@@ -1,0 +1,3 @@
+# Ignore UE4SS download/extract (re-downloadable)
+/tools/
+*.zip
