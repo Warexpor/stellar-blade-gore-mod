@@ -1,0 +1,14 @@
+LIBRARY kernel32.dll
+EXPORTS
+CreateThread
+Sleep
+CreateFileW
+ReadFile
+WriteFile
+CloseHandle
+DeleteFileW
+GetModuleHandleW
+GetModuleHandleExW
+DisableThreadLibraryCalls
+VirtualAlloc
+VirtualFree

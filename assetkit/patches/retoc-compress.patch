@@ -1,0 +1,51 @@
+diff --git i/retoc/src/iostore_writer.rs w/retoc/src/iostore_writer.rs
+index ba54785..d3551d8 100644
+--- i/retoc/src/iostore_writer.rs
++++ w/retoc/src/iostore_writer.rs
+@@ -59,15 +59,41 @@ impl IoStoreWriter {
+ 
+         let start_block = self.toc.compression_blocks.len();
+ 
++        // RETOC_COMPRESS=zlib|zstd|lz4|oodle compresses each block that gets smaller; blocks are padded to 16 bytes
++        // because the engine reads Align(CompressedSize, AES block size).
++        let method = std::env::var("RETOC_COMPRESS").ok().and_then(|m| crate::compression::CompressionMethod::from_str_ignore_case(&m));
+         let mut hasher = blake3::Hasher::new();
+         for block in data.chunks(self.toc.compression_block_size as usize) {
+-            self.cas_stream.write_all(block)?;
+             hasher.update(block);
+-            let compressed_size = block.len() as u32;
+             let uncompressed_size = block.len() as u32;
+-            let compression_method_index = 0; // "None"
+-            self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
+-            offset += compressed_size as u64;
++            let mut packed = None;
++            if let Some(m) = method {
++                let mut buf = vec![];
++                crate::compression::compress(m, block, &mut buf)?;
++                if buf.len() < block.len() {
++                    let index = match self.toc.compression_methods.iter().position(|x| *x == m) {
++                        Some(i) => i,
++                        None => {
++                            self.toc.compression_methods.push(m);
++                            self.toc.compression_methods.len() - 1
++                        }
++                    };
++                    packed = Some((buf, index as u8 + 1));
++                }
++            }
++            let (bytes, compression_method_index): (&[u8], u8) = match &packed {
++                Some((buf, index)) => (buf, *index),
++                None => (block, 0), // "None"
++            };
++            self.cas_stream.write_all(bytes)?;
++            let mut stored = bytes.len() as u64;
++            if method.is_some() {
++                let pad = align_usize(bytes.len(), 16) - bytes.len();
++                self.cas_stream.write_all(&[0u8; 16][..pad])?;
++                stored += pad as u64;
++            }
++            self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, bytes.len() as u32, uncompressed_size, compression_method_index));
++            offset += stored;
+         }
+         let hash = hasher.finalize();
+         let meta = FIoStoreTocEntryMeta {

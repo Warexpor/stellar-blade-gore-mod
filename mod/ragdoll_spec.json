@@ -1,0 +1,201 @@
+{
+  "_comment": "Paths are relative to SB/Content without extension. Field names follow USBShowRagdollKey (see assetkit/patch_shows.py ORDER). bIgnorePlayer defaults to true in the game's constructor, which is why vanilla Eve never ragdolls. Shared Dead_Monster_* shows stay vanilla; Eve gets her own clones (enemy impulses are 5k-18k and launch her). bOverrideHitBone=true makes the key push the bone that took the hit (the hit info's bone name, falling back to ImpulseBoneName when there is none); vanilla leaves it false, so every death pushed Spine1. Explosions keep the centre-of-mass push.",
+  "donor": "Art/Show/Dead/Dead_Monster_SkillType_Step1",
+  "inject_defaults": {
+    "bIgnorePlayer": false,
+    "bKeepPlaying": true,
+    "StartTime": 0.05,
+    "ImpulsePower": 1200.0,
+    "DirectionType": 2,
+    "ImpulseBoneName": "Bip001-Spine1",
+    "bOverrideHitBone": true,
+    "ImpulseLimitVelocity": 700.0,
+    "CapsuleComponentFollowingSocketName": null
+  },
+  "assets": {
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Stand": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_EffectType_Stand",
+      "set": {}
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Step0": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_SkillType_Step0",
+      "set": {
+        "ImpulsePower": 600.0
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Step1": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_SkillType_Step1",
+      "set": {
+        "ImpulsePower": 1200.0
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Step2": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_SkillType_Step2",
+      "set": {
+        "ImpulsePower": 1500.0
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Step3": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_SkillType_Step3",
+      "set": {
+        "ImpulsePower": 1800.0
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Explosion1": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_EffectType_Explosion",
+      "set": {
+        "ImpulsePower": 2500.0,
+        "bOverrideHitBone": false
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Explosion2": {
+      "mode": "clone",
+      "from": "Art/Show/Dead/Dead_Monster_EffectType_ExplosionLight",
+      "set": {
+        "ImpulsePower": 2000.0,
+        "bOverrideHitBone": false
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead": {
+      "mode": "inject"
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead2": {
+      "mode": "inject"
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead3": {
+      "mode": "inject"
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Nikke": {
+      "mode": "inject"
+    },
+    "Art/Show/CH_P_EVE_01/Basic/Eve_Dead_Down": {
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 400.0
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Falling": {
+      "mode": "inject",
+      "set": {
+        "bUseImpulse": false,
+        "StartTime": 0.0
+      }
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_AirDead": {
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 600.0,
+        "StartTime": 0.0
+      }
+    },
+    "Local/Data/CharacterDeadTable": {
+      "mode": "table",
+      "rows": {
+        "Player": {
+          "StandDeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Stand",
+          "Step0DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step0",
+          "Step1DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step1",
+          "Step2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step2",
+          "Step3DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step3",
+          "Explosion1DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion1",
+          "Explosion2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion2",
+          "AirborneDeadShow": "CH_P_EVE_01/Basic/P_Eve_AirDead",
+          "DefaultDeadUIDelayTime": 3.5,
+          "StandDeadUIDelayTime": 3.5,
+          "Step0DeadUIDelayTime": 3.5,
+          "Step1DeadUIDelayTime": 3.5,
+          "Step2DeadUIDelayTime": 3.5,
+          "Step3DeadUIDelayTime": 3.5,
+          "Explosion1DeadUIDelayTime": 3.5,
+          "Explosion2DeadUIDelayTime": 3.5,
+          "Custom2DeadUIDelayTime": 3.5,
+          "Custom3DeadUIDelayTime": 3.5,
+          "Custom5DeadUIDelayTime": 3.5,
+          "Custom9DeadUIDelayTime": 3.5,
+          "DownDeadUIDelayTime": 3.5,
+          "AirborneDeadUIDelayTime": 3.5
+        }
+      }
+    }
+  },
+  "_comment_ui_delay": "Seconds before the death/respawn UI appears, so the ragdoll is visible. Vanilla is 0 for these (desert hole uses 2.5).",
+  "clone_defaults": {
+    "bIgnorePlayer": false,
+    "bOverrideHitBone": true,
+    "ImpulseLimitVelocity": 700.0,
+    "CapsuleComponentFollowingSocketName": null
+  },
+  "disabled_assets": {
+    "Art/Character/PC/CH_P_EVE_01/Blueprints/CH_P_EVE_01_Blueprint": {
+      "mode": "collision",
+      "_comment": "Components attached to Eve's own skeleton that still block PhysicsBody. Once she ragdolls (Ragdoll profile = PhysicsBody) they push her own bodies every frame and fling her.",
+      "ignore": {
+        "WeaponPhysicsCollision_GEN_VARIABLE": [
+          "PhysicsBody"
+        ],
+        "SBHair_GEN_VARIABLE": [
+          "PhysicsBody"
+        ]
+      }
+    }
+  },
+  "_comment_clone_retarget": "Clones chain into the enemy Dead_Monster_Common (monster DEAD voice); Eve's own death shows chain into Eve_Dead_Common.",
+  "clone_retarget": {
+    "/Game/Art/Show/Dead/Dead_Monster_Common": "/Game/Art/Show/CH_P_EVE_01/Basic/Eve_Dead_Common"
+  },
+  "outfits": {
+    "_comment": "Every outfit mesh EquipmentTable can put on Eve (SkeletalMesh on her body skeleton) gets LOD0 CPU access, which the gore slicer needs, and its physics asset gets the ragdoll fix. Vanilla physics assets enable Pelvis-vs-Thigh collision although the capsules overlap by ~10 cm at rest, which blows the ragdoll apart (the flinging), and disable almost everything else, so limbs pass through each other. Here bodies collide across groups and never inside one (some outfits, e.g. CH_P_EVE_09, ship with neighbouring torso bodies colliding, which spins her), except pairs closer than rest_margin cm in the outfit's bind pose (measured per asset by assetkit/outfits.py, for every body, so a jiggle, cape or accessory body resting inside another stops colliding with it). Linear damping 5.0 capped her fall at ~2 m/s (floaty); these bodies are kinematic in gameplay, so this only changes ragdolls. Hair and jiggle bodies keep their other settings. 'only' / 'skip' take mesh-name globs (e.g. only: [\"CH_P_EVE_30*\"]) to trim the mod; every patched mesh is a full copy in the pak and replaces outfit mods for the same mesh.",
+    "enabled": true,
+    "table": "Local/Data/EquipmentTable",
+    "skeleton": "CH_P_EVE_01_Skeleton",
+    "only": [],
+    "skip": [
+      "*Hair*"
+    ],
+    "cpuaccess_lods": [
+      0
+    ],
+    "groups": {
+      "torso": [
+        "Bip001-Pelvis",
+        "Bip001-Spine",
+        "Bip001-Spine1",
+        "Bip001-Spine2",
+        "Bip001-Neck",
+        "Bip001-Head",
+        "Bip001-L-Clavicle",
+        "Bip001-R-Clavicle"
+      ],
+      "left_arm": [
+        "Bip001-L-UpperArm",
+        "Bip001-L-Forearm",
+        "Bip001-L-Hand"
+      ],
+      "right_arm": [
+        "Bip001-R-UpperArm",
+        "Bip001-R-Forearm",
+        "Bip001-R-Hand"
+      ],
+      "left_leg": [
+        "Bip001-L-Thigh",
+        "Bip001-L-Calf",
+        "Bip001-L-Foot"
+      ],
+      "right_leg": [
+        "Bip001-R-Thigh",
+        "Bip001-R-Calf",
+        "Bip001-R-Foot"
+      ]
+    },
+    "rest_margin": 0.5,
+    "body": {
+      "LinearDamping": 0.2
+    }
+  }
+}

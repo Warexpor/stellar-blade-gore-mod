@@ -1,3 +1,14 @@
-# Ignore UE4SS download/extract (re-downloadable)
+# research dumps, UE4SS downloads (re-creatable)
 /tools/
+# build cache (retoc, UAssetAPI, SDK headers, .NET SDK, work dirs) and output
+/.cache/
+/dist/
 *.zip
+*.dll
+*.lib
+*.exp
+*.obj
+*.pdb
+__pycache__/
+bin/
+obj/
