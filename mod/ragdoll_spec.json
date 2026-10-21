@@ -63,21 +63,50 @@
       }
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead": {
-      "mode": "inject"
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 1.0,
+        "ImpulseLimitVelocity": 701.0
+      },
+      "_comment": "Animated deaths (with P_Eve_Dead2/3, _Nikke, Eve_Dead_Down): their ragdoll key is only the death signal. ImpulseLimitVelocity 701 marks it; main.lua sees the marker in RagdollInfo, turns physics back off and lets the show's own fall play (tune.active.animated). No knockdown show has a key, so a knockdown never counts",
+      "preload": [
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Start",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Start1",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Forward",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Backward",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_S_Fw",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_S_Bw",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_Tumble_Fw",
+        "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_Tumble_Bw"
+      ],
+      "_comment_preload": "The animated death's falls (EveDeath_*), each referenced by a play-show key of its own in the show's play-show channel, disabled and timed at 1e9 s, so they load and stay with her death show and are never played by it: UE4SS's LoadAsset didn't find them, a bare import was dropped by the IoStore conversion, and keys in no channel were garbage collected with the falls"
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead2": {
-      "mode": "inject"
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 1.0,
+        "ImpulseLimitVelocity": 701.0
+      }
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead3": {
-      "mode": "inject"
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 1.0,
+        "ImpulseLimitVelocity": 701.0
+      }
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Nikke": {
-      "mode": "inject"
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 1.0,
+        "ImpulseLimitVelocity": 701.0
+      }
     },
     "Art/Show/CH_P_EVE_01/Basic/Eve_Dead_Down": {
       "mode": "inject",
       "set": {
-        "ImpulsePower": 400.0
+        "ImpulsePower": 1.0,
+        "ImpulseLimitVelocity": 701.0
       }
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Falling": {
@@ -94,32 +123,89 @@
         "StartTime": 0.0
       }
     },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Start": {
+      "_comment": "Death animations made from her knockdown falls (the knockdown shows and animations stay as they are): P_Eve_Dead with the fall swapped in, held on its last frame, Eve_Dead_Common (the death face and voice) kept, no ragdoll key. main.lua plays one at random over an animated death (tune.active.animatedPool), F5 cycles through them",
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Start",
+      "length": 1.6666666,
+      "rm": null
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Start1": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Start1",
+      "length": 1.6666666,
+      "rm": null
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Forward": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Forward",
+      "length": 2.0,
+      "rm": null
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Backward": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Backward",
+      "length": 2.0,
+      "rm": null
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_S_Fw": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_S_Fw",
+      "length": 2.0,
+      "rm": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/RootMotionData/Result_State_KnockDown_S_Fw_RM"
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_S_Bw": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_S_Bw",
+      "length": 2.5,
+      "rm": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/RootMotionData/Result_State_KnockDown_S_Bw_RM"
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_Tumble_Fw": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_Tumble_Fw",
+      "length": 1.6,
+      "rm": null
+    },
+    "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_Tumble_Bw": {
+      "mode": "animshow",
+      "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
+      "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_Tumble_Bw",
+      "length": 2.1,
+      "rm": null
+    },
     "Local/Data/CharacterDeadTable": {
       "mode": "table",
       "rows": {
         "Player": {
-          "StandDeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Stand",
-          "Step0DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step0",
-          "Step1DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step1",
+          "StandDeadShow": "CH_P_EVE_01/Basic/P_Eve_Dead",
+          "Step0DeadShow": "CH_P_EVE_01/Basic/P_Eve_Dead2",
+          "Step1DeadShow": "CH_P_EVE_01/Basic/P_Eve_Dead3",
           "Step2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step2",
           "Step3DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step3",
           "Explosion1DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion1",
           "Explosion2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion2",
           "AirborneDeadShow": "CH_P_EVE_01/Basic/P_Eve_AirDead",
-          "DefaultDeadUIDelayTime": 3.5,
-          "StandDeadUIDelayTime": 3.5,
-          "Step0DeadUIDelayTime": 3.5,
-          "Step1DeadUIDelayTime": 3.5,
-          "Step2DeadUIDelayTime": 3.5,
-          "Step3DeadUIDelayTime": 3.5,
-          "Explosion1DeadUIDelayTime": 3.5,
-          "Explosion2DeadUIDelayTime": 3.5,
-          "Custom2DeadUIDelayTime": 3.5,
-          "Custom3DeadUIDelayTime": 3.5,
-          "Custom5DeadUIDelayTime": 3.5,
-          "Custom9DeadUIDelayTime": 3.5,
-          "DownDeadUIDelayTime": 3.5,
-          "AirborneDeadUIDelayTime": 3.5
+          "DefaultDeadUIDelayTime": 8.0,
+          "StandDeadUIDelayTime": 8.0,
+          "Step0DeadUIDelayTime": 8.0,
+          "Step1DeadUIDelayTime": 8.0,
+          "Step2DeadUIDelayTime": 8.0,
+          "Step3DeadUIDelayTime": 8.0,
+          "Explosion1DeadUIDelayTime": 8.0,
+          "Explosion2DeadUIDelayTime": 8.0,
+          "Custom2DeadUIDelayTime": 8.0,
+          "Custom3DeadUIDelayTime": 8.0,
+          "Custom5DeadUIDelayTime": 8.0,
+          "Custom9DeadUIDelayTime": 8.0,
+          "DownDeadUIDelayTime": 8.0,
+          "AirborneDeadUIDelayTime": 8.0
         }
       }
     },
@@ -246,8 +332,79 @@
     "rest_margin": 0.5,
     "_comment_lock_orphans": "Bodies no constraint holds (twist / helper bones anchoring a cape or skirt chain, e.g. CH_P_EVE_09's Ab-L-UpperArm-Tw1) fly free in a ragdoll and drag the skin off the limb; each gets a locked joint to the nearest ancestor body.",
     "lock_orphans": true,
+    "_comment_accessory_collision": "false: every body outside the groups (hair, cape, breast and hip jiggle, neck pieces) collides with nothing of hers, only the world. CH_P_EVE_09 had 114 such pairs with her main bodies; the jiggle bodies inside her torso shoved the thighs and arms and the cape got pinned under her, and she shook on the floor",
+    "accessory_collision": false,
+    "_comment_body": "Damping on the torso and limb bodies: vanilla linear 5.0 capped her fall at ~2 m/s, angular 10.0 made her topple and turn as if under water (both only matter in a ragdoll, the bodies are kinematic in gameplay)",
     "body": {
-      "LinearDamping": 0.2
-    }
+      "LinearDamping": 0.2,
+      "AngularDamping": 1.0
+    },
+    "_comment_limits": "The main joints bend about their twist axis (PhAT framed them as hinges), limited the same both ways round a zero of the asset's own, as soft limits: vanilla knees went 19 deg past straight, elbows 24, hips bent forward only 30 and back as far, the spine 5 deg a joint, and the soft limits gave way further under a push (she folded at odd angles). 'ranges': how far each joint's far end ('end') may swing towards her front and her back from the bind pose, in degrees; outfits.py measures each asset's zero and turns its frame 2 to centre the range ('limits' in the expanded spec). 'swing' overrides cone limits (Swing1 = sideways for the hips). 'hard_limits': every angular limit of the grouped bodies' joints stops dead instead of springing (bSoftConstraint off).",
+    "ranges": {
+      "Bip001-L-Calf": {
+        "end": "Bip001-L-Foot",
+        "front": 3,
+        "back": 140
+      },
+      "Bip001-R-Calf": {
+        "end": "Bip001-R-Foot",
+        "front": 3,
+        "back": 140
+      },
+      "Bip001-L-Forearm": {
+        "end": "Bip001-L-Hand",
+        "front": 145,
+        "back": 3
+      },
+      "Bip001-R-Forearm": {
+        "end": "Bip001-R-Hand",
+        "front": 145,
+        "back": 3
+      },
+      "Bip001-L-Thigh": {
+        "end": "Bip001-L-Calf",
+        "front": 110,
+        "back": 20
+      },
+      "Bip001-R-Thigh": {
+        "end": "Bip001-R-Calf",
+        "front": 110,
+        "back": 20
+      },
+      "Bip001-L-UpperArm": {
+        "end": "Bip001-L-Forearm",
+        "front": 120,
+        "back": 40
+      },
+      "Bip001-R-UpperArm": {
+        "end": "Bip001-R-Forearm",
+        "front": 120,
+        "back": 40
+      },
+      "Bip001-Spine1": {
+        "end": "Bip001-Spine2",
+        "front": 15,
+        "back": 8
+      },
+      "Bip001-Spine2": {
+        "end": "Bip001-Neck",
+        "front": 15,
+        "back": 8
+      },
+      "Bip001-Neck": {
+        "end": "Bip001-Head",
+        "front": 25,
+        "back": 15
+      }
+    },
+    "swing": {
+      "Bip001-L-Thigh": {
+        "Swing1LimitDegrees": 30.0
+      },
+      "Bip001-R-Thigh": {
+        "Swing1LimitDegrees": 30.0
+      }
+    },
+    "hard_limits": true
   }
 }

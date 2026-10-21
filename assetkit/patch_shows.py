@@ -8,6 +8,9 @@ The spec lists, per asset (relative path under SB/Content, no extension):
   "flip":   set bIgnorePlayer=false on every SBShowRagdollKey export (key already exists)
   "inject": clone the donor ragdoll key into the show with per-show overrides
   "clone":  copy another show ("from") to this new package path, then retune its ragdoll key
+  "animshow": copy an animated death show ("from") to this new package path playing another animation ("anim",
+            "length" s, "rm" its root motion data or null), without a ragdoll key: a death animation main.lua
+            plays over her death show
   "table":  set fields on DataTable rows
   "collision": make component templates ignore collision channels (raw unversioned data)
   "physics": rework a physics asset's ragdoll: collision between body groups (CollisionDisableTable, raw
@@ -21,9 +24,10 @@ The spec lists, per asset (relative path under SB/Content, no extension):
   "notify": add an SBAnimNotify_CharSESound playing voice "voice" to an AnimSequence at time "at", keeping
             every notify it has
 """
-import base64, copy, json, os, struct, sys
+import base64, copy, json, math, os, struct, sys
 
 RAGDOLL_CHANNEL = 23  # KeyContanerMap key used by every vanilla SBShowRagdollKey
+PRELOAD_AT = 1.0e9    # a preload key's StartTime: never reached
 
 # Schema order (USBShowKey then USBShowRagdollKey), matches the exe reflection data.
 ORDER = [
@@ -66,6 +70,49 @@ def exports_of(d, cls):
 def add_name(d, s):
     if s is not None and s not in d["NameMap"]:
         d["NameMap"].append(s)
+
+
+def preload(d, rels):
+    """Shows (SB/Content-relative) nothing else refers to, loaded with this package so Lua finds them (UE4SS's
+    LoadAsset found none of the packages this mod adds). A bare import isn't enough: the IoStore conversion drops
+    imports no export refers to, and the falls never loaded. Each gets a play-show key of its own pointing at it (a
+    hard reference). Keys in no channel loaded them, but nothing referred to the keys: the next garbage collection
+    took them and the falls with them (her death a minute after the show loaded found none). So they sit in the
+    play-show channel, kept as long as the show is, disabled (bEnable false) and timed past any show's end."""
+    src_idx = (exports_of(d, "SBShowPlayShowKey") or [None])[0]
+    if not src_idx:
+        die("preload needs a show with an SBShowPlayShowKey to copy")
+    src = d["Exports"][src_idx - 1]
+    main_idx, main = main_export(d)
+    channel = next((k["Value"] for k, v in key_map(main)["Value"]
+                    if any(x["Value"] == src_idx for x in v["Value"][0]["Value"] or [])), None)
+    if channel is None:
+        die("preload: the show's play-show key is in no channel")
+    taken = {e["ObjectName"] for e in d["Exports"]}
+    k = 1
+    for rel in rels:
+        name = rel.rsplit("/", 1)[1]
+        pkg = ensure_import(d, "/Game/" + rel, 0, "/Script/CoreUObject", "Package")
+        show = ensure_import(d, name, pkg, "/Script/SB", "SBShowData")
+        while f"SBShowPlayShowKey_{k}" in taken:
+            k += 1
+        key = f"SBShowPlayShowKey_{k}"
+        taken.add(key)
+        add_name(d, key)
+        new = copy.deepcopy(src)
+        new.update({"ObjectName": key, "OuterIndex": main_idx,
+                    "SerializationBeforeSerializationDependencies": [], "CreateBeforeSerializationDependencies": [show],
+                    "SerializationBeforeCreateDependencies": [src["ClassIndex"], src["TemplateIndex"]],
+                    "CreateBeforeCreateDependencies": [main_idx]})
+        for p in new["Data"]:
+            if p["Name"] == "ShowData":
+                p["Value"] = show
+        # USBShowKey's fields come before the play-show key's own (schema order)
+        new["Data"] = [make_prop("StartTime", PRELOAD_AT), make_prop("bEnable", False)] + \
+            [p for p in new["Data"] if p["Name"] not in ("StartTime", "bEnable")]
+        d["Exports"].append(new)
+        main["CreateBeforeSerializationDependencies"].append(len(d["Exports"]))
+        add_key_to_channel(d, main, len(d["Exports"]), channel)
 
 
 def ensure_import(d, obj, outer, cls_pkg, cls_name):
@@ -180,6 +227,41 @@ def flip(d, overrides):
         die("flip target has no ragdoll key")
     for i in idxs:
         set_props(d, d["Exports"][i - 1], overrides)
+
+
+def anim_show(d, job):
+    """The show's one SBShowAnimKey plays job["anim"] for job["length"] s and holds its last frame; the show ends
+    0.9 s later; the knockdown IK key keeps its share of the animation."""
+    anim, length, rm = job["anim"], float(job["length"]), job.get("rm")
+    name = anim.rsplit("/", 1)[1]
+    keys = [e for i, e in enumerate(d["Exports"], 1) if e["ClassIndex"] < 0 and imp_name(d, e["ClassIndex"]) == "SBShowAnimKey"]
+    if len(keys) != 1:
+        die(f"animshow: {len(keys)} anim keys in {job['from']}")
+    if exports_of(d, "SBShowRagdollKey"):
+        die(f"animshow: {job['from']} already has a ragdoll key")
+    old_len = None
+    for p in keys[0]["Data"]:
+        if p["Name"] == "AnimResourcePath":
+            p["Value"] = f"AnimSequence'{anim}.{name}'"
+        elif p["Name"] == "RootMotionDataPath":
+            p["Value"] = rm
+        elif p["Name"] in ("PlayEndTime", "Duration"):
+            old_len = old_len or float(p["Value"])
+            p["Value"] = length
+        elif p["Name"] == "bHoldEndTime":
+            p["Value"] = True
+    if rm is None:
+        # no root motion data for this animation: the key goes without (the property's default)
+        keys[0]["Data"] = [p for p in keys[0]["Data"] if p["Name"] not in ("RootMotionKey", "RootMotionDataPath")]
+    k = length / (old_len or length)
+    for i in exports_of(d, "SBShowAnimBPSetValueKey"):
+        for p in d["Exports"][i - 1]["Data"]:
+            if p["Name"] in ("StartTime", "Duration"):
+                p["Value"] = float(p["Value"]) * k
+    main = next(e for e in d["Exports"] if e["OuterIndex"] == 0)
+    for p in main["Data"]:
+        if p["Name"] == "EndTime":
+            p["Value"] = length + 0.9
 
 
 def rename_package(d, src_rel, dst_rel):
@@ -322,6 +404,15 @@ def physics_table(d, job):
                             continue  # outfits without a body on that bone
                         die(f"physics: no body for {a} / {b}")
                     table.discard((min(idx[a], idx[b]), max(idx[a], idx[b])))
+    # the accessories (hair, cape, breast and hip jiggle, neck pieces) touch nothing of hers, only the world: the hip
+    # and breast bodies sit inside her torso and shoved the thighs and arms every frame, and the cape and hair got
+    # pinned between her and the floor, so she shook on the ground (pelvis turning 150-300 deg/s while still)
+    if not job.get("accessory_collision", False):
+        main = {b for g in groups for b in g}
+        for a in (i for i, b in enumerate(bones) if b not in main):
+            for b in range(len(bones)):
+                if b != a:
+                    table.add((min(a, b), max(a, b)))
     for a, b in job.get("except", []):
         if a in idx and b in idx:
             table.add((min(idx[a], idx[b]), max(idx[a], idx[b])))
@@ -409,8 +500,88 @@ def add_joints(d, joints):
         have.append(j["child"])
 
 
+def _float_prop(name, v):
+    return _prop("Objects.FloatPropertyData", name, float(v))
+
+
+def _struct_field(d, parent, name, make):
+    """The field `name` of a struct property's Value list, added (as make()) when it was left at its default."""
+    p = next((q for q in parent["Value"] if q["Name"] == name), None)
+    if p is None:
+        add_name(d, name)
+        p = make()
+        parent["Value"].append(p)
+    return p
+
+
+def zero_limited(cone, twist, twisted):
+    """(struct, motion prop, degrees prop) of each motion ACM_Limited to 0 deg; the twist only when no range replaces
+    it (twisted)."""
+    out = []
+    pairs = [(cone, "Swing1Motion", "Swing1LimitDegrees"), (cone, "Swing2Motion", "Swing2LimitDegrees")]
+    if not twisted:
+        pairs.append((twist, "TwistMotion", "TwistLimitDegrees"))
+    for lim, m, dg in pairs:
+        mp = next((q for q in lim["Value"] if q["Name"] == m), None)
+        dp = next((q for q in lim["Value"] if q["Name"] == dg), None)
+        if mp and dp and str(mp["Value"]).endswith("ACM_Limited") and float(dp["Value"]) == 0.0:
+            out.append((lim, mp, dp))
+    return out
+
+
+def joint_limits(d, job):
+    """The main joints' limits: hard (bSoftConstraint off), the twist ("limits" from outfits.py: half range,
+    frame 2 turned about the twist axis to centre it) and cone overrides ("swing")."""
+    want = {b for g in job["groups"].values() for b in g}
+    limits, swing, hard = job.get("limits", {}), job.get("swing", {}), job.get("hard_limits", False)
+    _, m = main_export(d)
+    done = []
+    for ref in next((p for p in m["Data"] if p["Name"] == "ConstraintSetup"), {"Value": []})["Value"]:
+        e = d["Exports"][ref["Value"] - 1]
+        di = next(p for p in e["Data"] if p["Name"] == "DefaultInstance")
+        child = next(p["Value"] for p in di["Value"] if p["Name"] == "ConstraintBone1")
+        if child not in want:
+            continue
+        prof = next((p for p in di["Value"] if p["Name"] == "ProfileInstance"), None)
+        if prof is None:
+            die(f"physics: {child}'s joint has no ProfileInstance")
+        cone = next((p for p in prof["Value"] if p["Name"] == "ConeLimit"), None)
+        twist = next((p for p in prof["Value"] if p["Name"] == "TwistLimit"), None)
+        if cone is None or twist is None:
+            die(f"physics: {child}'s joint has no ConeLimit / TwistLimit")
+        if hard:
+            for lim in (cone, twist):
+                _struct_field(d, lim, "bSoftConstraint", lambda: _prop("Objects.BoolPropertyData", "bSoftConstraint", False))["Value"] = False
+        # a motion "limited" to 0 deg (CH_P_EVE_09's pelvis to spine cone) is locked instead: a hard limit with no
+        # range shook the joint every frame
+        for lim, mk, dk in zero_limited(cone, twist, child in limits):
+            mk["Value"] = "ACM_Locked"
+        for k, v in swing.get(child, {}).items():
+            _struct_field(d, cone, k, lambda: _float_prop(k, v))["Value"] = float(v)
+        lim = limits.get(child)
+        if lim:
+            _struct_field(d, twist, "TwistLimitDegrees", lambda: _float_prop("TwistLimitDegrees", 0))["Value"] = float(lim["twist"])
+            # frame 2 turned by "turn" about its X: the twist then reads "turn" less, so the range moves by it
+            vecs = {p["Name"]: p for p in di["Value"] if p["Name"] in ("PriAxis2", "SecAxis2")}
+            if len(vecs) != 2:
+                die(f"physics: {child}'s joint has no PriAxis2 / SecAxis2")
+            v = lambda p: p["Value"][0]["Value"]
+            pri, sec = v(vecs["PriAxis2"]), v(vecs["SecAxis2"])
+            a = [pri["X"], pri["Y"], pri["Z"]]
+            b = [sec["X"], sec["Y"], sec["Z"]]
+            c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+            t = math.radians(lim["turn"])
+            n = [b[i] * math.cos(t) + c[i] * math.sin(t) for i in range(3)]
+            sec.update({"X": n[0], "Y": n[1], "Z": n[2]})
+        done.append(child)
+    missing = set(limits) - set(done)
+    if missing:
+        die(f"physics: no joint for {sorted(missing)}")
+
+
 def physics(d, job):
     add_joints(d, job.get("joints", []))
+    joint_limits(d, job)
     table = physics_table(d, job)
     _, tail = disable_table(d)
     _, m = main_export(d)
@@ -423,7 +594,16 @@ def physics(d, job):
             continue
         inst = next(p for p in e["Data"] if p["Name"] == "DefaultInstance")["Value"]
         for k, v in job.get("body", {}).items():
-            p = next((p for p in inst if p["Name"] == k), None) or die(f"physics: {bone} has no {k}")
+            p = next((p for p in inst if p["Name"] == k), None)
+            if p is None:
+                # left at its default (unserialized): a float like the body's other ones
+                tmpl = next((q for q in inst if q["$type"].startswith("UAssetAPI.PropertyTypes.Objects.FloatPropertyData")), None)
+                if tmpl is None or not isinstance(v, float):
+                    die(f"physics: {bone} has no {k}")
+                p = copy.deepcopy(tmpl)
+                p["Name"] = k
+                add_name(d, k)
+                inst.append(p)
             p["Value"] = v
 
 
@@ -578,8 +758,11 @@ def main():
         if mode == "vendor":
             d = json.load(open(os.path.join(os.environ["SB_VENDOR_JSON"], rel + ".json")))
         else:
-            d = load(job["from"] if mode == "clone" else rel)
-        if mode == "clone":
+            d = load(job["from"] if mode in ("clone", "animshow") else rel)
+        if mode == "animshow":
+            rename_package(d, job["from"], rel)
+            anim_show(d, job)
+        elif mode == "clone":
             rename_package(d, job["from"], rel)
             retarget(d, spec.get("clone_retarget", {}))
             if exports_of(d, "SBShowRagdollKey"):
@@ -608,6 +791,8 @@ def main():
                 ignore_channels(d, comp, chans)
         else:
             die(f"bad mode {mode}")
+        if job.get("preload"):
+            preload(d, job["preload"])
         outputs[rel] = full_import_names(d)
         os.makedirs(os.path.dirname(out_path(dst, rel)), exist_ok=True)
         json.dump(d, open(out_path(dst, rel), "w"), indent=1)

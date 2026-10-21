@@ -194,7 +194,7 @@ int main(void)
     float ring[60 * 3], pp[3] = { 0, 0, 0 }, up[3] = { 0, 0, 1 }, idt[12] = { 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0 };
     for (int i = 0; i < 50; i++) { float a = i * 6.2831853f / 50; ring[i * 3] = 6 * __builtin_cosf(a) + 1; ring[i * 3 + 1] = 4 * __builtin_sinf(a); ring[i * 3 + 2] = 0.3f; }
     for (int i = 50; i < 60; i++) { ring[i * 3] = 15 + (i - 50); ring[i * 3 + 1] = 2; ring[i * 3 + 2] = 0; }
-    char fit[4096]; *put_fit(fit, "t", ring, 60, pp, up, idt) = 0;
+    char fit[4096]; *put_fit(fit, "t", ring, 60, pp, up, idt, 1) = 0;
     printf("fit:%s\n", fit);
     float fa = 0, fb = 0, fcx = 0;
     sscanf(strstr(fit, "te=") + 3, "%f,%f", &fa, &fb);
@@ -267,6 +267,26 @@ int main(void)
         }
         printf("dent: centre at x %.2f (8 - 2), %d moved outside it, %d pushed outward, %d pressed in, sums %d\n", cx, far_moved, outward, inner, sums);
         modebad |= cx < 5.9f || cx > 6.1f || far_moved || outward || inner < 3 || sums || !strstr(lastres, " dented=");
+        skin_restore(0);
+    }
+    // RUPTURE: the same blow as a burst: every front vertex within the radius goes all the way to the floor (x 6),
+    // with no falloff; nothing outside it moves
+    {
+        free(override_w); override_w = 0;
+        skin_cut((u64)comp_buf, 0, SPINE, hp, hn, MODE_RUPTURE, 5, 0, -1, 2);
+        printf("rupture: %.160s\n", lastres);
+        skin_collapse();
+        int far_moved = 0, sums = 0, off_floor = 0, floored = 0;
+        for (int v = 0; v < NV; v++) {
+            float x[3]; skin(&override_w[v], vpos[v], x);
+            int t2 = 0; for (int i = 0; i < MAX_INF; i++) t2 += override_w[v].weights[i];
+            sums += t2 != 255;
+            float dy = vpos[v][1], dz = vpos[v][2] - 80, q2 = dy * dy + dz * dz;
+            if ((q2 >= 25 || vpos[v][0] < 0) && dist3(x, vpos[v]) > 0.01f) far_moved++;
+            if (q2 < 20 && vpos[v][0] > 6.5f) { if (x[0] > 6.2f) off_floor++; else floored++; }
+        }
+        printf("rupture: %d on the floor, %d left above it, %d moved outside it, sums %d\n", floored, off_floor, far_moved, sums);
+        modebad |= off_floor || floored < 3 || far_moved || sums || !strstr(lastres, " dented=");
         skin_restore(0);
     }
     // PLANE through the knee region for the calf alone: the calf has no helper to collapse its side onto, so its
@@ -353,7 +373,8 @@ int main(void)
         }
         int expect = 0;
         for (int v = 0; v < NV; v++) expect += vpos[v][0] <= 0;
-        for (int k = 0; k < SPLIT_BANDS; k++) { char tag[8]; sprintf(tag, " s%dc=", k); bands += !!strstr(lastres, tag); }
+        // one traced opening over the whole cut (bands only pick sinks now)
+        bands = !!strstr(lastres, " s0c=") + !!strstr(lastres, " s0p=");
         int early = mmap6[SPINE_HELP] != SPINE_HELP;
         skin_collapse();
         int remapped = mmap6[SPINE_HELP] == SPINE && !early;
@@ -367,9 +388,9 @@ int main(void)
         skin_restore(0);
         int nb_back = *(int *)(sec + SEC_BONE_MAP + 8);
         unremap((u64)comp_buf);
-        printf("side: %d/%d gone onto the borrowed sink, %d kept wrongly, bonemap %d -> %d, remapped %d -> %d, bands %d, off the plane %d, kept moved %d\n",
+        printf("side: %d/%d gone onto the borrowed sink, %d kept wrongly, bonemap %d -> %d, remapped %d -> %d, lid parts %d, off the plane %d, kept moved %d\n",
                gone, expect, kept_bad, nbm, nb8, remapped, mmap6[SPINE_HELP], bands, off, moved);
-        modebad |= gone != expect || kept_bad || nb8 != nbm + 1 || nb_back != nbm || !remapped || mmap6[SPINE_HELP] != SPINE_HELP || bands < 3 || off || moved;
+        modebad |= gone != expect || kept_bad || nb8 != nbm + 1 || nb_back != nbm || !remapped || mmap6[SPINE_HELP] != SPINE_HELP || bands < 2 || off || moved;
         // pose copy
         static float dst[NB * 12];
         static unsigned char comp2[0x2000];

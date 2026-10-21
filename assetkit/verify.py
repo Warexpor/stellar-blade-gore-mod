@@ -4,7 +4,7 @@
 Usage: verify.py <spec.json> <vanilla_json_dir> <repacked_json_dir> [--no-meshes]
 --no-meshes: "cpuaccess" jobs were checked by sbtool checkcpu (meshes have no JSON then).
 """
-import json, os, sys
+import json, math, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from patch_shows import response_array, physics_table, disable_table, physics_bodies, joint_names, voice_pairs, notify_events, main_export
@@ -34,6 +34,14 @@ for rel, job in spec["assets"].items():
     v = load(os.environ["SB_VENDOR_JSON"], rel) if job["mode"] == "vendor" else load(van_dir, job.get("from", rel))
     o = load(out_dir, rel)
     tag = f"{job['mode']:6s} {rel}"
+    if job.get("preload"):
+        # the preloaded shows' imports: the read-back names them only from the patched package (other packages'
+        # objects come back unnamed), so check the slots survived and the patched package names every show
+        pj = load(os.environ["SB_PATCHED_JSON"], rel) if os.environ.get("SB_PATCHED_JSON") else o
+        names = {i["ObjectName"] for i in pj["Imports"]}
+        missing = [r for r in job["preload"] if r.rsplit("/", 1)[1] not in names or "/Game/" + r not in names]
+        if missing or len(o["Imports"]) < len(pj["Imports"]):
+            fail.append(f"{tag}: preload imports missing {missing} ({len(o['Imports'])} of {len(pj['Imports'])} imports read back)")
     if job["mode"] == "vendor":
         # the third-party package as shipped: same exports, same data
         same = [(e.get("ObjectName"), json.dumps(e.get("Data")), json.dumps(e.get("Extras"))) for e in o["Exports"]] == \
@@ -119,11 +127,13 @@ for rel, job in spec["assets"].items():
             inst = lambda e: next((p["Value"] for p in e["Data"] if p["Name"] == "DefaultInstance"), [])  # absent = all defaults
             vi = {p["Name"]: p for p in inst(ve)}
             oi = {p["Name"]: p for p in inst(oe)}
-            if set(oi) != set(vi):
-                fail.append(f"{tag}: {bone} DefaultInstance fields {sorted(set(oi) ^ set(vi))} added or lost")
+            # the spec's body fields may be added where vanilla left them at their defaults
+            added = set(job.get("body", {})) if bone in want else set()
+            if set(oi) - added != set(vi) - added or not added <= set(oi):
+                fail.append(f"{tag}: {bone} DefaultInstance fields {sorted((set(oi) ^ set(vi)) - added)} added or lost")
                 continue
             for k in oi:
-                exp = job.get("body", {}).get(k, vi[k]["Value"]) if bone in want else vi[k]["Value"]
+                exp = job.get("body", {}).get(k, vi[k]["Value"] if k in vi else None) if bone in want else vi[k]["Value"]
                 same = oi[k]["Value"] == exp or (isinstance(exp, (int, float)) and isinstance(oi[k]["Value"], (int, float))
                                                   and abs(oi[k]["Value"] - exp) < 1e-5)
                 if not same:
@@ -142,19 +152,72 @@ for rel, job in spec["assets"].items():
                 fail.append(f"{tag}: joint {e['ObjectName']} is not a locked {j['child']} -> {j['parent']}")
         if len(added) != len(joints):
             fail.append(f"{tag}: {len(added)} new exports for {len(joints)} joints")
+        # the main joints' limits (patch_shows.joint_limits): hard, the twist range and frame 2 turned to centre it
+        def walk(p, path):
+            val = p.get("Value")
+            if isinstance(val, list) and val and isinstance(val[0], dict) and "Name" in val[0]:
+                out = {}
+                for q in val:
+                    out.update(walk(q, path + "." + q["Name"]))
+                return out
+            return {path: val}
+        limited = []
+        for e in o["Exports"]:
+            if not e["ObjectName"].startswith("PhysicsConstraintTemplate") or e["ObjectName"] not in vex:
+                continue
+            fo = {k: v for p in e["Data"] for k, v in walk(p, p["Name"]).items()}
+            fv = {k: v for p in vex[e["ObjectName"]]["Data"] for k, v in walk(p, p["Name"]).items()}
+            child = fo.get("DefaultInstance.ConstraintBone1")
+            if child not in want:
+                continue
+            touched.add(id(e))
+            lim = job.get("limits", {}).get(child)
+            exp = dict(fv)
+            if job.get("hard_limits"):
+                exp["DefaultInstance.ProfileInstance.ConeLimit.bSoftConstraint"] = False
+                exp["DefaultInstance.ProfileInstance.TwistLimit.bSoftConstraint"] = False
+            for k, val in job.get("swing", {}).get(child, {}).items():
+                exp["DefaultInstance.ProfileInstance.ConeLimit." + k] = float(val)
+            # motions limited to 0 deg are locked
+            for part, m, dg in (("ConeLimit", "Swing1Motion", "Swing1LimitDegrees"), ("ConeLimit", "Swing2Motion", "Swing2LimitDegrees"),
+                                ("TwistLimit", "TwistMotion", "TwistLimitDegrees")):
+                pre = "DefaultInstance.ProfileInstance." + part + "."
+                if part == "TwistLimit" and lim:
+                    continue
+                if str(fv.get(pre + m)).endswith("ACM_Limited") and fv.get(pre + dg) is not None and float(fv[pre + dg]) == 0.0:
+                    exp[pre + m] = "ACM_Locked"
+            sec = "DefaultInstance.SecAxis2.SecAxis2"
+            if lim:
+                exp["DefaultInstance.ProfileInstance.TwistLimit.TwistLimitDegrees"] = lim["twist"]
+                pri = fv["DefaultInstance.PriAxis2.PriAxis2"]
+                a, b, n = ([q["X"], q["Y"], q["Z"]] for q in (pri, fv[sec], fo[sec]))
+                c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+                turn = math.degrees(math.atan2(sum(x * y for x, y in zip(n, c)), sum(x * y for x, y in zip(n, b))))
+                if abs(turn - lim["turn"]) > 0.01:
+                    fail.append(f"{tag}: {child} frame 2 turned {turn:.2f} instead of {lim['turn']}")
+                limited.append(child)
+            for k in set(fo) | set(exp):
+                if lim and k == sec:
+                    continue
+                a, b = fo.get(k), exp.get(k)
+                if not (a == b or (isinstance(a, (int, float)) and isinstance(b, (int, float)) and abs(a - b) < 1e-4)):
+                    fail.append(f"{tag}: {child} joint {k} = {a}, expected {b}")
+        if sorted(limited) != sorted(job.get("limits", {})):
+            fail.append(f"{tag}: limits on {sorted(limited)} instead of {sorted(job.get('limits', {}))}")
         for e in o["Exports"]:
             if id(e) in touched or e["OuterIndex"] == 0 or e["ObjectName"] not in vex:
                 continue
             if json.dumps(e.get("Data")) != json.dumps(vex[e["ObjectName"]].get("Data")):
                 fail.append(f"{tag}: export {e['ObjectName']} changed")
         for e in o["Exports"]:
-            if id(e) in touched:
+            if id(e) in touched and not e["ObjectName"].startswith("PhysicsConstraintTemplate"):
                 strip = lambda x: [p for p in x["Data"] if p["Name"] != "DefaultInstance"]
                 if json.dumps(strip(e)) != json.dumps(strip(vex[e["ObjectName"]])):
                     fail.append(f"{tag}: {e['ObjectName']} changed beyond DefaultInstance")
         old, _ = disable_table(v)
         print(f"ok  {tag}  {len(old)} -> {len(got)} non-colliding pairs, body {job.get('body', {})}"
-              + (f", locked {','.join(j['child'] for j in joints)}" if joints else ""))
+              + (f", locked {','.join(j['child'] for j in joints)}" if joints else "")
+              + (f", limits on {len(limited)} joints" if limited else ""))
         continue
 
     if job["mode"] == "cpuaccess":
@@ -192,6 +255,22 @@ for rel, job in spec["assets"].items():
         continue
 
     rag = [e for e in o["Exports"] if cls_name(o, e) == "SBShowRagdollKey"]
+    if job["mode"] == "animshow":
+        # a death animation: no ragdoll key, its one anim key plays job["anim"] and holds the end, the rest as vanilla
+        main = next(e for e in o["Exports"] if e["OuterIndex"] == 0)
+        if main["ObjectName"] != rel.rsplit("/", 1)[1]:
+            fail.append(f"{tag}: main export is {main['ObjectName']}")
+        if rag:
+            fail.append(f"{tag}: has a ragdoll key")
+        keys = [e for e in o["Exports"] if cls_name(o, e) == "SBShowAnimKey"]
+        kp = props(keys[0]) if len(keys) == 1 else {}
+        name = job["anim"].rsplit("/", 1)[1]
+        if kp.get("AnimResourcePath", {}).get("Value") != f"AnimSequence'{job['anim']}.{name}'":
+            fail.append(f"{tag}: plays {kp.get('AnimResourcePath', {}).get('Value')}")
+        if abs(float(kp.get("PlayEndTime", {}).get("Value") or 0) - float(job["length"])) > 1e-3 or kp.get("bHoldEndTime", {}).get("Value") is not True:
+            fail.append(f"{tag}: doesn't hold the end at {job['length']} s")
+        print(f"ok  {tag}  plays {name} for {job['length']} s")
+        continue
     if not rag:
         fail.append(f"{tag}: no ragdoll key after patch")
     for e in rag:
@@ -215,9 +294,28 @@ for rel, job in spec["assets"].items():
     if not set(rag_idx) <= set(chans.get(23, [])):
         fail.append(f"{tag}: ragdoll key not wired into channel 23 ({chans.get(23)})")
 
+    # preloaded shows: a new play-show key each, pointing at an import (a hard reference, which also keeps them loaded
+    # while her death show is: a bare import was dropped, keys in no channel were garbage collected with the falls), in
+    # a channel so the show keeps them, disabled and timed past its end so it never plays them. The round trip can't
+    # name another package's objects (vanilla's own key reads UnknownExport too), so it is counted
+    want = job.get("preload", [])
+    pre = set()
+    played = {x for xs in chans.values() for x in xs}
+    vnames = {x["ObjectName"] for x in v["Exports"]}
+    for i, e in enumerate(o["Exports"], 1):
+        if cls_name(o, e) == "SBShowPlayShowKey" and e["ObjectName"] not in vnames:
+            pr = props(e)
+            sd = pr.get("ShowData")
+            off = pr.get("bEnable", {}).get("Value") is False and float(pr.get("StartTime", {}).get("Value") or 0) >= 1e8
+            if sd and isinstance(sd["Value"], int) and sd["Value"] < 0 and i in played and off:
+                pre.add(e["ObjectName"])
+            else:
+                fail.append(f"{tag}: {e['ObjectName']} is no preload key (in a channel {i in played}, disabled {off})")
+    if len(pre) != len(want):
+        fail.append(f"{tag}: {len(pre)} preload keys for {len(want)} shows")
     vex = {e["ObjectName"]: e for e in v["Exports"]}
     for e in o["Exports"]:
-        if cls_name(o, e) == "SBShowRagdollKey" or e is main:
+        if cls_name(o, e) == "SBShowRagdollKey" or e is main or e["ObjectName"] in pre:
             continue
         if e["ObjectName"] not in vex:
             fail.append(f"{tag}: unexpected new export {e['ObjectName']}")
@@ -227,7 +325,7 @@ for rel, job in spec["assets"].items():
     for k in props(vmain):
         if k != "KeyContanerMap" and json.dumps(props(vmain)[k]) != json.dumps(props(main).get(k)):
             fail.append(f"{tag}: main field {k} changed")
-    print(f"ok  {tag}  ragdoll keys={len(rag)} ch23={chans.get(23)}")
+    print(f"ok  {tag}  ragdoll keys={len(rag)} ch23={chans.get(23)}" + (f" preload={len(pre)}" if pre else ""))
 
 if fail:
     print("\nVERIFY FAILED:\n  " + "\n  ".join(fail))

@@ -17,6 +17,11 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
         [[ $r == PASS ]] || fail=1
       done
     done
+    for posed in "" 1; do
+      r=$(WAIST=1 POSED=$posed real/run.sh "$m" 2>&1 | tail -1)
+      echo "real waist cut $m${posed:+ (posed)}: $r"
+      [[ $r == PASS ]] || fail=1
+    done
   done
 fi
 [[ $fail == 0 ]] && echo PASS || echo FAIL

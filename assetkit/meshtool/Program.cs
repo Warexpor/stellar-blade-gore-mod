@@ -33,6 +33,29 @@ if (cmd == "bones")
     return 0;
 }
 
+if (cmd == "anims")
+{
+    // anims <legacy_root> <usmap> - <out.json>: per animation sequence (package paths on stdin) its length and, in
+    // component space, the pelvis and head heights and the root's travel over its frames (is she on the floor at
+    // the end?)
+    var rows = new List<object>();
+    string? p;
+    while ((p = Console.ReadLine()) != null)
+    {
+        p = p.Trim(); if (p.Length == 0) continue;
+        CUE4Parse.UE4.Assets.Exports.Animation.UAnimSequence? a = null;
+        try
+        {
+            a = provider.LoadPackageObject<CUE4Parse.UE4.Assets.Exports.Animation.UAnimSequence>($"{p}.{Path.GetFileName(p)}");
+            rows.Add(AnimRow(a, p));
+        }
+        // the game's own codecs aren't all supported: the length and frame count still come from the asset
+        catch (Exception e) { rows.Add(new { package = p, length = a?.SequenceLength, frames = a?.NumFrames, error = e.Message }); }
+    }
+    await File.WriteAllTextAsync(outp, JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true }));
+    return 0;
+}
+
 var mesh = provider.LoadPackageObject<USkeletalMesh>($"{pkg}.{Path.GetFileName(pkg)}");
 if (cmd == "gltf")
 {
@@ -99,3 +122,41 @@ var mats = mesh.SkeletalMaterials.Select(m => m.MaterialInterface?.Name ?? m.Mat
 await File.WriteAllTextAsync(outp, JsonSerializer.Serialize(new { package = pkg, bones, materials = mats, lods }));
 Console.WriteLine($"{pkg}: {bones.Length} bones, {lods.Count} LODs -> {outp}");
 return 0;
+
+static object AnimRow(CUE4Parse.UE4.Assets.Exports.Animation.UAnimSequence anim, string pkg)
+{
+    var set = CUE4Parse_Conversion.Animations.AnimConverter.ConvertAnims(anim);
+    var seq = set.Sequences[0];
+    var rs = set.Skeleton.ReferenceSkeleton;
+    int n = rs.FinalRefBoneInfo.Length;
+    int Find(string name) { for (int i = 0; i < n; i++) if (rs.FinalRefBoneInfo[i].Name.Text == name) return i; return -1; }
+    int pel = Find("Bip001-Pelvis"), head = Find("Bip001-Head"), rootb = 0;
+    var heights = new List<float[]>();
+    int frames = Math.Max(seq.NumFrames, 1);
+    for (int f = 0; f < frames; f++)
+    {
+        var wq = new CUE4Parse.UE4.Objects.Core.Math.FQuat[n];
+        var wp = new CUE4Parse.UE4.Objects.Core.Math.FVector[n];
+        for (int i = 0; i < n; i++)
+        {
+            var bp = rs.FinalRefBonePose[i];
+            var q = bp.Rotation; var t = bp.Translation; var sc = bp.Scale3D;
+            if (i < seq.Tracks.Count && seq.Tracks[i] != null && (seq.Tracks[i].KeyQuat.Length > 0 || seq.Tracks[i].KeyPos.Length > 0))
+                seq.Tracks[i].GetBoneTransform(f, frames, ref q, ref t, ref sc);
+            int par = rs.FinalRefBoneInfo[i].ParentIndex;
+            if (par < 0) { wq[i] = q; wp[i] = t; }
+            else { wq[i] = wq[par] * q; wp[i] = wp[par] + wq[par].RotateVector(t); }
+        }
+        heights.Add(new[] { pel >= 0 ? wp[pel].Z : 0, head >= 0 ? wp[head].Z : 0, wp[rootb].X, wp[rootb].Y, wp[rootb].Z });
+    }
+    var first = heights[0]; var last = heights[^1];
+    return new
+    {
+        package = pkg, length = anim.SequenceLength, frames = seq.NumFrames,
+        pelvis = new { first = first[0], last = last[0], min = heights.Min(h => h[0]), max = heights.Max(h => h[0]) },
+        head = new { first = first[1], last = last[1], min = heights.Min(h => h[1]) },
+        rootTravel = new[] { last[2] - first[2], last[3] - first[3], last[4] - first[4] },
+        // the head's height at every tenth of the way, to see when she reaches the floor
+        headCurve = Enumerable.Range(0, 11).Select(k => MathF.Round(heights[(int)((heights.Count - 1) * k / 10.0)][1], 1)).ToArray(),
+    };
+}

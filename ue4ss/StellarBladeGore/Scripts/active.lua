@@ -18,9 +18,12 @@
 --     air where she died. Each weapon showing is carried by an invisible box of its size that falls and tumbles,
 --     starting with her hand's speed.
 --   * settling: lying still, she kept jittering (head and limbs turning at 50-80 deg/s on the floor for seconds):
---     the tone's drives pulling towards the animated pose against the floor, and light jiggle bodies fighting
---     heavy ones. Once her main bodies have barely moved for settle.time, the tone goes and every body is put to
---     sleep; something hitting her wakes her up and she settles again.
+--     the tone's drives pulling towards the animated pose against the floor and the joint limits, and light jiggle
+--     bodies fighting heavy ones. Speed alone rarely got low enough (a body shivering in place is fast but goes
+--     nowhere), so she counts as lying still when her main bodies are slow or have drifted less than settle.drift
+--     over the last settle.window; the tone lets go the moment she does, and after settle.time of it every body is
+--     put to sleep. Past settle.most seconds a ragdoll that is only shivering settles anyway. Something hitting
+--     her wakes her up and she settles again.
 -- Everything is put back on recovery (masses, the component, the weapons on their sockets).
 
 local M = {}
@@ -415,14 +418,34 @@ local function blow(pawn, mesh, hint)
   return nil, "none"
 end
 
--- the fastest of a ragdoll's main bodies, cm/s
+-- a body that still simulates: a split half's gone limbs don't (they are the other half's), and their bones, left
+-- where they were, aren't hers to wait for
+local function live(comp, b)
+  return try(function() return comp:IsSimulatingPhysics(FName(b)) end) ~= false
+end
+
+-- the fastest of a ragdoll's main bodies, cm/s, and which
 local function speed(comp)
-  local top = 0
+  local top, which = 0, nil
   for _, b in ipairs(STILL) do
-    local v = try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
-    if v then top = math.max(top, len(v)) end
+    local v = live(comp, b) and try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    if v and len(v) > top then top, which = len(v), b end
   end
-  return top
+  return top, which
+end
+
+-- where the main bodies are, keyed "<component n>/<bone>"
+local function where(comps)
+  local out = {}
+  for i, comp in ipairs(comps) do
+    if valid(comp) then
+      for _, b in ipairs(STILL) do
+        local p = live(comp, b) and try(function() local x = comp:GetSocketLocation(FName(b)); return vec(x.X, x.Y, x.Z) end)
+        if p then out[i .. "/" .. b] = p end
+      end
+    end
+  end
+  return out
 end
 
 local function sleep(comp)
@@ -487,29 +510,87 @@ function M.release()
 end
 
 -- a split's copy: her masses (it came with the outfit's 100 kg chest bodies and 80 kg cape links), and it settles
--- with her
+-- with her. No tone: it plays no animation, so the drives would pull it towards the bind pose (arms out)
 function M.add_body(comp)
   if not valid(comp) then return end
   log("split copy: " .. set_masses(comp, cfg()))
   if run then extra[#extra + 1] = comp end
 end
 
+-- the tone's strength now (the fade, or what settling left of it)
+local function tone_set(s)
+  if valid(run.pac) then try(function() run.pac:SetStrengthMultiplyer(s) end) end
+end
+
 local function settle(dt)
   local st = cfg().settle or {}
+  local comps = { run.mesh }
+  for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  -- the main bodies' trail over the last window: how far each got (shivering in place goes nowhere)
+  local win = st.window or 0.5
+  run.trail = run.trail or {}
+  local now = where(comps)
+  table.insert(run.trail, { t = run.t, at = now })
+  while #run.trail > 1 and run.trail[2].t <= run.t - win do table.remove(run.trail, 1) end
   if st.enabled == false or run.t < (st.after or 1.5) then return end
-  local top = speed(run.mesh)
-  for _, c in ipairs(extra) do if valid(c) then top = math.max(top, speed(c)) end end
+  local top, which, wc = 0, nil, nil
+  for i, c in ipairs(comps) do
+    if valid(c) then
+      local s, b = speed(c)
+      if s > top then top, which, wc = s, b, i end
+    end
+  end
+  local drift, far = 0, nil
+  local old = run.trail[1]
+  if old and run.t - old.t >= win * 0.9 then
+    for k, p in pairs(now) do
+      local q = old.at[k]
+      if q then
+        local d = len(vec(p.X - q.X, p.Y - q.Y, p.Z - q.Z))
+        if d > drift then drift, far = d, k end
+      end
+    end
+  else
+    drift = math.huge
+  end
   if run.asleep then
-    if top > (st.wake or 60) then run.asleep, run.still = false, 0; log(string.format("woken (%.0f cm/s)", top)) end
+    if top > (st.wake or 60) then
+      run.asleep, run.still = false, 0
+      log(string.format("woken (%.0f cm/s, %s)", top, tostring(which)))
+    end
     return
   end
-  if top < (st.speed or 15) then run.still = run.still + dt else run.still = 0 end
+  local calm = top < (st.speed or 15) or drift < (st.drift or 2)
+  -- a ragdoll that has been only shivering for long enough settles whatever its speed
+  if not calm and run.t >= (st.most or 6) and drift < (st.driftMost or 6) then calm = true end
+  if calm then
+    if run.still == 0 then
+      -- no tone pulling her against the floor while she comes to rest
+      run.toneHeld = true
+      tone_set(0)
+    end
+    run.still = run.still + dt
+  else
+    if run.still > 0 and run.toneHeld then
+      run.toneHeld = false
+      tone_set(run.toneNow or 1)
+    end
+    run.still = 0
+  end
+  -- every 2 s she isn't lying still: what keeps her going
+  run.nextWhy = run.nextWhy or (st.after or 1.5)
+  if run.still == 0 and run.t >= run.nextWhy then
+    run.nextWhy = run.t + 2
+    log(string.format("not settled at %.1f s: fastest %s %.0f cm/s (body %d), drift %.1f cm (%s) over %.1f s", run.t,
+      tostring(which), top, wc or 0, drift == math.huge and -1 or drift, tostring(far), win))
+  end
   if run.still < (st.time or 0.5) then return end
   run.asleep = true
   tone_stop()
-  local n = sleep(run.mesh)
-  for _, c in ipairs(extra) do if valid(c) then n = n + sleep(c) end end
-  log(string.format("settled after %.2f s: tone off, %d bodies asleep", run.t, n))
+  local n = 0
+  for _, c in ipairs(comps) do if valid(c) then n = n + sleep(c) end end
+  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies asleep", run.t, top,
+    drift == math.huge and -1 or drift, n))
 end
 
 function M.tick(dt)
@@ -526,6 +607,7 @@ function M.tick(dt)
     run.probe = run.probe + 1
   end
   if not run.piece then settle(dt) end
+  if not run then return end
   if run.impactAt and run.t >= run.impactAt then
     run.impactAt = nil
     local d, from = blow(run.pawn, run.mesh, run.hint)
@@ -533,7 +615,7 @@ function M.tick(dt)
   end
   if not run.pac or run.toneDone then return end
   local t = cfg().tone or {}
-  local hold, fade, rest = t.hold or 0.35, t.fade or 2.5, math.max(t.rest or 0.15, 0)
+  local hold, fade, rest = t.hold or 0.35, t.fade or 2.5, math.max(t.rest or 0.1, 0)
   if run.t <= hold then return end
   local x = (run.t - hold) / math.max(fade, 0.01)
   if x >= 1 then
@@ -541,15 +623,16 @@ function M.tick(dt)
       tone_stop()
       log(string.format("tone gone after %.2f s", run.t))
     else
-      try(function() run.pac:SetStrengthMultiplyer(rest) end)
+      run.toneNow = rest
+      if not run.toneHeld then tone_set(rest) end
       run.toneDone = true
       log(string.format("tone down to %.2f after %.2f s", rest, run.t))
     end
     return
   end
-  -- smooth fade, down to the resting tone
-  local s = rest + (1 - rest) * (1 - x * x * (3 - 2 * x))
-  try(function() run.pac:SetStrengthMultiplyer(s) end)
+  -- smooth fade, down to the resting tone (settling holds it at 0 meanwhile)
+  run.toneNow = rest + (1 - rest) * (1 - x * x * (3 - 2 * x))
+  if not run.toneHeld then tone_set(run.toneNow) end
 end
 
 -- a joint gore broke (no tone change): left out of the stretch probe

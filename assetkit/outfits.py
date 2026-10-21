@@ -235,6 +235,69 @@ def orphan_joints(phys, bones, groups):
     return out
 
 
+
+def _inst_vec(inst, name, default):
+    p = next((q for q in inst if q["Name"] == name), None)
+    if p is None:
+        return default
+    v = p["Value"][0]["Value"] if isinstance(p["Value"], list) else p["Value"]
+    return (float(v["X"]), float(v["Y"]), float(v["Z"]))
+
+
+def _frame(q, pri, sec):
+    """A constraint frame's axes (X = pri, Y = sec, Z = pri x sec) in world space, as rows."""
+    x, y = qrot(q, pri), qrot(q, sec)
+    return (x, y, cross(x, y))
+
+
+def joint_limits(phys, bones, ranges):
+    """The main joints' twist is their bend (knee, elbow, hip, shoulder, spine, neck: PhAT framed them as hinges
+    about X), limited the same both ways round a zero of the asset's own. Vanilla knees went from 19 deg past
+    straight to 121 bent, elbows from 24 past straight to 76 (with soft limits, further). Each gets the range of
+    "ranges" (degrees its far end may swing towards her front / her back from the bind pose): twist = half of it,
+    "turn" = how far frame 2 turns about the twist axis to centre it there. Her front is from the feet to the toes."""
+    names = [b["name"] for b in bones]
+    R, T = world_pose(bones)
+    if "Bip001-L-Toe0" not in names:
+        return {}, ["no Bip001-L-Toe0 (no front)"]
+    f = sub(T[names.index("Bip001-L-Toe0")], T[names.index("Bip001-L-Foot")])
+    f = (f[0], f[1], 0.0)
+    fwd = mul(f, 1 / math.sqrt(dot(f, f)))
+    m = main_export(phys)
+    out, notes = {}, []
+    for ref in next((p for p in m["Data"] if p["Name"] == "ConstraintSetup"), {"Value": []})["Value"]:
+        e = phys["Exports"][ref["Value"] - 1]
+        inst = next(p for p in e["Data"] if p["Name"] == "DefaultInstance")["Value"]
+        child = next(p["Value"] for p in inst if p["Name"] == "ConstraintBone1")
+        parent = next(p["Value"] for p in inst if p["Name"] == "ConstraintBone2")
+        r = ranges.get(child)
+        if not r or child not in names or parent not in names:
+            continue
+        c, a = names.index(child), names.index(parent)
+        end = r["end"]
+        if end not in names:
+            notes.append(f"{child}: no {end}")
+            continue
+        f1 = _frame(R[c], _inst_vec(inst, "PriAxis1", (1.0, 0.0, 0.0)), _inst_vec(inst, "SecAxis1", (0.0, 1.0, 0.0)))
+        f2 = _frame(R[a], _inst_vec(inst, "PriAxis2", (1.0, 0.0, 0.0)), _inst_vec(inst, "SecAxis2", (0.0, 1.0, 0.0)))
+        # the child frame in the parent frame (frame 2 is the parent's, as PhysX's actor 0), its twist about X
+        rel = [[dot(f2[i], f1[j]) for j in range(3)] for i in range(3)]
+        w = math.sqrt(max(0.0, 1 + rel[0][0] + rel[1][1] + rel[2][2])) / 2
+        x = (rel[2][1] - rel[1][2]) / (4 * w) if w > 1e-6 else 1.0
+        at_bind = math.degrees(2 * math.atan2(x, w))
+        limb = sub(T[names.index(end)], T[c])
+        limb = mul(limb, 1 / math.sqrt(dot(limb, limb)))
+        ahead = dot(cross(f1[0], limb), fwd)
+        if abs(ahead) < 0.5:
+            notes.append(f"{child}: its twist doesn't bend it front to back ({ahead:+.2f})")
+            continue
+        # a positive twist swings the far end forward when ahead > 0
+        lo, hi = (-r["back"], r["front"]) if ahead > 0 else (-r["front"], r["back"])
+        lo, hi = lo + at_bind, hi + at_bind
+        out[child] = {"twist": round((hi - lo) / 2, 2), "turn": round((hi + lo) / 2, 2)}
+        notes.append(f"{child} {at_bind:+.0f} at bind, twist {out[child]['twist']} turned {out[child]['turn']:+}")
+    return out, notes
+
 def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
     job = job_of(spec)
     pairs = [l.split() for l in open(pairs_file) if l.strip()]
@@ -256,10 +319,14 @@ def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
         bones = json.load(open(f"{bones_root}/SB/Content/{mesh}.json"))["bones"]
         over = rest_overlaps(d, bones, job["groups"], job["rest_margin"])
         joints = orphan_joints(d, bones, job["groups"]) if job.get("lock_orphans", True) else []
+        limits, notes = joint_limits(d, bones, job.get("ranges", {}))
         report.append(f"{phys}: {len(over)} rest overlaps " + ", ".join(f"{a}/{b} {g:.1f}" for a, b, g in over)
-                      + "".join(f"; locks {j['child']} to {j['parent']}" for j in joints))
+                      + "".join(f"; locks {j['child']} to {j['parent']}" for j in joints)
+                      + ("; limits " + ", ".join(notes) if notes else ""))
         assets[phys] = {"mode": "physics", "groups": job["groups"], "except": [[a, b] for a, b, _ in over],
-                        "body": job["body"], "joints": joints, "optional_bodies": True}
+                        "body": job["body"], "joints": joints, "limits": limits, "swing": job.get("swing", {}),
+                        "hard_limits": job.get("hard_limits", True), "optional_bodies": True,
+                        "accessory_collision": job.get("accessory_collision", False)}
     out = dict(spec)
     out["assets"] = assets
     json.dump(out, open(out_spec, "w"), indent=2)

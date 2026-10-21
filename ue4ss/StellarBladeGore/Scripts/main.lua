@@ -15,11 +15,14 @@
 -- Gore (gore.lua + sbslice.dll): dismemberment through a skin weight split on her own mesh, blood on hits,
 -- cuts and under the body; all removed again on recovery.
 -- Active ragdoll (active.lua): human masses, momentum and the blow carried into the fall, fading muscle tone.
--- Sandbox: F7 ragdolls her on the spot with the settings in tune.lua, F8 recovers, F6 re-reads tune.lua,
--- F9 cuts a limb, the head or the torso (tune.gore), F10 presses in a blunt or (next press) stab dent, F11 ragdolls her and splits her
--- in half top to bottom, F5 ragdolls her and cuts along a random blade (as a killing blow does).
+-- Sandbox: F7 ragdolls her with a shove onto her back (tune.lua), F8 recovers, F6 re-reads tune.lua,
+-- F9 cuts a limb, the head or the torso (tune.gore), F10 a blunt wound or (next press) a stab, F11 ragdolls her and splits
+-- her in half top to bottom, Shift+F5 ragdolls her and cuts along a made-up blade (as a killing blow does), F5 plays one
+-- of her animated death shows (a test death, which always splits her: tune.gore.f5Split).
 -- Hits: the game tells clients about every skill hit (SBNetworkPlayerController:ClientBroadcast_SkillHitResult,
--- with the swing's direction); the last one on Eve decides whether a killing blow came down from above.
+-- with the swing's direction); the last one on Eve decides whether a killing blow came down from above. In single
+-- player it never fires: the blow is made up from her mesh's hit or the nearest enemy (death_hit), whose class also
+-- names the attack's style (ENEMY_STYLE).
 -- On first load it also dumps the full reflection schema (DumpUSMAP) for asset editing.
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
@@ -85,6 +88,18 @@ end
 load_tune()
 
 local gore, rag = nil, nil
+-- an animated death (see animated_death below): { pawn, mesh, push } while her own fall plays, nil otherwise
+local animDeath = nil
+local function ragdoll_now(why)
+  local a = animDeath
+  if not a then return end
+  animDeath = nil
+  try(function() a.mesh:SetSimulatePhysics(true) end)
+  try(function() a.mesh:SetAllBodiesSimulatePhysics(true) end)
+  try(function() a.mesh:WakeAllRigidBodies() end)
+  log("animated death: ragdoll after all (" .. why .. ")")
+  if rag then rag.start(a.pawn, a.mesh, "death", a.push) end
+end
 goreCtx.log, goreCtx.try, goreCtx.valid, goreCtx.v3 = log, try, valid, v3
 -- a severed limb stops being driven by the muscle tone
 goreCtx.on_cut = function(mesh, bone) if rag then rag.on_cut(mesh, bone) end end
@@ -94,6 +109,10 @@ goreCtx.on_copy = function(comp) if rag then rag.add_body(comp) end end
 goreCtx.on_broken = function(mesh, bone) if rag then rag.broken(mesh, bone) end end
 goreCtx.on_hold = function(mesh) if rag then return rag.hold(mesh) end end
 goreCtx.on_release = function() if rag then rag.release() end end
+-- a waist cut or a split needs the ragdoll: an animated death switches to it before the cut
+goreCtx.on_need_ragdoll = function(kind) ragdoll_now(kind) end
+-- her death fall is playing (a split then plays on with it before the halves come apart)
+goreCtx.animated = function() return animDeath ~= nil end
 -- a piece cut off a standing Eve gets human masses
 goreCtx.on_piece = function(pawn, mesh) if rag then return rag.piece(pawn, mesh) end end
 do
@@ -315,7 +334,7 @@ local function on_end(pawn, mesh)
   log(string.format("mesh flags at ragdoll end: pendingKill=%s beginDestroyed=%s",
     tostring(try(function() return mesh:HasAnyInternalFlags(EInternalObjectFlags.PendingKill) end)),
     tostring(try(function() return mesh:HasAnyFlags(EObjectFlags.RF_BeginDestroyed) end))))
-  active = false
+  active, animDeath = false, nil
   after, lastRecover, respawned = 0, -100, false
   try(function() mesh:SetCollisionResponseToChannel(CH.PhysicsBody, saved.meshPB or BLOCK) end)
   if valid(saved.hair) and saved.hairEnabled then try(function() saved.hair:SetCollisionEnabled(saved.hairEnabled) end) end
@@ -338,6 +357,57 @@ local function on_end(pawn, mesh)
   recover(pawn, mesh, "ragdoll ended")
 end
 
+-- F7's push, per bone, as a share of tune.impulse (upper body) or of tune.legKick (negative: the legs, the other way)
+local F7_PUSH = {
+  ["Bip001-Spine2"] = 1.0, ["Bip001-Spine1"] = 0.9, ["Bip001-Neck"] = 0.9, ["Bip001-Head"] = 0.9,
+  ["Bip001-L-Clavicle"] = 0.8, ["Bip001-R-Clavicle"] = 0.8, ["Bip001-L-UpperArm"] = 0.6, ["Bip001-R-UpperArm"] = 0.6,
+  ["Bip001-Spine"] = 0.6, ["Bip001-Pelvis"] = 0.3,
+  ["Bip001-L-Calf"] = -0.6, ["Bip001-R-Calf"] = -0.6, ["Bip001-L-Foot"] = -1.0, ["Bip001-R-Foot"] = -1.0,
+}
+-- F7's push waits until her bodies simulate: pushed the tick physics was switched on, most of it was lost (her pelvis
+-- read 0 cm/s right after, the head 100 instead of 900). { pawn, mesh, n } ticks to wait
+local f7_push, f7_after = nil, nil
+local F7_WAIT = 2
+
+local function body_speed(mesh, b)
+  local v = try(function() local x = mesh:GetPhysicsLinearVelocity(FName(b)); return { X = x.X, Y = x.Y, Z = x.Z } end)
+  return v and math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) or -1
+end
+
+-- the shove: the whole body moves along it (push, every body the same velocity change, so the centre of mass goes),
+-- the upper body more (impulse) and the legs the other way (legKick), so with "back" she topples onto her back
+local function f7_shove(pawn, mesh)
+  local f = (tune.relativeTo or "eve") == "camera" and try(function()
+    local yaw = math.rad(pawn:GetControlRotation().Yaw)
+    return { X = math.cos(yaw), Y = math.sin(yaw) }
+  end) or try(function() local v = pawn:GetActorForwardVector(); return { X = v.X, Y = v.Y } end)
+  f = f or { X = 1, Y = 0 }
+  local fl = math.max(math.sqrt(f.X * f.X + f.Y * f.Y), 1e-3)
+  local fx, fy = f.X / fl, f.Y / fl
+  local dirs = { forward = { fx, fy }, back = { -fx, -fy }, left = { fy, -fx }, right = { -fy, fx } }
+  local d = dirs[tune.direction] or dirs.back
+  local up, kick, push = tune.up or 0, tune.legKick or 0, tune.push or 0
+  local h = math.sqrt(math.max(0, 1 - up * up))
+  local before = body_speed(mesh, "Bip001-Pelvis")
+  local all = false
+  if push > 0 then
+    all = try(function()
+      mesh:AddImpulseToAllBodiesBelow({ X = d[1] * h * push, Y = d[2] * h * push, Z = up * push }, FName("Bip001"), true, true)
+      return true
+    end) == true
+  end
+  local n = 0
+  for bone, share in pairs(F7_PUSH) do
+    local v = share > 0 and (tune.impulse or 0) * share or kick * share
+    local imp = { X = d[1] * h * v, Y = d[2] * h * v, Z = share > 0 and up * v or 0 }
+    if try(function() mesh:AddImpulse(imp, FName(bone), true); return true end) then n = n + 1 end
+  end
+  try(function() mesh:WakeAllRigidBodies() end)
+  log(string.format("F7: pushed %s (from %s's facing): whole body %.0f cm/s%s, upper body %.0f, legs the other way %.0f, on %d bones; pelvis at %.0f cm/s",
+    tune.direction or "back", (tune.relativeTo or "eve") == "camera" and "the camera" or "her", push, all and "" or " (FAILED)",
+    tune.impulse or 0, kick, n, before))
+end
+
 -- F7 sandbox ragdoll: what the death show does (Ragdoll profile + simulate + impulse), on demand
 local function sandbox_ragdoll()
   local pawn = find_eve()
@@ -352,19 +422,9 @@ local function sandbox_ragdoll()
   on_start(pawn, mesh)
   saved.collision = c
   try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
-  if (tune.impulse or 0) > 0 then
-    local rot = try(function() return pawn:GetControlRotation() end)
-    local yaw = math.rad(rot and rot.Yaw or 0)
-    local fx, fy = math.cos(yaw), math.sin(yaw)
-    local dirs = { forward = { fx, fy }, back = { -fx, -fy }, left = { fy, -fx }, right = { -fy, fx } }
-    local d = dirs[tune.direction] or dirs.back
-    local up = tune.up or 0
-    local h = math.sqrt(math.max(0, 1 - up * up))
-    local imp = { X = d[1] * h * tune.impulse, Y = d[2] * h * tune.impulse, Z = up * tune.impulse }
-    local ok = try(function() mesh:AddImpulse(imp, FName(tune.bone or "Bip001-Spine1"), true); return true end)
-    log(string.format("F7: impulse %s on %s: %s", v3(imp), tostring(tune.bone), tostring(ok)))
-  end
   if rag then rag.start(pawn, mesh, "sandbox") end
+  -- the push goes in a couple of ticks later, once her bodies simulate (tick)
+  if (tune.impulse or 0) > 0 or (tune.push or 0) > 0 then f7_push = { pawn = pawn, mesh = mesh, n = F7_WAIT } end
 end
 
 local function sandbox_recover()
@@ -383,11 +443,13 @@ end
 -- when no reported hit named a stab or blunt attack); wounds false = only cuts (F9);
 -- split only when allowed (a blow that came down from above)
 local KINDS = { "limb", "head", "torso", "wound", "split" }
-local function pick_kind(wounds, split)
+-- blunt: a fist or a slam tears off a limb or the head at most, it never cuts her in two
+local function pick_kind(wounds, split, blunt)
   local odds = (tune.gore or {}).death or { limb = 45, head = 20, torso = 15, wound = 20, split = 10 }
   local function w(k)
     if k == "wound" and not wounds then return 0 end
-    if k == "split" and not split then return 0 end
+    if k == "split" and (not split or blunt) then return 0 end
+    if k == "torso" and blunt then return 0 end
     return math.max(tonumber(odds[k]) or 0, 0)
   end
   local total = 0
@@ -425,6 +487,7 @@ end
 local HIT_RESULT = { [0] = "none", "hit", "miss", "parry", "superparry", "guard", "guardblock" }
 local ATTACK_DIR = { [0] = "none", "left-to-right", "right-to-left", "front" }
 local hitCalls, hitsOnEve = 0, 0
+local attack_style -- below
 local HIT_PROBE = 12
 local function on_skill_hit(_, _turn, skill, _result_id, caster, target, result, group, _hit, loc, nrm, bone, dir, fwd,
                             _stop, _crit, attack_dir, show)
@@ -462,7 +525,29 @@ end
 local STAB = { "stab", "thrust", "pierce", "sting", "spear", "lance", "drill", "needle", "spike", "impale" }
 local BLUNT = { "punch", "smash", "bash", "slam", "stomp", "kick", "hammer", "tackle", "crush", "charge",
   "headbutt", "fist", "blunt", "rush" }
-local function attack_style(h)
+-- The game never reports the attack in single player, so the attacker decides: each enemy by what most of its
+-- attacks are (sorted from its skill shows' names: the Gorilla's FistRush / BodySlam / SmashCombo are blunt, the
+-- Sawshark's saw and the Tachy's slashes blades, the gunners' shots stabs). tune.gore.attackerStyles adds or
+-- overrides entries; the key is the part of the enemy's class name after CH_M_ (CH_M_NA_05_Blueprint_C -> "NA_05")
+local ENEMY_STYLE = {
+  NA_01 = "stab", NA_02 = "blade", NA_03 = "blade", NA_05 = "blunt", NA_07 = "blunt", NA_08 = "blunt",
+  NA_09 = "stab", NA_11 = "blunt", NA_12 = "blunt", NA_13 = "blade", NA_14 = "blade", NA_15 = "blunt",
+  NA_16 = "blunt", NA_17 = "blade", NA_18 = "stab", NA_19 = "stab", NA_20 = "blunt", NA_21 = "blade",
+  NA_22 = "blade", NA_23 = "blade", NA_24 = "stab", NA_25 = "blunt", NA_26 = "blade", NA_27 = "stab",
+  NA_28 = "blunt", NA_29 = "blade", NA_30 = "blunt", NA_31 = "blade", NA_32 = "blunt", NA_34 = "blunt",
+  NA_35 = "blunt", NA_36 = "blunt", NA_37 = "blunt", NA_39 = "blade", NA_40 = "blade", NA_41 = "blunt",
+  NA_42 = "blade", NA_43 = "blunt", NA_44 = "blade", NA_45 = "blade", NA_46 = "blunt", NA_47 = "blade",
+  NA_48 = "stab", NA_49 = "blade", NA_51 = "blunt", NA_52 = "blunt", NA_53 = "blade", NA_54 = "blade",
+  NA_55 = "blade", NA_56 = "blade", NA_57 = "stab", NA_58 = "blade", NA_901 = "blade", NA_961 = "blade",
+}
+local function enemy_style(cls)
+  if not cls then return nil end
+  local key = cls:match("^CH_[MN]_([%a]+_%d+)")
+  if not key then return nil end
+  local over = (tune.gore or {}).attackerStyles or {}
+  return over[key] or ENEMY_STYLE[key]
+end
+attack_style = function(h)
   if not h then return "blade" end
   local g = tune.gore or {}
   local name = ((h.group or "") .. " " .. (h.show or "")):lower()
@@ -472,7 +557,7 @@ local function attack_style(h)
   end
   if any(g.stabWords or STAB) then return "stab" end
   if any(g.bluntWords or BLUNT) then return "blunt" end
-  return "blade"
+  return enemy_style(h.attacker) or g.unknownStyle or "blade"
 end
 local function last_hit(within)
   local h = hits[#hits]
@@ -533,11 +618,35 @@ local function attacker(pawn, mesh)
   return best
 end
 
+-- where a made-up blade lands, with odds: mostly the chest, stomach, neck and arms (an even pick of 12 bones, a third of
+-- them legs, put nearly every made-up blow through a leg); a limb is struck 40 % of the way down it, not at its joint
+local SWING_AT = {
+  { "Bip001-Spine1", 3 }, { "Bip001-Spine2", 3 }, { "Bip001-Neck", 1.5 }, { "Bip001-Spine", 1 },
+  { "Bip001-L-UpperArm", 1.5, "Bip001-L-Forearm" }, { "Bip001-R-UpperArm", 1.5, "Bip001-R-Forearm" },
+  { "Bip001-L-Forearm", 0.75, "Bip001-L-Hand" }, { "Bip001-R-Forearm", 0.75, "Bip001-R-Hand" },
+  { "Bip001-L-Thigh", 0.6, "Bip001-L-Calf" }, { "Bip001-R-Thigh", 0.6, "Bip001-R-Calf" },
+  { "Bip001-L-Calf", 0.3, "Bip001-L-Foot" }, { "Bip001-R-Calf", 0.3, "Bip001-R-Foot" },
+}
+local function swing_at(mesh)
+  local sum = 0
+  for _, e in ipairs(SWING_AT) do sum = sum + e[2] end
+  local r = math.random() * sum
+  local e = SWING_AT[#SWING_AT]
+  for _, x in ipairs(SWING_AT) do
+    r = r - x[2]
+    if r <= 0 then e = x; break end
+  end
+  local loc = try(function()
+    local a = mesh:GetSocketLocation(FName(e[1]))
+    if not e[3] then return { X = a.X, Y = a.Y, Z = a.Z } end
+    local b = mesh:GetSocketLocation(FName(e[3]))
+    return { X = a.X + 0.4 * (b.X - a.X), Y = a.Y + 0.4 * (b.Y - a.Y), Z = a.Z + 0.4 * (b.Z - a.Z) }
+  end)
+  return e[1], loc
+end
 -- the killing blow: the game's skill hit when it came (swing and forward), else a blade made up around where it came
 -- from (her mesh's last hit, else the nearest enemy): pushed from there, swung level, slanted or down across it,
--- through where the mesh says she was hit or a random part of her
-local SWING_AT = { "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck", "Bip001-Pelvis", "Bip001-L-UpperArm", "Bip001-R-UpperArm",
-  "Bip001-L-Forearm", "Bip001-R-Forearm", "Bip001-L-Thigh", "Bip001-R-Thigh", "Bip001-L-Calf", "Bip001-R-Calf" }
+-- through where the mesh says she was hit or a part of her (swing_at)
 local function death_hit(pawn, mesh)
   local g = tune.gore or {}
   local h = last_hit(g.hitWindow or 0.6)
@@ -556,16 +665,15 @@ local function death_hit(pawn, mesh)
   local ang = math.rad(({ 0, 20, 45, 45, 70, 90 })[math.random(6)])
   local dir = { X = -fwd.Y * side * math.cos(ang), Y = fwd.X * side * math.cos(ang), Z = -math.sin(ang) }
   local loc = m and m.loc
-  if not loc then
-    local bone = SWING_AT[math.random(#SWING_AT)]
-    loc = try(function() return vof(mesh:GetSocketLocation(FName(bone))) end)
-  end
+  local bone = m and m.bone
+  if not loc then bone, loc = swing_at(mesh) end
   if not loc then return h end
   local from = (m and m.push and "her mesh's hit") or "the nearest enemy"
-  log(string.format("death: blow from %s%s, %d deg down, at %s", from,
-    a and string.format(" (%s, %.0f cm off)", a.name, a.d) or "", math.floor(math.deg(ang) + 0.5), v3(loc)))
+  log(string.format("death: blow from %s%s, %d deg down, at %s (%s)", from,
+    a and string.format(" (nearest enemy %s, %.0f cm off: %s)", a.name, a.d, enemy_style(a.name) or "style unknown") or "",
+    math.floor(math.deg(ang) + 0.5), v3(loc), m and "where the mesh was hit" or ("made up: " .. tostring(bone))))
   return { t = os.clock(), loc = loc, dir = dir, fwd = fwd, push = push, attack_dir = 0, src = from,
-    group = h and h.group, show = h and h.show, bone = m and m.bone }
+    group = h and h.group, show = h and h.show, bone = bone, attacker = a and a.name }
 end
 
 -- a blow from above: the split plane holds the swing and the attacker's forward (its normal is their cross
@@ -604,12 +712,12 @@ local function sandbox_split()
   gore.split(pawn, mesh, nil, { X = -math.sin(yaw), Y = math.cos(yaw), Z = 0 }, "F11")
 end
 
--- F5: ragdoll her and cut along a made-up blade, as a killing blow would (gore.blow): a swing level, slanted or
+-- Shift+F5: ragdoll her and cut along a made-up blade, as a killing blow would (gore.blow): a swing level, slanted or
 -- straight down through a random part of her, the attacker standing where the camera looks from
 local function sandbox_blade()
   local pawn = find_eve()
   local mesh = pawn and try(function() return pawn.Mesh end)
-  if not (gore and valid(mesh)) then log("F5: no Eve or no gore.lua"); return end
+  if not (gore and valid(mesh)) then log("Shift+F5: no Eve or no gore.lua"); return end
   if not active then sandbox_ragdoll() end
   local rot = try(function() return pawn:GetControlRotation() end)
   local yaw = math.rad(rot and rot.Yaw or 0)
@@ -617,14 +725,81 @@ local function sandbox_blade()
   local side = math.random() < 0.5 and -1 or 1
   local a = math.rad(({ 0, 30, 60, 90 })[math.random(4)])
   local dir = { X = -math.sin(yaw) * side * math.cos(a), Y = math.cos(yaw) * side * math.cos(a), Z = -math.sin(a) }
-  local bone = SWING_AT[math.random(#SWING_AT)]
-  local loc = try(function() local l = mesh:GetSocketLocation(FName(bone)); return { X = l.X, Y = l.Y, Z = l.Z } end)
-  if not loc then log("F5: no " .. bone); return end
-  log(string.format("F5: blade through %s, %d deg down", bone, math.floor(math.deg(a) + 0.5)))
-  gore.blow(pawn, mesh, { t = os.clock(), loc = loc, dir = dir, fwd = fwd, attack_dir = 0 }, "F5")
+  local bone, loc = swing_at(mesh)
+  if not loc then log("Shift+F5: no " .. bone); return end
+  log(string.format("Shift+F5: blade through %s, %d deg down", bone, math.floor(math.deg(a) + 0.5)))
+  gore.blow(pawn, mesh, { t = os.clock(), loc = loc, dir = dir, fwd = fwd, attack_dir = 0, bone = bone }, "F5")
 end
 
--- F10: a dent, blunt and stab in turn
+-- more falls for an animated death: the data mod's death shows made from her knockdown falls (Ragdoll/EveDeath_*,
+-- no ragdoll key; the knockdown shows themselves are untouched). One is picked at random with her own death show
+-- (tune.active.animatedPool) and played over it
+local DEATH_FALLS = { "Knock_Down_Start", "Knock_Down_Start1", "Knock_Down_Forward", "Knock_Down_Backward",
+  "KnockDown_S_Fw", "KnockDown_S_Bw", "KnockDown_Tumble_Fw", "KnockDown_Tumble_Bw" }
+local forceFall = nil -- F5: the fall to play next ("own" = her death show's own)
+local DEATH_HOST = "/Game/Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead.P_Eve_Dead" -- imports every EveDeath_* (ragdoll_spec.json)
+-- a show (path under Art/Show, e.g. "CH_P_EVE_01/Basic/P_Eve_Dead") on her. PlaySingleShow is only on the game's
+-- show interface, which Lua can't call (it silently did nothing); SBBlueprintLibrary's PlaySBShowToPlayerCharacter
+-- takes the show asset itself, and the cheat manager's SBPlayShow (when the game made one) its path
+local function play_show(pawn, rel, why)
+  local nm = rel:match("([^/]+)$")
+  local path = "/Game/Art/Show/" .. rel .. "." .. nm
+  local show = try(function() return StaticFindObject(path) end)
+  if not valid(show) and LoadAsset then show = try(function() return LoadAsset(path) end) end
+  if not valid(show) then show = try(function() return StaticFindObject(path) end) end
+  if not valid(show) and LoadAsset then
+    -- the mod's own shows aren't in the asset registry, so LoadAsset can't find them; P_Eve_Dead (which is)
+    -- imports the death falls, and loading it brings them in
+    try(function() LoadAsset(DEATH_HOST) end)
+    show = try(function() return StaticFindObject(path) end)
+  end
+  if valid(show) then
+    local lib = try(function() return StaticFindObject("/Script/SB.Default__SBBlueprintLibrary") end)
+    if valid(lib) then
+      local ok, err = pcall(function() lib:PlaySBShowToPlayerCharacter(show) end)
+      log(string.format("%s: show %s via SBBlueprintLibrary: %s", why, rel, ok and "played" or tostring(err)))
+      if ok then return true end
+    else
+      log(why .. ": no SBBlueprintLibrary")
+    end
+  else
+    -- what the host holds: its preload keys gone (collected) or never there (the pak)
+    local host = try(function() return StaticFindObject(DEATH_HOST) end)
+    local key = try(function() return StaticFindObject(DEATH_HOST .. ":SBShowPlayShowKey_1") end)
+    local sd = valid(key) and try(function() return key.ShowData end)
+    log(string.format("%s: show %s didn't load (host %s, preload key %s -> %s)", why, path, tostring(valid(host)),
+      tostring(valid(key)), valid(sd) and sd:GetFullName() or "nothing"))
+  end
+  local cm = try(function() return FindFirstOf("SBCheatManager") end)
+  if valid(cm) then
+    local ok, err = pcall(function() cm:SBPlayShow(path) end)
+    log(string.format("%s: show %s via the cheat manager: %s", why, rel, ok and "played" or tostring(err)))
+    if ok then return true end
+  end
+  return false
+end
+
+-- F5: one of her animated death shows on the spot, in turn (P_Eve_Dead, Dead2, Dead3). Its ragdoll key is the
+-- data mod's death signal, so everything after runs as on a real death: the fall plays, the death's cut is rolled
+-- (or cut along the last hit), blood, recovery after recoverAfter. She isn't dead, so the game's death screen and
+-- respawn don't come
+local DEATH_SHOWS = { "P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3" }
+local f5_fall = 0
+local f5_at = nil -- when F5 played its death: that death splits her top to bottom (tune.gore.f5Split)
+local function sandbox_death()
+  local pawn = find_eve()
+  if not pawn then log("F5: no Eve"); return end
+  if active then log("F5: she is already down (F8 gets her up)"); return end
+  -- her three death shows first, then each knockdown fall over the first
+  f5_fall = f5_fall % (#DEATH_SHOWS + #DEATH_FALLS) + 1
+  local show
+  if f5_fall <= #DEATH_SHOWS then show, forceFall = DEATH_SHOWS[f5_fall], "own"
+  else show, forceFall = DEATH_SHOWS[1], DEATH_FALLS[f5_fall - #DEATH_SHOWS] end
+  log(string.format("F5: test death %d of %d: %s, fall %s", f5_fall, #DEATH_SHOWS + #DEATH_FALLS, show, forceFall))
+  if play_show(pawn, "CH_P_EVE_01/Basic/" .. show, "F5") then f5_at = os.clock() else forceFall = nil end
+end
+
+-- F10: a wound, blunt (tune.gore.bluntWound) and stab in turn
 local f10_stab = false
 local function sandbox_wound()
   local pawn = find_eve()
@@ -641,6 +816,14 @@ local function gore_death(pawn, mesh, h)
   local hit = try(function() local h = pawn.RagdollInfo.HitLocation; return { X = h.X, Y = h.Y, Z = h.Z } end)
   if hit and hit.X == 0 and hit.Y == 0 and hit.Z == 0 then hit = nil end
   gore.on_hit(pawn, mesh, hit or try(function() return mesh:GetSocketLocation(FName("Bip001-Spine2")) end))
+  -- F5's test death: always the split top to bottom, down the middle (her left and right), on her fall
+  local f5 = f5_at and os.clock() - f5_at < 5
+  f5_at = nil
+  if f5 and g.f5Split ~= false then
+    log("death: F5's test death, split top to bottom")
+    gore.split(pawn, mesh, nil, nil, "death")
+    return
+  end
   if g.sliceOnDeath ~= false and math.random() <= (g.sliceChance or 1.0) then
     local style = attack_style(h)
     -- a stab or blunt killing blow presses in where it landed, against its direction (else against her push)
@@ -659,7 +842,8 @@ local function gore_death(pawn, mesh, h)
       if gore.blow(pawn, mesh, h, "death") then return end
     end
     local normal = split_normal(h)
-    local kind = pick_kind(true, normal ~= nil)
+    -- a blade's death always takes something off: a wound only for stabs and blunt blows (whose own one failed)
+    local kind = pick_kind(style ~= "blade", normal ~= nil, style == "blunt")
     log(string.format("death: last hit %s (hook called %d times, %d on Eve), from above %s, rolled %s",
       h and string.format("%.2f s ago", os.clock() - h.t) or "none", hitCalls, hitsOnEve, tostring(normal ~= nil), kind))
     if kind == "split" then
@@ -692,7 +876,8 @@ RegisterKeyBind(Key.F6, on_key("F6", load_tune))
 RegisterKeyBind(Key.F9, on_key("F9", sandbox_slice))
 RegisterKeyBind(Key.F10, on_key("F10", sandbox_wound))
 RegisterKeyBind(Key.F11, on_key("F11", sandbox_split))
-RegisterKeyBind(Key.F5, on_key("F5", sandbox_blade))
+RegisterKeyBind(Key.F5, on_key("F5", sandbox_death))
+RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, on_key("Shift+F5", sandbox_blade))
 
 -- who touches the mesh around death/respawn: Blueprint-level destroys and Eve's (re)init events
 local hooked = false
@@ -750,6 +935,53 @@ local function trace(pawn, mesh)
   log(string.format("p%03d %s", polls, table.concat(parts, " ")))
 end
 
+-- Animated deaths: the data mod's ragdoll key in her animated death shows (P_Eve_Dead, Dead2, Dead3, _Nikke,
+-- Eve_Dead_Down) carries ImpulseLimitVelocity 701, and the death table points the stand and light-hit deaths at
+-- them. That key is only the signal that she died: the show's own fall plays on, physics goes back off, and cuts
+-- happen on the animated body like F9's on a standing Eve (the piece simulates, she doesn't). The end pose holds,
+-- so nothing jiggles on the floor. Heavy hits, explosions, airborne and ledge deaths keep the raw ragdoll, and so do
+-- a waist cut and a split (on_need_ragdoll). Knockdown shows have no key at all, so a knockdown never counts.
+local ANIM_MARK = 701
+local function animated_marker(pawn)
+  local v = try(function() return pawn.RagdollInfo.ImpulseLimitVelocity end)
+  return v and math.abs(v - ANIM_MARK) < 0.5, v
+end
+local anim_fall
+local function animated_death(pawn, mesh, push)
+  local a = tune.active or {}
+  if a.enabled == false or a.animated == false then return false end
+  local marked, v = animated_marker(pawn)
+  if not marked then
+    log(string.format("death: ragdoll show (ImpulseLimitVelocity %s)", tostring(v)))
+    return false
+  end
+  try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
+  try(function() mesh:SetSimulatePhysics(false) end)
+  return anim_fall(pawn, mesh, push)
+end
+
+-- her fall plays on as the death (the show's own, or one of DEATH_FALLS over it)
+anim_fall = function(pawn, mesh, push)
+  local a = tune.active or {}
+  animDeath = { pawn = pawn, mesh = mesh, push = push }
+  log(string.format("death: animated fall, physics off (pelvis simulating %s)",
+    tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
+  local fall = forceFall
+  forceFall = nil
+  if not fall and a.animatedPool ~= false then
+    local k = math.random(#DEATH_FALLS + 1)
+    fall = k <= #DEATH_FALLS and DEATH_FALLS[k] or "own"
+  end
+  if fall and fall ~= "own" then
+    animDeath.fall = fall
+    if not play_show(pawn, "CH_P_EVE_01/Ragdoll/EveDeath_" .. fall, "animated death") then animDeath.fall = "own (" .. fall .. " didn't play)" end
+  else
+    animDeath.fall = "own"
+  end
+  log("animated death: fall " .. animDeath.fall)
+  return true
+end
+
 local function tick()
   local pawn = find_eve()
   if not pawn then return end
@@ -760,18 +992,64 @@ local function tick()
   hook_once()
   local mesh = try(function() return pawn.Mesh end)
   if not valid(mesh) then return end
-  local sim = try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true
+  local function simulating() return try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true end
+  local sim = simulating()
 
-  if gore then gore.tick(pawn) end
+  if gore then
+    gore.tick(pawn)
+    -- gore can switch an animated death to the ragdoll (a split after its splitAnim): read it again, or this tick
+    -- saw a death with no fall and no ragdoll and ended it (she was put back whole mid death)
+    if not sim and animDeath == nil and active then sim = simulating() end
+  end
+  if f7_push then
+    f7_push.n = f7_push.n - 1
+    if f7_push.n <= 0 then
+      local p = f7_push
+      f7_push = nil
+      if valid(p.mesh) and active then
+        f7_shove(p.pawn, p.mesh)
+        -- the push shows in the bodies' speed only after the next physics step
+        f7_after = { mesh = p.mesh, n = 1 }
+      end
+    end
+  elseif f7_after then
+    f7_after.n = f7_after.n - 1
+    if f7_after.n <= 0 then
+      if valid(f7_after.mesh) then log(string.format("F7: pelvis %.0f cm/s after the push", body_speed(f7_after.mesh, "Bip001-Pelvis"))) end
+      f7_after = nil
+    end
+  end
   if rag and not sim then rag.track(pawn) end
   if not sim then poll_mesh_hit(mesh) end
-  if sim and not active then
+  if f5_at and not sim and not active and os.clock() - f5_at >= ((tune.gore or {}).f5Delay or 0.5) then
+    -- the show's ragdoll key does nothing while she is alive (F5 played the fall, then nothing): the death starts
+    -- here, on her animated fall, as if the key had fired
+    log("F5: the show's ragdoll key didn't fire (she isn't dead), the test death starts here")
+    after = -1
+    saved = {}
+    on_start(pawn, mesh)
+    anim_fall(pawn, mesh, nil)
+    gore_death(pawn, mesh, nil)
+    f5_at = nil
+  elseif sim and not active then
     after = -1
     saved = {}
     on_start(pawn, mesh)
     local h = death_hit(pawn, mesh)
-    if rag then rag.start(pawn, mesh, "death", h and h.push) end
+    if not animated_death(pawn, mesh, h and h.push) and rag then rag.start(pawn, mesh, "death", h and h.push) end
     gore_death(pawn, mesh, h)
+  elseif not sim and active and animDeath then
+    -- her own fall: the death continues without physics
+    if polls == 15 then
+      log(string.format("animated death at 0.5 s: pelvis%s, simulating %s", v3(try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end)),
+        tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
+    end
+    -- is she lying at the end? her head's height over the mesh's origin (her feet, the floor)
+    if polls == 90 or polls == 150 then
+      local h = try(function() return mesh:GetSocketLocation(FName("Bip001-Head")).Z - mesh:K2_GetComponentLocation().Z end)
+      log(string.format("animated death (%s) at %.0f s: head %s cm over the floor%s", tostring(animDeath.fall), polls / 30,
+        h and string.format("%.0f", h) or "?", h and h > 60 and " - NOT LYING, drop this fall" or ""))
+    end
   elseif not sim and active then
     on_end(pawn, mesh)
   elseif not sim and after >= 0 then
@@ -793,7 +1071,7 @@ local function tick()
     if l and r then rel.loc, rel.rot = copy3(l, XYZ), copy3(r, PYR) end
   end
 
-  if active and polls * POLL_MS / 1000 >= (tune.recoverAfter or 6) then
+  if active and polls * POLL_MS / 1000 >= (tune.recoverAfter or 10) then
     -- get her up ourselves while the death screen covers it; the sandbox (F8) recovery always worked,
     -- the one after the game's respawn never did
     log(string.format("recovering after %.1f s of ragdoll, before the game respawns her", polls * POLL_MS / 1000))
@@ -823,7 +1101,7 @@ end
 -- held from the old one is dropped without touching it.
 local function forget_world()
   active, polls, after, respawned, lastRecover = false, 0, -1, false, -100
-  saved, hits, pending = {}, {}, {}
+  saved, hits, pending, animDeath = {}, {}, {}, nil
   rel = { loc = nil, rot = nil }
   meshHit, meshKey = nil, nil
   if gore then gore.forget() end
@@ -843,6 +1121,7 @@ local function adopt(ctx)
 end
 
 local nextTick = 0
+local lastTickErr, tickErrRepeats = nil, 0
 local function game_tick(ctx)
   if not adopt(ctx) then return end
   local now = os.clock()
@@ -850,8 +1129,18 @@ local function game_tick(ctx)
   pending = {}
   if now < nextTick then return end
   nextTick = now + POLL_MS / 1000
-  local ok, err = pcall(tick)
-  if not ok then log("tick error: " .. tostring(err)) end
+  local ok, err = xpcall(tick, debug and debug.traceback or tostring)
+  if not ok then
+    -- the same error on every tick filled the log (900 lines in 30 s): once with its traceback, then a count
+    err = tostring(err)
+    if err == lastTickErr then
+      tickErrRepeats = tickErrRepeats + 1
+      if tickErrRepeats % 300 == 0 then log(string.format("tick error repeated %d times", tickErrRepeats)) end
+    else
+      lastTickErr, tickErrRepeats = err, 0
+      log("tick error: " .. err)
+    end
+  end
 end
 
 local TICK_FN = "/Game/Art/Character/PC/CH_P_EVE_01/Blueprints/CH_P_EVE_01_Blueprint.CH_P_EVE_01_Blueprint_C:ReceiveTick"

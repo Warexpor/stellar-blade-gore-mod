@@ -15,5 +15,5 @@ if [[ ! -f $OUT/$MESH.bin ]]; then
     "$ROOT/.cache/meshtool/meshtool" dump "$ROOT/.cache/work/vanilla" "$ROOT/mappings/SB.usmap" "$PKG" "$OUT/$MESH.json" >/dev/null
   python3 "$HERE/pack.py" "$OUT/$MESH.json" "$OUT/$MESH.bin"
 fi
-clang -O1 -g -fsanitize=address,undefined -w -o "$OUT/real_split" "$HERE/real_split.c"
+clang -O1 -g -fsanitize=address,undefined -w -o "$OUT/real_split" "$HERE/real_split.c" -lm
 ASAN_OPTIONS=detect_leaks=0 "$OUT/real_split" "$OUT/$MESH.bin" ${2:+"$2"} | cut -c1-240
