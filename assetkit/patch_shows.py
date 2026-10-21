@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Patch Stellar Blade show / table JSON (UAssetAPI SerializeJson) so Eve ragdolls on death.
 
-Usage: patch_shows.py <spec.json> <json_in_dir> <json_out_dir>
+Usage: patch_shows.py <spec.json> <json_in_dir> <json_out_dir> [meshinfo.log]
+With meshinfo.log (sbtool meshinfo), "cpuaccess" jobs are left to sbtool cpuaccess and only their imports are read.
 
 The spec lists, per asset (relative path under SB/Content, no extension):
   "flip":   set bIgnorePlayer=false on every SBShowRagdollKey export (key already exists)
@@ -13,6 +14,12 @@ The spec lists, per asset (relative path under SB/Content, no extension):
              data after the tagged properties) and per-body damping
   "cpuaccess": keep a skeletal mesh's LOD0 vertex data on the CPU (bAllowCPUAccess), which the game's
                runtime mesh slicer needs; sliceable monsters ship with it, Eve's outfits don't
+  "vendor": ship a third-party asset as is ("file": legacy package under the repo, dumped by build.sh into
+            $SB_VENDOR_JSON)
+  "voice":  add a voice to a CharacterSoundSet's VoiceSounds map, as a copy of the entry "like" with "set"
+            fields changed ("sound": the SoundSource cue's package path)
+  "notify": add an SBAnimNotify_CharSESound playing voice "voice" to an AnimSequence at time "at", keeping
+            every notify it has
 """
 import base64, copy, json, os, struct, sys
 
@@ -321,7 +328,89 @@ def physics_table(d, job):
     return table
 
 
+def _prop(kind, name, value, **extra):
+    return {"$type": f"UAssetAPI.PropertyTypes.{kind}, UAssetAPI", **({"StructType": extra.pop("struct")} if "struct" in extra else {}),
+            **({"SerializeNone": True, "StructGUID": "{00000000-0000-0000-0000-000000000000}", "SerializationControl": "NoExtension",
+                "Operation": "None"} if kind == "Structs.StructPropertyData" else {}),
+            "Name": name, "ArrayIndex": 0, "PropertyGuid": None, "IsZero": False, "PropertyTagFlags": "None",
+            "PropertyTypeName": None, "PropertyTagExtensions": "NoExtension", **extra, "Value": value}
+
+
+def _vector(name, v):
+    vec = _prop("Structs.VectorPropertyData", name, {"$type": "UAssetAPI.UnrealTypes.FVector, UAssetAPI",
+                                                     "X": float(v[0]), "Y": float(v[1]), "Z": float(v[2])})
+    return _prop("Structs.StructPropertyData", name, [vec], struct="Vector")
+
+
+def _motion(name, enum, value):
+    return _prop("Objects.EnumPropertyData", name, value, EnumType=enum, InnerType="ByteProperty")
+
+
+def joint_names(d):
+    """Child bone of every constraint (ConstraintBone1), in ConstraintSetup order."""
+    _, m = main_export(d)
+    out = []
+    for ref in next(p for p in m["Data"] if p["Name"] == "ConstraintSetup")["Value"]:
+        inst = next(p for p in d["Exports"][ref["Value"] - 1]["Data"] if p["Name"] == "DefaultInstance")["Value"]
+        out.append(next(p["Value"] for p in inst if p["Name"] == "ConstraintBone1"))
+    return out
+
+
+def add_joints(d, joints):
+    """A locked PhysicsConstraintTemplate per joint ({child, parent, pos, pri, sec}: frame 2 in the parent body's
+    space; frame 1 stays the child bone), no collision between the two, appended to ConstraintSetup."""
+    if not joints:
+        return
+    main_idx, m = main_export(d)
+    setup = next(p for p in m["Data"] if p["Name"] == "ConstraintSetup")
+    have = joint_names(d)
+    first = d["Exports"][setup["Value"][0]["Value"] - 1]
+    used = {e["ObjectName"] for e in d["Exports"]}
+    serial = max(int(n.rsplit("_", 1)[1]) for n in used if n.startswith("PhysicsConstraintTemplate_"))
+    for s in ("JointName", "ConstraintBone1", "ConstraintBone2", "Pos2", "PriAxis2", "SecAxis2", "ProfileInstance",
+              "ConeLimit", "TwistLimit", "Swing1Motion", "Swing2Motion", "TwistMotion", "bDisableCollision",
+              "EAngularConstraintMotion", "ACM_Locked", "ConstraintInstance", "ConstraintProfileProperties",
+              "ConeConstraint", "TwistConstraint", "Vector", "DefaultInstance", "PhysicsConstraintTemplate"):
+        add_name(d, s)
+    for j in joints:
+        if j["child"] in have:
+            die(f"physics: {j['child']} already has a joint")
+        for s in (j["child"], j["parent"]):
+            add_name(d, s)
+        serial += 1
+        e = copy.deepcopy(first)
+        e.update({"ObjectName": f"PhysicsConstraintTemplate_{serial}", "OuterIndex": main_idx, "Extras": "",
+                  "SerializationBeforeSerializationDependencies": [], "CreateBeforeSerializationDependencies": [],
+                  "SerializationBeforeCreateDependencies": [first["ClassIndex"], first["TemplateIndex"]],
+                  "CreateBeforeCreateDependencies": [main_idx]})
+        profile = [
+            _prop("Structs.StructPropertyData", "ConeLimit", [
+                _motion("Swing1Motion", "EAngularConstraintMotion", "ACM_Locked"),
+                _motion("Swing2Motion", "EAngularConstraintMotion", "ACM_Locked")], struct="ConeConstraint"),
+            _prop("Structs.StructPropertyData", "TwistLimit", [
+                _motion("TwistMotion", "EAngularConstraintMotion", "ACM_Locked")], struct="TwistConstraint"),
+            _prop("Objects.BoolPropertyData", "bDisableCollision", True),
+        ]
+        e["Data"] = [_prop("Structs.StructPropertyData", "DefaultInstance", [
+            _prop("Objects.NamePropertyData", "JointName", j["child"]),
+            _prop("Objects.NamePropertyData", "ConstraintBone1", j["child"]),
+            _prop("Objects.NamePropertyData", "ConstraintBone2", j["parent"]),
+            _vector("Pos2", j["pos"]), _vector("PriAxis2", j["pri"]), _vector("SecAxis2", j["sec"]),
+            _prop("Structs.StructPropertyData", "ProfileInstance", profile, struct="ConstraintProfileProperties"),
+        ], struct="ConstraintInstance")]
+        d["Exports"].append(e)
+        idx = len(d["Exports"])
+        ref = copy.deepcopy(setup["Value"][-1])
+        ref.update({"Name": str(len(setup["Value"])), "Value": idx})
+        setup["Value"].append(ref)
+        # outside retoc's export chain (its last link waits for the asset itself, so chaining on would loop):
+        # created after the asset, before the asset serializes the reference to it
+        m["CreateBeforeSerializationDependencies"].append(idx)
+        have.append(j["child"])
+
+
 def physics(d, job):
+    add_joints(d, job.get("joints", []))
     table = physics_table(d, job)
     _, tail = disable_table(d)
     _, m = main_export(d)
@@ -366,8 +455,8 @@ def fix_public(dst, outputs):
     for rel in outputs:
         pkg = "/game/" + rel.lower()
         names = wanted.get(pkg)
-        if not names:
-            continue
+        if not names or not os.path.exists(out_path(dst, rel)):
+            continue  # nothing imports from it, or not patched through JSON (cpuaccess meshes)
         d = json.load(open(out_path(dst, rel)))
         def epath(i):
             e = d["Exports"][i - 1]
@@ -385,16 +474,111 @@ def out_path(dst, rel):
     return os.path.join(dst, rel + ".json")
 
 
+def mesh_imports(path):
+    """rel -> import names, from sbtool meshinfo's "imp <rel> <package> <path>" lines."""
+    out = {}
+    for line in open(path):
+        f = line.split()
+        if len(f) == 4 and f[0] == "imp":
+            out.setdefault(f[1], {}).setdefault(f[2], set()).add(f[3])
+    return out
+
+
+def _name_prop(name, value):
+    return _prop("Objects.NamePropertyData", name, value)
+
+
+def voice_pairs(d):
+    """The VoiceSounds map of a CharacterSoundSet: its list of [key, value] pairs."""
+    _, main = main_export(d)
+    for p in main["Data"]:
+        if p["Name"] == "VoiceSounds" and isinstance(p.get("Value"), list):
+            return p["Value"]
+    die("no VoiceSounds map")
+
+
+def add_voice(d, key, job):
+    pairs = voice_pairs(d)
+    if any(k["Value"].lower() == key.lower() for k, _ in pairs):
+        die(f"voice {key} already exists")
+    src = next((pr for pr in pairs if pr[0]["Value"] == job["like"]), None) or die(f"no voice {job['like']}")
+    new = copy.deepcopy(src)
+    new[0]["Value"] = key
+    add_name(d, key)
+    fields = {q["Name"]: q for q in new[1]["Value"]}
+    if "sound" in job:
+        pkg_path = job["sound"]
+        obj = pkg_path.rsplit("/", 1)[1]
+        pkg = ensure_import(d, pkg_path, 0, "/Script/CoreUObject", "Package")
+        fields["SoundSource"]["Value"] = ensure_import(d, obj, pkg, "/Script/Engine", "SoundCue")
+        fields["SoundSource"]["IsZero"] = False
+    for k, v in job.get("set", {}).items():
+        q = fields.get(k) or die(f"voice field {k} not in {job['like']}")
+        q["Value"] = type(q["Value"])(v)
+        q["IsZero"] = not v
+    pairs.append(new)
+
+
+def notify_events(main):
+    for p in main["Data"]:
+        if p["Name"] == "Notifies":
+            return p
+    die("no Notifies")
+
+
+def add_notify(d, voice, at):
+    main_idx, main = main_export(d)
+    sb_pkg = ensure_import(d, "/Script/SB", 0, "/Script/CoreUObject", "Package")
+    cls = ensure_import(d, "SBAnimNotify_CharSESound", sb_pkg, "/Script/CoreUObject", "Class")
+    tmpl = ensure_import(d, "Default__SBAnimNotify_CharSESound", sb_pkg, "/Script/SB", "SBAnimNotify_CharSESound")
+    name = "SBAnimNotify_CharSESound_StellarBladeGore"
+    for s_ in (name, "VoiceKey", voice, "SBCharSESound"):
+        add_name(d, s_)
+    events = notify_events(main)
+    # a template for both: an existing notify object of this sequence and its event
+    ev0 = min(events["Value"], key=lambda ev: next(q["Value"] for q in ev["Value"] if q["Name"] == "LinkValue"))
+    src_idx = next(q["Value"] for q in ev0["Value"] if q["Name"] == "Notify")
+    new = copy.deepcopy(d["Exports"][src_idx - 1])
+    new.update({"ObjectName": name, "OuterIndex": main_idx, "ClassIndex": cls, "TemplateIndex": tmpl,
+                "Data": [_name_prop("VoiceKey", voice)],
+                "SerializationBeforeSerializationDependencies": [], "CreateBeforeSerializationDependencies": [],
+                "SerializationBeforeCreateDependencies": [cls, tmpl], "CreateBeforeCreateDependencies": [main_idx]})
+    d["Exports"].append(new)
+    idx = len(d["Exports"])
+    main["CreateBeforeSerializationDependencies"].append(idx)
+    ev = copy.deepcopy(ev0)
+    for q in ev["Value"]:
+        if q["Name"] == "Notify":
+            q["Value"] = idx
+        elif q["Name"] == "NotifyName":
+            q["Value"] = "SBCharSESound"
+        elif q["Name"] == "LinkValue":
+            q["Value"] = float(at)
+    t = lambda e: next(q["Value"] for q in e["Value"] if q["Name"] == "LinkValue")
+    events["Value"].append(ev)
+    events["Value"].sort(key=t)
+    for i, e in enumerate(events["Value"]):
+        e["Name"] = str(i) if e.get("Name", "").isdigit() else e.get("Name")
+
+
 def main():
     spec_path, src, dst = sys.argv[1:4]
     spec = json.load(open(spec_path))
     load = lambda rel: json.load(open(os.path.join(src, rel + ".json")))
     donor = load(spec["donor"])
+    # cpuaccess meshes are patched by sbtool, without JSON; their imports still count for fix_public
+    imports = mesh_imports(sys.argv[4]) if len(sys.argv) > 4 else {}
     outputs = {}
     # one package at a time: with every outfit mesh in the spec, holding them all would take gigabytes
     for rel, job in spec["assets"].items():
         mode = job["mode"]
-        d = load(job["from"] if mode == "clone" else rel)
+        if mode == "cpuaccess" and len(sys.argv) > 4:
+            outputs[rel] = imports.get(rel, {})
+            continue
+        if mode == "vendor":
+            d = json.load(open(os.path.join(os.environ["SB_VENDOR_JSON"], rel + ".json")))
+        else:
+            d = load(job["from"] if mode == "clone" else rel)
         if mode == "clone":
             rename_package(d, job["from"], rel)
             retarget(d, spec.get("clone_retarget", {}))
@@ -412,6 +596,13 @@ def main():
             physics(d, job)
         elif mode == "cpuaccess":
             cpu_access(d, job.get("lods", [0]))
+        elif mode == "vendor":
+            pass
+        elif mode == "voice":
+            for key, v in job["voices"].items():
+                add_voice(d, key, v)
+        elif mode == "notify":
+            add_notify(d, job["voice"], job["at"])
         elif mode == "collision":
             for comp, chans in job["ignore"].items():
                 ignore_channels(d, comp, chans)

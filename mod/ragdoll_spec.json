@@ -122,6 +122,56 @@
           "AirborneDeadUIDelayTime": 3.5
         }
       }
+    },
+    "Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3": {
+      "_comment": "Eve's face (CH_P_EVE_01_Blueprint's face slot): LOD0 CPU access, so a beheading can move all of it onto the head bone (its neck is weighted to the neck, which stays)",
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/PC/CH_P_EVE_01/Animation/Facial/EVE_Facial_ActionVoice_DIE1": {
+      "_comment": "Eve's death face from Proper Death Expression by blabmice (third_party/proper-death-expression, credits there): the vanilla one is a blank stare",
+      "mode": "vendor",
+      "file": "third_party/proper-death-expression/EVE_Facial_ActionVoice_DIE1"
+    },
+    "Sound/SoundAsset/CharacterSoundset/CSS_PC_EVE": {
+      "_comment": "DIE3: the death face without a voice (a breath cue at 0.0001 volume, as in Proper Death Expression's fixes), for the deaths whose animations play no death voice",
+      "mode": "voice",
+      "voices": {
+        "DIE3": {
+          "like": "DIE1",
+          "sound": "/Game/Sound/Voice/PC/eve_vo_breath_s_Random_Cue",
+          "set": {
+            "VolumeMultiplier": 0.0001,
+            "PlayStartTime": 0.1
+          }
+        }
+      }
+    },
+    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_DownFaceUp": {
+      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
+      "mode": "notify",
+      "voice": "die3",
+      "at": 0.2496
+    },
+    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_DownFaceDown": {
+      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
+      "mode": "notify",
+      "voice": "die3",
+      "at": 0.4152
+    },
+    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_FallingDown": {
+      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
+      "mode": "notify",
+      "voice": "die3",
+      "at": 0.2238
+    },
+    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_Explosion": {
+      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
+      "mode": "notify",
+      "voice": "die3",
+      "at": 0.0813
     }
   },
   "_comment_ui_delay": "Seconds before the death/respawn UI appears, so the ragdoll is visible. Vanilla is 0 for these (desert hole uses 2.5).",
@@ -194,6 +244,8 @@
       ]
     },
     "rest_margin": 0.5,
+    "_comment_lock_orphans": "Bodies no constraint holds (twist / helper bones anchoring a cape or skirt chain, e.g. CH_P_EVE_09's Ab-L-UpperArm-Tw1) fly free in a ragdoll and drag the skin off the limb; each gets a locked joint to the nearest ancestor body.",
+    "lock_orphans": true,
     "body": {
       "LinearDamping": 0.2
     }

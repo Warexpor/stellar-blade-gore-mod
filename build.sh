@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the EveRagdollDeath IoStore patch from the installed game.
-#   ./build.sh            build dist/ZZ_EveRagdollDeath_P.{utoc,ucas,pak} and verify it
+# Build the Stellar Blade Gore Mod's IoStore patch from the installed game.
+#   ./build.sh            build dist/ZZ_StellarBladeGore_P.{utoc,ucas,pak} and verify it
 #   ./build.sh --install  also copy it into the game's Paks/~mods
 #   ./build.sh --uninstall
 # SB_GAME: game install dir; SB_COMPRESS: IoStore block compression (zlib default, "none" to store raw)
@@ -11,7 +11,8 @@ CACHE=$ROOT/.cache
 GAME=${SB_GAME:-$HOME/.local/share/Steam/steamapps/common/StellarBlade}
 PAKS=$GAME/SB/Content/Paks
 MODS=$PAKS/~mods
-NAME=ZZ_EveRagdollDeath_P
+NAME=ZZ_StellarBladeGore_P
+OLD_NAMES=(ZZ_Severed_P ZZ_EveRagdollDeath_P) # earlier names; removed on install / uninstall
 SPEC=$ROOT/mod/ragdoll_spec.json
 DIST=$ROOT/dist
 
@@ -22,7 +23,7 @@ SBSDK_REV=bed8151334aefdadc76972d68a11f5b07927c336
 log() { printf '\033[1m[build]\033[0m %s\n' "$*"; }
 
 if [[ ${1:-} == --uninstall ]]; then
-  rm -fv "$MODS/$NAME".{utoc,ucas,pak}
+  for n in "$NAME" "${OLD_NAMES[@]}"; do rm -fv "$MODS/$n".{utoc,ucas,pak}; done
   exit 0
 fi
 
@@ -75,59 +76,99 @@ else
 fi
 
 W=$CACHE/work
-rm -rf "$W"; mkdir -p "$W/vanilla" "$W/json" "$W/json_out" "$W/legacy" "$W/verify"
-legacy() { # extract packages (SB/Content-relative, one per line on stdin) to $W/vanilla
+# The vanilla side (extracted packages, their JSON, the outfit scan) only changes with the game, the mappings, the
+# tools or the outfits job, so it is kept between builds under that key; only the patched side is rebuilt.
+KEY=$( { stat -c '%n %s %Y' "$PAKS"/*.utoc "$PAKS"/*.ucas; md5sum "$SB_USMAP" "$ROOT/assetkit/sbtool/Program.cs" \
+  "$ROOT/assetkit/meshtool/Program.cs"; echo "$RETOC_REV $UASSETAPI_REV"
+  python3 -c 'import json,sys; j=json.load(open(sys.argv[1])).get("outfits", {}); print({k: j.get(k) for k in ("enabled", "table", "skeleton", "only", "skip")})' "$SPEC"
+} | md5sum | cut -d' ' -f1)
+if [[ $(cat "$W/vanilla.key" 2>/dev/null) != "$KEY" ]]; then
+  log "vanilla cache is stale or missing: extracting everything"
+  rm -rf "$W"
+fi
+rm -f "$W/vanilla.key" # written back once the vanilla side is complete
+rm -rf "$W/json_out" "$W/legacy" "$W/verify" "$W/composite" "$W/vendor"
+mkdir -p "$W/vanilla" "$W/json" "$W/json_out" "$W/legacy" "$W/verify"
+legacy() { # extract packages (SB/Content-relative, one per line on stdin) to $W/vanilla, unless already there
   local args=() r
-  while read -r r; do args+=(-f "Content/$r."); done
+  while read -r r; do [[ -f $W/vanilla/SB/Content/$r.uasset ]] || args+=(-f "Content/$r."); done
   (( ${#args[@]} )) && "$RETOC" to-legacy --no-shaders --no-script-objects "${args[@]}" "$PAKS" "$W/vanilla" >/dev/null
   return 0
 }
+undumped() { # the packages on stdin that have no JSON yet
+  local r
+  while read -r r; do [[ -f $W/json/$r.json ]] || echo "$r"; done
+}
 
 # Outfits: expand the spec's "outfits" job into cpuaccess + physics jobs for every Eve outfit (assetkit/outfits.py).
+# Meshes never go through JSON: sbtool reads what the scan needs (meshinfo) and flips their CPU access in place.
+MESHINFO=
 if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("outfits", {}).get("enabled") else 1)' "$SPEC"; then
   log "building meshtool"
   DOTNET=$DOTNET "$ROOT/assetkit/meshtool/build.sh" >/dev/null
   O=$W/outfits; mkdir -p "$O"
   TABLE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["outfits"]["table"])' "$SPEC")
-  echo "$TABLE" | legacy
-  "${SBTOOL[@]}" dump "$W/vanilla/SB/Content/$TABLE.uasset" "$O/table.json"
+  if [[ ! -f $O/table.json ]]; then
+    echo "$TABLE" | legacy
+    "${SBTOOL[@]}" dump "$W/vanilla/SB/Content/$TABLE.uasset" "$O/table.json"
+  fi
   python3 "$ROOT/assetkit/outfits.py" meshes "$SPEC" "$O/table.json" > "$O/meshes.txt"
   log "outfits: reading $(wc -l < "$O/meshes.txt") meshes"
   legacy < "$O/meshes.txt"
-  "${SBTOOL[@]}" dumpall "$W/vanilla/SB/Content" "$W/json" SkeletalMesh < "$O/meshes.txt" > "$O/meshes.log"
-  grep '^bad' "$O/meshes.log" | sed 's/^/  skipped: /' || true
-  grep -c '^missing' "$O/meshes.log" | sed 's/$/ table entries not shipped in the game/; s/^/  /' || true
-  python3 "$ROOT/assetkit/outfits.py" physics "$SPEC" "$W/json" $(awk '$1 == "ok" {print $2}' "$O/meshes.log") > "$O/pairs.txt"
+  MESHINFO=$O/meshinfo.log
+  if [[ ! -f $MESHINFO ]]; then
+    "${SBTOOL[@]}" meshinfo "$W/vanilla/SB/Content" < "$O/meshes.txt" > "$MESHINFO.tmp"
+    mv "$MESHINFO.tmp" "$MESHINFO"
+  fi
+  grep '^bad' "$MESHINFO" | sed 's/^/  skipped: /' || true
+  grep -c '^missing' "$MESHINFO" | sed 's/$/ table entries not shipped in the game/; s/^/  /' || true
+  python3 "$ROOT/assetkit/outfits.py" physics "$SPEC" "$MESHINFO" | sort > "$O/pairs.txt"
   awk '{print $2}' "$O/pairs.txt" | sort -u > "$O/physics.txt"
   log "outfits: $(wc -l < "$O/pairs.txt") body meshes, $(wc -l < "$O/physics.txt") physics assets"
   legacy < "$O/physics.txt"
-  "${SBTOOL[@]}" dumpall "$W/vanilla/SB/Content" "$W/json" PhysicsAsset < "$O/physics.txt" > "$O/physics.log"
-  grep '^bad' "$O/physics.log" | sed 's/^/  skipped: /' || true
-  sort -k2,2 -u "$O/pairs.txt" | awk '{print "SB/Content/" $1}' \
-    | "$DOTNET" "$CACHE/meshtool/meshtool.dll" bones "$W/vanilla/SB" "$SB_USMAP" - "$O/bones"
+  undumped < "$O/physics.txt" | "${SBTOOL[@]}" dumpall "$W/vanilla/SB/Content" "$W/json" PhysicsAsset >> "$O/physics.log"
+  grep '^bad' "$O/physics.log" | sort -u | sed 's/^/  skipped: /' || true
+  if [[ ! -d $O/bones ]]; then
+    sort -k2,2 -u "$O/pairs.txt" | awk '{print "SB/Content/" $1}' \
+      | "$DOTNET" "$CACHE/meshtool/meshtool.dll" bones "$W/vanilla/SB" "$SB_USMAP" - "$O/bones.tmp"
+    mv "$O/bones.tmp" "$O/bones"
+  fi
   python3 "$ROOT/assetkit/outfits.py" expand "$SPEC" "$W/json" "$O/bones" "$O/pairs.txt" "$W/spec.json" > "$O/overlaps.txt"
   SPEC=$W/spec.json
 fi
 
-mapfile -t ASSETS < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["assets"]))' "$SPEC")
-DONOR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["donor"])' "$SPEC")
-mapfile -t SOURCES < <(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print("\n".join(sorted({j.get("from", r) for r, j in s["assets"].items()} | {s["donor"]})))' "$SPEC")
+# json: patched through JSON (shows, tables, physics, blueprint); mesh: cpuaccess, patched by sbtool
+mapfile -t JSON_ASSETS < <(python3 -c 'import json,sys; print("\n".join(r for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] != "cpuaccess"))' "$SPEC")
+mapfile -t MESH_ASSETS < <(python3 -c 'import json,sys; print("\n".join(r for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] == "cpuaccess"))' "$SPEC")
+MESH_LODS=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(",".join(str(l) for l in sorted({l for j in s["assets"].values() if j["mode"] == "cpuaccess" for l in j.get("lods", [0])})) or "0")' "$SPEC")
+mapfile -t SOURCES < <(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print("\n".join(sorted({j.get("from", r) for r, j in s["assets"].items() if j["mode"] not in ("cpuaccess", "vendor")} | {s["donor"]})))' "$SPEC")
+lines() { (( $# )) && printf '%s\n' "$@"; return 0; }
 
 log "extracting ${#SOURCES[@]} assets"
-for rel in "${SOURCES[@]}"; do echo "$rel"; done | legacy
+lines "${SOURCES[@]}" | legacy
+lines "${MESH_ASSETS[@]}" | legacy
 for rel in "${SOURCES[@]}"; do
-  [[ -f $W/json/$rel.json ]] && continue  # dumped (and round-trip checked) by the outfits step
   [[ -f $W/vanilla/SB/Content/$rel.uasset ]] || { echo "missing in game: $rel"; exit 1; }
-  mkdir -p "$(dirname "$W/json/$rel")"
-  "${SBTOOL[@]}" dump "$W/vanilla/SB/Content/$rel.uasset" "$W/json/$rel.json"
 done
+lines "${SOURCES[@]}" | undumped | "${SBTOOL[@]}" dumplist "$W/vanilla/SB/Content" "$W/json"
+echo "$KEY" > "$W/vanilla.key"
+
+# vendor: third-party packages shipped as they are (third_party/), dumped to JSON like the vanilla side
+export SB_VENDOR_JSON=$W/vendor
+mkdir -p "$SB_VENDOR_JSON"
+while read -r rel file; do
+  [[ -n $rel ]] || continue
+  mkdir -p "$(dirname "$SB_VENDOR_JSON/$rel")"
+  "${SBTOOL[@]}" dump "$ROOT/$file.uasset" "$SB_VENDOR_JSON/$rel.json" >/dev/null
+done < <(python3 -c 'import json,sys; [print(r, j["file"]) for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] == "vendor"]' "$SPEC")
 
 log "patching"
-python3 "$ROOT/assetkit/patch_shows.py" "$SPEC" "$W/json" "$W/json_out"
-for rel in "${ASSETS[@]}"; do
-  mkdir -p "$(dirname "$W/legacy/SB/Content/$rel")"
-  "${SBTOOL[@]}" fromjson "$W/json_out/$rel.json" "$W/legacy/SB/Content/$rel.uasset" >/dev/null
-done
+python3 "$ROOT/assetkit/patch_shows.py" "$SPEC" "$W/json" "$W/json_out" ${MESHINFO:+"$MESHINFO"}
+lines "${JSON_ASSETS[@]}" | "${SBTOOL[@]}" fromjsonall "$W/json_out" "$W/legacy/SB/Content"
+if (( ${#MESH_ASSETS[@]} )); then
+  lines "${MESH_ASSETS[@]}" | "${SBTOOL[@]}" cpuaccess "$W/vanilla/SB/Content" "$W/legacy/SB/Content" "$MESH_LODS" > "$W/cpuaccess.log"
+  if grep '^bad' "$W/cpuaccess.log"; then echo "cpuaccess failed"; exit 1; fi
+fi
 
 log "packing IoStore"
 mkdir -p "$DIST"; rm -f "$DIST/$NAME".*
@@ -140,14 +181,17 @@ mkdir -p "$W/composite"
 ln -sf "$PAKS/global.utoc" "$PAKS/global.ucas" "$W/composite/"
 cp "$DIST/$NAME".* "$W/composite/"
 "$RETOC" to-legacy --no-shaders --no-script-objects "$W/composite" "$W/verify" >/dev/null
-for rel in "${ASSETS[@]}"; do
-  mkdir -p "$(dirname "$W/verify/json/$rel")"
-  "${SBTOOL[@]}" dump "$W/verify/SB/Content/$rel.uasset" "$W/verify/json/$rel.json"
-done
-python3 "$ROOT/assetkit/verify.py" "$SPEC" "$W/json" "$W/verify/json"
+lines "${JSON_ASSETS[@]}" | "${SBTOOL[@]}" dumplist "$W/verify/SB/Content" "$W/verify/json"
+SB_PATCHED_JSON=$W/json_out python3 "$ROOT/assetkit/verify.py" "$SPEC" "$W/json" "$W/verify/json" --no-meshes
+if (( ${#MESH_ASSETS[@]} )); then
+  lines "${MESH_ASSETS[@]}" | "${SBTOOL[@]}" checkcpu "$W/vanilla/SB/Content" "$W/verify/SB/Content" "$MESH_LODS" > "$W/checkcpu.log"
+  if grep '^bad' "$W/checkcpu.log"; then echo "VERIFY FAILED: meshes"; exit 1; fi
+  echo "ok  cpuaccess $(grep -c '^ok' "$W/checkcpu.log") meshes, LOD$MESH_LODS CPU access and nothing else"
+fi
 ls -l "$DIST"
 
 if [[ ${1:-} == --install ]]; then
   mkdir -p "$MODS"
+  for n in "${OLD_NAMES[@]}"; do rm -fv "$MODS/$n".{utoc,ucas,pak}; done
   cp -v "$DIST/$NAME".* "$MODS/"
 fi

@@ -1,0 +1,439 @@
+-- active.lua: make Eve's ragdoll fall like a body instead of a sack (tune.active).
+--
+-- On every ragdoll start:
+--   * masses: the outfits' physics assets set bOverrideMass on the spine and jiggle bodies without a value, so
+--     they weigh the engine default of 100 kg each (a 400 kg chest the push can't move), and cape / accessory
+--     chains weigh up to 80 kg a link. Main bodies get a human mass distribution (~60 kg), every other body is
+--     capped at a few hundred grams, so they follow her instead of steering her.
+--   * momentum: the speed she had in the last few hundred ms before dying carries into the ragdoll (the death
+--     show stops the capsule first, so without it she drops dead on the spot even at a sprint).
+--   * impact: an extra push along the killing blow, spread over the upper body, plus a little twist so she turns as
+--     she goes down. The direction is the game's own impulse when its death key gives one, else where the blow came
+--     from (main.lua: the hit on her, or the nearest enemy).
+--   * muscle tone: a PhysicalAnimationComponent drives every main joint towards the animated pose (local space, so
+--     it shapes her but never holds her up), at full strength for tone.hold seconds, then fading over tone.fade to
+--     tone.rest, which stays: a body without any folds flat at every joint like a sack. Legs get less, so the knees
+--     go first and the torso folds over them. A severed limb's drive is dropped at once.
+--   * her weapons drop: the sword hangs off a prop bone without a physics body, so in a ragdoll it stayed in the
+--     air where she died. Each weapon showing is carried by an invisible box of its size that falls and tumbles,
+--     starting with her hand's speed.
+--   * settling: lying still, she kept jittering (head and limbs turning at 50-80 deg/s on the floor for seconds):
+--     the tone's drives pulling towards the animated pose against the floor, and light jiggle bodies fighting
+--     heavy ones. Once her main bodies have barely moved for settle.time, the tone goes and every body is put to
+--     sleep; something hitting her wakes her up and she settles again.
+-- Everything is put back on recovery (masses, the component, the weapons on their sockets).
+
+local M = {}
+local ctx
+
+local function cfg() return ctx.tune.active or {} end
+local function log(s) ctx.log("active: " .. s) end
+local try, valid = nil, nil
+
+local function vec(x, y, z) return { X = x, Y = y, Z = z } end
+local function len(v) return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) end
+
+-- kg per main body, ~60 kg in all (Dempster-style segment shares for a light adult)
+local MASS = {
+  ["Bip001-Pelvis"] = 8.5, ["Bip001-Spine"] = 5.5, ["Bip001-Spine1"] = 5.5, ["Bip001-Spine2"] = 7.5,
+  ["Bip001-Neck"] = 1.1, ["Bip001-Head"] = 4.5,
+  ["Bip001-L-Clavicle"] = 1.4, ["Bip001-R-Clavicle"] = 1.4,
+  ["Bip001-L-UpperArm"] = 1.7, ["Bip001-R-UpperArm"] = 1.7,
+  ["Bip001-L-Forearm"] = 1.0, ["Bip001-R-Forearm"] = 1.0,
+  ["Bip001-L-Hand"] = 0.4, ["Bip001-R-Hand"] = 0.4,
+  ["Bip001-L-Thigh"] = 6.5, ["Bip001-R-Thigh"] = 6.5,
+  ["Bip001-L-Calf"] = 2.8, ["Bip001-R-Calf"] = 2.8,
+  ["Bip001-L-Foot"] = 0.8, ["Bip001-R-Foot"] = 0.8,
+}
+-- muscle tone per joint, as a share of tone.strength (the pelvis has no parent body to drive against)
+local TONE = {
+  ["Bip001-Spine"] = 1.0, ["Bip001-Spine1"] = 1.0, ["Bip001-Spine2"] = 1.0, ["Bip001-Neck"] = 0.9, ["Bip001-Head"] = 0.8,
+  ["Bip001-L-Clavicle"] = 0.8, ["Bip001-R-Clavicle"] = 0.8,
+  ["Bip001-L-UpperArm"] = 0.6, ["Bip001-R-UpperArm"] = 0.6,
+  ["Bip001-L-Forearm"] = 0.5, ["Bip001-R-Forearm"] = 0.5,
+  ["Bip001-L-Hand"] = 0.3, ["Bip001-R-Hand"] = 0.3,
+  ["Bip001-L-Thigh"] = 0.45, ["Bip001-R-Thigh"] = 0.45,
+  ["Bip001-L-Calf"] = 0.35, ["Bip001-R-Calf"] = 0.35,
+  ["Bip001-L-Foot"] = 0.3, ["Bip001-R-Foot"] = 0.3,
+}
+-- the push along the blow, per bone, as a share of impact
+local IMPACT = {
+  ["Bip001-Spine2"] = 1.0, ["Bip001-Spine1"] = 0.8, ["Bip001-Head"] = 0.6, ["Bip001-L-Clavicle"] = 0.6,
+  ["Bip001-R-Clavicle"] = 0.6, ["Bip001-Spine"] = 0.5, ["Bip001-Pelvis"] = 0.35,
+}
+local TWIST = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2" }
+
+local speeds = {}       -- the capsule's last velocities while alive, newest last
+local SPEED_SAMPLES = 10 -- ~330 ms at the 33 ms tick
+local run = nil         -- the ragdoll in progress: { mesh, pac, t, masses = {bone = kg}, scales = {bone = scale} }
+local dropped = {}      -- { comp, box, parent, socket, loc, rot }: weapons let go of
+local extra = {}        -- other ragdolls to settle with hers (a split's copy)
+local STILL = { "Bip001-Pelvis", "Bip001-Spine2", "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand", "Bip001-L-Foot", "Bip001-R-Foot" }
+
+function M.init(c)
+  ctx = c
+  try, valid = c.try, c.valid
+end
+
+-- every tick she is alive: remember how fast she moves
+function M.track(pawn)
+  local v = try(function() local x = pawn:GetVelocity(); return vec(x.X, x.Y, x.Z) end)
+  if not v then return end
+  speeds[#speeds + 1] = v
+  if #speeds > SPEED_SAMPLES then table.remove(speeds, 1) end
+end
+
+local function bodies(mesh)
+  local out = {}
+  local pa = try(function() return mesh:GetPhysicsAsset() end) or try(function() return mesh.SkeletalMesh.PhysicsAsset end)
+  if not valid(pa) then return out end
+  try(function()
+    pa.SkeletalBodySetups:ForEach(function(_, elem)
+      local bs = elem:get()
+      if valid(bs) then out[#out + 1] = bs.BoneName:ToString() end
+    end)
+  end)
+  return out
+end
+
+local function mass(mesh, bone) return try(function() return mesh:GetBoneMass(FName(bone), true) end) end
+
+local function set_masses(mesh, g)
+  local before, after, acc, accBefore, n = 0, 0, 0, 0, 0
+  local main = {}
+  local cap = g.accessoryMaxKg or 0.8
+  for _, bone in ipairs(bodies(mesh)) do
+    local m = mass(mesh, bone)
+    if m and m > 0 then
+      if MASS[bone] then
+        main[#main + 1] = string.format("%s=%.0f", bone:gsub("Bip001%-", ""), m)
+        run.masses[bone] = m
+        local want = MASS[bone] * (g.massScale or 1.0)
+        if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then
+          before, after = before + m, after + want
+        end
+      else
+        accBefore = accBefore + m
+        if cap > 0 and m > cap then
+          local s = try(function() return mesh:GetMassScale(FName(bone)) end) or 1.0
+          if try(function() mesh:SetMassScale(FName(bone), s * cap / m); return true end) then
+            run.scales[bone] = s
+            m = cap
+          end
+        end
+        acc, n = acc + m, n + 1
+      end
+    end
+  end
+  return string.format("masses %.0f -> %.0f kg (was %s), %d other bodies %.1f -> %.1f kg", before, after,
+    table.concat(main, " "), n, accBefore, acc)
+end
+
+local function momentum(mesh, g)
+  local k = g.momentum or 1.0
+  if k <= 0 then return "" end
+  local best, bs = nil, 0
+  for _, v in ipairs(speeds) do
+    local h = math.sqrt(v.X * v.X + v.Y * v.Y)
+    if h + math.abs(v.Z) * 0.5 > bs then best, bs = v, h + math.abs(v.Z) * 0.5 end
+  end
+  if not best then return ", no momentum" end
+  local v = vec(best.X * k, best.Y * k, best.Z * k)
+  local l = len(v)
+  local cap = g.momentumMax or 1500
+  if l > cap then v = vec(v.X * cap / l, v.Y * cap / l, v.Z * cap / l); l = cap end
+  if l < 20 then return ", standing still" end
+  local ok = try(function() mesh:SetAllPhysicsLinearVelocity(v, true); return true end)
+  return string.format(", momentum %.0f cm/s%s", l, ok and "" or " (failed)")
+end
+
+-- dir: the blow's direction (horizontal is enough), or nil
+local function impact(mesh, g, dir, boost)
+  local out = ""
+  boost = boost or g.impact or 350
+  if dir and boost > 0 then
+    local h = math.sqrt(dir.X * dir.X + dir.Y * dir.Y)
+    if h > 1e-3 then
+      local up = g.impactUp or 0.15
+      local d = vec(dir.X / h * (1 - up), dir.Y / h * (1 - up), up)
+      local n = 0
+      for bone, share in pairs(IMPACT) do
+        if try(function() mesh:AddImpulse(vec(d.X * boost * share, d.Y * boost * share, d.Z * boost * share), FName(bone), true); return true end) then n = n + 1 end
+      end
+      out = string.format(", impact %.0f cm/s on %d bones", boost, n)
+    end
+  end
+  local tw = g.twist or 90
+  if tw > 0 then
+    local w = vec(0, 0, (math.random() < 0.5 and -1 or 1) * tw * (0.6 + 0.4 * math.random()))
+    for _, bone in ipairs(TWIST) do try(function() mesh:AddAngularImpulseInDegrees(w, FName(bone), true) end) end
+    out = out .. string.format(", twist %.0f deg/s", w.Z)
+  end
+  return out
+end
+
+local function drive(pac, bone, k, t)
+  local s = t.strength or 800
+  local data = { bIsLocalSimulation = true, OrientationStrength = s * k, AngularVelocityStrength = s * k * (t.damping or 0.1),
+    PositionStrength = 0, VelocityStrength = 0, MaxLinearForce = 0, MaxAngularForce = 0 }
+  return try(function() pac:ApplyPhysicalAnimationSettings(FName(bone), data); return true end)
+end
+
+local function tone_start(pawn, mesh, g)
+  local t = g.tone or {}
+  if t.enabled == false then return ", no tone" end
+  local cls = try(function() return StaticFindObject("/Script/Engine.PhysicalAnimationComponent") end)
+  if not valid(cls) then return ", tone: no PhysicalAnimationComponent class" end
+  local pac = try(function()
+    return pawn:AddComponentByClass(cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }, false)
+  end)
+  if not valid(pac) then return ", tone: component not created" end
+  run.pac = pac
+  if not try(function() pac:SetSkeletalMeshComponent(mesh); return true end) then return ", tone: no mesh" end
+  local n = 0
+  for bone, k in pairs(TONE) do if drive(pac, bone, k, t) then n = n + 1 end end
+  try(function() pac:SetStrengthMultiplyer(1.0) end)
+  return string.format(", tone on %d joints (%.0f, hold %.2f s, fade %.2f s)", n, t.strength or 800, t.hold or 0.25, t.fade or 1.4)
+end
+
+local function tone_stop()
+  local pac = run and run.pac
+  if not valid(pac) then return end
+  -- release the drives before the component goes (gore recreates the bodies on recovery)
+  try(function() pac:SetStrengthMultiplyer(0) end)
+  try(function() pac:SetSkeletalMeshComponent(nil) end)
+  try(function() pac:K2_DestroyComponent(pac) end)
+  run.pac = nil
+end
+
+local WEAPON_SLOTS = { [5] = true, [6] = true, [7] = true, [8] = true }
+local function weapons(pawn)
+  local out = {}
+  try(function()
+    pawn.MeshInfoList:ForEach(function(_, e)
+      local info = e:get()
+      local c = info.MeshComponent
+      if WEAPON_SLOTS[info.MeshSlot] and valid(c) and try(function() return c:IsVisible() end) == true
+        and valid(try(function() return c.SkeletalMesh end)) then out[#out + 1] = c end
+    end)
+  end)
+  return out
+end
+
+local function weapons_back()
+  local n = 0
+  for _, d in ipairs(dropped) do
+    local w = d.comp
+    if valid(w) and valid(d.parent) then
+      if try(function()
+        w:K2_AttachToComponent(d.parent, d.socket or FName("None"), 2, 2, 2, false)
+        if d.loc and d.rot then w:K2_SetRelativeLocationAndRotation(d.loc, d.rot, false, {}, true) end
+        return true
+      end) then n = n + 1 end
+    end
+    if valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
+  end
+  dropped = {}
+  return n
+end
+
+-- each weapon rides an invisible box of its mesh's size, simulated, starting with her hand's speed plus a toss
+local function drop_weapons(pawn, mesh, g)
+  if g.dropWeapon == false then return "" end
+  local cls = try(function() return StaticFindObject("/Script/Engine.BoxComponent") end)
+  if not valid(cls) then return ", weapons: no BoxComponent class" end
+  local hv = try(function() local v = mesh:GetPhysicsLinearVelocity(FName("Bip001-R-Hand")); return vec(v.X, v.Y, v.Z) end)
+    or speeds[#speeds] or vec(0, 0, 0)
+  local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
+  local names = {}
+  for _, w in ipairs(weapons(pawn)) do
+    -- the imported bounds (GetBounds adds the asset's bounds extension: 217 cm for her sword), capped at weaponMaxCm
+    local function bnd(fn) return try(function() local x = fn(); return { o = vec(x.Origin.X, x.Origin.Y, x.Origin.Z),
+      e = vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z) } end) end
+    local b = bnd(function() return w.SkeletalMesh:GetImportedBounds() end) or bnd(function() return w.SkeletalMesh:GetBounds() end)
+    if b then
+      local half = (g.weaponMaxCm or 120) / 2
+      b.e = vec(math.min(b.e.X, half), math.min(b.e.Y, half), math.min(b.e.Z, half))
+    end
+    local box = b and try(function() return pawn:AddComponentByClass(cls, true, id, false) end)
+    if valid(box) then
+      local d = { comp = w, box = box, parent = try(function() return w:GetAttachParent() end),
+        socket = try(function() return w:GetAttachSocketName() end),
+        loc = try(function() local v = w.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
+        rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end) }
+      dropped[#dropped + 1] = d
+      local ok = try(function()
+        local wl, f, r, u = w:K2_GetComponentLocation(), w:GetForwardVector(), w:GetRightVector(), w:GetUpVector()
+        local o = b.o
+        local at = vec(wl.X + f.X * o.X + r.X * o.Y + u.X * o.Z, wl.Y + f.Y * o.X + r.Y * o.Y + u.Y * o.Z,
+          wl.Z + f.Z * o.X + r.Z * o.Y + u.Z * o.Z)
+        box:K2_SetWorldLocationAndRotation(at, w:K2_GetComponentRotation(), false, {}, true)
+        box:SetBoxExtent(vec(math.max(b.e.X, 1.5), math.max(b.e.Y, 1.5), math.max(b.e.Z, 1.5)), false)
+        box:SetHiddenInGame(true, false)
+        -- Pawn: not her capsule (or the player's); PhysicsBody: it lands on her as well as the floor
+        box:SetCollisionProfileName(FName("PhysicsActor"), true)
+        box:SetCollisionResponseToChannel(2, 0)
+        box:SetCollisionEnabled(3)
+        try(function() box.BodyInstance.bUseCCD = true end)
+        box:SetSimulatePhysics(true)
+        box:SetMassOverrideInKg(FName("None"), g.weaponKg or 1.5, true)
+        w:K2_AttachToComponent(box, FName("None"), 1, 1, 1, false)
+        local toss = g.weaponToss or 150
+        local a = math.random() * math.pi * 2
+        box:SetPhysicsLinearVelocity(vec(hv.X + math.cos(a) * toss, hv.Y + math.sin(a) * toss, hv.Z + toss * 0.6), false, FName("None"))
+        box:SetPhysicsAngularVelocityInDegrees(vec((math.random() - 0.5) * 720, (math.random() - 0.5) * 720,
+          (math.random() - 0.5) * 360), false, FName("None"))
+        return true
+      end)
+      names[#names + 1] = string.format("%s %.0fx%.0fx%.0f%s", tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)),
+        b.e.X * 2, b.e.Y * 2, b.e.Z * 2, ok and "" or " (failed)")
+    end
+  end
+  if #names == 0 then return ", no weapon showing" end
+  return ", dropped " .. table.concat(names, ", ")
+end
+
+-- kind: "death" or "sandbox"; dir: the blow's direction for the impact (sandbox), or where it came from when the
+-- game's death key gives no impulse (death)
+function M.start(pawn, mesh, kind, dir)
+  local g = cfg()
+  if g.enabled == false then return end
+  if run then M.stop(pawn) end
+  run = { mesh = mesh, t = 0, masses = {}, scales = {}, still = 0 }
+  extra = {}
+  local parts = { set_masses(mesh, g) }
+  if kind == "death" then
+    parts[#parts + 1] = momentum(mesh, g)
+    -- the death key pushes after ImpulseDelayTime (0.01 s), so its direction is read a couple of ticks later
+    run.pawn, run.impactAt, run.hint = pawn, 0.06, dir
+  else
+    parts[#parts + 1] = impact(mesh, g, dir)
+  end
+  parts[#parts + 1] = tone_start(pawn, mesh, g)
+  parts[#parts + 1] = drop_weapons(pawn, mesh, g)
+  speeds = {}
+  log(kind .. ": " .. table.concat(parts, ""))
+end
+
+-- a piece cut off her while she stands (gore, F9): no ragdoll runs, so give her bodies their human masses now; put
+-- back by M.stop like a ragdoll's (a ragdoll that starts meanwhile takes over)
+function M.piece(pawn, mesh)
+  local g = cfg()
+  if g.enabled == false or run then return nil end
+  run = { mesh = mesh, t = 0, masses = {}, scales = {}, piece = true }
+  local r = set_masses(mesh, g)
+  log("piece: " .. r)
+  return r
+end
+
+-- the blow's direction: the death key's impulse, else where main.lua says it came from, else from where she was hit
+-- through her pelvis
+local function blow(pawn, mesh, hint)
+  local d = try(function() local v = pawn.RagdollInfo.ImpulseValue; return vec(v.X, v.Y, v.Z) end)
+  if d and len(d) > 1e-3 then return d, "key" end
+  if hint and len(hint) > 1e-3 then return hint, "attack" end
+  local h = try(function() local v = pawn.RagdollInfo.HitLocation; return vec(v.X, v.Y, v.Z) end)
+  local p = try(function() local v = mesh:GetSocketLocation(FName("Bip001-Pelvis")); return vec(v.X, v.Y, v.Z) end)
+  if h and p and len(h) > 0 then
+    d = vec(p.X - h.X, p.Y - h.Y, 0)
+    if len(d) > 1 then return d, "hit" end
+  end
+  return nil, "none"
+end
+
+-- the fastest of a ragdoll's main bodies, cm/s
+local function speed(comp)
+  local top = 0
+  for _, b in ipairs(STILL) do
+    local v = try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    if v then top = math.max(top, len(v)) end
+  end
+  return top
+end
+
+local function sleep(comp)
+  local n = 0
+  for _, b in ipairs(bodies(comp)) do
+    if try(function() comp:PutRigidBodyToSleep(FName(b)); return true end) then n = n + 1 end
+  end
+  return n
+end
+
+-- a split's copy settles with her
+function M.add_body(comp) if run and valid(comp) then extra[#extra + 1] = comp end end
+
+local function settle(dt)
+  local st = cfg().settle or {}
+  if st.enabled == false or run.t < (st.after or 1.5) then return end
+  local top = speed(run.mesh)
+  for _, c in ipairs(extra) do if valid(c) then top = math.max(top, speed(c)) end end
+  if run.asleep then
+    if top > (st.wake or 60) then run.asleep, run.still = false, 0; log(string.format("woken (%.0f cm/s)", top)) end
+    return
+  end
+  if top < (st.speed or 15) then run.still = run.still + dt else run.still = 0 end
+  if run.still < (st.time or 0.5) then return end
+  run.asleep = true
+  tone_stop()
+  local n = sleep(run.mesh)
+  for _, c in ipairs(extra) do if valid(c) then n = n + sleep(c) end end
+  log(string.format("settled after %.2f s: tone off, %d bodies asleep", run.t, n))
+end
+
+function M.tick(dt)
+  if not run then return end
+  run.t = run.t + dt
+  if not run.piece then settle(dt) end
+  if run.impactAt and run.t >= run.impactAt then
+    run.impactAt = nil
+    local d, from = blow(run.pawn, run.mesh, run.hint)
+    log(string.format("blow from %s%s", from, impact(run.mesh, cfg(), d)))
+  end
+  if not run.pac or run.toneDone then return end
+  local t = cfg().tone or {}
+  local hold, fade, rest = t.hold or 0.35, t.fade or 2.5, math.max(t.rest or 0.15, 0)
+  if run.t <= hold then return end
+  local x = (run.t - hold) / math.max(fade, 0.01)
+  if x >= 1 then
+    if rest <= 0 then
+      tone_stop()
+      log(string.format("tone gone after %.2f s", run.t))
+    else
+      try(function() run.pac:SetStrengthMultiplyer(rest) end)
+      run.toneDone = true
+      log(string.format("tone down to %.2f after %.2f s", rest, run.t))
+    end
+    return
+  end
+  -- smooth fade, down to the resting tone
+  local s = rest + (1 - rest) * (1 - x * x * (3 - 2 * x))
+  try(function() run.pac:SetStrengthMultiplyer(s) end)
+end
+
+-- a limb came off: its root stops pulling towards the body (its own joints keep their fading tone)
+function M.on_cut(mesh, bone)
+  if not (run and valid(run.pac)) then return end
+  drive(run.pac, bone, 0, cfg().tone or {})
+end
+
+function M.stop(pawn)
+  local nw = #dropped > 0 and weapons_back() or nil
+  if nw then log(string.format("%d weapons back on their sockets", nw)) end
+  if not run then return end
+  tone_stop()
+  local mesh = run.mesh
+  local n = 0
+  if valid(mesh) then
+    for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FName(bone), m, true); return true end) then n = n + 1 end end
+    for bone, s in pairs(run.scales) do if try(function() mesh:SetMassScale(FName(bone), s); return true end) then n = n + 1 end end
+  end
+  run = nil
+  log(string.format("stopped, %d masses put back", n))
+end
+
+-- a new Eve (the level reloaded): drop what was held from the old one without touching it
+function M.forget()
+  run, speeds, dropped, extra = nil, {}, {}, {}
+end
+
+return M

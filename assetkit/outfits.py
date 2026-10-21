@@ -2,13 +2,14 @@
 """Expand the spec's "outfits" job into per-asset cpuaccess / physics jobs for every Eve outfit.
 
   outfits.py meshes  <spec> <EquipmentTable.json>                candidate mesh packages (SB/Content-relative)
-  outfits.py physics <spec> <json_root> <mesh_rel...>            "<mesh> <physics asset>" for usable body meshes
+  outfits.py physics <spec> <meshinfo.log>                       "<mesh> <physics asset>" for usable body meshes
   outfits.py expand  <spec> <json_root> <bones_root> <pairs_file> <out_spec>
 
 Outfit meshes come from EquipmentTable (every SkeletalMesh path under Art/Character/PC/CH_P_EVE*), filtered to
 meshes on Eve's body skeleton. Each physics asset gets the job's groups, and its "except" pairs are measured: two
 bodies (of different groups, or not grouped at all) that are closer than rest_margin cm in the mesh's bind pose
-would be shoved apart by the solver every frame (the flinging), so they stay non-colliding.
+would be shoved apart by the solver every frame (the flinging), so they stay non-colliding. Bodies no constraint
+holds ("joints", see orphan_joints) get a locked joint to the body above them.
 """
 import fnmatch
 import json
@@ -50,29 +51,14 @@ def main_export(d):
     return next(e for e in d["Exports"] if e["OuterIndex"] == 0)
 
 
-def import_path(d, idx):
-    imp = d["Imports"][-idx - 1]
-    pkg = d["Imports"][-imp["OuterIndex"] - 1]["ObjectName"]
-    return pkg, imp["ObjectName"]
-
-
-def cmd_physics(spec, root, rels):
+def cmd_physics(spec, meshinfo):
+    """sbtool meshinfo's "ok <rel> <skeleton> <physics package>" lines -> "<mesh> <physics asset>" for body meshes."""
     job = job_of(spec)
-    for rel in rels:
-        try:
-            d = json.load(open(f"{root}/{rel}.json"))
-        except FileNotFoundError:
+    for line in open(meshinfo):
+        f = line.split()
+        if len(f) != 4 or f[0] != "ok" or f[2] != job["skeleton"] or not f[3].startswith(PREFIX):
             continue
-        m = main_export(d)
-        if m["ClassIndex"] >= 0 or d["Imports"][-m["ClassIndex"] - 1]["ObjectName"] != "SkeletalMesh":
-            continue
-        props = {p["Name"]: p["Value"] for p in m["Data"]}
-        if not props.get("Skeleton") or import_path(d, props["Skeleton"])[1] != job["skeleton"]:
-            continue
-        if not props.get("PhysicsAsset"):
-            continue
-        pkg, _ = import_path(d, props["PhysicsAsset"])
-        print(rel, pkg[len(PREFIX):])
+        print(f[1], f[3][len(PREFIX):])
 
 
 # --- bind-pose geometry -------------------------------------------------------------------------------------
@@ -212,6 +198,43 @@ def rest_overlaps(phys, bones, groups, margin):
     return out
 
 
+def orphan_joints(phys, bones, groups):
+    """Bodies that no constraint ties to anything above them (twist / helper bones carrying a cape or a jiggle
+    chain, e.g. CH_P_EVE_09's Ab-L-UpperArm-Tw1). In gameplay they are kinematic, so it never shows; once she
+    ragdolls they fly free and drag the skin weighted to them off the arm. Each gets a locked joint to the nearest
+    ancestor that has a body, framed at the bind pose (frame 1 = the child bone, frame 2 = the child relative to
+    that ancestor, as PhAT makes them). The main skeleton's own bodies are left alone."""
+    names = [b["name"] for b in bones]
+    R, T = world_pose(bones)
+    m = main_export(phys)
+    bodies = []
+    for ref in next(p for p in m["Data"] if p["Name"] == "SkeletalBodySetups")["Value"]:
+        e = phys["Exports"][ref["Value"] - 1]
+        bodies.append(next(p for p in e["Data"] if p["Name"] == "BoneName")["Value"])
+    children = set()
+    for ref in next((p for p in m["Data"] if p["Name"] == "ConstraintSetup"), {"Value": []})["Value"]:
+        e = phys["Exports"][ref["Value"] - 1]
+        inst = next(p for p in e["Data"] if p["Name"] == "DefaultInstance")["Value"]
+        children.add(next(p["Value"] for p in inst if p["Name"] == "ConstraintBone1"))
+    main = {b for g in groups.values() for b in g}
+    out = []
+    for b in bodies:
+        if b in children or b in main or b not in names:
+            continue
+        c = names.index(b)
+        a = bones[c]["parent"]
+        while a >= 0 and names[a] not in bodies:
+            a = bones[a]["parent"]
+        if a < 0:
+            continue
+        ia = (-R[a][0], -R[a][1], -R[a][2], R[a][3])
+        q = qmul(ia, R[c])
+        out.append({"child": b, "parent": names[a], "pos": [round(x, 4) for x in qrot(ia, sub(T[c], T[a]))],
+                    "pri": [round(x, 6) for x in qrot(q, (1.0, 0.0, 0.0))],
+                    "sec": [round(x, 6) for x in qrot(q, (0.0, 1.0, 0.0))]})
+    return out
+
+
 def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
     job = job_of(spec)
     pairs = [l.split() for l in open(pairs_file) if l.strip()]
@@ -232,9 +255,11 @@ def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
             continue
         bones = json.load(open(f"{bones_root}/SB/Content/{mesh}.json"))["bones"]
         over = rest_overlaps(d, bones, job["groups"], job["rest_margin"])
-        report.append(f"{phys}: {len(over)} rest overlaps " + ", ".join(f"{a}/{b} {g:.1f}" for a, b, g in over))
+        joints = orphan_joints(d, bones, job["groups"]) if job.get("lock_orphans", True) else []
+        report.append(f"{phys}: {len(over)} rest overlaps " + ", ".join(f"{a}/{b} {g:.1f}" for a, b, g in over)
+                      + "".join(f"; locks {j['child']} to {j['parent']}" for j in joints))
         assets[phys] = {"mode": "physics", "groups": job["groups"], "except": [[a, b] for a, b, _ in over],
-                        "body": job["body"], "optional_bodies": True}
+                        "body": job["body"], "joints": joints, "optional_bodies": True}
     out = dict(spec)
     out["assets"] = assets
     json.dump(out, open(out_spec, "w"), indent=2)
@@ -246,7 +271,7 @@ if __name__ == "__main__":
     if cmd == "meshes":
         cmd_meshes(spec, sys.argv[3])
     elif cmd == "physics":
-        cmd_physics(spec, sys.argv[3], sys.argv[4:])
+        cmd_physics(spec, sys.argv[3])
     elif cmd == "expand":
         cmd_expand(spec, *sys.argv[3:7])
     else:

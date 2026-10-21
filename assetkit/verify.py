@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Check the repacked assets: ragdoll keys reach the player, and nothing else changed.
 
-Usage: verify.py <spec.json> <vanilla_json_dir> <repacked_json_dir>
+Usage: verify.py <spec.json> <vanilla_json_dir> <repacked_json_dir> [--no-meshes]
+--no-meshes: "cpuaccess" jobs were checked by sbtool checkcpu (meshes have no JSON then).
 """
 import json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from patch_shows import response_array, physics_table, disable_table, physics_bodies
+from patch_shows import response_array, physics_table, disable_table, physics_bodies, joint_names, voice_pairs, notify_events, main_export
 import base64
 
 spec = json.load(open(sys.argv[1]))
 van_dir, out_dir = sys.argv[2], sys.argv[3]
+no_meshes = "--no-meshes" in sys.argv[4:]
 fail = []
 
 
@@ -27,8 +29,73 @@ def props(e):
 
 
 for rel, job in spec["assets"].items():
-    v, o = load(van_dir, job.get("from", rel)), load(out_dir, rel)
+    if no_meshes and job["mode"] == "cpuaccess":
+        continue
+    v = load(os.environ["SB_VENDOR_JSON"], rel) if job["mode"] == "vendor" else load(van_dir, job.get("from", rel))
+    o = load(out_dir, rel)
     tag = f"{job['mode']:6s} {rel}"
+    if job["mode"] == "vendor":
+        # the third-party package as shipped: same exports, same data
+        same = [(e.get("ObjectName"), json.dumps(e.get("Data")), json.dumps(e.get("Extras"))) for e in o["Exports"]] == \
+               [(e.get("ObjectName"), json.dumps(e.get("Data")), json.dumps(e.get("Extras"))) for e in v["Exports"]]
+        if not same:
+            fail.append(f"{tag}: differs from {job['file']}")
+        print(f"ok  {tag}  from {job['file']}")
+        continue
+
+    if job["mode"] == "voice":
+        vp = {k["Value"]: json.dumps(x) for k, x in voice_pairs(v)}
+        op = {k["Value"]: x for k, x in voice_pairs(o)}
+        for key, want in job["voices"].items():
+            got = {q["Name"]: q.get("Value") for q in op.get(key, {"Value": []})["Value"]}
+            like = {q["Name"]: q.get("Value") for q in json.loads(vp[want["like"]])["Value"]}
+            if not got:
+                fail.append(f"{tag}: no voice {key}")
+                continue
+            snd = got["SoundSource"]
+            snd_name = o["Imports"][-snd - 1]["ObjectName"] if isinstance(snd, int) and snd < 0 else None
+            if snd_name == "UnknownExport" and os.environ.get("SB_PATCHED_JSON"):
+                # the read-back only sees the mod container, so game imports come back unnamed; the import slot
+                # survives packing, so name it from the patched package
+                snd_name = load(os.environ["SB_PATCHED_JSON"], rel)["Imports"][-snd - 1]["ObjectName"]
+            if "sound" in want and snd_name != want["sound"].rsplit("/", 1)[1]:
+                fail.append(f"{tag}: {key} plays {snd_name}")
+            for k, x in got.items():
+                exp = want.get("set", {}).get(k, like[k])
+                if k != "SoundSource" and not (x == exp or (isinstance(x, float) and abs(x - exp) < 1e-6)):
+                    fail.append(f"{tag}: {key}.{k}={x}")
+        if {k: x for k, x in vp.items()} != {k: json.dumps(x) for k, x in op.items() if k not in job["voices"]}:
+            fail.append(f"{tag}: other voices changed")
+        print(f"ok  {tag}  {', '.join(job['voices'])}")
+        continue
+
+    if job["mode"] == "notify":
+        _, vm = main_export(v)
+        _, om = main_export(o)
+        ve, oe = notify_events(vm)["Value"], notify_events(om)["Value"]
+        fields = lambda ev: {q["Name"]: q.get("Value") for q in ev["Value"]}
+        vex = {e["ObjectName"]: e for e in v["Exports"]}
+        name_of = lambda d, i: d["Exports"][i - 1]["ObjectName"]
+        old = sorted((name_of(v, fields(e)["Notify"]), round(fields(e)["LinkValue"], 4)) for e in ve)
+        kept = sorted((name_of(o, fields(e)["Notify"]), round(fields(e)["LinkValue"], 4)) for e in oe
+                      if name_of(o, fields(e)["Notify"]) in vex)
+        new = [fields(e) for e in oe if name_of(o, fields(e)["Notify"]) not in vex]
+        if kept != old:
+            fail.append(f"{tag}: vanilla notifies changed")
+        if len(new) != 1 or abs(new[0]["LinkValue"] - job["at"]) > 1e-4:
+            fail.append(f"{tag}: {len(new)} new notifies")
+        else:
+            ne = o["Exports"][new[0]["Notify"] - 1]
+            if cls_name(o, ne) != "SBAnimNotify_CharSESound" or props(ne).get("VoiceKey", {}).get("Value") != job["voice"]:
+                fail.append(f"{tag}: new notify is not a {job['voice']} voice")
+        for e in o["Exports"]:
+            if e["OuterIndex"] != 0 and e["ObjectName"] in vex and json.dumps(e.get("Data")) != json.dumps(vex[e["ObjectName"]].get("Data")):
+                fail.append(f"{tag}: export {e['ObjectName']} changed")
+        strip = lambda e: [p for p in e["Data"] if p["Name"] != "Notifies"]
+        if json.dumps(strip(om)) != json.dumps(strip(vm)) or om.get("Extras") != vm.get("Extras"):
+            fail.append(f"{tag}: sequence changed beyond its notifies")
+        print(f"ok  {tag}  {job['voice']} at {job['at']} s, {len(old)} notifies kept")
+        continue
     if job["mode"] == "table":
         rows = {r["Name"]: {p["Name"]: p.get("Value") for p in r["Value"]} for r in o["Exports"][0]["Table"]["Data"]}
         for row, fields in job["rows"].items():
@@ -63,8 +130,20 @@ for rel, job in spec["assets"].items():
                     fail.append(f"{tag}: {bone}.{k}={oi[k]['Value']}")
         touched = {id(oe) for oe, b in physics_bodies(o) if b in want}
         vex = {e["ObjectName"]: e for e in v["Exports"]}
+        joints = job.get("joints", [])
+        if joint_names(o) != joint_names(v) + [j["child"] for j in joints]:
+            fail.append(f"{tag}: constraints {joint_names(o)[len(joint_names(v)):]} instead of the spec's joints")
+        added = [e for e in o["Exports"] if e["ObjectName"] not in vex]
+        for e, j in zip(added, joints):
+            inst = {p["Name"]: p["Value"] for p in e["Data"][0]["Value"]}
+            prof = {p["Name"]: p["Value"] for p in inst["ProfileInstance"]}
+            motions = [q["Value"] for k in ("ConeLimit", "TwistLimit") for q in prof[k]]
+            if (inst["ConstraintBone1"], inst["ConstraintBone2"]) != (j["child"], j["parent"]) or set(motions) != {"ACM_Locked"}:
+                fail.append(f"{tag}: joint {e['ObjectName']} is not a locked {j['child']} -> {j['parent']}")
+        if len(added) != len(joints):
+            fail.append(f"{tag}: {len(added)} new exports for {len(joints)} joints")
         for e in o["Exports"]:
-            if id(e) in touched or e["OuterIndex"] == 0:
+            if id(e) in touched or e["OuterIndex"] == 0 or e["ObjectName"] not in vex:
                 continue
             if json.dumps(e.get("Data")) != json.dumps(vex[e["ObjectName"]].get("Data")):
                 fail.append(f"{tag}: export {e['ObjectName']} changed")
@@ -74,7 +153,8 @@ for rel, job in spec["assets"].items():
                 if json.dumps(strip(e)) != json.dumps(strip(vex[e["ObjectName"]])):
                     fail.append(f"{tag}: {e['ObjectName']} changed beyond DefaultInstance")
         old, _ = disable_table(v)
-        print(f"ok  {tag}  {len(old)} -> {len(got)} non-colliding pairs, body {job.get('body', {})}")
+        print(f"ok  {tag}  {len(old)} -> {len(got)} non-colliding pairs, body {job.get('body', {})}"
+              + (f", locked {','.join(j['child'] for j in joints)}" if joints else ""))
         continue
 
     if job["mode"] == "cpuaccess":

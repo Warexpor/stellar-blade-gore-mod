@@ -1,28 +1,42 @@
 diff --git i/retoc/src/iostore_writer.rs w/retoc/src/iostore_writer.rs
-index ba54785..d3551d8 100644
+index ba54785..95e8d9d 100644
 --- i/retoc/src/iostore_writer.rs
 +++ w/retoc/src/iostore_writer.rs
-@@ -59,15 +59,41 @@ impl IoStoreWriter {
+@@ -59,15 +59,51 @@ impl IoStoreWriter {
  
          let start_block = self.toc.compression_blocks.len();
  
 +        // RETOC_COMPRESS=zlib|zstd|lz4|oodle compresses each block that gets smaller; blocks are padded to 16 bytes
 +        // because the engine reads Align(CompressedSize, AES block size).
 +        let method = std::env::var("RETOC_COMPRESS").ok().and_then(|m| crate::compression::CompressionMethod::from_str_ignore_case(&m));
++        // blocks compress independently, so all of a chunk's blocks go through rayon at once (a 20 MB mesh is ~300)
++        let blocks: Vec<&[u8]> = data.chunks(self.toc.compression_block_size as usize).collect();
++        let packed: Vec<Option<Vec<u8>>> = match method {
++            Some(m) => {
++                use rayon::prelude::*;
++                blocks
++                    .par_iter()
++                    .map(|block| -> Result<Option<Vec<u8>>> {
++                        let mut buf = vec![];
++                        crate::compression::compress(m, block, &mut buf)?;
++                        Ok((buf.len() < block.len()).then_some(buf))
++                    })
++                    .collect::<Result<_>>()?
++            }
++            None => vec![None; blocks.len()],
++        };
          let mut hasher = blake3::Hasher::new();
-         for block in data.chunks(self.toc.compression_block_size as usize) {
+-        for block in data.chunks(self.toc.compression_block_size as usize) {
 -            self.cas_stream.write_all(block)?;
++        for (block, packed) in blocks.iter().zip(&packed) {
              hasher.update(block);
 -            let compressed_size = block.len() as u32;
              let uncompressed_size = block.len() as u32;
 -            let compression_method_index = 0; // "None"
 -            self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
 -            offset += compressed_size as u64;
-+            let mut packed = None;
-+            if let Some(m) = method {
-+                let mut buf = vec![];
-+                crate::compression::compress(m, block, &mut buf)?;
-+                if buf.len() < block.len() {
++            let (bytes, compression_method_index): (&[u8], u8) = match (packed, method) {
++                (Some(buf), Some(m)) => {
 +                    let index = match self.toc.compression_methods.iter().position(|x| *x == m) {
 +                        Some(i) => i,
 +                        None => {
@@ -30,12 +44,9 @@ index ba54785..d3551d8 100644
 +                            self.toc.compression_methods.len() - 1
 +                        }
 +                    };
-+                    packed = Some((buf, index as u8 + 1));
++                    (buf, index as u8 + 1)
 +                }
-+            }
-+            let (bytes, compression_method_index): (&[u8], u8) = match &packed {
-+                Some((buf, index)) => (buf, *index),
-+                None => (block, 0), // "None"
++                _ => (block, 0), // "None"
 +            };
 +            self.cas_stream.write_all(bytes)?;
 +            let mut stored = bytes.len() as u64;
