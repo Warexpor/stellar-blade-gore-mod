@@ -21,6 +21,9 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       r=$(WAIST=1 POSED=$posed real/run.sh "$m" 2>&1 | tail -1)
       echo "real waist cut $m${posed:+ (posed)}: $r"
       [[ $r == PASS ]] || fail=1
+      r=$(ARM=1 POSED=$posed real/run.sh "$m" 2>&1 | tail -1)
+      echo "real arm cut $m (cape kept)${posed:+ (posed)}: $r"
+      [[ $r == PASS ]] || fail=1
     done
   done
 fi

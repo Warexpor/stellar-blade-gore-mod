@@ -190,6 +190,10 @@ static unsigned char nosink[MAX_BONES];
 #define MAX_LIMB_ROOTS 8
 static u64 limbs_comp;
 static int gone_roots[MAX_LIMB_ROOTS], ngone, keep_roots[MAX_LIMB_ROOTS], nkeep;
+// and the spine bones its lid pieces ride (each lid triangle on the nearest one): the flattened skin behind the lid
+// is banded the same way, each band on sinks that ride that bone, so sheet and lid move together
+#define MAX_RIDE 6
+static int ride_bones[MAX_RIDE], nride;
 // a split's neck plane (point, normal up the neck, world; "h"): her main hair is one piece with no bone a cut could
 // collapse, so a split never halves her head. The half that keeps it (HEAD_KEEP) keeps the neck and head above the
 // plane whole, the other (HEAD_DROP) lets them go into its neck, which closes like a stump. Within NECK_R of the neck
@@ -897,7 +901,8 @@ static char *core_rim(char *o, const char *tag, float *pts, u16 *sec, int *n, co
 #define MODE_RUPTURE 6 // a burst: like DENT, but all of the skin within radius goes down to the floor (a crater
                        // with a hard, torn edge, which the flesh lid over it hides)
 #define DENTY(m) ((m) == MODE_DENT || (m) == MODE_RUPTURE)
-#define SPLIT_BANDS 4 // a split's flattening sinks are picked in this many bands along its opening (neck, chest, belly)
+#define SPLIT_BANDS 6 // most bands a split's flattening sinks are picked in: one per bone the lid rides ("g"), else
+#define AXIS_BANDS 4  // this many along the opening (neck, chest, belly)
 
 // A split's halves are two components on one mesh asset, so they share the collapsed sinks. Sections that have
 // nothing to collapse onto (Eve's face: eyes, teeth, brows only know the head bone) borrow a bone no vertex of the
@@ -923,7 +928,9 @@ static int nremaps;
 #define SIDE_TOL 1.0f   // cm: a bone this close to the plane counts as on it
 #define FREE_CM 3.0f    // cm: a limb bone whose joint and its parent's both lie this far in front of the plane, and
                         // everything under it, hangs free of the cut (CUT goes along with the limb wherever it hangs)
-#define SHEET_IN 0.3f   // cm the flattened skin sits inside the kept side, behind the caps
+#define SHEET_IN 2.0f   // cm the flattened skin sits inside the kept side, behind the caps. 0.3 put the sheet out in
+                        // front of the lid wherever she bent more than the sheet's sinks follow (harness: 2018 of
+                        // 42234 sheet vertices on the real mesh); 2 cm hides all but a few
 #define SHEET_FAR 5.0f  // cm: what lies further behind the plane collapses to a point in its band instead of
                         // flattening (a slice across the waist would flatten the shoulders out past the opening)
 
@@ -941,6 +948,8 @@ typedef struct {
                                               // 10 + k a point in band k
     const unsigned char *headused;            // MODE_SIDE with a neck plane: bones on the head and the skin round
                                               // the neck plane, which one half keeps whole: never a sink
+    const signed char *rideof;                // MODE_SIDE with ride bones: the band each bone rides, -1 none
+    int band;                                 // the band a sink is wanted for (-1: any)
 } sink_args;
 
 static int uf_find(int *par, int v)
@@ -1035,6 +1044,7 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
     for (int i = 1; i < nb; i++) {
         if (!c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || (a->limb[i] && !(a->onplane && a->onplane[i])) || a->gone[i] || a->keep[i]) continue;
         if (i == a->b || i == a->parent_b || (a->headused && a->headused[i])) continue;
+        if (a->rideof && a->band >= 0 && a->rideof[i] != a->band) continue;
         if (a->btype[i] ? a->btype[i] != want : is_sink(c, i)) continue;
         const float *t = pose_of(c, i);
         if (!t) continue;
@@ -1050,6 +1060,7 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
             if (c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || (a->limb[i] && !(a->onplane && a->onplane[i]))
                 || a->gone[i] || a->keep[i] || i == a->b || i == a->parent_b) continue;
             if (a->headused && a->headused[i]) continue;
+            if (a->rideof && a->band >= 0 && a->rideof[i] != a->band) continue;
             if (a->btype[i] ? a->btype[i] != want : is_sink(c, i)) continue;
             const float *t = pose_of(c, i);
             if (!t) continue;
@@ -1209,7 +1220,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // a second block for islands (hanging pieces), layers (holes) and the split: per vertex island parent, counts,
     // weights, reach, sink, kind; per bone the split's limb flags, sink types and roots; per section layer flags and
     // the split's band and limb sinks
-    u64 bytes2 = (u64)nv * (6 * 4 + 5) + (u64)nb * (3 + 4) + (u64)c.nsec * (1 + 4 * (2 * SPLIT_BANDS + MAX_LIMB_ROOTS + 1)) + 64;
+    u64 bytes2 = (u64)nv * (6 * 4 + 6) + (u64)nb * (4 + 4) + (u64)c.nsec * (1 + 4 * (2 * SPLIT_BANDS + MAX_LIMB_ROOTS + 1)) + 64;
     unsigned char *mem2 = VirtualAlloc(0, bytes2, 0x3000, 0x04);
     if (!mem2) { VirtualFree(mem, 0, 0x8000); skin_result("err out of memory"); return; }
     int *upar = (int *)mem2, *icnt = upar + nv, *iwl = icnt + nv, *iwb = iwl + nv, *vsink = iwb + nv;
@@ -1218,6 +1229,8 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int *secroot = secfar + (u64)c.nsec * SPLIT_BANDS, *secneck = secroot + (u64)c.nsec * MAX_LIMB_ROOTS;
     unsigned char *iflag = (unsigned char *)(secneck + c.nsec), *vkind = iflag + nv, *vroot = vkind + nv;
     unsigned char *vcn = vroot + nv, *idec = vcn + nv, *gonebone = idec + nv, *keepbone = gonebone + nb, *btype = keepbone + nb, *secore = btype + nb;
+    unsigned char *vband = secore + c.nsec;          // a split's vanishing vertex: its band
+    signed char *rideof = (signed char *)(vband + nv); // per bone: the band (ride bone) it rides, -1 none
     const unsigned char *ns = nosink_mesh == c.sm && nb <= MAX_BONES ? nosink : 0;
     unsigned char *limb = mem, *haschild = limb + nb, *drop_l = haschild + nb, *drop_b = drop_l + nb, *stable = drop_b + nb;
     unsigned char *inmap = stable + nb;
@@ -1236,6 +1249,21 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         limb[i] = !holey && mode != MODE_SIDE && (i == b || (par >= 0 && par < i && limb[par]));
         if (par >= 0 && par < nb) haschild[par] = 1;
     }
+    // a limb cut: the accessory chains Lua names ("g" with no gone roots, its kept roots) hang off the limb but stay
+    // on the body, their skin on their own bones (Lua hangs their bodies on the limb's parent). CH_P_EVE_09's cape
+    // hangs off the upper arm's twist bone and went off with the arm. Used by this cut only
+    static unsigned char keepcut[MAX_BONES];
+    int anykeep = mode == MODE_CUT && limbs_comp == comp && nkeep > 0 && nb <= MAX_BONES;
+    if (anykeep) {
+        for (int i = 0; i < nb; i++) {
+            int par = parent_of(&c, i);
+            keepcut[i] = 0;
+            for (int r = 0; r < nkeep; r++) if (keep_roots[r] == i) keepcut[i] = 1;
+            if (!keepcut[i] && par >= 0 && par < i) keepcut[i] = keepcut[par];
+            if (keepcut[i]) limb[i] = 0;
+        }
+    }
+    if (mode == MODE_CUT && limbs_comp == comp) limbs_comp = 0;
     int parent_b = parent_of(&c, b);
     for (int s = 0; s < c.nsec; s++) {
         u64 sec = secs + (u64)s * 0xe8;
@@ -1334,19 +1362,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             else { off = (wide ? 3 : 2) * maxinf * (u32)v; cn = maxinf; }
             if (cn > MAX_INF) cn = MAX_INF;
             vcn[v] = (unsigned char)cn;
-            float sub = 0, hang = 0, *x = xs + (u64)v * 3;
+            float sub = 0, hang = 0, kept = 0, *x = xs + (u64)v * 3;
             for (u32 i = 0; i < cn; i++) {
                 u32 li = wide ? ((unsigned short *)(data + off))[i] : data[off + i];
                 unsigned char w = data[off + (wide ? 2 : 1) * cn + i];
                 int mb = li < (u32)nbmap ? bmap[li] : 0;
                 o->bones[i] = mb;
                 o->weights[i] = w;
-                if (w && mb < nb) { usage[mb]++; if (limb[mb]) sub += w; if (freeb[mb]) hang += w; }
+                if (w && mb < nb) { usage[mb]++; if (limb[mb]) sub += w; if (freeb[mb]) hang += w; if (anykeep && keepcut[mb]) kept += w; }
             }
             skin_point(&c, o, (const float *)(pos + (u64)v * pstride), x);
             float d[3] = { x[0] - p[0], x[1] - p[1], x[2] - p[2] }, h = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
             float q2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - h * h; // squared distance from the axis
-            if (mode == MODE_CUT) side[v] = sub > 0 && (h > 0 || hang > 127);
+            // mostly on a kept accessory chain: on the body, wherever it lies (its edge on the arm too)
+            if (mode == MODE_CUT) side[v] = sub > 0 && (h > 0 || hang > 127) && kept <= 127;
             else if (mode == MODE_WHOLE) side[v] = 1;
             else if (mode == MODE_PLANE) side[v] = h > 0 && (sub > 0 || (r2 > 0 && q2 < r2));
             else side[v] = 0;
@@ -1470,7 +1499,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
 
     // sinks, per section and side, near the joint (PLANE: the plane point, HOLE: where the ray met the skin)
     sink_args sa = { &c, limb, stable, haschild, usage, b, parent_b, mode, { p[0], p[1], p[2] }, { p[0], p[1], p[2] }, { n[0], n[1], n[2] },
-                     ns, gonebone, keepbone, mode == MODE_SIDE ? onplane : 0, mode == MODE_SIDE ? secs : 0, btype, 0 };
+                     ns, gonebone, keepbone, mode == MODE_SIDE ? onplane : 0, mode == MODE_SIDE ? secs : 0, btype, 0, 0, -1 };
     if (mode == MODE_CUT) { const float *t = pose_of(&c, b); if (t) { sa.joint[0] = t[4]; sa.joint[1] = t[5]; sa.joint[2] = t[6]; } }
     if (holey) for (int k = 0; k < 3; k++) sa.joint[k] = sa.pp[k] = hc[k];
 
@@ -1583,6 +1612,8 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int nproj = 0, npoint = 0;
     float pin[3] = { p[0] + n[0] * SHEET_IN / tm[8], p[1] + n[1] * SHEET_IN / tm[8], p[2] + n[2] * SHEET_IN / tm[8] };
     float bandc[SPLIT_BANDS][3];
+    int nbands = AXIS_BANDS;
+    const float *ridet[MAX_RIDE] = { 0 }; // the ride bones that have a band, as posed now
     // where the neck closes: on its axis, NECK_IN under the plane
     float neckc[3] = { p2[0] - n2[0] * NECK_IN / tm[8], p2[1] - n2[1] * NECK_IN / tm[8], p2[2] - n2[2] * NECK_IN / tm[8] };
     if (mode == MODE_SIDE) {
@@ -1616,10 +1647,65 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         }
         if (lo_t > hi_t) lo_t = hi_t = 0;
         float span = hi_t > lo_t ? hi_t - lo_t : 1;
-        // each band's middle, on the plane
-        for (int k = 0; k < SPLIT_BANDS; k++) {
-            float tc = lo_t + span * (k + 0.5f) / SPLIT_BANDS;
+        // the bands: with ride bones, the one each vanishing vertex (where it lands on the plane) is nearest to, as
+        // the lid's triangles pick theirs, and only sinks riding that bone serve it: a sink on the pelvis had carried
+        // 43 cm of the sheet up to the ribs, sinks under a clavicle swung with it, and once she bent the sheet tore
+        // between them and stuck out through the lid. Else AXIS_BANDS along the opening
+        int byride = limbs_comp == comp && nride > 0;
+        nbands = byride ? nride : AXIS_BANDS;
+        if (byride) {
+            for (int k = 0; k < nride; k++) ridet[k] = pose_of(&c, ride_bones[k]);
+            for (int i = 0; i < nb; i++) {
+                rideof[i] = -1;
+                for (int j = parent_of(&c, i), g = 0; j >= 0 && j < nb && g < nb; j = parent_of(&c, j), g++) {
+                    int k = -1;
+                    for (int r = 0; r < nride; r++) if (ride_bones[r] == j) k = r;
+                    if (k >= 0) { rideof[i] = (signed char)k; break; }
+                    if (ns && ns[j]) break; // rides a body of its own (a clavicle, a breast)
+                }
+            }
+            // a bone no free helper rides (Spine and Spine1 carry none) gets no band: its stretch goes to the
+            // nearest bone that has one
+            for (int k = 0; k < nride; k++) {
+                int any = 0;
+                for (int i = 1; i < nb && !any; i++)
+                    any = rideof[i] == k && !(ns && ns[i]) && !(limb[i] && !onplane[i]) && !gonebone[i] && !keepbone[i]
+                        && !(hmode && headused[i]);
+                if (!any) ridet[k] = 0;
+            }
+            sa.rideof = rideof;
+        }
+        float bsum[SPLIT_BANDS][3] = { { 0 } };
+        int bcnt[SPLIT_BANDS] = { 0 };
+        for (int v = 0; v < nv; v++) {
+            vband[v] = 0;
+            if (vkind[v] != 1 && vkind[v] != 3) continue;
+            const float *x = xs + (u64)v * 3;
+            float h = (x[0] - p[0]) * n[0] + (x[1] - p[1]) * n[1] + (x[2] - p[2]) * n[2], q[3];
+            for (int j = 0; j < 3; j++) q[j] = x[j] - h * n[j];
+            int k = 0;
+            if (sa.rideof) {
+                float bd = 1e30f;
+                for (int r = 0; r < nride; r++) {
+                    if (!ridet[r]) continue;
+                    float d0 = q[0] - ridet[r][4], d1 = q[1] - ridet[r][5], d2 = q[2] - ridet[r][6], d = d0 * d0 + d1 * d1 + d2 * d2;
+                    if (d < bd) { bd = d; k = r; }
+                }
+            } else {
+                float t = (x[0] - mc[0]) * ax[0] + (x[1] - mc[1]) * ax[1] + (x[2] - mc[2]) * ax[2];
+                k = (int)((t - lo_t) / span * AXIS_BANDS);
+                k = k < 0 ? 0 : k >= AXIS_BANDS ? AXIS_BANDS - 1 : k;
+            }
+            vband[v] = (unsigned char)k;
+            for (int j = 0; j < 3; j++) bsum[k][j] += q[j];
+            bcnt[k]++;
+        }
+        // each band's middle, on the plane: where its vertices land, else (axis bands) the middle of its stretch
+        for (int k = 0; k < nbands; k++) {
+            if (bcnt[k]) { for (int j = 0; j < 3; j++) bandc[k][j] = bsum[k][j] / (float)bcnt[k]; continue; }
+            float tc = lo_t + span * (k + 0.5f) / nbands;
             for (int j = 0; j < 3; j++) bandc[k][j] = mc[j] + ax[j] * tc;
+            if (sa.rideof && ridet[k]) for (int j = 0; j < 3; j++) bandc[k][j] = ridet[k][4 + j];
             float h = (bandc[k][0] - p[0]) * n[0] + (bandc[k][1] - p[1]) * n[1] + (bandc[k][2] - p[2]) * n[2];
             for (int j = 0; j < 3; j++) bandc[k][j] -= h * n[j];
         }
@@ -1637,22 +1723,33 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 if (vkind[v] != order[pass] || s == 0xffff || (forced_sink > 0 && secsink[s * 2] == forced_sink)) continue;
                 const float *x = xs + (u64)v * 3;
                 if (vkind[v] == 4) {
+                    sa.band = -1;
                     if (secneck[s] == -1) secneck[s] = side_sink(&sa, s, neckc, NECK_SINK);
                 } else if (vkind[v] != 2) {
-                    float t = (x[0] - mc[0]) * ax[0] + (x[1] - mc[1]) * ax[1] + (x[2] - mc[2]) * ax[2];
-                    int k = (int)((t - lo_t) / span * SPLIT_BANDS);
-                    k = k < 0 ? 0 : k >= SPLIT_BANDS ? SPLIT_BANDS - 1 : k;
+                    int k = vband[v];
                     int *slot = &(vkind[v] == 1 ? secband : secfar)[(u64)s * SPLIT_BANDS + k];
+                    sa.band = k;
                     if (*slot == -1) *slot = side_sink(&sa, s, bandc[k], vkind[v] == 1 ? 1 : 10 + k);
                 } else {
                     int r = vroot[v] < MAX_LIMB_ROOTS ? vroot[v] : 0;
                     int *slot = &secroot[(u64)s * MAX_LIMB_ROOTS + r];
                     if (*slot != -1) continue;
-                    // where the limb joined, on the plane
+                    // where the limb joined, on the plane, on a sink riding the spine bone nearest to it (one under
+                    // the clavicle flapped the point about)
                     const float *t = pose_of(&c, gone_roots[r]);
                     float target[3] = { t ? t[4] : x[0], t ? t[5] : x[1], t ? t[6] : x[2] };
                     float h = (target[0] - p[0]) * n[0] + (target[1] - p[1]) * n[1] + (target[2] - p[2]) * n[2];
                     for (int j = 0; j < 3; j++) target[j] -= h * n[j];
+                    sa.band = -1;
+                    if (sa.rideof) {
+                        float bd = 1e30f;
+                        for (int k = 0; k < nride; k++) {
+                            const float *rt = pose_of(&c, ride_bones[k]);
+                            if (!rt) continue;
+                            float d0 = target[0] - rt[4], d1 = target[1] - rt[5], d2 = target[2] - rt[6], d = d0 * d0 + d1 * d1 + d2 * d2;
+                            if (d < bd) { bd = d; sa.band = k; }
+                        }
+                    }
                     *slot = side_sink(&sa, s, target, 2 + r);
                 }
             }
@@ -1663,20 +1760,17 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             int s = vsec[v];
             if (!vkind[v] || s == 0xffff) continue;
             if (forced_sink > 0 && secsink[s * 2] == forced_sink) { vsink[v] = forced_sink; continue; }
-            const float *x = xs + (u64)v * 3;
-            float t = (x[0] - mc[0]) * ax[0] + (x[1] - mc[1]) * ax[1] + (x[2] - mc[2]) * ax[2];
-            int k0 = (int)((t - lo_t) / span * SPLIT_BANDS);
-            k0 = k0 < 0 ? 0 : k0 >= SPLIT_BANDS ? SPLIT_BANDS - 1 : k0;
+            int k0 = vband[v];
             if (vkind[v] == 2) {
                 int r = vroot[v] < MAX_LIMB_ROOTS ? vroot[v] : 0, k = secroot[(u64)s * MAX_LIMB_ROOTS + r];
                 if (k >= 0) { vsink[v] = k; continue; }
             }
             if (vkind[v] == 4 && secneck[s] >= 0) { vsink[v] = secneck[s]; continue; }
             if (vkind[v] == 3 && secfar[(u64)s * SPLIT_BANDS + k0] >= 0) { vsink[v] = secfar[(u64)s * SPLIT_BANDS + k0]; continue; }
-            for (int dk = 0; dk < SPLIT_BANDS && vsink[v] < 0; dk++)
+            for (int dk = 0; dk < nbands && vsink[v] < 0; dk++)
                 for (int sg = -1; sg <= 1 && vsink[v] < 0; sg += 2) {
                     int k = k0 + sg * dk;
-                    if (k >= 0 && k < SPLIT_BANDS && secband[(u64)s * SPLIT_BANDS + k] >= 0) vsink[v] = secband[(u64)s * SPLIT_BANDS + k];
+                    if (k >= 0 && k < nbands && secband[(u64)s * SPLIT_BANDS + k] >= 0) vsink[v] = secband[(u64)s * SPLIT_BANDS + k];
                 }
         }
     }
@@ -1722,6 +1816,34 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 for (int i = 0; i < MAX_INF; i++) { o->bones[i] = 0; o->weights[i] = 0; }
                 o->bones[0] = sink;
                 o->weights[0] = 255;
+                // the flattened sheet bends like skin: between the two bands of its section it lies between, weighted
+                // by where along the spine (both put it on the same spot of the plane now). On one band's sink, the
+                // sheet tore where two bands met and came out through the lid once she bent
+                if (mode == MODE_SIDE && vkind[v] == 1 && sa.rideof) {
+                    const float *x = xs + (u64)v * 3;
+                    int ka = -1, kb = -1, prev = -1;
+                    float bd = 1e30f, bt = 0;
+                    for (int k = 0; k < nride; k++) {
+                        if (!ridet[k] || secband[(u64)s * SPLIT_BANDS + k] < 0) continue;
+                        if (prev >= 0) {
+                            const float *a0 = ridet[prev] + 4, *b0 = ridet[k] + 4;
+                            float ab[3] = { b0[0] - a0[0], b0[1] - a0[1], b0[2] - a0[2] }, ax2[3] = { x[0] - a0[0], x[1] - a0[1], x[2] - a0[2] };
+                            float l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                            float t = l2 > 0 ? (ax2[0] * ab[0] + ax2[1] * ab[1] + ax2[2] * ab[2]) / l2 : 0;
+                            t = t < 0 ? 0 : t > 1 ? 1 : t;
+                            float d[3] = { ax2[0] - ab[0] * t, ax2[1] - ab[1] * t, ax2[2] - ab[2] * t }, dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                            if (dd < bd) { bd = dd; ka = prev; kb = k; bt = t; }
+                        }
+                        prev = k;
+                    }
+                    if (ka >= 0) {
+                        int wb = (int)(bt * 255.0f + 0.5f);
+                        int sa0 = secband[(u64)s * SPLIT_BANDS + ka], sb0 = secband[(u64)s * SPLIT_BANDS + kb];
+                        if (wb >= 255) { o->bones[0] = sb0; }
+                        else if (wb > 0) { o->bones[0] = sa0; o->weights[0] = (unsigned char)(255 - wb); o->bones[1] = sb0; o->weights[1] = (unsigned char)wb; }
+                        else o->bones[0] = sa0;
+                    }
+                }
                 nseam++;
                 continue;
             }
@@ -1730,7 +1852,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         // an earlier cut's seam vertex: already all on its sink. Only this component's: a split's copy shares the
         // mesh asset, and a vertex of its kept half that the vanilla skin puts wholly on a helper the other half had
         // just made its sink (CH_P_EVE_09's Ab-NeckSub) stayed on it and was flattened with the other half
-        if (o->weights[0] == 255 && own_sink(&c, o->bones[0])) continue;
+        {
+            int all = o->weights[0] > 0;   // a split's sheet may lie between two of them
+            for (int i = 0; i < MAX_INF && all; i++) if (o->weights[i] && !own_sink(&c, o->bones[i])) all = 0;
+            if (all) continue;
+        }
         const unsigned char *drop = side[v] ? drop_l : drop_b;
         int r = keep_only(&c, s, o, drop, fallback_bone(&c, s, side[v] || holey || mode == MODE_SIDE ? b : parent_b, drop));
         if (r > 0) moved++;
@@ -1894,7 +2020,12 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     o = put(o, " new="); o = put_int(o, nnew);
     o = put(o, " sinkmoved="); o = put_int(o, moved_sinks);
     if (forced_sink > 0) { o = put(o, " borrowed="); o = put_int(o, borrowed); }
-    if (mode == MODE_SIDE) { o = put(o, " proj="); o = put_int(o, nproj); o = put(o, " point="); o = put_int(o, npoint); }
+    if (mode == MODE_SIDE) {
+        o = put(o, " proj="); o = put_int(o, nproj); o = put(o, " point="); o = put_int(o, npoint);
+        int nr = 0;
+        for (int k = 0; k < MAX_RIDE; k++) nr += ridet[k] != 0;
+        o = put(o, " bands="); o = put_int(o, nr ? nr : nbands); if (nr) o = put(o, "/ride");
+    }
     if (mode == MODE_CUT || mode == MODE_PLANE) {
         o = put(o, " pieces="); o = put_int(o, islands_moved); *o++ = '/'; o = put_int(o, islands_gone);
     }
@@ -2121,6 +2252,140 @@ static void skin_clear(u64 comp, int lod)
     skin_result(msg);
 }
 
+// "s<comp>,<lod>": where the skin stretches now. Every vertex skinned as the GPU does (the weights in use, the mesh's
+// inverse bind matrices with the collapsed sinks, the live pose), every triangle's edges against the bind pose's: a
+// triangle stretches when an edge is over 3x and 15 cm longer than at bind. Reports how many, the longest edge, and
+// the bones (each vertex's strongest) most of them hang on, with how far that bone's vertices got from the bone.
+// hidden= counts the stretched triangles wholly on sinks (the flattened other side, meant to sit behind the lids)
+static void skin_probe(u64 comp, int lod)
+{
+    cut_ctx c = { 0 };
+    c.comp = comp;
+    c.sm = *(u64 *)(comp + SC_SKELETAL_MESH);
+    if (!c.sm) { skin_result("err no mesh"); return; }
+    u64 rd = *(u64 *)(comp + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(comp + SC_MESH_OBJECT) + 0x40) : *(u64 *)(c.sm + SM_RENDER_DATA);
+    if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
+    u64 ld = ((u64 *)*(u64 *)rd)[lod];
+    u64 sw = ((get_buffer_fn)(exe + RVA_GET_SKIN_WEIGHT_BUFFER))(comp, lod);
+    u64 ib = *(u64 *)(ld + LOD_INDICES);
+    c.nv = *(int *)(ld + LOD_NUM_VERTICES);
+    unsigned char *pos = *(unsigned char **)(ld + LOD_POSITIONS + 0x28);
+    u32 pstride = *(u32 *)(ld + LOD_POSITIONS + 0x30);
+    if (!sw || !*(u64 *)(sw + SW_DATA) || !pos || !ib || *(int *)(sw + SW_NUM_VERTICES) != c.nv) {
+        skin_result("err no CPU copy of positions / skin weights / indices"); return;
+    }
+    int ni = ((index_num_fn)(*(u64 *)(*(u64 *)ib + 0x58)))(ib);
+    index_get_fn index_get = (index_get_fn)(*(u64 *)(*(u64 *)ib + 0x68));
+    c.nb = *(int *)(c.sm + SM_REF_BONE_INFO + 8);
+    c.binfo = *(unsigned char **)(c.sm + SM_REF_BONE_INFO);
+    c.refinv = *(float **)(c.sm + SM_REF_BASES_INV);
+    if (!c.refinv || c.nb <= 0 || c.nb > MAX_BONES) { skin_result("err no bones"); return; }
+    u64 master = ((weak_get_fn)(exe + RVA_WEAK_PTR_GET))(comp + SC_MASTER_POSE);
+    u64 src = master ? master : comp;
+    if (master) {
+        static int namemap[MAX_BONES];
+        u64 msm = *(u64 *)(master + SC_SKELETAL_MESH);
+        const unsigned char *mbi = msm ? *(unsigned char **)(msm + SM_REF_BONE_INFO) : 0;
+        int mnb = msm ? *(int *)(msm + SM_REF_BONE_INFO + 8) : 0;
+        if (!mbi || mnb <= 0) { skin_result("err no master skeleton"); return; }
+        for (int i = 0; i < c.nb; i++) {
+            u64 nm = *(const u64 *)(c.binfo + (u64)i * 0xc);
+            namemap[i] = -1;
+            for (int j = 0; j < mnb; j++) if (*(const u64 *)(mbi + (u64)j * 0xc) == nm) { namemap[i] = j; break; }
+        }
+        c.mmap = namemap;
+    }
+    c.space = *(float **)(src + SC_SPACE_BASES + (u64)*(int *)(src + SC_SPACE_READ) * 0x10);
+    c.nspace = *(int *)(src + SC_SPACE_BASES + (u64)*(int *)(src + SC_SPACE_READ) * 0x10 + 8);
+    if (!c.space) { skin_result("err no bone transforms"); return; }
+    u64 secs = *(u64 *)(ld + LOD_SECTIONS);
+    int nsec = *(int *)(ld + LOD_SECTIONS + 8), nv = c.nv, nb = c.nb;
+    unsigned char *mem = VirtualAlloc(0, (u64)nv * 17 + (u64)nb * 12 + 64, 0x3000, 0x04);
+    if (!mem) { skin_result("err out of memory"); return; }
+    float *xs = (float *)mem;
+    int *top = (int *)(xs + (u64)nv * 3);
+    int *count = top + nv, *far = count + nb;   // per bone: stretched triangle corners, farthest vertex (mm)
+    unsigned char *onsink = (unsigned char *)(far + nb);   // per vertex: every weight on a sink
+    unsigned char *data = *(unsigned char **)(sw + SW_DATA);
+    u32 *lookup = *(u32 **)(sw + SW_LOOKUP);
+    int variable = *(unsigned char *)(sw + SW_VARIABLE) && lookup;
+    u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
+    int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
+    for (int v = 0; v < nv; v++) top[v] = -1;
+    for (int s = 0; s < nsec; s++) {
+        u64 sec = secs + (u64)s * 0xe8;
+        int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
+        unsigned short *bmap = *(unsigned short **)(sec + SEC_BONE_MAP);
+        int nbmap = *(int *)(sec + SEC_BONE_MAP + 8);
+        for (int v = base; v < base + cnt && v < nv; v++) {
+            skin_info o;
+            u32 off, cn;
+            if (variable) { off = lookup[v] >> 8; cn = lookup[v] & 0xff; }
+            else { off = (wide ? 3 : 2) * maxinf * (u32)v; cn = maxinf; }
+            if (cn > MAX_INF) cn = MAX_INF;
+            int tw = 0, sunk = 1;
+            for (int i = 0; i < MAX_INF; i++) { o.bones[i] = 0; o.weights[i] = 0; }
+            for (u32 i = 0; i < cn; i++) {
+                u32 li = wide ? ((unsigned short *)(data + off))[i] : data[off + i];
+                unsigned char w = data[off + (wide ? 2 : 1) * cn + i];
+                int mb = li < (u32)nbmap ? bmap[li] : 0;
+                o.bones[i] = mb; o.weights[i] = w;
+                if (w > tw && mb < nb) { tw = w; top[v] = mb; }
+                if (w && !is_sink(&c, mb)) sunk = 0;
+            }
+            onsink[v] = (unsigned char)sunk;
+            skin_point(&c, &o, (const float *)(pos + (u64)v * pstride), xs + (u64)v * 3);
+        }
+    }
+    int bad = 0, hidden = 0;
+    float longest = 0;
+    for (int t = 0; t + 2 < ni; t += 3) {
+        u32 a[3] = { index_get(ib, t), index_get(ib, t + 1), index_get(ib, t + 2) };
+        if (a[0] >= (u32)nv || a[1] >= (u32)nv || a[2] >= (u32)nv) continue;
+        float worst = 0;
+        for (int e = 0; e < 3; e++) {
+            u32 i = a[e], j = a[(e + 1) % 3];
+            const float *bi = (const float *)(pos + (u64)i * pstride), *bj = (const float *)(pos + (u64)j * pstride);
+            float db[3] = { bi[0] - bj[0], bi[1] - bj[1], bi[2] - bj[2] };
+            float dl[3] = { xs[i * 3] - xs[j * 3], xs[i * 3 + 1] - xs[j * 3 + 1], xs[i * 3 + 2] - xs[j * 3 + 2] };
+            float lb = __builtin_sqrtf(db[0] * db[0] + db[1] * db[1] + db[2] * db[2]);
+            float ll = __builtin_sqrtf(dl[0] * dl[0] + dl[1] * dl[1] + dl[2] * dl[2]);
+            if (ll > 3 * lb && ll > lb + 15 && ll > worst) worst = ll;
+        }
+        if (worst <= 0) continue;
+        bad++;
+        if (onsink[a[0]] && onsink[a[1]] && onsink[a[2]]) hidden++;
+        if (worst > longest) longest = worst;
+        for (int e = 0; e < 3; e++) {
+            int b = top[a[e]];
+            if (b < 0 || b >= nb) continue;
+            count[b]++;
+            const float *bt = pose_of(&c, b);
+            if (!bt) continue;
+            const float *x = xs + (u64)a[e] * 3;
+            float d[3] = { x[0] - bt[4], x[1] - bt[5], x[2] - bt[6] };
+            int mm = (int)(__builtin_sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) * 10);
+            if (mm > far[b]) far[b] = mm;
+        }
+    }
+    char msg[512], *o = put(msg, "ok stretched=");
+    o = put_int(o, bad); o = put(o, " of "); o = put_int(o, ni / 3); o = put(o, " hidden="); o = put_int(o, hidden);
+    o = put(o, " longest="); o = put_f(o, longest);
+    o = put(o, " bones=");
+    for (int k = 0; k < 8; k++) {
+        int best = -1;
+        for (int b = 0; b < nb; b++) if (count[b] > 0 && (best < 0 || count[b] > count[best])) best = b;
+        if (best < 0) break;
+        if (k) o = put(o, ";");
+        o = put_int(o, best); o = put(o, ":"); o = put_int(o, count[best]); o = put(o, ":");
+        o = put_f(o, far[best] * 0.1f);
+        count[best] = 0;
+    }
+    *o = 0;
+    VirtualFree(mem, 0, 0x8000);
+    skin_result(msg);
+}
+
 // "c<comp>,<lod>,<bone>[,<mode>,<radius>]" / "x<comp>,<lod>" / "r", fields in hex
 static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 {
@@ -2146,12 +2411,15 @@ static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 //                        DirX/Y/Z; answer in sbslice.cut
 //   c...,<sink>,<remap>  MODE_SIDE with a borrowed sink bone that follows the master's bone <remap>
 //   p<src>,<dst>         copy src's pose onto dst (same skeleton): a split's clone
+//   s<comp>,<lod>        where comp's skin stretches now (see skin_probe)
 //   k                    collapse the sinks the last cuts recorded (call once their weights are in use)
 //   x<comp>,<lod>        undo the cut on that component
 //   r                    put back every collapsed sink (a mesh asset outlives the component)
 //   n<comp>,<bone>,...   bones of comp's mesh asset that may never be a sink (until the next "n")
-//   g<comp>,<gone root>,...,0,<kept root>,...
-//                        a split half's limbs for the next MODE_SIDE cut on comp (0 = Root, never a limb root)
+//   g<comp>,<gone root>,...,0,<kept root>,...[,0,<ride bone>,...]
+//                        a split half's limbs for the next MODE_SIDE cut on comp (0 = Root, never a limb root), and
+//                        the spine bones its lid rides (its flattening sinks band by them). Before a MODE_CUT: no
+//                        gone roots, and the kept roots are accessory chains on the limb that stay on the body
 //   h<comp>,<mode>,<head bone>
 //                        a split half's neck plane for its next MODE_SIDE cut (mode HEAD_KEEP / HEAD_DROP, 0 none):
 //                        point LocX/Y/Z, normal DirX/Y/Z up the neck
@@ -2191,11 +2459,12 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
             nosink_mesh = *(u64 *)(lf[0] + SC_SKELETAL_MESH);
             for (int i = 1; i < k; i++) if (lf[i] < MAX_BONES) { nosink[lf[i]] = 1; cnt++; }
         } else {
-            limbs_comp = lf[0]; ngone = nkeep = 0;
+            limbs_comp = lf[0]; ngone = nkeep = nride = 0;
             int keep = 0;
             for (int i = 1; i < k; i++) {
-                if (lf[i] == 0) { keep = 1; continue; }
-                if (keep) { if (nkeep < MAX_LIMB_ROOTS) keep_roots[nkeep++] = (int)lf[i]; }
+                if (lf[i] == 0) { keep++; continue; }
+                if (keep == 2) { if (nride < MAX_RIDE) ride_bones[nride++] = (int)lf[i]; }
+                else if (keep) { if (nkeep < MAX_LIMB_ROOTS) keep_roots[nkeep++] = (int)lf[i]; }
                 else if (ngone < MAX_LIMB_ROOTS) gone_roots[ngone++] = (int)lf[i];
             }
             cnt = ngone * 100 + nkeep;
@@ -2224,6 +2493,13 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         parse_fields(txt + 1, len - 1, pf, 2);
         if (pf[0] < 0x10000 || pf[1] < 0x10000) { skin_result("err bad component"); return; }
         copy_pose(pf[0], pf[1]);
+        return;
+    }
+    if (txt[0] == 's') {
+        u64 sf[2] = { 0, 0 };
+        parse_fields(txt + 1, len - 1, sf, 2);
+        if (sf[0] < 0x10000) { skin_result("err bad component"); return; }
+        skin_probe(sf[0], (int)sf[1]);
         return;
     }
     if (txt[0] != 'c' && txt[0] != 'x') { skin_result("err unknown command"); return; }

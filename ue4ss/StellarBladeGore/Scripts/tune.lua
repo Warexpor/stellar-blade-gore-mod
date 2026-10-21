@@ -13,36 +13,51 @@ return {
   hairCollision = false,       -- true = SBHair keeps PhysicsOnly collision during the ragdoll
   massScale = 1.0,             -- SetAllMassScale on every body
   recoverAfter = 10,           -- seconds of ragdoll before the script gets her up (the death screen, 8 s in, covers it)
+  cameraFollow = false,        -- during a ragdoll her capsule (and the camera on it) drifts after her body, loosely
+                               -- (off: it fought how the death plays out, and the game died a second after it moved
+                               -- the capsule of a really dead Eve, thirteenth playtest)
+  cameraSlack = 40,            --   cm she may move before it follows
+  cameraRate = 0.06,           --   share of the rest it closes a tick (30 a second): it lags, it doesn't track
+  cameraLift = 95,             --   cm over her pelvis it is held (about where it stands over the floor)
   gore = {
     enabled = true,            -- false = no cutting, no blood (sbslice.dll stays idle)
     sliceOnDeath = true,       -- a killing blow leaves a mark (see death)
     sliceChance = 1.0,         -- 0..1, per death
-    f5Split = true,            -- the death F5 plays always splits her top to bottom (a test of the animated split)
-    f5Delay = 0.5,             --   seconds into F5's fall the death starts (the show's ragdoll key does nothing while
-                               --   she is alive, so the script starts it)
-    death = {                  -- relative odds of what it does; F9 rolls the cuts only, F10 dents, F11 splits
-      limb = 45,               --   the arm or thigh nearest the hit comes off
-      head = 20,               --   beheaded (the face goes with the head, the neck gets a stump)
+    f5Split = true,            -- F5's test death always splits her top to bottom, at once (no death show plays: a
+                               -- split never has a fall before it)
+    f5Delay = 0.5,             --   with f5Split off: seconds into F5's fall the death starts (the show's ragdoll key
+                               --   does nothing while she is alive, so the script starts it)
+    death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
+                               -- F9 rolls the cuts only, F10 dents, F11 splits
+      limb = 50,               --   the arm or thigh nearest the hit comes off
+      head = 25,               --   beheaded (the face goes with the head, the neck gets a stump)
       torso = 15,              --   cut in half at the waist
-      wound = 20,              --   a wound where the blow landed (a blunt blow bursts open, a stab is a pit)
       split = 10,              --   cut in half top to bottom along the blade; only counts when the killing blow
                                --   came down from above (else the others are rolled)
     },
     bladeChance = 0.85,        -- a death whose killing hit the game reported cuts along that blade: the neck
                                -- (beheading), the body in two along the blade's plane, or the limb it crosses;
                                -- otherwise (and without a reported hit) the odds above are rolled
+    bladeSplit = 0.2,          --   share of those blades through her body that split her in two (else the odds above
+                               --   are rolled): a blade made up for a death the game reported no hit for always
+                               --   crossed the spine, so every real death was a split
     sliceTilt = 50,            -- a limb cut along a blade leans with it at most this many degrees off square
     limbReach = 12,            -- a blade meeting an arm or leg this close to the hit, with the hit
     spineReach = 15,           --   further than this from the spine, takes that limb (else the plane decides)
     splitDown = 0.6,           -- how steeply a swing must come down to split (share of its direction pointing down)
     hitWindow = 0.6,           -- seconds before death the game's last hit on her still counts as the killing blow
-    splitPush = 120,           -- cm/s the halves get away from each other
+    splitPush = 300,           -- cm/s the halves get away from each other
+    splitTip = 250,            -- cm/s more on each half's upper body (Spine2 up), so a cut down her length falls open
+    splitBleedDelay = 0.3,     -- seconds after a split opens before it bleeds (the halves come apart first)
+    splitSpine = true,         -- a split down her length shows the spine halved along each lid (GM_Brokenbone pieces)
+    splitSpineWidth = 3.0,     --   cm wide in the plane
+    splitSpineFlat = 1.2,      --   cm thick out of it
     splitMinShare = 0.12,      -- a split leaving either half less than this share of her body is a waist cut instead
     splitLidGrow = 0.4,        -- cm a split's flat lid reaches past the skin round its edge
     splitLidPush = 0.2,        -- cm it sits out of the half, over the flattened skin
-    splitAnim = 0.7,           -- a split on her death fall (tune.active.animated): both halves play on with the fall for
-                               -- this many seconds, then come apart by physics at the speed it had (0 = they ragdoll at
-                               -- once, held still while it is cut)
+    splitAnim = 0,             -- a split on her death fall (tune.active.animated): both halves play on with the fall for
+                               -- this many seconds, then come apart by physics at the speed it had. 0 = no fall: she
+                               -- ragdolls at once, held still while it is cut, and comes apart
     bone = "auto",             -- "auto" = the roll above, or always one of: Bip001-Head, Bip001-Spine1,
                                -- Bip001-L/R-UpperArm, Bip001-L/R-Forearm, Bip001-L/R-Thigh, Bip001-L/R-Calf
     cutAt = "auto",            -- where along the limb, 0 = joint, 1 = next joint; "auto" = 0.4 (torso 0.5, the neck
@@ -61,16 +76,6 @@ return {
                                -- drips and pools like a cut (a small pool, 22 cm)
     stabWidth = 2.5,           -- a stab's pit: this radius in cm
     stabDepth = 0.6,           --   r times this deep (at most 4 cm)
-    -- a killing hit whose attack group or show name holds one of these is a stab or a blunt blow (dents where it
-    -- landed), anything else a blade; "hit on Eve (style)" log lines show the names to fit these to
-    stabWords = { "stab", "thrust", "pierce", "sting", "spear", "lance", "drill", "needle", "spike", "impale" },
-    bluntWords = { "punch", "smash", "bash", "slam", "stomp", "kick", "hammer", "tackle", "crush", "charge",
-      "headbutt", "fist", "blunt", "rush" },
-    -- the game never names the attack in single player, so the enemy nearest her decides (main.lua ENEMY_STYLE, by
-    -- what most of its attacks are: the Gorilla NA_05 is blunt, the Sawshark NA_13 a blade). Add or override:
-    -- the key is the class name after CH_M_ ("NA_05"), the value "blade", "blunt" or "stab"
-    attackerStyles = {},
-    unknownStyle = "blade",    -- an enemy not in the list
     sounds = true,             -- the game's own gore sounds on cuts, splits and wounds
     soundVolume = 1.0,
     maxWounds = 6,             -- per life
@@ -78,6 +83,8 @@ return {
     blowTilt = 35,             -- death cuts lean towards the killing blow's direction, at most this many degrees
                                -- off square (0 = always square to the limb)
     throw = 250,               -- cm/s the severed piece gets, away from the body (0 = it just drops)
+    deathThrow = 650,          -- cm/s a piece cut off by a killing blow flies with, the way the blow went
+    splitFly = 350,            -- cm/s the cut off half of a death split flies with, the way the blow went
     caps = true,               -- flesh caps over both openings
     capScale = 1.05,           -- cap size relative to the opening's outline (1 = ends exactly on the skin)
     boneStubs = true,          -- a snapped bone (the game's GM_Brokenbone) in each limb and neck stump
@@ -90,6 +97,7 @@ return {
     bleedAxis = "z",           -- the bleed effect's (NS_Hit_Flesh_Slice_BloodOnly) cone axis, pointed out of each
                                -- opening: "z", "x", "-z", "-x" (F6 re-reads it; the "bleed: opening faces" log line
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
+    bleedSize = 0.6,           -- the bleed's size (the effect's scale; the spurts are as many)
     bleedPulse = 0.35,         -- seconds between spurts while an opening bleeds (each follows the stump's turn)
     capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps, lids and wounds
     capBloodColor = { 0.12, 0.005, 0.002 }, -- its glow (BloodColor, emissive: the material's own 10, 2.4, 0 lit the
@@ -142,14 +150,19 @@ return {
       rest = 0.1,              -- share that stays until she settles: some stiffness, so she doesn't fold flat at
                                -- every joint like a sack (0 = fully limp)
     },
+    spin = {                   -- deg/s a body may turn at most: lying still, her head and hands shook at 500-5000
+      enabled = true,          -- deg/s (thirteenth playtest), and anything cut off with them
+      main = 720,              --   torso, arms and legs
+      ends = 360,              --   head, hands, feet and every accessory body (hair, cape, jiggle)
+    },
     settle = {                 -- lying still: tone off and every body asleep, so she stops jittering on the floor
       enabled = true,
-      after = 1.5,             -- not before this many seconds of ragdoll
+      after = 1.0,             -- not before this many seconds of ragdoll
       speed = 15,              -- cm/s: main bodies all slower than this, or...
-      drift = 3,               -- cm: ...none of them got further than this over the last window (shivering in place)
+      drift = 4,               -- cm: ...none of them got further than this over the last window (shivering in place)
       window = 0.5,            -- seconds the drift is measured over
       time = 0.5,              -- lying still this long (tone off from the start of it), then every body sleeps
-      most = 4,                -- seconds: past this she settles once her bodies drift less than driftMost, however
+      most = 3,                -- seconds: past this she settles once her bodies drift less than driftMost, however
       driftMost = 6,           --   fast they shiver
       wake = 60,               -- cm/s: something moved her this fast, she settles again
     },

@@ -48,17 +48,20 @@ local MASS = {
   ["Bip001-L-Calf"] = 2.8, ["Bip001-R-Calf"] = 2.8,
   ["Bip001-L-Foot"] = 0.8, ["Bip001-R-Foot"] = 0.8,
 }
--- muscle tone per joint, as a share of tone.strength (the pelvis has no parent body to drive against)
+-- muscle tone per joint, as a share of tone.strength (the pelvis has no parent body to drive against). The head,
+-- hands and feet have none: pulled towards an animated pose the floor was in the way of, they shook at 500-5000
+-- deg/s while the rest of her lay still (thirteenth playtest)
 local TONE = {
-  ["Bip001-Spine"] = 1.0, ["Bip001-Spine1"] = 1.0, ["Bip001-Spine2"] = 1.0, ["Bip001-Neck"] = 0.9, ["Bip001-Head"] = 0.8,
+  ["Bip001-Spine"] = 1.0, ["Bip001-Spine1"] = 1.0, ["Bip001-Spine2"] = 1.0, ["Bip001-Neck"] = 0.9,
   ["Bip001-L-Clavicle"] = 0.8, ["Bip001-R-Clavicle"] = 0.8,
   ["Bip001-L-UpperArm"] = 0.6, ["Bip001-R-UpperArm"] = 0.6,
   ["Bip001-L-Forearm"] = 0.5, ["Bip001-R-Forearm"] = 0.5,
-  ["Bip001-L-Hand"] = 0.3, ["Bip001-R-Hand"] = 0.3,
   ["Bip001-L-Thigh"] = 0.45, ["Bip001-R-Thigh"] = 0.45,
   ["Bip001-L-Calf"] = 0.35, ["Bip001-R-Calf"] = 0.35,
-  ["Bip001-L-Foot"] = 0.3, ["Bip001-R-Foot"] = 0.3,
 }
+-- the ends of her chains: they spin at most spin.ends, like every accessory body
+local ENDS = { ["Bip001-Head"] = true, ["Bip001-L-Hand"] = true, ["Bip001-R-Hand"] = true, ["Bip001-L-Foot"] = true,
+  ["Bip001-R-Foot"] = true }
 -- the push along the blow, per bone, as a share of impact
 local IMPACT = {
   ["Bip001-Spine2"] = 1.0, ["Bip001-Spine1"] = 0.8, ["Bip001-Head"] = 0.6, ["Bip001-L-Clavicle"] = 0.6,
@@ -162,6 +165,20 @@ local function set_masses(mesh, g, keep)
   table.sort(per)
   return string.format("masses %.0f -> %.0f kg (was %s), %d other bodies %.1f -> %.1f kg (on %s)", before, after,
     table.concat(main, " "), n, accBefore, acc, table.concat(per, " "))
+end
+
+-- every body's top angular speed (spin.main for the torso, arms and legs, spin.ends for the rest); put back to the
+-- engine's default 3600 deg/s by M.stop
+local SPIN_DEFAULT = 3600
+local function cap_spin(comp, g, max)
+  local s = g.spin or {}
+  if s.enabled == false then return "" end
+  local n = 0
+  for _, b in ipairs(bodies(comp)) do
+    local w = max or ((MASS[b] and not ENDS[b]) and (s.main or 720) or (s.ends or 360))
+    if try(function() comp:SetPhysicsMaxAngularVelocityInDegrees(w, false, FName(b)); return true end) then n = n + 1 end
+  end
+  return string.format(", spin capped on %d bodies", n)
 end
 
 local function momentum(mesh, g)
@@ -378,7 +395,7 @@ function M.start(pawn, mesh, kind, dir)
   run = { mesh = mesh, t = 0, masses = {}, scales = {}, still = 0 }
   run.joints, run.probe = joint_lengths(mesh), 1
   extra = {}
-  local parts = { set_masses(mesh, g, run) }
+  local parts = { set_masses(mesh, g, run), cap_spin(mesh, g) }
   if kind == "death" then
     parts[#parts + 1] = momentum(mesh, g)
     -- the death key pushes after ImpulseDelayTime (0.01 s), so its direction is read a couple of ticks later
@@ -398,7 +415,7 @@ function M.piece(pawn, mesh)
   local g = cfg()
   if g.enabled == false or run then return nil end
   run = { mesh = mesh, t = 0, masses = {}, scales = {}, piece = true }
-  local r = set_masses(mesh, g, run)
+  local r = set_masses(mesh, g, run) .. cap_spin(mesh, g)
   log("piece: " .. r)
   return r
 end
@@ -418,9 +435,12 @@ local function blow(pawn, mesh, hint)
   return nil, "none"
 end
 
--- a body that still simulates: a split half's gone limbs don't (they are the other half's), and their bones, left
--- where they were, aren't hers to wait for
+-- a split half's gone limbs, by component address: they fall free, invisible, and aren't the half's to wait for
+local freed = {}
+-- a body that still simulates and that the half still shows
 local function live(comp, b)
+  local f = freed[addr(comp)]
+  if f and f[b] then return false end
   return try(function() return comp:IsSimulatingPhysics(FName(b)) end) ~= false
 end
 
@@ -513,7 +533,7 @@ end
 -- with her. No tone: it plays no animation, so the drives would pull it towards the bind pose (arms out)
 function M.add_body(comp)
   if not valid(comp) then return end
-  log("split copy: " .. set_masses(comp, cfg()))
+  log("split copy: " .. set_masses(comp, cfg()) .. cap_spin(comp, cfg()))
   if run then extra[#extra + 1] = comp end
 end
 
@@ -642,6 +662,14 @@ function M.broken(mesh, bone)
   if bone then severed[tostring(bone)] = true end
 end
 
+-- a split half let go of a body (a limb that went with the other half): the settle check leaves it out
+function M.freed(comp, bone)
+  local a = addr(comp)
+  if not a then return end
+  freed[a] = freed[a] or {}
+  freed[a][tostring(bone)] = true
+end
+
 -- a limb came off: its root stops pulling towards the body (its own joints keep their fading tone)
 function M.on_cut(mesh, bone)
   M.broken(mesh, bone)
@@ -661,8 +689,10 @@ function M.stop(pawn)
   if valid(mesh) then
     for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FName(bone), m, true); return true end) then n = n + 1 end end
     for bone, s in pairs(run.scales) do if try(function() mesh:SetMassScale(FName(bone), s); return true end) then n = n + 1 end end
+    cap_spin(mesh, cfg(), SPIN_DEFAULT)
   end
   run = nil
+  freed = {}
   log(string.format("stopped, %d masses put back", n))
 end
 
@@ -670,6 +700,7 @@ end
 function M.forget()
   run, speeds, dropped, extra = nil, {}, {}, {}
   severed, severedOn = {}, nil
+  freed = {}
 end
 
 return M
