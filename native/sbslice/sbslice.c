@@ -175,7 +175,7 @@ typedef u32 (*index_get_fn)(u64 self, u32 i);
 // A sink either collapses to a point (at, in the bone's frame) or, for a split, flattens onto the cut plane (pm, the
 // whole replacement matrix): every vertex on it lands where it is, only pushed onto the plane, so the seam closes
 // without a triangle reaching across the body.
-static struct { u64 mesh; int bone, down, proj; float m[16], at[3], pm[16]; } sinks[MAX_SINKS];
+static struct { u64 mesh, comp; int bone, down, proj; float m[16], at[3], pm[16]; } sinks[MAX_SINKS]; // comp: the cut's
 #define SINK_IN 2.0f // cm a sink's collapse point sits inside its own side of the cut
 static int nsinks;
 
@@ -283,28 +283,44 @@ static void skin_point(const cut_ctx *c, const skin_info *o, const float *vp, fl
     }
 }
 
-// move every weight of o on bones where drop[] says so to the strongest remaining bone, or else to fallback.
+// move every weight of o on bones where drop[] says so to that bone's nearest ancestor that stays (and is in section
+// s's BoneMap), else to the strongest remaining bone, else to fallback. A helper rides its parent at a fixed offset
+// in a ragdoll (no body of its own), so its parent skins the vertex where the helper did; the strongest bone put a
+// split's shoulder skin on the chest, and it tore off the clavicle by up to 23 cm once she moved.
 // Returns 1 if it changed o, 0 if not, -1 if it had to leave o alone (nothing to put the weight on).
-static int keep_only(skin_info *o, const unsigned char *drop, int nb, int fallback)
+static int keep_only(const cut_ctx *c, int s, skin_info *o, const unsigned char *drop, int fallback)
 {
-    int target = -1, best = -1, gone = 0;
+    int nb = c->nb, target = -1, best = -1, gone = 0, rest = 0;
+    int up[MAX_INF];
     for (int i = 0; i < MAX_INF; i++) {
+        up[i] = -1;
         if (!o->weights[i]) continue;
         int mb = o->bones[i];
-        if (mb >= 0 && mb < nb && drop[mb]) gone += o->weights[i];
-        else if (o->weights[i] > best) { best = o->weights[i]; target = mb; }
+        if (mb >= 0 && mb < nb && drop[mb]) {
+            gone += o->weights[i];
+            for (int a = parent_of(c, mb); a >= 0 && a < nb; a = parent_of(c, a))
+                if (!drop[a] && (!c->inmap || c->inmap[(u64)s * nb + a])) { up[i] = a; break; }
+            if (up[i] < 0) rest += o->weights[i];
+        } else if (o->weights[i] > best) { best = o->weights[i]; target = mb; }
     }
     if (!gone) return 0;
     if (target < 0) target = fallback;
-    if (target < 0) return -1;
+    if (rest && target < 0) return -1;
+    unsigned char w[MAX_INF];
     for (int i = 0; i < MAX_INF; i++) {
+        w[i] = 0;
         int mb = o->bones[i];
-        if (o->weights[i] && mb >= 0 && mb < nb && drop[mb]) o->weights[i] = 0;
+        if (o->weights[i] && mb >= 0 && mb < nb && drop[mb]) { w[i] = o->weights[i]; o->weights[i] = 0; }
     }
-    int slot = -1;
-    for (int i = 0; i < MAX_INF; i++) if (o->weights[i] && o->bones[i] == target) slot = i;
-    if (slot < 0) for (int i = 0; i < MAX_INF; i++) if (!o->weights[i]) { slot = i; o->bones[i] = target; break; }
-    if (slot >= 0) o->weights[slot] += gone;
+    for (int i = 0; i <= MAX_INF; i++) {
+        int to = i < MAX_INF ? up[i] : target;
+        int add = i < MAX_INF ? (up[i] >= 0 ? w[i] : 0) : rest;
+        if (!add || to < 0) continue;
+        int slot = -1;
+        for (int k = 0; k < MAX_INF; k++) if (o->weights[k] && o->bones[k] == to) slot = k;
+        if (slot < 0) for (int k = 0; k < MAX_INF; k++) if (!o->weights[k]) { slot = k; o->bones[k] = to; break; }
+        if (slot >= 0) o->weights[slot] += (unsigned char)add;
+    }
     return 1;
 }
 
@@ -327,6 +343,13 @@ static int is_proj_sink(const cut_ctx *c, int bone)
 static int is_sink(const cut_ctx *c, int bone)
 {
     for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == c->sm && sinks[i].bone == bone) return 1;
+    return 0;
+}
+
+// a sink an earlier cut on this very component made (its seam vertices are already on it)
+static int own_sink(const cut_ctx *c, int bone)
+{
+    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == c->sm && sinks[i].comp == c->comp && sinks[i].bone == bone) return 1;
     return 0;
 }
 
@@ -650,7 +673,7 @@ static char *core_rim(char *o, const char *tag, float *pts, u16 *sec, int *n, co
 // even a 1-entry array) and, through the component's MasterBoneMap, made to follow the master's head.
 #define MAX_BONEMAP_FIX 64
 #define MAX_REMAPS 16
-static struct { u64 arr; int num, max; } bmfix[MAX_BONEMAP_FIX];
+static struct { u64 arr; int num, max; unsigned short *old; } bmfix[MAX_BONEMAP_FIX]; // old: data swapped out, or 0
 static int nbmfix;
 static struct { u64 comp; int index, old, to, applied; } remaps[MAX_REMAPS]; // applied on "k", with the sinks
 static int nremaps;
@@ -678,6 +701,8 @@ typedef struct {
     float joint[3], pp[3], n[3];
     const unsigned char *nosink;              // or 0
     const unsigned char *gone, *keep;         // MODE_SIDE: limb bones
+    const unsigned char *onplane;             // MODE_SIDE: helpers on the plane (both halves' kept skin drops them)
+    u64 secs;                                 // MODE_SIDE: the LOD's sections, to borrow a sink into one
     unsigned char *btype;                     // MODE_SIDE: 0 free, 1 flattens, 2 + r a point for gone root r,
                                               // 10 + k a point in band k
 } sink_args;
@@ -716,16 +741,63 @@ static void proj_matrix(const float *base, const float *t, const float *pp, cons
         }
 }
 
+// add bone to section s's BoneMap, undone by "r" like the face's borrowed sink. In place while it has fewer than 8
+// entries (the engine's smallest allocation is 16 bytes, whatever Max says); a fuller one is swapped for a copy of
+// ours with room (BONEMAP_ROOM entries), the engine's array kept to be put back. A waist cut's lower half had no
+// helper of its own in CH_P_EVE_09's metal, skin and lace sections (18-79 bones each), and 30000 vertices of her upper
+// body stayed on her legs. The GPU skin's bone buffer is sized for the engine's maximum, so a longer map is fine.
+// 0 if there is no room
+#define BONEMAP_ROOM 512
+static int borrow_bone(u64 secs, int s, int bone, unsigned char *inmap, int nb)
+{
+    u64 arr = secs + (u64)s * 0xe8 + SEC_BONE_MAP;
+    int num = *(int *)(arr + 8), max = *(int *)(arr + 12);
+    unsigned short *bm = *(unsigned short **)arr;
+    if (!bm || nbmfix >= MAX_BONEMAP_FIX || num >= 255) return 0;
+    int ours = 0;
+    for (int i = 0; i < nbmfix; i++) if (bmfix[i].arr == arr && bmfix[i].old) ours = 1;
+    if (num >= 8 && !ours) {
+        // one array of ours per engine array, reused by later cuts (never freed, see skin_restore)
+        static struct { u64 arr; unsigned short *buf; } pool[MAX_BONEMAP_FIX];
+        static int npool;
+        unsigned short *nb2 = 0;
+        for (int i = 0; i < npool; i++) if (pool[i].arr == arr) nb2 = pool[i].buf;
+        if (!nb2) {
+            if (npool >= MAX_BONEMAP_FIX) return 0;
+            nb2 = VirtualAlloc(0, BONEMAP_ROOM * sizeof(unsigned short), 0x3000, 0x04);
+            if (!nb2) return 0;
+            pool[npool].arr = arr; pool[npool].buf = nb2; npool++;
+        }
+        for (int i = 0; i < num; i++) nb2[i] = bm[i];
+        nb2[num] = (unsigned short)bone;
+        bmfix[nbmfix].arr = arr; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; bmfix[nbmfix].old = bm; nbmfix++;
+        // the pointer first: a reader that still sees the old count reads the same entries
+        *(unsigned short **)arr = nb2;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        *(int *)(arr + 12) = BONEMAP_ROOM;
+        *(int *)(arr + 8) = num + 1;
+    } else {
+        if (!ours && num >= 8) return 0;
+        bmfix[nbmfix].arr = arr; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; bmfix[nbmfix].old = 0; nbmfix++;
+        bm[num] = (unsigned short)bone;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        *(int *)(arr + 8) = num + 1;
+        if (max < num + 1) *(int *)(arr + 12) = num + 1;
+    }
+    inmap[(u64)s * nb + bone] = 1;
+    return 1;
+}
+
 // a split half's sink in section s near target, of type want (see btype): a helper of
 // the kept side (no limb, nothing past the plane, not another cut's sink) that costs little to give up, preferring
-// one this cut already uses the same way
+// one this cut already uses the same way. A helper on the plane will do: both halves' kept skin lets go of those
 static int side_sink(const sink_args *a, int s, const float *target, int want)
 {
     const cut_ctx *c = a->c;
     int nb = c->nb, best = -2;
     float bd = 1e30f;
     for (int i = 1; i < nb; i++) {
-        if (!c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || a->limb[i] || a->gone[i] || a->keep[i]) continue;
+        if (!c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || (a->limb[i] && !(a->onplane && a->onplane[i])) || a->gone[i] || a->keep[i]) continue;
         if (i == a->b || i == a->parent_b) continue;
         if (a->btype[i] ? a->btype[i] != want : is_sink(c, i)) continue;
         const float *t = pose_of(c, i);
@@ -734,6 +806,21 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
         float score = (d0 * d0 + d1 * d1 + d2 * d2) * (a->stable[i] ? 1.0f : 16.0f) * (a->haschild[i] ? 4.0f : 1.0f)
             * (1.0f + a->usage[i] / 200.0f) * (a->btype[i] ? 0.5f : 1.0f);
         if (score < bd) { bd = score; best = i; }
+    }
+    // none in the section (CH_P_EVE_09's neck lace only knows the neck and the spine): borrow the best helper of
+    // the half into its BoneMap, or the other half's piece of it stays where it was
+    if (best < 0 && a->secs) {
+        for (int i = 1; i < nb; i++) {
+            if (c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || (a->limb[i] && !(a->onplane && a->onplane[i]))
+                || a->gone[i] || a->keep[i] || i == a->b || i == a->parent_b) continue;
+            if (a->btype[i] ? a->btype[i] != want : is_sink(c, i)) continue;
+            const float *t = pose_of(c, i);
+            if (!t) continue;
+            float d0 = t[4] - target[0], d1 = t[5] - target[1], d2 = t[6] - target[2];
+            float score = (d0 * d0 + d1 * d1 + d2 * d2) * (a->stable[i] ? 1.0f : 16.0f) * (a->haschild[i] ? 4.0f : 1.0f);
+            if (score < bd) { bd = score; best = i; }
+        }
+        if (best >= 0 && !borrow_bone(a->secs, s, best, (unsigned char *)c->inmap, nb)) best = -2;
     }
     if (best >= 0) a->btype[best] = (unsigned char)want;
     return best;
@@ -836,10 +923,27 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int holey = mode == MODE_HOLE || mode == MODE_DENT; // a ray to the surface, no limb
     if (forced_sink >= nb || forced_sink < 0) { skin_result("err bad sink"); return; }
 
-    // pose source: the master pose component when there is one (bones mapped through MasterBoneMap)
+    // pose source: the master pose component when there is one, its bones matched by name (the engine's
+    // MasterBoneMap of a clone made this tick can still be empty or short, and was read unchecked: a split's face and
+    // hair copies once came out cut against the wrong bones)
     u64 master = ((weak_get_fn)(exe + RVA_WEAK_PTR_GET))(comp + SC_MASTER_POSE);
     u64 src = master ? master : comp;
-    c.mmap = master ? *(int **)(comp + SC_MASTER_BONE_MAP) : 0;
+    c.mmap = 0;
+    if (master) {
+        static int namemap[MAX_BONES];
+        u64 msm = *(u64 *)(master + SC_SKELETAL_MESH);
+        const unsigned char *mbi = msm ? *(unsigned char **)(msm + SM_REF_BONE_INFO) : 0;
+        int mnb = msm ? *(int *)(msm + SM_REF_BONE_INFO + 8) : 0;
+        if (!mbi || mnb <= 0 || c.nb > MAX_BONES) { skin_result("err no master skeleton"); return; }
+        int found = 0;
+        for (int i = 0; i < c.nb; i++) {
+            u64 nm = *(const u64 *)(c.binfo + (u64)i * 0xc);
+            namemap[i] = -1;
+            for (int j = 0; j < mnb; j++) if (*(const u64 *)(mbi + (u64)j * 0xc) == nm) { namemap[i] = j; found++; break; }
+        }
+        if (!found) { skin_result("err no bone shared with the master"); return; }
+        c.mmap = namemap;
+    }
     c.space = *(float **)(src + SC_SPACE_BASES + (u64)*(int *)(src + SC_SPACE_READ) * 0x10);
     c.nspace = *(int *)(src + SC_SPACE_BASES + (u64)*(int *)(src + SC_SPACE_READ) * 0x10 + 8);
     if (!c.space) { skin_result("err no bone transforms"); return; }
@@ -922,7 +1026,9 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
 
     // a split half: the limbs that go with the other half and the ones that stay (subtrees of Lua's roots), and what
     // kept skin lets go of ("limb" here): those limbs and every helper past the plane (the other half's sinks)
-    for (int i = 0; i < nb; i++) { rootof[i] = -1; gonebone[i] = keepbone[i] = btype[i] = 0; }
+    static unsigned char onplane[MAX_BONES];
+    if (nb > MAX_BONES) { VirtualFree(mem, 0, 0x8000); VirtualFree(mem2, 0, 0x8000); skin_result("err too many bones"); return; }
+    for (int i = 0; i < nb; i++) { rootof[i] = -1; gonebone[i] = keepbone[i] = btype[i] = onplane[i] = 0; }
     if (mode == MODE_SIDE) {
         int lim = limbs_comp == comp;
         for (int i = 0; i < nb; i++) {
@@ -934,7 +1040,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             if (!keepbone[i] && par >= 0 && par < i) keepbone[i] = keepbone[par];
             const float *t = pose_of(&c, i);
             float h = t ? (t[4] - p[0]) * n[0] + (t[5] - p[1]) * n[1] + (t[6] - p[2]) * n[2] : 0;
-            limb[i] = gonebone[i] || (i > 0 && !(ns && ns[i]) && !keepbone[i] && h < -SIDE_TOL / tm[8]);
+            // helpers on the plane too: the other half's kept skin keeps whatever lies in front of its plane, so a
+            // sink on the plane is safe only if both halves let go of it
+            int helper = i > 0 && !(ns && ns[i]) && !keepbone[i];
+            onplane[i] = helper && !gonebone[i] && h >= -SIDE_TOL / tm[8] && h <= SIDE_TOL / tm[8];
+            limb[i] = gonebone[i] || (helper && h < -SIDE_TOL / tm[8]) || onplane[i];
         }
     }
 
@@ -1079,7 +1189,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
 
     // sinks, per section and side, near the joint (PLANE: the plane point, HOLE: where the ray met the skin)
     sink_args sa = { &c, limb, stable, haschild, usage, b, parent_b, mode, { p[0], p[1], p[2] }, { p[0], p[1], p[2] }, { n[0], n[1], n[2] },
-                     ns, gonebone, keepbone, btype };
+                     ns, gonebone, keepbone, mode == MODE_SIDE ? onplane : 0, mode == MODE_SIDE ? secs : 0, btype };
     if (mode == MODE_CUT) { const float *t = pose_of(&c, b); if (t) { sa.joint[0] = t[4]; sa.joint[1] = t[5]; sa.joint[2] = t[6]; } }
     if (holey) for (int k = 0; k < 3; k++) sa.joint[k] = sa.pp[k] = hc[k];
 
@@ -1163,18 +1273,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             int s = vsec[v];
             if (secsink[s * 2] != -1) continue;
             if (!inmap[(u64)s * nb + forced_sink]) {
-                u64 sec = secs + (u64)s * 0xe8;
-                u64 arr = sec + SEC_BONE_MAP;
-                int num = *(int *)(arr + 8), max = *(int *)(arr + 12);
-                unsigned short *bm = *(unsigned short **)arr;
-                // the engine's smallest allocation is 16 bytes: room for 8 entries whatever Max says
-                if (!bm || num >= 8 || nbmfix >= MAX_BONEMAP_FIX) continue; // left to find_sink
-                bmfix[nbmfix].arr = arr; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; nbmfix++;
-                bm[num] = (unsigned short)forced_sink;
-                __atomic_thread_fence(__ATOMIC_SEQ_CST);
-                *(int *)(arr + 8) = num + 1;
-                if (max < num + 1) *(int *)(arr + 12) = num + 1;
-                inmap[(u64)s * nb + forced_sink] = 1;
+                if (!borrow_bone(secs, s, forced_sink, inmap, nb)) continue; // left to find_sink
                 borrowed++;
             }
             secsink[s * 2] = forced_sink;
@@ -1318,7 +1417,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         if (s == 0xffff) continue;
         if (mode == MODE_DENT) {
             // its weights as they were (minus any sink), then the dent's sink blended in
-            int r = keep_only(o, drop_b, nb, fallback_bone(&c, s, b, drop_b));
+            int r = keep_only(&c, s, o, drop_b, fallback_bone(&c, s, b, drop_b));
             if (r > 0) moved++;
             else if (r < 0) stuck++;
             if (seam[v]) {
@@ -1338,10 +1437,12 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             }
             unsunk++;
         }
-        // an earlier cut's seam vertex: already all on its sink
-        if (o->weights[0] == 255 && is_sink(&c, o->bones[0])) continue;
+        // an earlier cut's seam vertex: already all on its sink. Only this component's: a split's copy shares the
+        // mesh asset, and a vertex of its kept half that the vanilla skin puts wholly on a helper the other half had
+        // just made its sink (CH_P_EVE_09's Ab-NeckSub) stayed on it and was flattened with the other half
+        if (o->weights[0] == 255 && own_sink(&c, o->bones[0])) continue;
         const unsigned char *drop = side[v] ? drop_l : drop_b;
-        int r = keep_only(o, drop, nb, fallback_bone(&c, s, side[v] || holey || mode == MODE_SIDE ? b : parent_b, drop));
+        int r = keep_only(&c, s, o, drop, fallback_bone(&c, s, side[v] || holey || mode == MODE_SIDE ? b : parent_b, drop));
         if (r > 0) moved++;
         else if (r < 0) stuck++;
     }
@@ -1409,7 +1510,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         if (bone < 0 || is_sink(&c, bone)) continue;
         if (nsinks >= MAX_SINKS) { full = 1; continue; }
         float *m = c.refinv + (u64)bone * 16;
-        sinks[nsinks].mesh = c.sm; sinks[nsinks].bone = bone; sinks[nsinks].down = 0; sinks[nsinks].proj = 0;
+        sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = bone; sinks[nsinks].down = 0; sinks[nsinks].proj = 0;
         for (int k = 0; k < 16; k++) sinks[nsinks].m[k] = m[k];
         if (mode == MODE_DENT) {
             // the dent's floor, in the sink's frame as posed now
@@ -1456,7 +1557,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         const float *t = pose_of(&c, i);
         if (!t) continue;
         float *m = c.refinv + (u64)i * 16;
-        sinks[nsinks].mesh = c.sm; sinks[nsinks].bone = i; sinks[nsinks].down = 0;
+        sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = i; sinks[nsinks].down = 0;
         for (int k = 0; k < 16; k++) sinks[nsinks].m[k] = m[k];
         if (btype[i] == 1) {
             proj_matrix(m, t, pin, n, sinks[nsinks].pm);
@@ -1609,7 +1710,14 @@ static int skin_restore(u64 mesh)
     nsinks = k;
     // the borrowed BoneMap entries go with the sinks of a mesh (all of them on "r")
     if (!mesh) {
-        for (int i = nbmfix - 1; i >= 0; i--) { *(int *)(bmfix[i].arr + 8) = bmfix[i].num; *(int *)(bmfix[i].arr + 12) = bmfix[i].max; }
+        // newest first; a swapped array gets its count back before the engine's data pointer, so no reader sees our
+        // count on the engine's shorter array (ours is never freed: the render thread may still be reading it)
+        for (int i = nbmfix - 1; i >= 0; i--) {
+            *(int *)(bmfix[i].arr + 8) = bmfix[i].num;
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            if (bmfix[i].old) *(unsigned short **)bmfix[i].arr = bmfix[i].old;
+            *(int *)(bmfix[i].arr + 12) = bmfix[i].max;
+        }
         nbmfix = 0;
     }
     return put_back;

@@ -90,6 +90,10 @@ goreCtx.log, goreCtx.try, goreCtx.valid, goreCtx.v3 = log, try, valid, v3
 goreCtx.on_cut = function(mesh, bone) if rag then rag.on_cut(mesh, bone) end end
 -- a split's copy settles with her
 goreCtx.on_copy = function(comp) if rag then rag.add_body(comp) end end
+-- a split holds her still until it opens, then she falls in halves
+goreCtx.on_broken = function(mesh, bone) if rag then rag.broken(mesh, bone) end end
+goreCtx.on_hold = function(mesh) if rag then return rag.hold(mesh) end end
+goreCtx.on_release = function() if rag then rag.release() end end
 -- a piece cut off a standing Eve gets human masses
 goreCtx.on_piece = function(pawn, mesh) if rag then return rag.piece(pawn, mesh) end end
 do

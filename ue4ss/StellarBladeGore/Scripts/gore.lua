@@ -73,8 +73,11 @@ local WOUND = {
 local FX = {
   slice = "/Game/Art/FX/Char/Common/Hit/Flesh/NS_Hit_Flesh_Slice_Big.NS_Hit_Flesh_Slice_Big",
   bleed = "/Game/Art/FX/Char/Common/Hit/Link/NS_Blood_Flooded_Attached.NS_Blood_Flooded_Attached",
-  hit = "/Game/Art/FX/Char/Common/Hit/NS_HitBlood_Monster_01_Strong_Bld_02.NS_HitBlood_Monster_01_Strong_Bld_02",
-  splat = "/Game/Art/FX/Char/Common/Hit/NS_HitBlood_SpawnDecal_L.NS_HitBlood_SpawnDecal_L",
+  -- red blood: the monster hit and its decal (NS_HitBlood_Monster_01_*, NS_HitBlood_SpawnDecal_L) are the Naytiba's
+  -- glowing orange liquid (MI_A_EmissiveLiquid, EnemyCommon/MI_ParBloodDecal); Eve's own hit blood and the flesh
+  -- decal use MI_A_DefaultBlood and the common decal, like the bleed and the pool
+  hit = "/Game/Art/FX/Char/Common/Hit/PC/NS_HitBlood_PC_01.NS_HitBlood_PC_01",
+  splat = "/Game/Art/FX/Char/Common/Hit/Flesh/NS_Hit_Flesh_Decal_Strong_01.NS_Hit_Flesh_Decal_Strong_01",
   pool = "/Game/Art/FX/Char/Common/Hit/Link/NS_Blood_FloorDecalLoop.NS_Blood_FloorDecalLoop",
 }
 -- the cap: the engine's sphere (radius 50) flattened onto the opening, with the game's cut-flesh material
@@ -629,14 +632,30 @@ local function stage_wound(q)
   return true
 end
 
-local function bleed_from(q, cap_actor, o, bone, left)
-  local rot = try(function() local r = q.mesh:GetSocketRotation(FName(bone)); return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end)
+-- the rotation that points the bleed's emit axis (tune.gore.bleedAxis: the effect's cone axis, local Z) along out
+local function emit_rot(out)
+  local km = load_obj("/Script/Engine.Default__KismetMathLibrary")
+  local ax = cfg().bleedAxis or "z"
+  local d = ax:sub(1, 1) == "-" and scale(out, -1) or out
+  local r = km and try(function()
+    if ax:sub(-1) == "x" then return km:MakeRotFromX(d) end
+    return km:MakeRotFromZ(d)
+  end)
+  return r and { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll }
+end
+
+-- bleed out of an opening: along its outward normal (o.z, or out), riding its cap, else the bone. The bone's own
+-- rotation pointed the effect sideways or into the limb
+local function bleed_from(q, cap_actor, o, bone, left, out)
+  local dir = out or (o and o.z)
+  local rot = dir and emit_rot(dir)
+    or try(function() local r = q.mesh:GetSocketRotation(FName(bone)); return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end)
   local root = valid(cap_actor) and try(function() return cap_actor:K2_GetRootComponent() end)
   local at = valid(root) and try(function() local l = root:K2_GetComponentLocation(); return vec(l.X, l.Y, l.Z) end)
   local c
   if at then c = niagara(FX.bleed, root, nil, at, true, rot)
   elseif o then c = niagara(FX.bleed, q.mesh, bone, o.c, true, rot)
-  else c = niagara(FX.bleed, q.mesh, bone, nil, true) end
+  else c = niagara(FX.bleed, q.mesh, bone, nil, true, rot) end
   if c and left > 0 then bleeds[#bleeds + 1] = { comp = c, left = left } end
 end
 
@@ -649,7 +668,7 @@ local function stage_wound_open(q)
     niagara(FX.hit, q.pawn, nil, q.c.at, false)
     niagara(FX.splat, q.pawn, nil, q.c.at, false)
     if q.style == "stab" then
-      bleed_from(q, nil, { c = q.c.at }, q.ride, math.floor((g.bleedTime or 2.5) / TICK_S + 0.5))
+      bleed_from(q, nil, { c = q.c.at }, q.ride, math.floor((g.bleedTime or 2.5) / TICK_S + 0.5), q.c.n)
     end
   end
   log(string.format("%s in on %s (%s): %s", q.bone, q.ride, q.why, k))
@@ -850,6 +869,21 @@ local function stage_split_prep(q)
   q.hairs = {}
   if not q.face_whole then
     for _, h in ipairs(hair_of(q.pawn)) do
+      -- the borrowed sink: a body bone the hair's skeleton has (its weights only use the head and hair bones; Eve's
+      -- hair has no Spine1). A hair with none of them, or no head bone, can't follow her body: it stays on its head
+      -- socket, whole, on her half (moved to her body's root and master pose first, CH_P_EVE_Hair02 lost every bone
+      -- and she was bald)
+      local sink, sname
+      for _, b in ipairs(HAIR_SINKS) do
+        local i = try(function() return h:GetBoneIndex(FName(b)) end)
+        if i and i > 0 then sink, sname = i, b; break end
+      end
+      local hh = try(function() return h:GetBoneIndex(FName("Bip001-Head")) end)
+      if not (sink and hh and hh >= 0) then
+        log(string.format("split: hair %s stays whole on her half (no %s in its skeleton)", name_of(h),
+          sink and "Bip001-Head" or table.concat(HAIR_SINKS, ", ")))
+        goto next_hair
+      end
       rehaired[#rehaired + 1] = { comp = h, parent = try(function() return h:GetAttachParent() end),
         socket = try(function() return h:GetAttachSocketName() end),
         loc = try(function() local v = h.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
@@ -857,7 +891,8 @@ local function stage_split_prep(q)
       try(function() h:K2_AttachToComponent(q.mesh, FName("None"), 2, 2, 2, false) end)
       try(function() h:SetMasterPoseComponent(q.mesh, true) end)
       force_lod(h)
-      q.hairs[#q.hairs + 1] = { orig = h, copy = clone_of(q.pawn, h, q.body2) }
+      q.hairs[#q.hairs + 1] = { orig = h, copy = clone_of(q.pawn, h, q.body2), sink = sink, sname = sname }
+      ::next_hair::
     end
   end
   return true
@@ -918,8 +953,8 @@ local function stage_split_cut(q)
   q.caps = {}
   split_caps(q, q.mesh, r1, q.caps)
   split_caps(q, q.body2, r2, q.caps)
-  -- the copies of the face and hair follow the copy only once it ticks, so until then their pose is stale (a cut on
-  -- a stale face copy once found nothing on its side): they get the pose of the ones they copy
+  -- the copies of the face and hair are posed by the copy (the DLL matches their bones to it by name); their own
+  -- pose buffers get the originals' too, for anything that reads them before the copy ticks
   local function pose_like(src, dst)
     if valid(src) and valid(dst) then command(string.format("p%x,%x", src:GetAddress(), dst:GetAddress())) end
   end
@@ -951,13 +986,7 @@ local function stage_split_cut(q)
   local head = try(function() return q.mesh:GetBoneIndex(FName("Bip001-Head")) end)
   for _, hp in ipairs(q.hairs or {}) do
     local h, h2 = hp.orig, hp.copy
-    -- the borrowed sink: a body bone the hair's skeleton has (its weights only use the head and hair bones);
-    -- Eve's hair has no Spine1
-    local sink, sname
-    for _, b in ipairs(HAIR_SINKS) do
-      local i = valid(h2) and try(function() return h:GetBoneIndex(FName(b)) end)
-      if i and i > 0 then sink, sname = i, b; break end
-    end
+    local sink, sname = valid(h2) and hp.sink, hp.sname
     local done = false
     if sink and sink > 0 and head and head >= 0 then
       cuts[#cuts + 1] = { mesh = h, addr = addr(h), bone = "hair" }
@@ -976,8 +1005,7 @@ local function stage_split_cut(q)
       -- whole on her half, none on the copy
       if valid(h2) then try(function() h2:SetHiddenInGame(true, false) end) end
       hp.copy = nil
-      log(string.format("split: hair %s stays whole on her half (%s)", name_of(h),
-        sink and "the cut failed" or "none of " .. table.concat(HAIR_SINKS, ", ") .. " in its skeleton"))
+      log(string.format("split: hair %s stays whole on her half (%s)", name_of(h), sink and "the cut failed" or "no copy"))
     end
   end
   return true
@@ -1057,6 +1085,8 @@ local function stage_split_open(q)
   end
   copy_watch = { comp = b2, n = 0 }
   if ctx.on_copy then try(function() ctx.on_copy(b2) end) end
+  -- she stood still while it was cut; now both halves fall, before they get pushed apart
+  if ctx.on_release then try(function() ctx.on_release() end) end
   log(string.format("split copy ragdoll: simulating %s%s, collision %s", tostring(sim2), sim and "" or " (second try)",
     tostring(try(function() return b2:GetCollisionEnabled() end))))
   local push = g.splitPush or 120
@@ -1065,6 +1095,7 @@ local function stage_split_open(q)
   local b1 = settle_half(q.mesh, at, n, push, q.gone1, q.spine, true)
   local b2l = settle_half(b2, at, scale(n, -1), push, q.gone2, q.spine, false)
   if ctx.on_cut then for _, b in ipairs(b1) do try(function() ctx.on_cut(q.mesh, b) end) end end
+  if ctx.on_broken and q.spine then try(function() ctx.on_broken(q.mesh, q.spine) end) end
   local kinds = {}
   for _, c in ipairs(q.caps) do
     if valid(c.actor) then try(function() c.actor:SetActorHiddenInGame(false) end) end
@@ -1096,9 +1127,10 @@ local function split_tick(q)
     stage_split_open(q)
     return
   end
-  -- it didn't happen: nothing of it stays
+  -- it didn't happen: nothing of it stays, and she falls whole
   pending = nil
   M.undo_split()
+  if ctx.on_release then try(function() ctx.on_release() end) end
 end
 
 -- a cut runs in stages a few ticks apart, so no frame shows a half-made cut: LOD0 forced (the cut is made in
@@ -1116,6 +1148,8 @@ local function start(pawn, mesh, hit, why, kind, out, plane, blade, style)
   if face then waited = force_lod(face) or waited end
   pending = { stage = "cut", wait = waited and 2 or 0, pawn = pawn, mesh = mesh, hit = hit, why = why, kind = kind,
     face = face, out = out, plane = plane, blade = blade, style = style }
+  -- a split comes first, then the fall: she is held where she is until it opens
+  if kind == "split" and ctx.on_hold then try(function() ctx.on_hold(mesh) end) end
   M.tick(pawn)
   return true
 end

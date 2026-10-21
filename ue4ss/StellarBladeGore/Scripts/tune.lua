@@ -57,6 +57,8 @@ return {
     sliceFx = false,           -- the game's flesh-slice burst at the cut: it drops a static meat stub made for
                                -- monster stumps, which hangs in the air where she was cut
     bleedTime = 2.5,           -- seconds both openings keep bleeding (0 = until she recovers)
+    bleedAxis = "z",           -- the bleed effect's emit axis, pointed out of each opening: "z", "x", "-z", "-x"
+                               -- (F6 re-reads it; flip it if the blood still runs into the stump)
     hitSplat = true,           -- blood decal under every hit
     pool = true,               -- blood pool under the body after 2 s
   },
@@ -64,7 +66,9 @@ return {
     enabled = true,            -- false = the plain ragdoll the death show makes
     massScale = 1.0,           -- times the built-in human masses (~60 kg); the outfits ship 100 kg chest bodies
     accessoryMaxKg = 0.8,      -- cap for every other body (cape, hair, jiggle, accessories), so they trail behind
-                               -- (much lighter and they jitter against the heavy main bodies)
+    accessoryShare = 0.15,     -- all the accessories hanging off one body part weigh at most this share of it
+                               -- (the cape's 8 bodies a side hang off the upper arm, the hair's 9 off the head:
+                               -- heavier, they pulled both out of their joints)
     momentum = 1.0,            -- share of her speed before death carried into the fall (0 = drops on the spot)
     momentumMax = 1500,        -- cm/s
     impact = 450,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;

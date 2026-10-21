@@ -98,35 +98,67 @@ end
 
 local function mass(mesh, bone) return try(function() return mesh:GetBoneMass(FName(bone), true) end) end
 
-local function set_masses(mesh, g)
+-- the main body an accessory hangs from (its nearest ancestor in MASS), or nil
+local function anchor_of(mesh, bone)
+  local b = bone
+  for _ = 1, 64 do
+    local p = try(function() return mesh:GetParentBone(FName(b)):ToString() end)
+    if not p or p == "None" then return nil end
+    if MASS[p] then return p end
+    b = p
+  end
+  return nil
+end
+
+-- keep: where the masses it changes are remembered for M.stop (nil for a split's copy, which is destroyed)
+-- Accessories hanging off one main body share a budget of accessoryShare of its mass, each at most accessoryMaxKg:
+-- the cape hangs off the upper arms (8 bodies a side) and the hair off the head (9), and at 0.8 kg a body they
+-- weighed 6.4 kg on a 1.7 kg arm and 7.2 kg on a 4.5 kg head, and dragged both out of their joints
+local function set_masses(mesh, g, keep)
   local before, after, acc, accBefore, n = 0, 0, 0, 0, 0
   local main = {}
-  local cap = g.accessoryMaxKg or 0.8
+  local cap, share, floor = g.accessoryMaxKg or 0.8, g.accessoryShare or 0.15, 0.05
+  local list, groups = {}, {}
   for _, bone in ipairs(bodies(mesh)) do
     local m = mass(mesh, bone)
     if m and m > 0 then
-      if MASS[bone] then
-        main[#main + 1] = string.format("%s=%.0f", bone:gsub("Bip001%-", ""), m)
-        run.masses[bone] = m
-        local want = MASS[bone] * (g.massScale or 1.0)
-        if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then
-          before, after = before + m, after + want
-        end
-      else
-        accBefore = accBefore + m
-        if cap > 0 and m > cap then
-          local s = try(function() return mesh:GetMassScale(FName(bone)) end) or 1.0
-          if try(function() mesh:SetMassScale(FName(bone), s * cap / m); return true end) then
-            run.scales[bone] = s
-            m = cap
-          end
-        end
-        acc, n = acc + m, n + 1
+      list[#list + 1] = { bone = bone, m = m }
+      if not MASS[bone] then
+        local a = anchor_of(mesh, bone) or "?"
+        groups[a] = (groups[a] or 0) + 1
+        list[#list].anchor = a
       end
     end
   end
-  return string.format("masses %.0f -> %.0f kg (was %s), %d other bodies %.1f -> %.1f kg", before, after,
-    table.concat(main, " "), n, accBefore, acc)
+  for _, e in ipairs(list) do
+    local bone, m = e.bone, e.m
+    if MASS[bone] then
+      main[#main + 1] = string.format("%s=%.0f", bone:gsub("Bip001%-", ""), m)
+      if keep then keep.masses[bone] = m end
+      local want = MASS[bone] * (g.massScale or 1.0)
+      if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then
+        before, after = before + m, after + want
+      end
+    else
+      accBefore = accBefore + m
+      local want = cap
+      local am = MASS[e.anchor]
+      if am and share > 0 then want = math.max(math.min(cap, am * (g.massScale or 1.0) * share / groups[e.anchor]), floor) end
+      if want > 0 and m > want then
+        local s = try(function() return mesh:GetMassScale(FName(bone)) end) or 1.0
+        if try(function() mesh:SetMassScale(FName(bone), s * want / m); return true end) then
+          if keep then keep.scales[bone] = s end
+          m = want
+        end
+      end
+      acc, n = acc + m, n + 1
+    end
+  end
+  local per = {}
+  for a, c in pairs(groups) do per[#per + 1] = string.format("%s:%d", a:gsub("Bip001%-", ""), c) end
+  table.sort(per)
+  return string.format("masses %.0f -> %.0f kg (was %s), %d other bodies %.1f -> %.1f kg (on %s)", before, after,
+    table.concat(main, " "), n, accBefore, acc, table.concat(per, " "))
 end
 
 local function momentum(mesh, g)
@@ -293,15 +325,57 @@ local function drop_weapons(pawn, mesh, g)
   return ", dropped " .. table.concat(names, ", ")
 end
 
+-- stretch probe: every main joint's length (bone to the main bone above it) at the start, and how far it is off later
+-- (logged at STRETCH_AT seconds, the worst three). A joint the solver can't hold shows as centimetres here
+local STRETCH_AT = { 0.5, 1.0, 2.0, 3.0 }
+local function addr(o) return try(function() return o:GetAddress() end) end
+-- bones gore cut through (limbs, the split's spine break), on the mesh at severedOn: their joints come apart on
+-- purpose, so the probe leaves out every joint whose chain up to its anchor crosses one. Kept across M.start (a
+-- piece cut while she stands, then her death ragdoll) until another mesh starts
+local severed, severedOn = {}, nil
+local function crosses_cut(mesh, bone, up)
+  for s in pairs(severed) do
+    if s == bone then return true end
+    local below = try(function() return mesh:BoneIsChildOf(FName(bone), FName(s)) end) == true
+    local upBelow = s == up or try(function() return mesh:BoneIsChildOf(FName(up), FName(s)) end) == true
+    if below and not upBelow then return true end
+  end
+  return false
+end
+local function joint_lengths(mesh)
+  local out = {}
+  for bone in pairs(MASS) do
+    local up = anchor_of(mesh, bone)
+    local a = up and try(function() local v = mesh:GetSocketLocation(FName(bone)); return vec(v.X, v.Y, v.Z) end)
+    local b = a and try(function() local v = mesh:GetSocketLocation(FName(up)); return vec(v.X, v.Y, v.Z) end)
+    if b then out[bone] = { up = up, l = len(vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z)) } end
+  end
+  return out
+end
+local function stretch_report(mesh, base)
+  local now = joint_lengths(mesh)
+  local list = {}
+  for bone, j in pairs(base) do
+    local n = now[bone]
+    if n and not crosses_cut(mesh, bone, j.up) then list[#list + 1] = { bone = bone, d = n.l - j.l } end
+  end
+  table.sort(list, function(x, y) return math.abs(x.d) > math.abs(y.d) end)
+  local parts = {}
+  for i = 1, math.min(3, #list) do parts[#parts + 1] = string.format("%s %+.1f", list[i].bone:gsub("Bip001%-", ""), list[i].d) end
+  return table.concat(parts, ", ")
+end
+
 -- kind: "death" or "sandbox"; dir: the blow's direction for the impact (sandbox), or where it came from when the
 -- game's death key gives no impulse (death)
 function M.start(pawn, mesh, kind, dir)
   local g = cfg()
   if g.enabled == false then return end
   if run then M.stop(pawn) end
+  if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
   run = { mesh = mesh, t = 0, masses = {}, scales = {}, still = 0 }
+  run.joints, run.probe = joint_lengths(mesh), 1
   extra = {}
-  local parts = { set_masses(mesh, g) }
+  local parts = { set_masses(mesh, g, run) }
   if kind == "death" then
     parts[#parts + 1] = momentum(mesh, g)
     -- the death key pushes after ImpulseDelayTime (0.01 s), so its direction is read a couple of ticks later
@@ -321,7 +395,7 @@ function M.piece(pawn, mesh)
   local g = cfg()
   if g.enabled == false or run then return nil end
   run = { mesh = mesh, t = 0, masses = {}, scales = {}, piece = true }
-  local r = set_masses(mesh, g)
+  local r = set_masses(mesh, g, run)
   log("piece: " .. r)
   return r
 end
@@ -359,8 +433,66 @@ local function sleep(comp)
   return n
 end
 
--- a split's copy settles with her
-function M.add_body(comp) if run and valid(comp) then extra[#extra + 1] = comp end end
+-- a split holds her still until it opens, then she falls in halves: her bodies stop (gravity off, velocities zeroed
+-- every tick) and get back the velocities they had (the death key's push, her momentum, F7's impulse) on release.
+-- The tone stays at full strength meanwhile, so she holds her pose. Released after HOLD_MAX s whatever happens
+local HOLD_MAX = 1.0
+local function velocities(comp)
+  local out = {}
+  for _, b in ipairs(bodies(comp)) do
+    local v = try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local w = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    if v and w then out[b] = { v = v, w = w } end
+  end
+  return out
+end
+local function gravity(comp, on)
+  try(function() comp:SetEnableGravity(on) end)
+  for _, b in ipairs(bodies(comp)) do try(function() comp:SetEnableBodyGravity(on, FName(b)) end) end
+end
+local function stop_all(comp)
+  try(function() comp:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
+  try(function() comp:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
+end
+
+function M.hold(mesh)
+  -- by address: UE4SS hands out a new wrapper per call, so two wrappers of her mesh never compare equal
+  if not run or run.piece or run.held or addr(run.mesh) ~= addr(mesh) then return false end
+  run.held = { t = 0, vel = velocities(mesh) }
+  gravity(mesh, false)
+  stop_all(mesh)
+  log(string.format("held still for the split at %.2f s", run.t))
+  return true
+end
+
+function M.release()
+  if not (run and run.held) then return end
+  local held, mesh = run.held, run.mesh
+  run.held = nil
+  if not valid(mesh) then return end
+  gravity(mesh, true)
+  -- the halves go on as she was going: each body its own velocity again, the split's copy the same per bone
+  local n = 0
+  for _, comp in ipairs({ mesh, table.unpack(extra) }) do
+    if valid(comp) then
+      for b, e in pairs(held.vel) do
+        try(function() comp:SetPhysicsLinearVelocity(e.v, false, FName(b)) end)
+        try(function() comp:SetPhysicsAngularVelocityInDegrees(e.w, false, FName(b)) end)
+        n = n + 1
+      end
+      try(function() comp:WakeAllRigidBodies() end)
+    end
+  end
+  log(string.format("released after %.2f s held (%d body velocities back)", held.t, n))
+end
+
+-- a split's copy: her masses (it came with the outfit's 100 kg chest bodies and 80 kg cape links), and it settles
+-- with her
+function M.add_body(comp)
+  if not valid(comp) then return end
+  log("split copy: " .. set_masses(comp, cfg()))
+  if run then extra[#extra + 1] = comp end
+end
 
 local function settle(dt)
   local st = cfg().settle or {}
@@ -382,7 +514,17 @@ end
 
 function M.tick(dt)
   if not run then return end
+  if run.held then
+    run.held.t = run.held.t + dt
+    if not valid(run.mesh) or run.held.t >= HOLD_MAX then M.release(); return end
+    stop_all(run.mesh)
+    return
+  end
   run.t = run.t + dt
+  if run.probe and STRETCH_AT[run.probe] and run.t >= STRETCH_AT[run.probe] then
+    log(string.format("stretch at %.1f s (cm off the start): %s", run.t, stretch_report(run.mesh, run.joints)))
+    run.probe = run.probe + 1
+  end
   if not run.piece then settle(dt) end
   if run.impactAt and run.t >= run.impactAt then
     run.impactAt = nil
@@ -410,13 +552,23 @@ function M.tick(dt)
   try(function() run.pac:SetStrengthMultiplyer(s) end)
 end
 
+-- a joint gore broke (no tone change): left out of the stretch probe
+function M.broken(mesh, bone)
+  local a = addr(mesh)
+  if a ~= severedOn then severed, severedOn = {}, a end
+  if bone then severed[tostring(bone)] = true end
+end
+
 -- a limb came off: its root stops pulling towards the body (its own joints keep their fading tone)
 function M.on_cut(mesh, bone)
+  M.broken(mesh, bone)
   if not (run and valid(run.pac)) then return end
   drive(run.pac, bone, 0, cfg().tone or {})
 end
 
 function M.stop(pawn)
+  if run and run.held and valid(run.mesh) then gravity(run.mesh, true) end
+  if run then run.held = nil end
   local nw = #dropped > 0 and weapons_back() or nil
   if nw then log(string.format("%d weapons back on their sockets", nw)) end
   if not run then return end
@@ -434,6 +586,7 @@ end
 -- a new Eve (the level reloaded): drop what was held from the old one without touching it
 function M.forget()
   run, speeds, dropped, extra = nil, {}, {}, {}
+  severed, severedOn = {}, nil
 end
 
 return M
