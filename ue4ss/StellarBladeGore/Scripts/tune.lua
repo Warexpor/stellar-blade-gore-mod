@@ -30,7 +30,7 @@ return {
     f5Delay = 0.5,             --   with f5Split off: seconds into F5's fall the death starts (the show's ragdoll key
                                --   does nothing while she is alive, so the script starts it)
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
-                               -- F9 rolls the cuts only, F10 dents, F11 splits
+                               -- F9 rolls the cuts only, F10 marks, F11 splits
       limb = 40,               --   the arm or thigh nearest the hit comes off
       head = 20,               --   beheaded (the face goes with the head, the neck gets a stump)
       torso = 30,              --   cut in half at the waist
@@ -80,12 +80,11 @@ return {
       },
     },
     afterHits = {              -- an enemy's weapon swinging through her once she is dead cuts her again: a limb, the
-      enabled = true,          --   head or (while she is whole) her body in two along the swing, else a wound
+      enabled = true,          --   head or (while she is whole) her body in two along the swing, else a hit mark
       reach = 35,              --   cm its fastest bone (a hand or weapon bone) passes from a part of her
       max = 6,                 --   hits a death
       from = 0.6,              --   s into the death before the first (the killing swing itself doesn't count twice)
-      cutChance = 0.75,        --   share that cut (the rest wound: stab or blunt, stabShare of them stabs)
-      stabShare = 0.5,
+      cutChance = 0.75,        --   share that cut (the rest leave a hit mark, see hitMarks)
     },
     hitWindow = 0.6,           -- seconds before death the game's last hit on her still counts as the killing blow
     splitPush = 140,           -- cm/s the halves get away from each other (300 flung them apart, fifteenth playtest)
@@ -94,6 +93,9 @@ return {
     splitSpine = true,         -- a split down her length shows the spine halved along each lid (GM_Brokenbone pieces)
     splitSpineWidth = 3.0,     --   cm wide in the plane
     splitSpineFlat = 1.2,      --   cm thick out of it
+    splitBeside = 2,           -- cm beside her neck an F11 / F5 / odds split passes (leaning from her crotch up, between
+                               --   her breasts), so the head stays whole on one half; 0 = straight up her spine through
+                               --   the head. At 10 it ran through a breast
     splitMinShare = 0.12,      -- a split leaving either half less than this share of her body is a waist cut instead
     splitLidGrow = 0.4,        -- cm a split's flat lid reaches past the skin round its edge
     splitLidPush = 0.2,        -- cm it sits out of the half, over the flattened skin
@@ -110,28 +112,28 @@ return {
                                -- Bip001-L/R-UpperArm, Bip001-L/R-Forearm, Bip001-L/R-Thigh, Bip001-L/R-Calf
     cutAt = "auto",            -- where along the limb, 0 = joint, 1 = next joint; "auto" = 0.4 (torso 0.5, the neck
                                -- 0.3 of the way to the head; a blade's cut at least 0.3 down the limb)
-    woundScale = 1.0,          -- wound size; r = 6.5 cm on the torso, 5 thigh, 3.5 upper arm / calf
-    bluntWound = "rupture",    -- a blunt blow: "rupture" bursts the skin (a crater under a ragged lid of torn flesh,
-                               -- bleeding like a stab), "dent" presses it in smoothly (the older look)
-    ruptureWidth = 0.9,        --   a rupture's radius, times r (torso 5.9 cm, upper arm 3.2)
-    ruptureDepth = 0.5,        --   its crater's depth, times r
-    bluntWidth = 1.8,          -- a dent is r times this wide (radius)
-    bluntDepth = 0.7,          --   and r times this deep: a wide squash (upper arm 6.3 cm wide, 2.5 deep; torso
-                               --   11.7 and 4.6)
-    woundFlesh = true,         -- torn flesh (the cut-flesh material) at the bottom of a dent or stab
-    woundFleshShare = 0.55,    --   a dent's patch, as a share of the dent's radius
-    woundBleed = 0.6,          -- a dent bleeds for this share of bleedTime (a stab or a rupture for all of it), and
-                               -- drips and pools like a cut (a small pool, 22 cm)
-    stabWidth = 2.5,           -- a stab's pit: this radius in cm
-    stabDepth = 0.6,           --   r times this deep (at most 4 cm)
+    hitMarks = {               -- a hit she lives through leaves a slash of blood on her skin (no cut): a decal
+      enabled = true,          --   on the skin where it landed (the DLL finds it), along the swing, riding that skin's
+                               --   bone. F10 puts one on a part at random. false = living hits leave nothing
+      delay = 0.25,            --   s after the hit (a killing blow's hit gets the death cut instead)
+      needDamage = true,       --   only a hit that took HP off her bar (a guarded or parried one leaves none)
+      length = 12,             --   cm long (a forearm's or calf's shorter: it stays on the part's curve)
+      width = 2.2,             --   cm wide
+      scale = 1.0,             --   both, each mark 75-125 % of it at random
+      depth = 0.5,             --   how far its box reaches into her, times the part's radius
+      max = 12,                --   on her at once, the oldest goes first
+      healFade = 2.5,          --   s a mark takes to fade once healing has brought her HP bar back to where it was
+                               --   before its hit (all go when she recovers or respawns)
+      blood = true,            --   the hit's blood burst on the mark
+      reach = 40,              --   cm the hit may be from her nearest part
+    },
     voice = {                  -- her own death cry (Eve's action-voice recordings) the moment she dies, nothing after
       enabled = true,          --   false: the game's own death voice only
       volume = 1.0,
       rest = 8,                --   s a recording rests before it can play again
     },
-    sounds = true,             -- the game's own gore sounds on cuts, splits and wounds
+    sounds = true,             -- the game's own gore sounds on cuts and splits
     soundVolume = 1.0,
-    maxWounds = 6,             -- per life
     tilt = 0.25,               -- random tilt of the cut plane
     blowTilt = 35,             -- death cuts lean towards the killing blow's direction, at most this many degrees
                                -- off square (0 = always square to the limb)
@@ -141,7 +143,9 @@ return {
     deathThrow = 650,          -- cm/s a piece cut off by a killing blow flies with, the way the blow went
     legThrow = 1.4,            -- a cut-off leg gets this many times the throw (it dropped at her feet)
     legLift = 0.35,            --   and leans this much more upward
-    throwTicks = 3,            -- ticks after a cut the piece is kept at least as fast as its throw (the throw went in
+    pieceGravity = 0.55,       -- share of gravity a cut-off arm or leg falls with, for its first pieceFloat s (1 = full:
+    pieceFloat = 3,            --   it dropped like a stone)
+    throwTicks = 3,           -- ticks after a cut the piece is kept at least as fast as its throw (the throw went in
                                --   the tick its bodies started simulating and was mostly lost)
     splitFly = 200,            -- cm/s the cut off half of a death split flies with, the way the blow went
     caps = true,               -- flesh caps over both openings
@@ -158,7 +162,7 @@ return {
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
     bleedSize = 0.6,           -- the bleed's size (the effect's scale; the spurts are as many)
     bleedPulse = 0.35,         -- seconds between spurts while an opening bleeds (each follows the stump's turn)
-    capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps, lids and wounds
+    capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps and lids
     debugCaps = false,         -- every cap and lid glows bright green (a test: are the split's shards lids or skin?)
     capBloodColor = { 0.12, 0.005, 0.002 }, -- its glow (BloodColor, emissive: the material's own 10, 2.4, 0 lit the
                                -- stumps bright orange); nil = the material as it is
@@ -268,7 +272,7 @@ return {
       reach = 35,              -- cm her hand passes from one of its parts
       max = 4,                 -- per corpse
       from = 0.4,              -- seconds after the kill (the killing swing itself)
-      cutChance = 0.7,         -- else a wound (stab or blunt)
+      cutChance = 0.7,         -- else a hit mark
     },
     spawnDistance = 450,       -- F5 / the window: cm in front of her, in a row spawnSpread cm apart, facing her
     spawnSpread = 160,

@@ -376,7 +376,7 @@ local function try_cut(pawn, a, e)
   end
   if ctx.gore.busy() then return end
   local got = ctx.gore.enemy_cut(a, e.obj, e.mesh, r.h, r.kind, e.kind.face)
-  if not got and not ctx.gore.busy() and r.kind ~= "wound" then
+  if not got and not ctx.gore.busy() and r.kind ~= "mark" then
     -- nothing came off that way: the next kind (a limb, the head, across the waist), each once
     r.tried = r.tried or {}
     r.tried[r.kind] = true
@@ -417,10 +417,9 @@ local function corpse_hit(pawn, a, e)
   local k = dot(sub(bl, sw.at), sw.n)
   local loc = vec(bl.X - k * sw.n.X, bl.Y - k * sw.n.Y, bl.Z - k * sw.n.Z)
   local cut = math.random() <= (ch.cutChance or 0.7)
-  e.want = { t = os.clock(), kind = cut and "limb" or "wound", loc = loc, what = "corpse hit",
+  e.want = { t = os.clock(), kind = cut and "limb" or "mark", loc = loc, what = "corpse hit",
     src = string.format("%s at %.0f cm/s, %.0f cm from %s", sw.how, sw.speed, bd, bb),
-    h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb,
-      style = math.random() < 0.5 and "stab" or "blunt" } }
+    h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb } }
 end
 
 -- the spawner's Kill nearest (and Ctrl+F6): the followed character nearest her goes down as a ragdoll, which the

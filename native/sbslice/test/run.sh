@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and run the skin cut harness natively (clang, ASan/UBSan), then the cuts on real outfit and enemy meshes when
 # the build cache has them (test/real/run.sh). The real-mesh runs go in parallel (JOBS, default the CPU count).
-#   test/run.sh [group...]   groups: unit (test_cut.c), stats (test_stats.c), split, waist, arm, enemy; default all
+#   test/run.sh [group...]   groups: unit (test_cut.c), stats (test_stats.c), split, waist, arm, mark, enemy; default all
 # What to run for a change:
 #   stats.c / glass.lua            stats
 #   sbslice.c, a limb or neck cut  unit arm enemy
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
-[[ $# -eq 0 ]] && SEL=" unit stats split waist arm enemy "
+[[ $# -eq 0 ]] && SEL=" unit stats split waist arm mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
 fail=0
 if on unit; then
@@ -34,13 +34,24 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
     for posed in "" 1; do
       p=${posed:+ (posed)}
       if on split; then
-        jobs+=("real split $m$p|POSED=$posed|$m" "real split $m across the waist$p|ACROSS=1 POSED=$posed|$m")
+        jobs+=("real split $m$p|POSED=$posed|$m" "real split $m across the waist$p|ACROSS=1 POSED=$posed|$m"
+               "real split $m beside the neck$p|BESIDE=2 POSED=$posed|$m")
       fi
       on waist && jobs+=("real waist cut $m$p|WAIST=1 POSED=$posed|$m")
       on waist && [[ -z $posed ]] && jobs+=("real waist cut $m after the left arm|WAIST=1 ARMFIRST=1|$m")
       if on arm; then
         jobs+=("real arm cut $m (cape cut off)$p|ARM=1 POSED=$posed|$m" "real arm cut $m (cape kept on the body)$p|ARM=1 KEEPCAPE=1 POSED=$posed|$m")
       fi
+      # a living hit's mark: rays out of the torso, an arm and a thigh meet the skin on that part
+      on mark && jobs+=("real hit mark $m$p|MARK=1 POSED=$posed|$m")
+      # a thigh cut in a fall, her left elbow by the hip: no sink of the hip's seam on the arm (twenty-seventh playtest)
+      on arm && [[ -z $posed ]] && jobs+=("real thigh cut $m, her elbow by the hip|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47 ELBOWHIP=1|$m")
+      # thigh cuts near the knee and mid-thigh with the hip's correctives moving (in play and after the cut): the
+      # seam's point rides a still helper of the stump's body, nothing stretches to a moving one or to the chest
+      on arm && [[ -z $posed ]] && jobs+=("real thigh cut $m near the knee, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.81|$m"
+                                         "real thigh cut $m, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|$m")
+      # a calf cut: its stub's carrier rides the thigh, never the hip's jiggle body (a body of its own)
+      on arm && [[ -z $posed ]] && jobs+=("real calf cut $m|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|$m")
       # a stub carrier must have held still while she played: helpers that swung, or none watched yet, carry nothing
       if on arm && [[ -z $posed ]]; then
         jobs+=("real arm cut $m, its parent's helpers driven|ARM=1 DRIVEN=1|$m" "real arm cut $m, never watched|ARM=1 UNWATCHED=1|$m")
@@ -53,6 +64,15 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
     jobs+=("real split CH_P_EVE_10|POSED=|CH_P_EVE_10" "real split CH_P_EVE_10 (posed)|POSED=1|CH_P_EVE_10"
            "real split CH_P_EVE_10, correctives driven|DRIVEN=1|CH_P_EVE_10" "real split CH_P_EVE_09, correctives driven|DRIVEN=1|CH_P_EVE_09")
   fi
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
+    jobs+=("real thigh cut CH_P_EVE_10, her elbow by the hip|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47 ELBOWHIP=1|CH_P_EVE_10"
+           "real calf cut CH_P_EVE_10|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|CH_P_EVE_10"
+           "real thigh cut CH_P_EVE_10 near the knee, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.81|CH_P_EVE_10"
+           "real thigh cut CH_P_EVE_10, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
+           "real thigh cut CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
+           "real split CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 POSED=|CH_P_EVE_10")
+  on mark && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
+    jobs+=("real hit mark CH_P_EVE_10|MARK=1|CH_P_EVE_10" "real hit mark CH_P_EVE_10 (posed)|MARK=1 POSED=1|CH_P_EVE_10")
 fi
 # the enemies' bodies (tune.enemies.kinds; ./build.sh extracts them for their CPU access): an arm, the head, across
 # the waist, with the nosink list gore.lua sends for an enemy (ENEMY=1). ENEMY_VANILLA=<legacy cache> points elsewhere

@@ -16,7 +16,8 @@
 -- cuts and under the body; all removed again on recovery.
 -- Active ragdoll (active.lua): human masses, momentum and the blow carried into the fall, fading muscle tone.
 -- Sandbox: F7 ragdolls her with a shove onto her back (tune.lua), F8 recovers, F6 re-reads tune.lua,
--- F9 cuts a limb, the head or the torso (tune.gore), F10 a blunt wound or (next press) a stab, F11 ragdolls her and splits
+-- F9 cuts a limb, the head or the torso (tune.gore), F10 puts a living hit's mark on her (tune.gore.hitMarks: a hit she
+-- lives through leaves a slash of blood on her skin, healing fades it), F11 ragdolls her and splits
 -- her in half top to bottom, Ctrl+Shift+F5 ragdolls her and cuts along a made-up blade (as a killing blow does), Ctrl+F5 plays one
 -- of her animated death shows (a test death, which always splits her: tune.gore.f5Split).
 -- Enemies (enemies.lua): F5 spawns the picked humanoid enemy in front of her, Shift+F5 picks the next, Shift+F6 shows
@@ -27,7 +28,7 @@
 -- Hits: the game tells clients about every skill hit (SBNetworkPlayerController:ClientBroadcast_SkillHitResult,
 -- with the swing's direction); the last one on Eve decides whether a killing blow came down from above. In single
 -- player it never fires: the blow is made up from her mesh's hit or the nearest enemy (death_hit). Every killing
--- blow cuts, whatever hit her (a fist cuts like a blade: there are no blunt or stab wounds on death).
+-- blow cuts, whatever hit her (a fist cuts like a blade).
 -- On first load it also dumps the full reflection schema (DumpUSMAP) for asset editing.
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
@@ -750,6 +751,9 @@ end
 -- her mesh: the game's physical hit reaction leaves the force, where it landed and on which bone
 -- (PhysicalHitForce*), and the hit shake its position and direction (VertexShakeInfo). A change is a new hit.
 local meshHit, meshKey = nil, nil
+-- a living hit's mark (tune.gore.hitMarks, gore.hit_mark): q, the hits waiting to be marked; pct, her HP bar's last
+-- reading (read every 0.25 s while she is alive), the "before" of the next hit
+local hm = { q = {}, pct = nil, nextBar = 0 }
 local function vof(v) return v and { X = v.X, Y = v.Y, Z = v.Z } or nil end
 local function poll_mesh_hit(mesh)
   local f = try(function() return vof(mesh.PhysicalHitForceVector) end)
@@ -766,6 +770,12 @@ local function poll_mesh_hit(mesh)
   local loc = (at and dist(at, pel) < 150 and at) or (sp and dist(sp, pel) < 150 and sp) or nil
   local dir = (f and len(f) > 1e-3 and f) or (sd and len(sd) > 1e-3 and sd) or nil
   meshHit = { t = os.clock(), loc = loc, push = dir, bone = bone, src = "mesh" }
+  -- marked a moment later, if she still lives (a killing blow's hit is the death cut's)
+  local mk = (tune.gore or {}).hitMarks or {}
+  if loc and not active and mk.enabled ~= false then
+    hm.q[#hm.q + 1] = { due = os.clock() + (mk.delay or 0.25), loc = loc, push = dir, pre = hm.pct }
+    if #hm.q > 4 then table.remove(hm.q, 1) end
+  end
   log(string.format("mesh hit: force %s at %s bone %s power %s, shake at %s dir %s -> on her %s", v3(f), v3(at),
     tostring(bone), tostring(try(function() return mesh.PhysicalHitForcePower end)), v3(sp), v3(sd), tostring(loc ~= nil)))
 end
@@ -1046,7 +1056,7 @@ end
 -- An enemy's weapon still swinging through her once she is dead cuts her again (tune.gore.afterHits): every tick of
 -- the death the step its fastest weapon bone just made is checked against her parts (SWING_AT, and the head); a step
 -- faster than swingMinSpeed passing within reach cm of one is a blow there, cut along the plane the weapon swept as a
--- killing blow is (gore.blow: a limb, the head, or her body in two while she is still whole), else a wound. One per
+-- killing blow is (gore.blow: a limb, the head, or her body in two while she is still whole), else a hit mark. One per
 -- swing (the weapon has to slow down again first), at most max a death, none in the first from seconds (the killing
 -- swing itself)
 local function seg_dist(p, q, x)
@@ -1113,12 +1123,49 @@ local function hits_after(pawn, mesh)
   gore.on_hit(pawn, mesh, at)
   if split then return end
   gore.aim(dir)
-  -- a split needs her whole: once something is off her, a blow through her body is a wound instead
+  -- a split needs her whole: once something is off her, a blow through her body is a hit mark instead
   local h = { t = os.clock(), loc = at, dir = dir, fwd = fwd or dir, n = n, how = how, push = dir, attack_dir = 0,
     bone = bone, noSplit = ncut > 0, attacker = swing.who }
   if math.random() <= (c.cutChance or 0.75) and gore.blow(pawn, mesh, h, "after") then return end
-  local out = dir and { X = -dir.X, Y = -dir.Y, Z = -dir.Z } or nil
-  gore.wound(pawn, mesh, at, out, "after", math.random() < (c.stabShare or 0.5) and "stab" or "blunt")
+  gore.hit_mark(pawn, mesh, at, dir, nil)
+end
+
+-- while she is alive: her HP bar for the marks' healing, and the hit waiting for its mark once its delay is up. The
+-- slash runs along the attacker's fastest bone's motion (a weapon) if it moved in the last 0.3 s, else the hit's push
+local function hit_marks(pawn, mesh)
+  local g = tune.gore or {}
+  if not gore or g.enabled == false or (g.hitMarks or {}).enabled == false then hm.q = {}; return end
+  local now = os.clock()
+  if now >= hm.nextBar and goreCtx.glass then
+    hm.nextBar = now + 0.25
+    -- the HUD is looked for (35 ms) only once a mark is waiting to heal; else only a widget already found is read
+    local pct = goreCtx.glass.bar_pct(gore.marks() == 0)
+    if pct then hm.pct = pct end
+    if gore.marks() > 0 then gore.heal_marks(pct) end
+  end
+  local q = hm.q[1]
+  if not q or now < q.due then return end
+  table.remove(hm.q, 1)
+  -- held over a death or a load: its place is long gone
+  if now - q.due > 1 then return end
+  -- a hit that took nothing off her bar (a guard, a parry) leaves no mark (tune.gore.hitMarks.needDamage)
+  local pct = goreCtx.glass and goreCtx.glass.bar_pct(true)
+  if q.pre and pct and pct > q.pre - 0.001 and (g.hitMarks or {}).needDamage ~= false then
+    log(string.format("hit mark skipped: her HP bar didn't drop (%.3f before, %.3f now)", q.pre, pct))
+    return
+  end
+  local dir
+  local hist = swing.hist
+  if swing.bones and #hist >= 2 and now - hist[#hist].t < 0.3 then
+    local a, b = hist[#hist - 1], hist[#hist]
+    local bv
+    for i = 1, #swing.bones do
+      local p, r = a.p[i], b.p[i]
+      if p and r and (not bv or dist(p, r) > bv) then bv, dir = dist(p, r), sub(r, p) end
+    end
+  end
+  if dir and len(dir) < 1 then dir = nil end
+  gore.hit_mark(pawn, mesh, q.loc, dir or q.push, q.pre)
 end
 
 -- what glass.lua reads off the swing tracker and her mesh
@@ -1257,16 +1304,6 @@ local function sandbox_death()
   if play_show(pawn, "CH_P_EVE_01/Basic/" .. show, "F5") then f5_at = os.clock() else forceFall = nil end
 end
 
--- F10: a wound, blunt (tune.gore.bluntWound) and stab in turn
-local f10_stab = false
-local function sandbox_wound()
-  local pawn = find_eve()
-  local mesh = pawn and try(function() return pawn.Mesh end)
-  if not (gore and valid(mesh)) then log("F10: no Eve or no gore.lua"); return end
-  f10_stab = not f10_stab
-  gore.wound(pawn, mesh, nil, nil, "F10", f10_stab and "stab" or "blunt")
-end
-
 local function gore_cut(pawn, mesh, h, hit)
   local g = tune.gore or {}
   -- what comes off flies the way the blow went: from the attacker through her, else the swing, else her push
@@ -1350,7 +1387,26 @@ RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face))
 RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover))
 RegisterKeyBind(Key.F6, on_key("F6", load_tune))
 RegisterKeyBind(Key.F9, on_key("F9", sandbox_slice))
-RegisterKeyBind(Key.F10, on_key("F10", sandbox_wound))
+-- F10: a living hit's mark on a part at random, on its side facing the camera (tune.gore.hitMarks)
+RegisterKeyBind(Key.F10, on_key("F10", function()
+  local pawn = find_eve()
+  local mesh = pawn and try(function() return pawn.Mesh end)
+  if not (gore and valid(mesh)) then log("F10: no Eve or no gore.lua"); return end
+  local w = gore.MARK_AT[math.random(#gore.MARK_AT)]
+  local a = try(function() return vof(mesh:GetSocketLocation(FName(w.bone))) end)
+  local b = try(function() return vof(mesh:GetSocketLocation(FName(w.to))) end)
+  local cam = try(function()
+    local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+    return vof(gs:GetPlayerCameraManager(pawn, 0):GetCameraLocation())
+  end)
+  if not (a and b and cam) then log("F10: no bone or camera"); return end
+  local mid = { X = (a.X + b.X) / 2, Y = (a.Y + b.Y) / 2, Z = (a.Z + b.Z) / 2 }
+  local to = unit(sub(cam, mid))
+  local at = to and { X = mid.X + to.X * w.r * 2, Y = mid.Y + to.Y * w.r * 2, Z = mid.Z + to.Z * w.r * 2 } or mid
+  local dir = { X = math.random() - 0.5, Y = math.random() - 0.5, Z = math.random() - 0.5 }
+  log("F10: hit mark on " .. w.bone)
+  gore.hit_mark(pawn, mesh, at, dir, hm.pct)
+end))
 RegisterKeyBind(Key.F11, on_key("F11", sandbox_split))
 RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, on_key("Ctrl+F5", sandbox_death))
 RegisterKeyBind(Key.F5, { ModifierKey.CONTROL, ModifierKey.SHIFT }, on_key("Ctrl+Shift+F5", sandbox_blade))
@@ -1550,6 +1606,8 @@ local function tick()
     tp.mark("bone watch")
     if goreCtx.glass then goreCtx.glass.tick(pawn, mesh) end
     tp.mark("glass")
+    hit_marks(pawn, mesh)
+    tp.mark("hit marks")
   elseif active and ((tune.gore or {}).afterHits or {}).enabled ~= false and (tune.gore or {}).enabled ~= false then
     track_swing(pawn, mesh)
     hits_after(pawn, mesh)
@@ -1663,6 +1721,7 @@ local function forget_world()
   saved, hits, pending, animDeath = {}, {}, {}, nil
   rel = { loc = nil, rot = nil }
   meshHit, meshKey = nil, nil
+  hm.q, hm.pct = {}, nil
   swing_drop(); swingBones = {}
   chars, charsSeeded = {}, false
   followed = nil

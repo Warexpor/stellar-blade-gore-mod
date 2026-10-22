@@ -74,7 +74,8 @@ end
 
 -- her HUD's HP bar (0..1): the one HUD value the game kept live in the twenty-sixth playtest (0.41 after a hit, while
 -- HpValue and MaxHpValue stayed 0 and the text read "123 / 123")
-local function bar_pct()
+-- cached: read only a widget already found, never look for one (the hit marks' reading while no mark waits)
+local function bar_pct(cached)
   local function pct_of(w)
     local bar = try(function() return w.ProgressBar_HP end)
     local pct = valid(bar) and try(function() return bar.Percent end)
@@ -86,7 +87,7 @@ local function bar_pct()
     if pct then return pct end
   end
   st.barHud = nil
-  if os.clock() < (st.barTry or 0) then return nil end
+  if cached or os.clock() < (st.barTry or 0) then return nil end
   st.barTry = os.clock() + 5
   for _, w in ipairs(try(function() return FindAllOf(HUD) end) or {}) do
     local name = try(function() return w:GetFullName() end) or ""
@@ -325,6 +326,8 @@ local function read_events()
 end
 
 -- every tick she is alive and animated (main.lua)
+M.bar_pct = bar_pct -- (main.lua: the hit marks heal with it)
+
 function M.tick(pawn, mesh)
   if not M.enabled() then if st.on then stop(); log("glass cannon off") end return end
   local gore = ctx.gore

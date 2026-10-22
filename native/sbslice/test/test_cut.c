@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #define __declspec(x)
 #define __stdcall
 #define u64 U64_
@@ -32,7 +33,13 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #include "../sbslice.c"
 void spawner_start(void) {} // the window is Win32 only
 int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (void)l; (void)a; (void)b; return 0; } // stats.c: test_stats.c
-int mem_readable(u64 p, u64 n) { (void)p; (void)n; return 0; } // stats.c
+static u64 ld_buf[0x900 / 8];
+static unsigned short act_buf[64]; static int act_n;   // the LOD's ActiveBoneIndices (every bone: one section has them all)
+// (stats.c) the DLL looks for ActiveBoneIndices in the LOD's render data: those two are all there is to read
+int mem_readable(u64 p, u64 n)
+{
+    return (p >= (u64)ld_buf && p + n <= (u64)ld_buf + sizeof ld_buf) || (p >= (u64)act_buf && p + n <= (u64)(act_buf + act_n));
+}
 #undef CreateThread
 #undef Sleep
 #undef CreateFileW
@@ -70,7 +77,7 @@ static float bonez[NB] = { 0, 100, 60, 30, 55, 65, 85, 58 };   // global ref pos
 static float vpos[NV][3];
 static unsigned char vw[NV][4 * 2]; // 4 indices then 4 weights (section-local == mesh, BoneMap identity)
 static u32 idx[(RINGS - 1) * SEG * 6]; static int nidx;
-static u64 sw_buf[32], ld_buf[64], sm_buf[128], rd_buf[4], lodptrs[1], ib_obj[1], ib_vt[16], sec_buf[0x200/8];
+static u64 sw_buf[32], sm_buf[128], rd_buf[4], lodptrs[1], ib_obj[1], ib_vt[16], sec_buf[0x200/8];
 static u16 bonemap[NB];
 static float space[NB * 12], refpose[NB * 12], refinv[NB * 16];
 static unsigned char binfo[NB * 0xc];
@@ -106,11 +113,21 @@ static unsigned char xw[XV][8];
 static u32 xidx[(RINGS - 1) * SEG * 6 + 64 * 3]; static int nxidx;
 static u64 xsec[0x200 / 8];
 
+// the engine's allocator (GMalloc): a BoneMap array swapped into the engine's hands must come from it, or the engine
+// can't free it (the Alt+F4 crash, MallocBinned2's canary). Ours tracks what it handed out
+static void *gm_out[4096]; static int ngm;
+static void *gm_malloc(u64 self, u64 n, u32 al) { (void)self; (void)al; void *p = calloc(1, n); if (ngm < 4096) gm_out[ngm++] = p; return p; }
+static void gm_free(u64 self, void *p) { (void)self; for (int i = 0; i < ngm; i++) if (gm_out[i] == p) { gm_out[i] = 0; free(p); return; } fprintf(stderr, "FAIL: GMalloc freed %p it never gave\n", p); _exit(1); }
+static u64 gm_vt[16], gm_obj[2];
+static void gm_install(void) { gm_vt[2] = (u64)gm_malloc; gm_vt[6] = (u64)gm_free; gm_obj[0] = (u64)gm_vt; *(u64 *)(exe + RVA_GMALLOC) = (u64)gm_obj; }
+static int gm_owns(const void *p) { for (int i = 0; i < ngm; i++) if (gm_out[i] == p) return 1; return 0; }
+
 int main(void)
 {
-    void *m = mmap(0, 0x4200000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    void *m = mmap(0, 0x7100000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) { perror("mmap"); return 1; }
     exe = (u64)m;
+    gm_install();
     tramp(exe + RVA_GET_SKIN_WEIGHT_BUFFER, (void *)st_get_buffer);
     tramp(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE, (void *)st_set_override);
     tramp(exe + RVA_MARK_RENDER_STATE_DIRTY, (void *)st_noop);
@@ -155,10 +172,12 @@ int main(void)
     *(u64 *)(ld + LOD_POSITIONS + 0x28) = (u64)vpos; *(u32 *)(ld + LOD_POSITIONS + 0x30) = 12;
     *(int *)(ld + LOD_NUM_VERTICES) = NV;
     *(int *)(sec + SEC_BASE_VERTEX) = 0; *(u64 *)(sec + SEC_BONE_MAP) = (u64)bonemap; *(int *)(sec + SEC_BONE_MAP + 8) = NB; *(int *)(sec + SEC_NUM_VERTICES) = NV;
+    for (int i = 0; i < NB; i++) act_buf[act_n++] = (unsigned short)i;
+    *(u64 *)(ld + 0x3a8) = (u64)act_buf; *(int *)(ld + 0x3a8 + 8) = act_n; *(int *)(ld + 0x3a8 + 12) = act_n;
     sw[SW_VARIABLE] = 0; *(u32 *)(sw + SW_MAX_INFLUENCES) = 4; sw[SW_16BIT_INDEX] = 0; *(u64 *)(sw + SW_DATA) = (u64)vw; *(int *)(sw + SW_NUM_VERTICES) = NV;
 
     float pw[3] = { 0, 0, 57 }, nw[3] = { 0, 0, -1 };
-    skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1, 0);
+    skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1);
     printf("%s\n", lastres);
     int pending = refinv[THIGH_HELP * 16] == 1;
     printf("collapsed %d (sinks untouched before: %d)\n", skin_collapse(), pending);
@@ -188,7 +207,7 @@ int main(void)
     printf("restored %d, thigh_help refinv[0]=%.0f [14]=%.0f, spine_help [14]=%.0f, nsinks=%d\n", r1, refinv[THIGH_HELP*16], refinv[THIGH_HELP*16+14], refinv[SPINE_HELP*16+14], nsinks);
     // a tilted plane on the already moved pose (exercises a second cut over a posed limb)
     float pw2[3] = { 0, 0, 57 }, nw2[3] = { 0.3f, 0, 0.95f };
-    skin_cut((u64)comp_buf, 0, THIGH, pw2, nw2, MODE_CUT, 0, 0, -1, 0);
+    skin_cut((u64)comp_buf, 0, THIGH, pw2, nw2, MODE_CUT, 0, 0, -1);
     skin_collapse();
     printf("second plane: %s\n", lastres);
     skin_restore(0);
@@ -226,77 +245,23 @@ int main(void)
     // ---- the other modes, on the rest pose again ----
     for (int i = 0; i < NB; i++) space[i * 12 + 4] = 0;
     int modebad = 0;
-    // HOLE: a ray from inside the body along +x meets the skin at x=8; a 4 cm ball there collapses onto a sink
-    // behind it, nothing else moves, and the answer names the surface point and a bone to ride on
-    float hp[3] = { 0, 0, 80 }, hn[3] = { 1, 0, 0 };
-    free(override_w); override_w = 0;
-    skin_cut((u64)comp_buf, 0, SPINE, hp, hn, MODE_HOLE, 4, 0, -1, 0);
-    skin_collapse();
-    printf("hole: %.300s\n", lastres);
+    // a living hit's mark (skin_mark): a ray from inside the body along +x meets the skin at x=8, facing +x,
+    // nothing changed
     {
-        int holed = 0, other = 0, sums = 0;
-        for (int v = 0; v < NV; v++) {
-            float d0 = vpos[v][0] - 8, d1 = vpos[v][1], d2 = vpos[v][2] - 80;
-            int in = d0 * d0 + d1 * d1 + d2 * d2 < 16;
-            int onsink = override_w[v].weights[0] == 255 && is_sink(&(cut_ctx){ .sm = (u64)sm_buf }, override_w[v].bones[0]);
-            if (in) holed += onsink; else other += onsink;
-            int t = 0; for (int i = 0; i < MAX_INF; i++) t += override_w[v].weights[i];
-            sums += t != 255;
-        }
-        float hx = 0; sscanf(strstr(lastres, " hit=") + 5, "%f", &hx);
-        int sink_inside = 1;
-        for (int i = 0; i < nsinks; i++) if (bonez[sinks[i].bone] == 0 && sinks[i].bone != ROOT) sink_inside = 0;
-        printf("hole: %d in the ball on a sink, %d outside, sums %d, hit x %.1f, wb %d\n", holed, other, sums, hx, !!strstr(lastres, " wb="));
-        modebad |= !holed || other || sums || hx < 7.5f || hx > 8.5f || !strstr(lastres, " bc=") || !sink_inside;
-    }
-    skin_restore(0);
-    // DENT: a blunt blow at x 8, z 80 along +x, 5 cm wide, 2 deep: the skin at the ray goes 2 cm in, the dent fades
-    // out to nothing at 5 cm across the ray, nothing behind it or past the radius moves, the skin stays closed
-    {
+        float hp[3] = { 0, 0, 80 }, hn[3] = { 1, 0, 0 };
         free(override_w); override_w = 0;
-        skin_cut((u64)comp_buf, 0, SPINE, hp, hn, MODE_DENT, 5, 0, -1, 2);
-        printf("dent: %.160s\n", lastres);
-        skin_collapse();
-        float cx = 0; int far_moved = 0, sums = 0, outward = 0, inner = 0;
-        for (int v = 0; v < NV; v++) {
-            float x[3]; skin(&override_w[v], vpos[v], x);
-            int t2 = 0; for (int i = 0; i < MAX_INF; i++) t2 += override_w[v].weights[i];
-            sums += t2 != 255;
-            float dy = vpos[v][1], dz = vpos[v][2] - 80, q2 = dy * dy + dz * dz;
-            if (vpos[v][0] > 7.9f && q2 < 0.01f) cx = x[0];
-            if ((q2 >= 25 || vpos[v][0] < 0) && dist3(x, vpos[v]) > 0.01f) far_moved++;
-            if (x[0] > vpos[v][0] + 0.01f) outward++;
-            if (q2 < 25 && vpos[v][0] > 0 && x[0] < vpos[v][0] - 0.01f) inner++;
-        }
-        printf("dent: centre at x %.2f (8 - 2), %d moved outside it, %d pushed outward, %d pressed in, sums %d\n", cx, far_moved, outward, inner, sums);
-        modebad |= cx < 5.9f || cx > 6.1f || far_moved || outward || inner < 3 || sums || !strstr(lastres, " dented=");
-        skin_restore(0);
-    }
-    // RUPTURE: the same blow as a burst: every front vertex within the radius goes all the way to the floor (x 6),
-    // with no falloff; nothing outside it moves
-    {
-        free(override_w); override_w = 0;
-        skin_cut((u64)comp_buf, 0, SPINE, hp, hn, MODE_RUPTURE, 5, 0, -1, 2);
-        printf("rupture: %.160s\n", lastres);
-        skin_collapse();
-        int far_moved = 0, sums = 0, off_floor = 0, floored = 0;
-        for (int v = 0; v < NV; v++) {
-            float x[3]; skin(&override_w[v], vpos[v], x);
-            int t2 = 0; for (int i = 0; i < MAX_INF; i++) t2 += override_w[v].weights[i];
-            sums += t2 != 255;
-            float dy = vpos[v][1], dz = vpos[v][2] - 80, q2 = dy * dy + dz * dz;
-            if ((q2 >= 25 || vpos[v][0] < 0) && dist3(x, vpos[v]) > 0.01f) far_moved++;
-            if (q2 < 20 && vpos[v][0] > 6.5f) { if (x[0] > 6.2f) off_floor++; else floored++; }
-        }
-        printf("rupture: %d on the floor, %d left above it, %d moved outside it, sums %d\n", floored, off_floor, far_moved, sums);
-        modebad |= off_floor || floored < 3 || far_moved || sums || !strstr(lastres, " dented=");
-        skin_restore(0);
+        skin_mark((u64)comp_buf, 0, hp, hn, 30);
+        printf("mark: %.160s\n", lastres);
+        float h[3] = { 0 }, n[3] = { 0 };
+        int bone = -1;
+        int got = sscanf(lastres, "ok hit=%f,%f,%f n=%f,%f,%f bone=%d", h, h + 1, h + 2, n, n + 1, n + 2, &bone);
+        modebad |= got != 7 || h[0] < 7.5f || h[0] > 8.5f || n[0] < 90 || bone < 0 || override_w;
     }
     // PLANE through the knee region for the calf alone: the calf has no helper to collapse its side onto, so its
     // side of the seam vanishes into the body's sink instead of stretching when the calf flies off
     float pp2[3] = { 0, 0, 40 }, pn2[3] = { 0, 0, -1 };
     free(override_w); override_w = 0;
-    skin_cut((u64)comp_buf, 0, CALF, pp2, pn2, MODE_PLANE, 10, 0, -1, 0);
+    skin_cut((u64)comp_buf, 0, CALF, pp2, pn2, MODE_PLANE, 10, 0, -1);
     skin_collapse();
     printf("plane: %.200s\n", lastres);
     {
@@ -318,7 +283,7 @@ int main(void)
     // WHOLE: everything follows the thigh, its opening is the band at the top of what is near the axis
     free(override_w); override_w = 0;
     float wp[3] = { 0, 0, 200 }, wn[3] = { 0, 0, -1 };
-    skin_cut((u64)comp_buf, 0, THIGH, wp, wn, MODE_WHOLE, 0, 0, -1, 0);
+    skin_cut((u64)comp_buf, 0, THIGH, wp, wn, MODE_WHOLE, 0, 0, -1);
     printf("whole: %.200s\n", lastres);
     {
         int follow = 0;
@@ -336,7 +301,7 @@ int main(void)
     {
         free(override_w); override_w = 0;
         float cp[3] = { 0, 0, 52 }, cn[3] = { 0, 0, -1 };
-        skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1, 0);
+        skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1);
         int moved = 0; char *sm = strstr(lastres, "sinkmoved="); if (sm) sscanf(sm + 10, "%d", &moved);
         skin_collapse();
         float top = -1e9f; int on = 0;
@@ -366,7 +331,7 @@ int main(void)
         *(u64 *)(comp_buf + SC_MASTER_BONE_MAP) = (u64)mmap6; *(int *)(comp_buf + SC_MASTER_BONE_MAP + 8) = NB;
         free(override_w); override_w = 0;
         float sp[3] = { 0, 0, 50 }, sn[3] = { 1, 0, 0 };
-        skin_cut((u64)comp_buf, 0, SPINE, sp, sn, MODE_SIDE, 0, SPINE_HELP, SPINE, 0);
+        skin_cut((u64)comp_buf, 0, SPINE, sp, sn, MODE_SIDE, 0, SPINE_HELP, SPINE);
         printf("side: %.300s\n", lastres);
         int gone = 0, kept_bad = 0, nb8 = *(int *)(sec + SEC_BONE_MAP + 8), bands = 0;
         for (int v = 0; v < NV; v++) {
@@ -414,7 +379,7 @@ int main(void)
         free(override_w); override_w = 0;
         limbs_comp = (u64)comp_buf; ngone = 1; gone_roots[0] = THIGH; nkeep = 0;
         float sp[3] = { 0, 0, 50 }, sn[3] = { 1, 0, 0 };
-        skin_cut((u64)comp_buf, 0, SPINE, sp, sn, MODE_SIDE, 0, 0, -1, 0);
+        skin_cut((u64)comp_buf, 0, SPINE, sp, sn, MODE_SIDE, 0, 0, -1);
         printf("bands: %.200s\n", lastres);
         int proj = 0, point = 0; char *q;
         if ((q = strstr(lastres, " proj="))) sscanf(q + 6, "%d", &proj);
@@ -443,7 +408,7 @@ int main(void)
         float qz[4] = { 0, 0, 0.70710678f, 0.70710678f };
         for (int i = 0; i < NB; i++) for (int k = 0; k < 4; k++) space[i * 12 + k] = qz[k];
         float sn2[3] = { 0, 1, 0 };
-        skin_cut((u64)comp_buf, 0, SPINE, sp, sn2, MODE_SIDE, 0, 0, -1, 0);
+        skin_cut((u64)comp_buf, 0, SPINE, sp, sn2, MODE_SIDE, 0, 0, -1);
         skin_collapse();
         int off2 = 0;
         for (int v = 0; v < NV; v++) {
@@ -460,7 +425,7 @@ int main(void)
         // across the body (the blade level at z 80, the top kept): everything below ends on the plane, inside the opening
         free(override_w); override_w = 0;
         float hp3[3] = { 0, 0, 80 }, hn3[3] = { 0, 0, 1 };
-        skin_cut((u64)comp_buf, 0, SPINE, hp3, hn3, MODE_SIDE, 0, 0, -1, 0);
+        skin_cut((u64)comp_buf, 0, SPINE, hp3, hn3, MODE_SIDE, 0, 0, -1);
         printf("across: %.140s\n", lastres);
         skin_collapse();
         int off3 = 0, out3 = 0, moved3 = 0;
@@ -481,7 +446,7 @@ int main(void)
         free(override_w); override_w = 0;
         nosink_mesh = (u64)sm_buf; nosink[THIGH_HELP] = nosink[PELVIS_HELP] = 1;
         float cp[3] = { 0, 0, 57 }, cn[3] = { 0, 0, -1 };
-        skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1, 0);
+        skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1);
         int bad_ns = 0;
         for (int i = 0; i < nsinks; i++) bad_ns += nosink[sinks[i].bone];
         printf("nosink: %.120s -> %d forbidden sinks\n", lastres, bad_ns);
@@ -527,7 +492,7 @@ int main(void)
 
         free(override_w); override_w = 0;
         float cp[3] = { 0, 0, 57 }, cn[3] = { 0, 0, -1 };
-        skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1, 0);
+        skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1);
         printf("pieces: %.160s\n", strstr(lastres, " pieces=") ? strstr(lastres, " pieces=") : lastres);
         skin_collapse();
         int a_bad = 0, a_off = 0, b_bad = 0, b_off = 0;
@@ -558,31 +523,6 @@ int main(void)
         printf("pieces: strap A cut (%d leg or sink weights over the cut, %d off its side), strap B along with the leg (%d not on leg bones, %d not moved)\n",
                a_bad, a_off, b_bad, b_off);
         modebad |= a_bad || a_off || b_bad || b_off || !strstr(lastres, " pieces=1");
-        skin_restore(0);
-
-        // a hole where the ray comes out through the plate: the plate stays, the skin under it gets the hole
-        free(override_w); override_w = 0;
-        float hp[3] = { 0, 0, 80 }, hn[3] = { 1, 0, 0 };
-        skin_cut((u64)comp_buf, 0, SPINE, hp, hn, MODE_HOLE, 4, 0, -1, 0);
-        skin_collapse();
-        int plate_hit = 0, skin_hit = 0;
-        for (int v = pb; v < pb + 9; v++) plate_hit += override_w[v].weights[0] == 255 && is_sink(&sc, override_w[v].bones[0]);
-        for (int v = 0; v < NV; v++) skin_hit += override_w[v].weights[0] == 255 && is_sink(&sc, override_w[v].bones[0]);
-        float hx = 0; char *q = strstr(lastres, " hit="); if (q) sscanf(q + 5, "%f", &hx);
-        printf("layers: plate verts holed %d, skin verts holed %d, hit x %.1f, %s\n", plate_hit, skin_hit, hx,
-               strstr(lastres, " layersoff=") ? strstr(lastres, " layersoff=") + 1 : "?");
-        modebad |= plate_hit || !skin_hit || hx < 7.5f || hx > 8.5f || !strstr(lastres, " layersoff=1");
-        skin_restore(0);
-
-        // a dent there: the plate stays as it is, the skin under it is pressed in
-        free(override_w); override_w = 0;
-        skin_cut((u64)comp_buf, 0, SPINE, hp, hn, MODE_DENT, 5, 0, -1, 2);
-        skin_collapse();
-        int plate_moved = 0, skin_in = 0;
-        for (int v = pb; v < pb + 9; v++) { float x[3]; skin(&override_w[v], xpos[v], x); plate_moved += dist3(x, xpos[v]) > 0.01f; }
-        for (int v = 0; v < NV; v++) { float x[3]; skin(&override_w[v], xpos[v], x); skin_in += x[0] < xpos[v][0] - 0.01f; }
-        printf("dent layers: plate verts moved %d, skin verts pressed in %d\n", plate_moved, skin_in);
-        modebad |= plate_moved || !skin_in;
         skin_restore(0);
 
         *(u64 *)(ld + LOD_SECTIONS) = (u64)sec_buf; *(int *)(ld + LOD_SECTIONS + 8) = 1;
