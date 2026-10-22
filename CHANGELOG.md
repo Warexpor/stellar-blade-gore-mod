@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Licensed under GPL-3.0 (`LICENSE`); `third_party/` keeps its authors' terms.
 - `tune.gore.probes` is off again: the stretch probe found what flashed (bones the GPU doesn't skin), and its stutter after every cut is gone.
 - The leaned split shaved off the far side of her neck's lower half (playtest render): the neck plane sat halfway up the neck. It sits at the neck's base now, and her half keeps the neck whole, only the neck's width (`NECK_BASE_R`, 7 cm) under halfway to the head bone and her collar's 10 cm above; the strip under it on the far side closes into the neck under its lid. 10 cm wide at the base, it kept the far trapezius, stretched to where the dropped arm collapsed.
 - The split's head half kept both arms, one cut through at the shoulder (playtest, `limbs Bip001-L-Clavicle,Bip001-R-Clavicle,...`): `limb_sides` sorted the arms by a later `LIMB_ROOTS` holding the clavicles, which sit by the neck, so a plane leaned beside it had both on one side. A split sorts them by the shoulder joint again (`SPLIT_LIMBS`, as the harness always did), its grazing check and its accessory chains too.
