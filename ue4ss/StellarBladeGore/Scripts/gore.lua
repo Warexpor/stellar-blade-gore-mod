@@ -1607,16 +1607,36 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   end
   -- the chains that stay on the body ("g": no gone roots, then them); always sent, so an earlier split's limbs aren't
   -- taken for them
-  local kept = {}
-  if part.kind == "limb" and (part.mode == nil or part.mode == MODE.cut) then
-    kept = kept_chains(mesh, bone, a, b)
+  -- and the limbs an earlier cut took off that hang under this one (drop roots): their skin goes with this piece
+  -- wherever it lies. Playtest 41: an arm, then the chest along the same blade; the flying arm lay across the chest's
+  -- plane, the half on her side lost its weights to her spine and long sheets ran from her to the hand
+  local kept, gone = {}, {}
+  if (part.kind == "limb" or part.kind == "torso") and (part.mode == nil or part.mode == MODE.cut) then
+    if part.kind == "limb" then kept = kept_chains(mesh, bone, a, b) end
+    local tree, ma = M.bone_tree(mesh), addr(mesh)
+    for _, c in ipairs(cuts) do
+      if c.addr == ma and c.bone ~= bone and PARTS[c.bone] then
+        local inside = tree and tree.index[c.bone] and M.under(tree, tree.index[c.bone], bone)
+        if inside == nil then inside = try(function() return mesh:BoneIsChildOf(FName(c.bone), FName(bone)) end) == true end
+        if inside then gone[#gone + 1] = c.bone end
+      end
+    end
     local f = { string.format("g%x", mesh:GetAddress()) }
-    if #kept > 0 then
+    if #kept > 0 or #gone > 0 then
       f[#f + 1] = "0"
       for _, c in ipairs(kept) do
         local i = try(function() return mesh:GetBoneIndex(FName(c)) end)
         if i and i > 0 then f[#f + 1] = string.format("%x", i) end
       end
+    end
+    if #gone > 0 then
+      f[#f + 1] = "0"
+      f[#f + 1] = "0"
+      for _, c in ipairs(gone) do
+        local i = try(function() return mesh:GetBoneIndex(FName(c)) end)
+        if i and i > 0 then f[#f + 1] = string.format("%x", i) end
+      end
+      log(string.format("cut %s: goes with %s, cut off before, wherever it lies", bone, table.concat(gone, ", ")))
     end
     command(table.concat(f, ","))
   end
@@ -1722,6 +1742,7 @@ end
 
 -- stage 1b, the next tick: the caps and stubs (hidden till the opening). In the cut's own tick they made its frame
 -- 20 ms longer, and a killing blow's two or three cuts stuttered one after another (twenty-ninth playtest)
+-- (and the caps and the stubs a tick each: together they were 23-29 ms, playtest 41)
 function M.stage_caps(q)
   M.posed = q.posed
   if cfg().caps ~= false then
@@ -1729,6 +1750,10 @@ function M.stage_caps(q)
     q.caps[2], q.kinds[2] = cap(q.pawn, q.mesh, q.ol, q.rideL)
     mark("caps")
   end
+  M.posed = nil
+end
+function M.stage_stubs(q)
+  M.posed = q.posed
   -- a bone in both stumps (the head's: the neck's spine); its look (spine or limb bone) goes by the cut's bones
   if cfg().caps ~= false then
     local spine = not (PARTS[q.bone] and PARTS[q.bone].kind == "limb")
@@ -2007,10 +2032,14 @@ local function stage_open(q)
     q.pawn, q.c.at)
   if g.blood ~= false then
     -- bleed from both openings, for a while: from the cap, which rides on that side's bone, else from the
-    -- opening's centre on the bone; oriented like that bone (the effect was made for bone attachment)
+    -- opening's centre on the bone; oriented like that bone (the effect was made for bone attachment). The next
+    -- tick: it was 10-15 ms of the opening's frame (playtest 41)
     local left = math.floor((g.bleedTime or 2.5) / TICK_S + 0.5)
-    if q.parent then bleed_from(q, q.caps[1], q.ob, q.rideB or q.parent, left) end
-    bleed_from(q, q.caps[2], q.ol, q.rideL or q.bone, left)
+    later[#later + 1] = { n = 1, fn = function()
+      if not valid(q.mesh) then return end
+      if q.parent then bleed_from(q, q.caps[1], q.ob, q.rideB or q.parent, left) end
+      bleed_from(q, q.caps[2], q.ol, q.rideL or q.bone, left)
+    end }
   end
   mark("sound, bleed")
   log(string.format("%s off (%s): %s, constraint broken=%s, caps %s / %s%s", q.bone, q.why, k, tostring(broke == true),
@@ -2024,7 +2053,7 @@ local function stage_open(q)
     end
     while anchor and not has[anchor] do anchor = parent_bone(q.mesh, anchor) end
     -- (diagnostics: the stretch probe skins every vertex on the CPU, a stutter of its own; tune.gore.probes)
-    if cfg().probes then limb_watch = { mesh = q.mesh, bone = q.bone, kept = q.c.kept or {}, anchor = anchor, n = 0 } end
+    if cfg().probes or ctx.tune.dev then limb_watch = { mesh = q.mesh, bone = q.bone, kept = q.c.kept or {}, anchor = anchor, n = 0 } end
   end
 end
 
@@ -2619,9 +2648,19 @@ local function stage_split_cut(q)
   send_limbs(q.mesh, q.gone1, keep1, back, SPLIT_RIDE.of(q, q.mesh), q.spine, true)
   local h1 = send_neck(q.mesh, 1)
   local r1 = side_cut(q.mesh, SPLIT_SINK, at, n)
-  send_limbs(q.body2, q.gone2, keep2, front, SPLIT_RIDE.of(q, q.body2), q.spine2, false)
+  -- the copy's cut the next tick (M.stage_split_copy): each cut is the engine building a new skin weight buffer,
+  -- 15-30 ms, and the two in one frame were a stutter at the death (playtest 41). She is held still meanwhile, and
+  -- the new weights show nothing till the opening
+  q.cut1 = { from = from, p = p, h1 = h1, r1 = r1, front = front, back = back, keep2 = keep2, neg = neg }
+  return true
+end
+function M.stage_split_copy(q)
+  local c1 = q.cut1
+  q.cut1 = nil
+  local at, n, from, p, h1, r1, front, back = q.c.at, q.c.n, c1.from, c1.p, c1.h1, c1.r1, c1.front, c1.back
+  send_limbs(q.body2, q.gone2, c1.keep2, front, SPLIT_RIDE.of(q, q.body2), q.spine2, false)
   local h2 = send_neck(q.body2, 2)
-  local r2 = side_cut(q.body2, SPLIT_SINK, at, neg)
+  local r2 = side_cut(q.body2, SPLIT_SINK, at, c1.neg)
   log(string.format("split (%s) at %s normal %s (%s), pose %s, limbs %s | %s, chains %s | %s, spine breaks at %s, neck %s | %s",
     q.why, v3(at), v3(n), from, p, table.concat(q.gone2, ","), table.concat(q.gone1, ","), table.concat(front, ","),
     table.concat(back, ","), tostring(q.spine) .. (q.spine2 ~= q.spine and " (the copy's at " .. tostring(q.spine2) .. ")" or ""), h1, h2))
@@ -2752,8 +2791,11 @@ end
 
 -- the copy becomes a ragdoll of its own and the halves come apart (vel: per bone velocities to start them with, from
 -- an animated split's last frames; else they keep what her ragdoll had)
-local function split_physics(q, vel)
-  local g = cfg()
+-- the copy's physics bodies, kinematic in her pose till split_physics: a tick before the opening (made in the
+-- opening's own tick, with the rest of it, that frame was 55-70 ms, playtest 41)
+function M.split_bodies(q)
+  if q.bodies then return end
+  q.bodies = true
   local b2 = q.body2
   local pa = ctx.physics_of(q.mesh)
   -- the copy was made without collision, so it has no physics bodies: a profile change doesn't create them (only
@@ -2762,8 +2804,14 @@ local function split_physics(q, vel)
   try(function() b2:SetCollisionProfileName(FName("Ragdoll"), true) end)
   -- PhysicsBody = 5: the halves don't collide with each other (or themselves, like her ragdoll)
   try(function() b2:SetCollisionResponseToChannel(5, 0) end)
-  try(function() b2:SetComponentTickEnabled(true) end)
   if pa then try(function() b2:SetPhysicsAsset(pa, true) end) end
+  mark("copy bodies")
+end
+local function split_physics(q, vel)
+  local g = cfg()
+  local b2 = q.body2
+  M.split_bodies(q)
+  try(function() b2:SetComponentTickEnabled(true) end)
   try(function() b2:SetSimulatePhysics(true) end)
   local v = try(function() local x = q.mesh:GetPhysicsLinearVelocity(FName("Bip001-Pelvis")); return vec(x.X, x.Y, x.Z) end)
   if v then try(function() b2:SetAllPhysicsLinearVelocity(v, false) end) end
@@ -2773,11 +2821,15 @@ local function split_physics(q, vel)
     try(function() b2:WakeAllRigidBodies() end)
   end
   local sim2 = try(function() return b2:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true
+  mark("copy simulates")
   rehome(q, b2, q.c.at, q.c.n)
-  if cfg().probes then copy_watch = { comp = b2, her = q.mesh, n = 0, helpers = { her = helper_pose(q.mesh), copy = helper_pose(b2) } } end
+  mark("rehome")
+  if cfg().probes or ctx.tune.dev then copy_watch = { comp = b2, her = q.mesh, n = 0, helpers = { her = helper_pose(q.mesh), copy = helper_pose(b2) } } end
   if ctx.on_copy then try(function() ctx.on_copy(b2) end) end
+  mark("copy masses")
   -- she stood still while it was cut; now both halves fall, before they get pushed apart
   if ctx.on_release then try(function() ctx.on_release() end) end
+  mark("release")
   log(string.format("split copy ragdoll: simulating %s%s, collision %s", tostring(sim2), sim and "" or " (second try)",
     tostring(try(function() return b2:GetCollisionEnabled() end))))
   local at, n = q.c.at, q.c.n
@@ -2788,6 +2840,7 @@ local function split_physics(q, vel)
   local gone2 = { table.unpack(q.gone2 or {}) }
   if not (q.spine and q.spine ~= "Bip001-Head") then gone2[#gone2 + 1] = "Bip001-Head" end
   local b2l = settle_half(b2, at, scale(n, -1), push, gone2, q.spine2, false)
+  mark("halves")
   if ctx.on_cut then for _, b in ipairs(b1) do try(function() ctx.on_cut(q.mesh, b) end) end end
   if ctx.on_broken and q.spine then try(function() ctx.on_broken(q.mesh, q.spine) end) end
   if vel then
@@ -2799,14 +2852,23 @@ local function split_physics(q, vel)
     log(string.format("split: the halves fall on from the animation (%d body velocities)", nv))
   end
   -- a killing blow sends both halves flying the way it hit her (her half stayed put while the cut off one flew)
+  -- (across the waist the upper body flies faster, splitFlyUpper: at 200 it dropped at her feet, playtest 41; it is
+  -- her half, which keeps the head's end)
   local fly = q.fly and (g.splitFly or 350) or 0
   if fly > 0 then
     local v = norm(add(q.fly, vec(0, 0, 0.3))) or q.fly
+    local p0, p1 = bone_loc(q.mesh, "Bip001-Pelvis"), bone_loc(q.mesh, "Bip001-Neck")
+    local axis = p0 and p1 and norm(sub(p1, p0))
+    local up = axis and math.abs(dot(axis, n)) >= 0.6 and q.mesh or nil
+    local upper = math.max(fly, g.splitFlyUpper or fly)
     for _, comp in ipairs({ q.mesh, b2 }) do
-      try(function() comp:AddImpulseToAllBodiesBelow(scale(v, fly), FName("Bip001-Pelvis"), true, true) end)
+      local f = comp == up and upper or fly
+      try(function() comp:AddImpulseToAllBodiesBelow(scale(v, f), FName("Bip001-Pelvis"), true, true) end)
     end
-    log(string.format("split: both halves fly with the blow, %s at %.0f cm/s", v3(v), fly))
+    log(string.format("split: both halves fly with the blow, %s at %.0f cm/s%s", v3(v), fly,
+      up and string.format(", the upper body at %.0f", upper) or ""))
   end
+  mark("fly")
   log(string.format("split falls apart (%s): limbs off %s | %s", q.why, table.concat(b1, ","), table.concat(b2l, ",")))
   local p = q.pieces or {}
   local n1, w1 = hide_gone(p.her, b1)
@@ -2823,6 +2885,7 @@ local function stage_split_open(q)
   place_like(b2, q.mesh)
   local p = command(string.format("p%x,%x", q.mesh:GetAddress(), b2:GetAddress()))
   try(function() b2:SetHiddenInGame(false, false) end)
+  mark("copy shown")
   if q.anim then
     -- an animated split: the copy is posed by her body while her fall plays on, both halves one body yet;
     -- split_tick lets them fall apart after tune.gore.splitAnim seconds
@@ -2872,16 +2935,26 @@ split_stage = function(q)
   if q.stage == "cut" then
     if stage_split_prep(q) then q.stage = "cut2"; q.wait = 2; return end
   elseif q.stage == "cut2" then
-    if stage_split_cut(q) then
+    if stage_split_cut(q) then q.stage = "cut3"; q.wait = 0; return end
+  elseif q.stage == "cut3" then
+    if M.stage_split_copy(q) then
       local function rides(c) local l = { "Bip001-Neck" }; for _, b in ipairs(SPLIT_RIDE.of(q, c) or {}) do l[#l + 1] = b end; return l end
       q.posed = M.snap({ { q.mesh, rides(q.mesh) }, { q.body2, rides(q.body2) } })
       q.stage = "caps"; q.wait = 0; return
     end
   elseif q.stage == "caps" then
+    -- a half's lids a tick (both in one were 35-43 ms), then the copy's physics bodies, made ahead of the opening
     M.posed = q.posed
     split_caps(q, q.mesh, q.r1, q.caps)
+    M.posed = nil
+    q.stage, q.wait = "caps2", 0
+    return
+  elseif q.stage == "caps2" then
+    M.posed = q.posed
     split_caps(q, q.body2, q.r2, q.caps)
     M.posed = nil
+    mark("lids")
+    if not q.anim then M.split_bodies(q) end
     q.stage, q.wait = "open", 1
     return
   elseif q.stage == "open" then
@@ -3501,6 +3574,9 @@ stage_step = function(q)
     release_lods()
   elseif q.stage == "caps" then
     M.stage_caps(q)
+    q.stage, q.wait = "stubs", 0
+  elseif q.stage == "stubs" then
+    M.stage_stubs(q)
     q.stage, q.wait = "open", 1
   else
     pending = nil

@@ -408,7 +408,10 @@ end
 -- SB's ragdoll drags the capsule (and the camera on it) after a bone, RagdollInfo.CapsuleComponentFollowingSocket, a
 -- step every tick: the camera stuttered after her (playtest 38). The data mod clears it in every death show's ragdoll
 -- key, but an animated death that goes ragdoll partway, or a test ragdoll, never runs one, and the default is
--- Bip001-Pelvis. Cleared on every ragdoll tick (tune.capsuleStill); hold.at is where the capsule was at the start
+-- Bip001-Pelvis. Cleared on every ragdoll tick (tune.capsuleStill). Playtest 41: an animated death gone ragdoll still
+-- had the capsule 50-65 cm a tick after her body with the socket None and her movement already MOVE_None (the game
+-- moves the pawn itself; putting it back every tick made the camera strobe), so the view is held instead (below).
+-- The log says how the capsule moves (at most 5 ticks) and how far it went
 local hold = nil
 local function hold_capsule(pawn, sim)
   if tune.capsuleStill == false then return end
@@ -416,18 +419,234 @@ local function hold_capsule(pawn, sim)
   local cur = ri and try(function() return ri.CapsuleComponentFollowingSocket:ToString() end)
   if cur and cur ~= "None" then
     try(function() ri.CapsuleComponentFollowingSocket = FName("None") end)
-    if not (hold and hold.cleared) then log("capsule: the ragdoll had it follow " .. cur .. ", now it stays where she died") end
+    log("capsule: the ragdoll had it follow " .. cur .. ", now it stays where she died")
   end
+  if not hold then hold = { far = 0, logged = 0 } end
   local c = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
-  if not hold then hold = { at = c, far = 0 } end
-  -- the farthest it got while she was ragdolled (recovery's move to her body comes after, and isn't drift)
-  if sim and c and hold.at then hold.far = math.max(hold.far, dist(hold.at, c)) end
-  if cur and cur ~= "None" then hold.cleared = true end
+  if not sim or not c then return end
+  if not hold.at then hold.at, hold.last = c, c end
+  hold.far = math.max(hold.far, dist(hold.at, c))
+  local step = dist(hold.last, c)
+  hold.last = c
+  if step > 2 and hold.logged < 5 then
+    hold.logged = hold.logged + 1
+    log(string.format("capsule: moved %.0f cm this tick (%.0f off where she went limp)", step, dist(hold.at, c)))
+  end
 end
 local function capsule_report()
   local h = hold
   hold = nil
   if h and h.at then log(string.format("capsule: drifted at most %.0f cm during the ragdoll", h.far)) end
+end
+
+-- Playtest 41: the camera followed her body after an animated death went ragdoll (a split, a beheading, a leg): the
+-- game moves her pawn after the ragdoll and the view rides the pawn. Nothing needs following: at a death a still
+-- camera is put where the view is and made the view target, back to her at recovery (tune.cameraStill). The log says
+-- where the view is against her capsule and head for 3 s
+local camHeld = nil -- { pc, cam, pawn, mesh, d, pitch, yaw, t, pivot, home, from, turned, free, placed }
+local function fwd(r)
+  local p, y = math.rad(r.Pitch), math.rad(r.Yaw)
+  return { X = math.cos(p) * math.cos(y), Y = math.cos(p) * math.sin(y), Z = math.sin(p) }
+end
+local camWatch = nil -- { t0, n }
+local PELVIS = FName("Bip001-Pelvis")
+local function camera_pelvis(h)
+  return valid(h.mesh) and try(function() local v = h.mesh:GetSocketLocation(PELVIS); return { X = v.X, Y = v.Y } end)
+end
+local function camera_hold(pawn)
+  camWatch = { t0 = os.clock(), n = 0 }
+  if tune.cameraStill == false or tune.cameraFollow == true or camHeld then return end
+  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local cls = StaticFindObject("/Script/Engine.CameraActor")
+  local pc = valid(gs) and try(function() return gs:GetPlayerController(pawn, 0) end)
+  local pcm = valid(gs) and try(function() return gs:GetPlayerCameraManager(pawn, 0) end)
+  if not (valid(cls) and valid(pc) and valid(pcm)) then log("camera: no controller or camera manager, the view follows her"); return end
+  local loc = try(function() local v = pcm:GetCameraLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  local rot = try(function() local r = pcm:GetCameraRotation(); return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end)
+  local fov = try(function() return pcm:GetFOVAngle() end)
+  if not (loc and rot) then log("camera: can't read the view, it follows her"); return end
+  local tm = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = loc, Scale3D = { X = 1, Y = 1, Z = 1 } }
+  local cam = try(function()
+    local d = gs:BeginDeferredActorSpawnFromClass(pawn, cls, tm, 1, nil)
+    return gs:FinishSpawningActor(d, tm)
+  end)
+  if not valid(cam) then log("camera: spawn failed, the view follows her"); return end
+  try(function() cam:K2_SetActorLocationAndRotation(loc, rot, false, {}, true) end)
+  local cc = try(function() return cam.CameraComponent end)
+  if valid(cc) then
+    try(function() cc.bConstrainAspectRatio = false end)
+    if fov then try(function() cc:SetFieldOfView(fov) end) end
+  end
+  try(function() pc:SetViewTargetWithBlend(cam, 0, 0, 0, false) end)
+  -- it turns about the point it looked at, where she died (her capsule's distance down the view), all the way round
+  -- either way, with the mouse and the right stick read straight off the controller's input (playtest 41: while she
+  -- is dead the game turns the controller's rotation only sideways, and putting it back each frame didn't take)
+  local cap = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  local d = cap and math.max(dist(loc, cap), 150) or 400
+  local f = fwd(rot)
+  local mesh = try(function() return pawn.Mesh end)
+  camHeld = { pc = pc, cam = cam, pawn = pawn, mesh = mesh, d = d, pitch = rot.Pitch, yaw = rot.Yaw, t = os.clock(),
+    pivot = { X = loc.X + f.X * d, Y = loc.Y + f.Y * d, Z = loc.Z + f.Z * d } }
+  camHeld.from = camera_pelvis(camHeld)
+  camHeld.home = { X = camHeld.pivot.X, Y = camHeld.pivot.Y, Z = camHeld.pivot.Z }
+  log(string.format("camera: view held at %s (fov %s) till she gets up, target %s", v3(loc), tostring(fov),
+    name(try(function() return pcm.ViewTarget.Target end))))
+end
+local function wrap(a) a = (a + 180) % 360 - 180; return a end
+local ks = nil
+-- every frame (game_tick): the held view turned about its point by the mouse (tune.cameraMouse degrees a unit of mouse
+-- input) and the right stick (tune.cameraStick degrees a second at full tilt), the point flown about by WASD, Q/E and
+-- the left stick and triggers (tune.cameraMove cm a second, Shift tune.cameraFast times that, no further than
+-- tune.cameraRange from where it started), kept out of walls (traces on the Camera channel, her and the camera
+-- ignored: the point stops 10 cm short of what it would fly into, the view 10 cm short of what is between them)
+local function K(n) return { KeyName = FName(n) } end
+local KEYS = { mx = K("MouseX"), my = K("MouseY"), sx = K("Gamepad_RightX"), sy = K("Gamepad_RightY"),
+  lx = K("Gamepad_LeftX"), ly = K("Gamepad_LeftY"), lt = K("Gamepad_LeftTriggerAxis"), rt = K("Gamepad_RightTriggerAxis"),
+  w = K("W"), a = K("A"), s = K("S"), d = K("D"), q = K("Q"), e = K("E"), shift = K("LeftShift") }
+local function axis(pc, k) return try(function() return pc:GetInputAnalogKeyState(k) end) or 0 end
+local function down(pc, k) return try(function() return pc:IsInputKeyDown(k) end) and 1 or 0 end
+local function dead(v) return math.abs(v) < 0.15 and 0 or v end
+-- where a Camera-channel trace from a to b first hits, or nil
+local function camera_trace(h, a, b)
+  if not valid(ks) then ks = try(function() return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary") end) end
+  if not valid(ks) then return nil end
+  local hit = {}
+  local blocked = try(function()
+    return ks:LineTraceSingle(h.cam, a, b, 1, false, { h.pawn, h.cam }, 0, hit, true,
+      { R = 1, G = 0, B = 0, A = 1 }, { R = 0, G = 1, B = 0, A = 1 }, 0)
+  end)
+  return blocked and try(function() local l = hit.Location; return { X = l.X, Y = l.Y, Z = l.Z } end) or nil
+end
+-- a point 10 cm short of where the way from a towards b (dir, len) is blocked, or b
+local function camera_short(h, a, dir, len)
+  local b = { X = a.X + dir.X * len, Y = a.Y + dir.Y * len, Z = a.Z + dir.Z * len }
+  local at = camera_trace(h, a, b)
+  if not at then return b end
+  local l = math.max(dist(a, at) - 10, 0)
+  return { X = a.X + dir.X * l, Y = a.Y + dir.Y * l, Z = a.Z + dir.Z * l }
+end
+local function camera_orbit()
+  local h = camHeld
+  if not (h and valid(h.cam) and valid(h.pc)) then return end
+  local now = os.clock()
+  local dt = math.min(now - h.t, 0.1)
+  h.t = now
+  local pc = h.pc
+  local mx, my, sx, sy = axis(pc, KEYS.mx), axis(pc, KEYS.my), dead(axis(pc, KEYS.sx)), dead(axis(pc, KEYS.sy))
+  local km, kst = tune.cameraMouse or 3, tune.cameraStick or 150
+  local dy = mx * km + sx * kst * dt
+  local dp = my * km + sy * kst * dt
+  if not h.turned and (dy ~= 0 or dp ~= 0) then
+    h.turned = true
+    log(string.format("camera: turning with the player (mouse %.2f %.2f, stick %.2f %.2f)", mx, my, sx, sy))
+  end
+  h.yaw, h.pitch = wrap(h.yaw + dy), wrap(h.pitch + dp)
+  -- past straight up or down the view goes on over the top, upside down
+  local rot = { Pitch = h.pitch, Yaw = h.yaw, Roll = 0 }
+  local f = fwd(rot)
+  -- flying: forward along the view, sideways on the level (flipped upside down), up and down in the world
+  local mf = down(pc, KEYS.w) - down(pc, KEYS.s) + dead(axis(pc, KEYS.ly))
+  local mr = down(pc, KEYS.d) - down(pc, KEYS.a) + dead(axis(pc, KEYS.lx))
+  local mu = down(pc, KEYS.e) - down(pc, KEYS.q) + dead(axis(pc, KEYS.rt)) - dead(axis(pc, KEYS.lt))
+  local moved = false
+  -- not till every key that flies it has been let go once: she died running, W still down, and it flew off at once
+  if not h.armed then h.armed = mf == 0 and mr == 0 and mu == 0 end
+  if h.armed and (mf ~= 0 or mr ~= 0 or mu ~= 0) then
+    local y, flip = math.rad(h.yaw), math.cos(math.rad(h.pitch)) < 0 and -1 or 1
+    local v = { X = f.X * mf - math.sin(y) * flip * mr, Y = f.Y * mf + math.cos(y) * flip * mr, Z = f.Z * mf + mu }
+    local l = math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+    local step = math.min(l, 1) * (tune.cameraMove or 400) * (down(pc, KEYS.shift) == 1 and (tune.cameraFast or 3) or 1) * dt
+    if l > 0 and step > 0 then
+      local dir = { X = v.X / l, Y = v.Y / l, Z = v.Z / l }
+      local to = camera_short(h, h.pivot, dir, step)
+      local range = tune.cameraRange or 1500
+      local o = { X = to.X - h.home.X, Y = to.Y - h.home.Y, Z = to.Z - h.home.Z }
+      local r = math.sqrt(o.X * o.X + o.Y * o.Y + o.Z * o.Z)
+      if r > range then to = { X = h.home.X + o.X * range / r, Y = h.home.Y + o.Y * range / r, Z = h.home.Z + o.Z * range / r } end
+      if not h.free then h.free = true; log("camera: flying free (it stops sliding after her)") end
+      h.pivot, moved = to, true
+    end
+  end
+  -- till then it slides after her pelvis on the level (tune.cameraTrack): the point it turns about moves by as much as
+  -- her pelvis has since she died, eased in, height kept
+  local rate = tune.cameraTrack or 2.5
+  local p = not h.free and rate > 0 and h.from and camera_pelvis(h)
+  if p then
+    local k = 1 - math.exp(-rate * dt)
+    local ox, oy = (p.X - h.from.X) * k, (p.Y - h.from.Y) * k
+    if ox * ox + oy * oy > 0.0001 then
+      h.from.X, h.from.Y = h.from.X + ox, h.from.Y + oy
+      h.pivot.X, h.pivot.Y = h.pivot.X + ox, h.pivot.Y + oy
+      h.home.X, h.home.Y = h.home.X + ox, h.home.Y + oy
+      moved = true
+    end
+  end
+  if dy == 0 and dp == 0 and h.placed and not moved then return end
+  h.placed = true
+  local loc = camera_short(h, h.pivot, { X = -f.X, Y = -f.Y, Z = -f.Z }, h.d)
+  try(function() h.cam:K2_SetActorLocationAndRotation(loc, rot, false, {}, true) end)
+end
+local function camera_release(pawn)
+  local h = camHeld
+  camHeld, camWatch = nil, nil
+  if not h then return end
+  if valid(h.pc) and valid(pawn) then try(function() h.pc:SetViewTargetWithBlend(pawn, 0, 0, 0, false) end) end
+  if valid(h.cam) then try(function() h.cam:K2_DestroyActor() end) end
+  log("camera: view back on her")
+end
+local function camera_watch(pawn, mesh)
+  local w = camWatch
+  if not w or w.n >= 6 then return end
+  local t = os.clock() - w.t0
+  if t < w.n * 0.5 then return end
+  w.n = w.n + 1
+  local cam = try(function()
+    local v = StaticFindObject("/Script/Engine.Default__GameplayStatics"):GetPlayerCameraManager(pawn, 0):GetCameraLocation()
+    return { X = v.X, Y = v.Y, Z = v.Z }
+  end)
+  local c = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  local h = try(function() local v = mesh:GetSocketLocation(FName("Bip001-Head")); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  log(string.format("camera at %.1f s: view%s, %.0f cm from her capsule%s, %.0f from her head%s",
+    t, v3(cam), dist(cam, c), v3(c), dist(cam, h), v3(h)))
+end
+
+-- Esc on a death (tune.deathSkip): the game runs tune.deathSkipSpeed times as fast till its death screen
+-- (WB_MainHUD_Dead) shows, instead of the wait. The mod's own clock for getting her up (recoverAfter) counts the
+-- game's time meanwhile (ahead: game seconds over real ones), so she still gets up under the screen
+local skip, ahead = nil, 0 -- skip: { t0, k, pawn }
+local function time_speed(pawn, k)
+  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  return valid(gs) and valid(pawn) and try(function() gs:SetGlobalTimeDilation(pawn, k); return true end) == true
+end
+local function death_screen()
+  local w = try(function() return FindFirstOf("WB_MainHUD_Dead_C") end)
+  if not valid(w) then return false end
+  local vis = try(function() return w:GetVisibility() end) or 0 -- 1 collapsed, 2 hidden
+  return try(function() return w:IsInViewport() end) == true and vis ~= 1 and vis ~= 2
+end
+local function skip_stop(why)
+  local sk = skip
+  skip = nil
+  if not sk then return end
+  time_speed(valid(sk.pawn) and sk.pawn or find_eve(), 1)
+  log(string.format("death: fast forward off after %.1f s (%s)", os.clock() - sk.t0, why))
+end
+local function skip_start(pawn)
+  -- a real death only: the test ragdolls (F7, saved.collision) have no death screen
+  if tune.deathSkip == false or skip or not active or saved.collision or not valid(pawn) then return end
+  if death_screen() then log("death: Esc, the death screen is up already"); return end
+  local k = tune.deathSkipSpeed or 6
+  if not time_speed(pawn, k) then log("death: Esc, the game's speed can't be set"); return end
+  skip = { t0 = os.clock(), k = k, pawn = pawn }
+  log(string.format("death: Esc, fast forward x%.0f to the death screen", k))
+end
+-- every tick of the ragdoll: the game's time it ran ahead, and the fast forward off once the screen shows (or the
+-- game's time is past getting her up, with no screen seen: a test death)
+local function skip_tick()
+  if not skip then return end
+  ahead = ahead + (skip.k - 1) * POLL_MS / 1000
+  if death_screen() then skip_stop("the death screen is up")
+  elseif polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10) then skip_stop("no death screen seen") end
 end
 
 local function on_start(pawn, mesh)
@@ -438,8 +657,9 @@ local function on_start(pawn, mesh)
   no_snapshot(pawn)
   hold = nil
   hold_capsule(pawn)
+  camera_hold(pawn)
   deaths = deaths + 1
-  active, polls = true, 0
+  active, polls, ahead = true, 0, 0
   saved = { meshPB = try(function() return mesh:GetCollisionResponseToChannel(CH.PhysicsBody) end) }
   -- "auto": the data mod fixes the collision table of every outfit's physics asset (mod/ragdoll_spec.json,
   -- "outfits"), so those keep self-collision (limbs can't pass through each other); vanilla ones (outfit mods
@@ -614,6 +834,8 @@ local function on_end(pawn, mesh)
   after, lastRecover, respawned = 0, -100, false
   camera_unfollow()
   capsule_report()
+  camera_release(pawn)
+  skip_stop("she got up")
   dface.stop()
   try(function() mesh:SetCollisionResponseToChannel(CH.PhysicsBody, saved.meshPB or BLOCK) end)
   if valid(saved.hair) and saved.hairEnabled then try(function() saved.hair:SetCollisionEnabled(saved.hairEnabled) end) end
@@ -1446,6 +1668,8 @@ RegisterKeyBind(Key.F7, on_key("F7", sandbox_ragdoll, true))
 RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face, true))
 RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover, true))
 RegisterKeyBind(Key.F6, on_key("F6", load_tune))
+-- Esc on her death: fast forward to the death screen (tune.deathSkip; parked for now, untested)
+-- RegisterKeyBind(Key.ESCAPE, on_key("Esc", function() if active then skip_start(find_eve()) end end))
 RegisterKeyBind(Key.F9, on_key("F9", sandbox_slice, true))
 -- F10: a living hit's mark on a part at random, on its side facing the camera (tune.gore.hitMarks)
 RegisterKeyBind(Key.F10, on_key("F10", function()
@@ -1658,7 +1882,7 @@ local function tick()
     end
   end
   if active and sim then camera_follow(pawn, mesh) end
-  if active then hold_capsule(pawn, sim) end
+  if active then hold_capsule(pawn, sim); camera_watch(pawn, mesh) end
   -- the outfit she has on, whenever she is animated (the respawn window included: an outfit put on right after a
   -- reset went unchecked, fifteenth playtest)
   if physfix and not sim and not active then physfix.check(pawn, mesh, false) end
@@ -1750,10 +1974,12 @@ local function tick()
     if l and r then rel.loc, rel.rot = copy3(l, XYZ), copy3(r, PYR) end
   end
 
-  if active and polls * POLL_MS / 1000 >= (tune.recoverAfter or 10) then
+  if active then skip_tick() end
+  if active and polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10) then
     -- get her up ourselves while the death screen covers it; the sandbox (F8) recovery always worked,
     -- the one after the game's respawn never did
-    log(string.format("recovering after %.1f s of ragdoll, before the game respawns her", polls * POLL_MS / 1000))
+    log(string.format("recovering after %.1f s of ragdoll (%.1f of the game's), before the game respawns her",
+      polls * POLL_MS / 1000, polls * POLL_MS / 1000 + ahead))
     try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
     try(function() mesh:SetSimulatePhysics(false) end)
     on_end(pawn, mesh)
@@ -1796,6 +2022,9 @@ local function forget_world()
   swing_drop(); swingBones = {}
   chars, charsSeeded = {}, false
   followed = nil
+  -- (the still camera went with the old level; the new controller looks through its own pawn)
+  camHeld, camWatch, hold = nil, nil, nil
+  skip, ahead = nil, 0
   -- the old face may be gone: dropped without touching it
   dface.on, dface.known, faceCheck = nil, {}, nil
   if gore then gore.forget() end
@@ -1836,6 +2065,7 @@ local function game_tick(ctx)
   end
   for _, fn in ipairs(pending) do fn() end
   pending = {}
+  if camHeld then camera_orbit() end
   if now < nextTick then return end
   nextTick = now + POLL_MS / 1000
   local ok, err = xpcall(tick, debug and debug.traceback or tostring)

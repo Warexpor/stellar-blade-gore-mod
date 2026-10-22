@@ -43,6 +43,11 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.death` | 30 / 22 / 38 / 10 | Odds of a limb, a beheading, a waist cut or a split down the middle, when the blow doesn't decide. |
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
+| `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster. It slides smoothly after her body till you fly it, and stops short of walls. |
+| `cameraMouse` / `cameraStick` | 3 / 150 | Its mouse and stick speed. |
+| `cameraTrack` | 2.5 | How closely it slides after her (0: it stays where she died). |
+| `cameraMove` | 400 | Flying speed, cm a second (up to 15 m from where it started). |
+<!-- | `deathSkip` | `true` | Esc on her death fast forwards to the death screen instead of the wait. | -->
 | `enemies.enabled` | `true` | Cuts on the humanoid enemies you kill. |
 | `dev` | `false` | Test keys, the enemy spawner and the glass cannon mode (see below). |
 

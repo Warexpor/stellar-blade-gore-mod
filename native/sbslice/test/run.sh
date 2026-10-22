@@ -59,6 +59,11 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       fi
       on waist && jobs+=("real waist cut $m$p|WAIST=1 POSED=$posed|$m")
       on waist && [[ -z $posed ]] && jobs+=("real waist cut $m after the left arm|WAIST=1 ARMFIRST=1|$m")
+      # the arm and its cape (cut off on their own, as gore.lua does) flown across the plane or under it when the body
+      # is cut after them (playtest 41: an arm, then the chest): none of their skin may move
+      on waist && [[ -z $posed && $m == CH_P_EVE_09 ]] && for up in 15 -30; do
+        jobs+=("real waist cut $m after the left arm and its cape, flung $up cm off the plane|WAIST=1 ARMFIRST=1 ARMCAPE=1 ARMFLUNG=$up|$m")
+      done
       if on arm; then
         jobs+=("real arm cut $m (cape cut off)$p|ARM=1 POSED=$posed|$m" "real arm cut $m (cape kept on the body)$p|ARM=1 KEEPCAPE=1 POSED=$posed|$m")
       fi

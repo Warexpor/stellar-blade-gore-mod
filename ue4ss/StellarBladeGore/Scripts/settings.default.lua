@@ -21,6 +21,14 @@ return {
       enabled = true,          -- her own death cry (false: the game's death voice only)
     },
   },
+  cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, and fly it with
+                               -- WASD, Q/E (down/up), Shift (faster) or the left stick and triggers, till the death
+                               -- screen (false: the game's own camera, which jerks after her body)
+  cameraMouse = 3,             --   mouse speed
+  cameraStick = 150,           --   right stick speed, degrees a second
+  cameraTrack = 2.5,           --   how closely it slides after her body, on the level, till you fly it (0: it stays put)
+  cameraMove = 400,            --   flying speed, cm a second
+  -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill
   },

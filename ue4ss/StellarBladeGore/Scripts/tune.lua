@@ -19,6 +19,20 @@ return {
   recoverAfter = 9,            -- seconds of ragdoll before the script gets her up (the death screen, 8 s in, covers it)
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
                                -- after her pelvis a step a tick and the camera stuttered after her (playtest 38)
+  cameraStill = true,          -- at a death the view holds still where it is till she gets up: the game moves her pawn
+                               -- after the ragdoll and the view rode it, jerking after her body (playtest 41)
+  cameraMouse = 3,             --   the held view turns this many degrees a unit of mouse input, all the way round, up and
+                               --   down (SB reads about 0.06 a frame for a slow move)
+  cameraStick = 150,           --   and this many degrees a second at the right stick's full tilt
+  cameraTrack = 2.5,           --   it slides sideways after her pelvis, never up or down, closing this share of the gap a
+                               --   second (smoothed, so her ragdoll's shakes don't reach it; 0: it stays put)
+  cameraMove = 400,            --   WASD, Q/E (down/up) and the left stick and triggers fly it this many cm a second
+                               --   (once flown it stops sliding after her)
+  cameraFast = 3,              --   this many times faster with Shift
+  cameraRange = 1500,          --   no further than this many cm from where it started
+  deathSkip = true,            -- Esc on her death fast forwards the game to its death screen instead of the wait
+                               -- (parked for now: its key is commented out in main.lua)
+  deathSkipSpeed = 6,          --   this many times as fast till the screen shows
   cameraFollow = false,        -- during a ragdoll her capsule (and the camera on it) drifts after her body, loosely
                                -- (off: it fought how the death plays out, and the game died a second after it moved
                                -- the capsule of a really dead Eve, thirteenth playtest)
@@ -109,7 +123,7 @@ return {
     splitLidSkin = true,       -- the lid in one piece that bends with her spine (false: a rigid piece per spine bone,
                                --   which cracked into shards as she bent)
     splitLidFollow = 12,       -- seconds the bending lid follows her (then it stays as it lies)
-    probes = false,            -- diagnostics after a split or limb cut: the stretch probe (skins every vertex on the
+    probes = false,            -- (on with dev too) diagnostics after a split or limb cut: the stretch probe (skins every vertex on the
                                --   CPU at 0.5 and 2 s, a stutter of its own) and the helper drift
     slowMs = 15,               -- a split stage or sbslice command taking this long is logged (stutter hunt)
     splitAnim = 0,             -- a split on her death fall (tune.active.animated): both halves play on with the fall for
@@ -167,6 +181,7 @@ return {
     throwTicks = 3,           -- ticks after a cut the piece is kept at least as fast as its throw (the throw went in
                                --   the tick its bodies started simulating and was mostly lost)
     splitFly = 200,            -- cm/s both halves of a death split fly with, the way the blow went
+    splitFlyUpper = 450,       --   and the upper body of one across the waist (at 200 it dropped at her feet)
     caps = true,               -- flesh caps over both openings
     capScale = 1.05,           -- cap size relative to the opening's outline (1 = ends exactly on the skin)
     boneStubs = true,          -- a snapped bone (the game's GM_Brokenbone) in each limb and neck stump

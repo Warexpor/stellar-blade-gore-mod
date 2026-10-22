@@ -1104,18 +1104,73 @@ int main(int argc, char **argv)
         for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
         // ARMFIRST=1: the left upper arm came off first, as a killing swing through her raised arm that goes on into
         // her body (multiCut's body follow-through): the arm cut and its collapse, then the waist cut as usual
+        int ua = -1;
+        float *armx = 0;
+        unsigned char *armsub = 0;
         if (env_on("ARMFIRST")) {
-            int ua = bone("Bip001-L-UpperArm"), fa = bone("Bip001-L-Forearm");
+            ua = bone("Bip001-L-UpperArm");
+            int fa = bone("Bip001-L-Forearm");
             if (ua < 0 || fa < 0) { fprintf(stderr, "no left arm\n"); return 1; }
             float *ap = space + ua * 12 + 4, *bp = space + fa * 12 + 4, aat[3], an[3], al = 0;
             for (int k = 0; k < 3; k++) { aat[k] = ap[k] + (bp[k] - ap[k]) * 0.4f; an[k] = bp[k] - ap[k]; al += an[k] * an[k]; }
             for (int k = 0; k < 3; k++) an[k] /= __builtin_sqrtf(al);
             set_nosink(); other_limbs_nosink(ua);
+            // ARMCAPE=1: as gore.lua: the cape kept on the body by the arm cut, then cut off at its top as a piece of
+            // its own (tune.gore.chains "detach")
+            int capeb = env_on("ARMCAPE") ? bone("Ab_CapeL01") : -1;
+            if (env_on("ARMCAPE") && capeb < 0) { printf("FAIL: no Ab_CapeL01\n"); return 1; }
             limbs_comp = (u64)comp_a; ngone = 0; nkeep = 0; nride = 0; ndrop = 0;
+            if (capeb >= 0) keep_roots[nkeep++] = capeb;
             skin_cut((u64)comp_a, 0, ua, aat, an, MODE_CUT, 0, 0, -1);
             printf("arm first: %.200s\n", lastres);
             if (strncmp(lastres, "ok", 2)) { printf("FAIL: the arm cut first failed\n"); return 1; }
             skin_collapse();
+            if (capeb >= 0) {
+                float *cp = space + bparent[capeb] * 12 + 4, *ct = space + capeb * 12 + 4, cn[3], cl = 0, cat[3];
+                for (int k = 0; k < 3; k++) { cat[k] = cp[k]; cn[k] = ct[k] - cp[k]; cl += cn[k] * cn[k]; }
+                for (int k = 0; k < 3; k++) cn[k] /= __builtin_sqrtf(cl);
+                set_nosink();
+                for (int i = 0; i < NB; i++) {
+                    int inchain = 0, inlimb = 0;
+                    for (int j = i; j >= 0; j = bparent[j]) { if (j == capeb) inchain = 1; if (j == ua) inlimb = 1; }
+                    if (inchain && i != capeb) nosink[i] = 0;
+                    else if (!inchain && inlimb) nosink[i] = 1;
+                }
+                limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0;
+                skin_cut((u64)comp_a, 0, capeb, cat, cn, MODE_CUT, 0, 0, -1);
+                printf("cape off: %.200s\n", lastres);
+                if (strncmp(lastres, "ok", 2)) { printf("FAIL: the cape's cut failed\n"); return 1; }
+                skin_collapse();
+            }
+            // ARMFLUNG=1: the arm flew off and lies across the waist plane when the body is cut (playtest 41: an arm,
+            // then the chest; half the flying arm went to her spine, long sheets from her to the hand). gore.lua names
+            // the cut-off arm a drop root of the body cut (NODROP=1: it doesn't, the bug)
+            if (env_on("ARMFLUNG")) {
+                armsub = calloc(NB, 1);
+                for (int i = 0; i < NB; i++) armsub[i] = i == ua || (bparent[i] >= 0 && armsub[bparent[i]]);
+                float *r0 = space + ua * 12 + 4, side[3] = { r0[0] - at2[0], r0[1] - at2[1], r0[2] - at2[2] };
+                float sd = side[0] * nn[0] + side[1] * nn[1] + side[2] * nn[2], sl = 0;
+                for (int k = 0; k < 3; k++) { side[k] -= nn[k] * sd; sl += side[k] * side[k]; }
+                sl = __builtin_sqrtf(sl);
+                float to[3], mv[3];
+                float up = (float)atof(getenv("ARMFLUNG")); // ARMFLUNG=<cm>: its shoulder joint that far over the plane (under: < 0)
+                if (up == 0 && strcmp(getenv("ARMFLUNG"), "0")) up = 15;
+                for (int k = 0; k < 3; k++) { to[k] = at2[k] + nn[k] * up + side[k] / sl * 40; mv[k] = to[k] - r0[k]; }
+                for (int i = 0; i < NB; i++) if (armsub[i]) for (int k = 0; k < 3; k++) space[i * 12 + 4 + k] += mv[k];
+                // where the arm's skin is now: the body cut must not move any of it
+                armx = malloc(12 * (size_t)NV);
+                int over = 0, under = 0;
+                for (int v = 0; v < NV; v++) {
+                    skin_v(&ov_a[v], v, armx + 3 * (size_t)v);
+                    int w = 0;
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armsub[ov_a[v].bones[i]]) w += ov_a[v].weights[i];
+                    if (w <= 127) continue;
+                    float *x = armx + 3 * (size_t)v;
+                    if ((x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2] > 0) over++; else under++;
+                }
+                printf("arm flung: %d of its vertices over the waist plane, %d under\n", over, under);
+                if (!under) { printf("FAIL: the flung arm doesn't reach under the plane\n"); return 1; }
+            }
         }
         set_nosink();
         // as gore.lua for a cut through the spine: nothing on an arm or a leg is a sink (it swings on its own, and
@@ -1123,6 +1178,7 @@ int main(int argc, char **argv)
         nbodies = 0; memset(hasbody, 0, sizeof hasbody);
         for (int i = 0; i < NB; i++) for (int j = i; j >= 0; j = bparent[j])
             if (!strcmp(bname[j], "Bip001-L-Clavicle") || !strcmp(bname[j], "Bip001-R-Clavicle") || !strcmp(bname[j], "Bip001-L-Thigh") || !strcmp(bname[j], "Bip001-R-Thigh")) nosink[i] = 1;
+        if (armsub && !env_on("NODROP")) { limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0; drop_roots[ndrop++] = ua; }
         skin_cut((u64)comp_a, 0, spine1, at2, nn, MODE_CUT, 0, 0, -1);
         printf("waist: %.300s\n", lastres);
         if (!strstr(lastres, " unsunk=0 ")) { printf("FAIL: seam vertices left with no sink\n"); return 1; }
@@ -1185,6 +1241,23 @@ int main(int argc, char **argv)
         // its arms swung): a cut strap must not stretch from the hips to it, nor its edge after an arm
         int still = -1, flung = -1, hs = 0, hf = 0;
         skin_collapse();
+        int armmoved = 0;
+        if (armx) {
+            for (int v = 0; v < NV; v++) {
+                float x[3], *y = armx + 3 * (size_t)v;
+                skin_v(&ov_a[v], v, x);
+                float d0 = x[0] - y[0], d1 = x[1] - y[1], d2 = x[2] - y[2];
+                if (d0 * d0 + d1 * d1 + d2 * d2 > 4) {
+                    skin_info vo; orig_info(v, &vo);
+                    int w = 0;
+                    for (int i = 0; i < 8; i++) if (vo.weights[i] && armsub[vo.bones[i]]) w += vo.weights[i];
+                    if (w > 127) armmoved++;
+                }
+            }
+            printf("waist after the flung arm: %d of the arm's vertices moved\n", armmoved);
+            if (armmoved) printf("FAIL: the body cut pulled the cut-off arm's skin\n");
+            free(armx); free(armsub);
+        }
         float *saved = malloc(48 * NB);
         memcpy(saved, space, 48 * NB);
         // where the legs' skin lies now (none of its weight on the upper body): flinging the upper body must not move it
@@ -1248,7 +1321,7 @@ int main(int argc, char **argv)
         memcpy(space, saved, 48 * NB); free(saved);
         int shown = (flung - hf) - (still - hs);
         if (shown > 0) printf("FAIL: the upper body fallen off stretches %d more triangles that stay visible\n", shown);
-        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0;
+        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0 || armmoved > 0;
         printf("%s\n", bad ? "FAIL" : "PASS");
         return bad;
     }
