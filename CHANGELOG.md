@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- A waist cut low over her hips stretched her torso a metre long to a point (playtest 40, CH_P_EVE_09). Each half of a split lets the other side of the broken spine fall free and invisible, but skin just over the cut still hung on those bodies (her half's pelvis, the copy's spine) and was dragged after them. sbslice now moves that weight onto the bones the half keeps (`g` takes the break), and the copy breaks one bone higher when the break bone carries its own legs (the Biped thighs hang off `Bip001-Spine`), so it no longer lets its legs go with the spine. Every waist split had this latent: with the free bodies flung, 6-12 thousand vertices followed them. The skin at the cut can now shift up to a few cm as the halves separate. `test/run.sh` throws each half's free side away and runs a waist split just over the pelvis on CH_P_EVE_09 and 30. Untested in game.
+
 ## 0.2.0
 
 First release.

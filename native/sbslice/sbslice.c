@@ -234,6 +234,14 @@ static int gone_roots[MAX_LIMB_ROOTS], ngone, keep_roots[MAX_KEEP_ROOTS], nkeep,
 // is banded the same way, each band on sinks that ride that bone, so sheet and lid move together
 #define MAX_RIDE 6
 static int ride_bones[MAX_RIDE], nride;
+// where the split breaks her spine ("g"'s fifth list: the bone, then 1 for the half above it, 2 for the one below):
+// each half's ragdoll lets go of the other side of the break (gore.lua's settle_half), free and invisible, so its kept
+// skin may hang on none of it. A waist split 9 cm over the pelvis left the skin above the plane on her half's free
+// pelvis, and her torso stretched a metre after it (playtest 40). The half above's weight goes to the break bone
+// (the pelvis is the spine's parent: its kept ancestor is no body at all), the half below's to the nearest ancestor
+static int free_spine = -1, free_upper;
+static short keep_to[MAX_BONES]; // keep_only: a dropped bone's weight goes here first, -1 the nearest kept ancestor
+static const short *keep_to_on;
 // a split's neck plane (point, normal up the neck, world; "h"; gore.lua puts it at the neck's base): her main hair is
 // one piece with no bone a cut could collapse, so a split never halves her head. The half that keeps it (HEAD_KEEP)
 // keeps the neck and head above the plane whole, the other (HEAD_DROP) lets them go into its neck, which closes like
@@ -391,6 +399,9 @@ static int keep_only(const cut_ctx *c, int s, skin_info *o, const unsigned char 
         int mb = o->bones[i];
         if (mb >= 0 && mb < nb && drop[mb]) {
             gone += o->weights[i];
+            int to = keep_to_on ? keep_to_on[mb] : -1;
+            if (to >= 0 && to < nb && !drop[to] && (!c->inmap || c->inmap[(u64)s * nb + to])) { up[i] = to; continue; }
+            if (to >= 0) { rest += o->weights[i]; continue; }
             for (int a = parent_of(c, mb); a >= 0 && a < nb; a = parent_of(c, a))
                 if (!drop[a] && (!c->inmap || c->inmap[(u64)s * nb + a])) { up[i] = a; break; }
             if (up[i] < 0) rest += o->weights[i];
@@ -1492,9 +1503,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // kept skin lets go of ("limb" here): those limbs and every helper past the plane (the other half's sinks)
     static unsigned char onplane[MAX_BONES], dropbone[MAX_BONES];
     if (nb > MAX_BONES) { VirtualFree(mem, 0, 0x8000); VirtualFree(mem2, 0, 0x8000); skin_result("err too many bones"); return; }
-    for (int i = 0; i < nb; i++) { rootof[i] = -1; gonebone[i] = keepbone[i] = btype[i] = onplane[i] = dropbone[i] = 0; }
+    static unsigned char spsub[MAX_BONES], spfree[MAX_BONES];
+    for (int i = 0; i < nb; i++) { rootof[i] = -1; gonebone[i] = keepbone[i] = btype[i] = onplane[i] = dropbone[i] = 0; keep_to[i] = -1; spfree[i] = 0; }
+    keep_to_on = 0;
     if (mode == MODE_SIDE) {
-        int lim = limbs_comp == comp;
+        int lim = limbs_comp == comp, brk = lim && free_spine > 0 && free_spine < nb ? free_spine : -1;
         for (int i = 0; i < nb; i++) {
             int par = parent_of(&c, i);
             if (lim) for (int r = 0; r < ngone; r++) if (gone_roots[r] == i) rootof[i] = r;
@@ -1511,7 +1524,15 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             int helper = i > 0 && !(ns && ns[i]) && !keepbone[i];
             onplane[i] = helper && !gonebone[i] && h >= -SIDE_TOL / tm[8] && h <= SIDE_TOL / tm[8];
             limb[i] = gonebone[i] || (helper && h < -SIDE_TOL / tm[8]) || onplane[i];
+            // the other side of a broken spine: free, so kept skin lets go of it (a chain the half keeps stays)
+            spsub[i] = i == brk || (par >= 0 && par < i && spsub[par]);
+            if (brk > 0 && i > 0 && !keepbone[i] && (free_upper ? !spsub[i] : spsub[i])) {
+                limb[i] = spfree[i] = 1;
+                onplane[i] = 0;
+                if (free_upper) keep_to[i] = (short)brk;
+            }
         }
+        if (brk > 0) keep_to_on = keep_to;
     }
 
     // the neck plane, for this cut only (see "h")
@@ -1615,7 +1636,8 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     }
     // a helper the head's skin hangs on is the head's, wherever it lies (CH_P_EVE_09's Ab-NeckSub swings past the plane
     // when she is posed): the kept head lets go of nothing
-    if (hmode) for (int i = 0; i < nb; i++) if (headused[i] && !gonebone[i]) limb[i] = onplane[i] = 0;
+    // (but not one the broken spine lets go of: it is free)
+    if (hmode) for (int i = 0; i < nb; i++) if (headused[i] && !gonebone[i] && !spfree[i]) limb[i] = onplane[i] = 0;
 
     // pass 2: triangles across the cut
     if (mode != MODE_SIDE)
@@ -3254,10 +3276,12 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
             }
         } else {
             limbs_comp = lf[0]; ngone = nkeep = nride = ndrop = 0;
-            int keep = 0;
+            free_spine = -1; free_upper = 0;
+            int keep = 0, nfs = 0;
             for (int i = 1; i < k; i++) {
                 if (lf[i] == 0) { keep++; continue; }
-                if (keep >= 3) { if (ndrop < MAX_KEEP_ROOTS) drop_roots[ndrop++] = (int)lf[i]; }
+                if (keep >= 4) { if (nfs == 0) free_spine = lf[i] < MAX_BONES ? (int)lf[i] : -1; else if (nfs == 1) free_upper = lf[i] == 1; nfs++; }
+                else if (keep == 3) { if (ndrop < MAX_KEEP_ROOTS) drop_roots[ndrop++] = (int)lf[i]; }
                 else if (keep == 2) { if (nride < MAX_RIDE) ride_bones[nride++] = (int)lf[i]; }
                 else if (keep) { if (nkeep < MAX_KEEP_ROOTS) keep_roots[nkeep++] = (int)lf[i]; }
                 else if (ngone < MAX_LIMB_ROOTS) gone_roots[ngone++] = (int)lf[i];

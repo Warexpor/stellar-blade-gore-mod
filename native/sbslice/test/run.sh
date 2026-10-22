@@ -54,7 +54,8 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       p=${posed:+ (posed)}
       if on split; then
         jobs+=("real split $m$p|POSED=$posed|$m" "real split $m across the waist$p|ACROSS=1 POSED=$posed|$m"
-               "real split $m beside the neck$p|BESIDE=2 POSED=$posed|$m")
+               "real split $m beside the neck$p|BESIDE=2 POSED=$posed|$m"
+               "real split $m across the waist just over the pelvis$p|ACROSS=1 LOW=9 POSED=$posed|$m")
       fi
       on waist && jobs+=("real waist cut $m$p|WAIST=1 POSED=$posed|$m")
       on waist && [[ -z $posed ]] && jobs+=("real waist cut $m after the left arm|WAIST=1 ARMFIRST=1|$m")

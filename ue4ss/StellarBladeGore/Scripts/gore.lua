@@ -57,14 +57,15 @@ local SPLIT_SINK = "Bip001-Spine1"
 local SPLIT_RIDE = { "Bip001-Head", "Bip001-Neck", "Bip001-Spine2", "Bip001-Spine1", "Bip001-Spine", "Bip001-Pelvis" }
 -- the ones a half's lid and sheet may ride: never a bone that half lets go of (settle_half: the copy's head, the
 -- other end of a broken spine), which falls free and spins, and the lid stretched after it in tall flashing sheets
--- (ragdoll deaths, playtest 26). q.spine: where the spine breaks (her half keeps it and what is above it)
+-- (ragdoll deaths, playtest 26). q.spine: where the spine breaks (her half keeps it and what is above it); q.spine2:
+-- where the copy's does (it lets go of that and what is above it)
 function SPLIT_RIDE.of(q, comp)
-  local s, si, list = q.spine, nil, {}
-  for i, b in ipairs(SPLIT_RIDE) do if b == s then si = i end end
   local copy = comp ~= q.mesh
+  local s, si, list = copy and (q.spine2 or q.spine) or q.spine, nil, {}
+  for i, b in ipairs(SPLIT_RIDE) do if b == s then si = i end end
   for i, b in ipairs(SPLIT_RIDE) do
     local ok = not si or (copy and i > si) or (not copy and i <= si)
-    if copy and b == "Bip001-Head" and not (s and s ~= b) then ok = false end
+    if copy and b == "Bip001-Head" and not (q.spine and q.spine ~= b) then ok = false end
     if ok then list[#list + 1] = b end
   end
   return #list > 0 and list or SPLIT_RIDE
@@ -2132,7 +2133,9 @@ end
 
 -- tell the DLL a half's limbs for its next split cut, the bones its lid pieces ride (the flattened skin behind the
 -- lid bands by them) and the accessory chains it drops: "g<comp>,<gone roots>,0,<kept roots>,0,<ride bones>,0,<drop>"
-local function send_limbs(comp, gone, keep, drop, ride)
+-- spine, upper: where the split breaks her spine and whether this is the half above it (settle_half lets the other
+-- side of the break go, so the DLL takes this half's skin off it)
+local function send_limbs(comp, gone, keep, drop, ride, spine, upper)
   local f = {}
   local function add_bones(list)
     for _, b in ipairs(list) do
@@ -2145,9 +2148,15 @@ local function send_limbs(comp, gone, keep, drop, ride)
   add_bones(keep)
   f[#f + 1] = "0"
   add_bones(ride or SPLIT_RIDE)
-  if drop and #drop > 0 then
+  local si = spine and try(function() return comp:GetBoneIndex(FName(spine)) end)
+  if (drop and #drop > 0) or (si and si > 0) then
     f[#f + 1] = "0"
-    add_bones(drop)
+    add_bones(drop or {})
+  end
+  if si and si > 0 then
+    f[#f + 1] = "0"
+    f[#f + 1] = string.format("%x", si)
+    f[#f + 1] = upper and "1" or "2"
   end
   return command(string.format("g%x,%s", comp:GetAddress(), table.concat(f, ",")))
 end
@@ -2554,6 +2563,19 @@ local function spine_break(mesh, at, n)
   return nil
 end
 
+-- the copy's break: the spine bone her half breaks at, or the next one up when the copy's own legs hang off it (the
+-- Biped thighs' parent is Bip001-Spine, not the pelvis): a waist split just over the pelvis broke both halves there,
+-- and the copy let its legs go with the spine (playtest 40)
+function M.copy_break(mesh, spine, kept)
+  if not spine then return nil end
+  local si
+  for i, b in ipairs(SPINE_CHAIN) do if b == spine then si = i end end
+  for _, l in ipairs(kept or {}) do
+    if try(function() return mesh:BoneIsChildOf(FName(l), FName(spine)) end) == true then return si and SPINE_CHAIN[si + 1] end
+  end
+  return spine
+end
+
 local function stage_split_cut(q)
   local at, n, from
   if q.plane then
@@ -2575,6 +2597,8 @@ local function stage_split_cut(q)
   end
   if not at then log("split skipped: no bone transforms"); return false end
   q.c = { at = at, n = n }
+  q.gone1, q.gone2 = limb_sides(q.mesh, at, n)
+  q.spine2 = M.copy_break(q.mesh, q.spine, q.gone1)
   place_like(q.body2, q.mesh)
   local p = command(string.format("p%x,%x", q.mesh:GetAddress(), q.body2:GetAddress()))
   local neg = scale(n, -1)
@@ -2582,8 +2606,8 @@ local function stage_split_cut(q)
   cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = "split" }
   cuts[#cuts + 1] = { mesh = q.body2, addr = addr(q.body2), bone = "split copy" }
   -- each half keeps the limbs on its side whole and lets the others go; the halves share the mesh's sinks, and each
-  -- half's skin lets go of every helper past the plane, so the other half's sinks never pull on it
-  q.gone1, q.gone2 = limb_sides(q.mesh, at, n)
+  -- half's skin lets go of every helper past the plane, so the other half's sinks never pull on it (q.gone1, q.gone2:
+  -- limb_sides, above)
   -- her half keeps the head, face and hair whole, on their own animation; the copy's neck closes. The DLL holds one
   -- neck plane, for the next split cut of that component
   local front, back = split_chains(q.mesh, at, n)
@@ -2592,15 +2616,15 @@ local function stage_split_cut(q)
   for _, b in ipairs(front) do keep1[#keep1 + 1] = b end
   for _, b in ipairs(q.gone1) do keep2[#keep2 + 1] = b end
   for _, b in ipairs(back) do keep2[#keep2 + 1] = b end
-  send_limbs(q.mesh, q.gone1, keep1, back, SPLIT_RIDE.of(q, q.mesh))
+  send_limbs(q.mesh, q.gone1, keep1, back, SPLIT_RIDE.of(q, q.mesh), q.spine, true)
   local h1 = send_neck(q.mesh, 1)
   local r1 = side_cut(q.mesh, SPLIT_SINK, at, n)
-  send_limbs(q.body2, q.gone2, keep2, front, SPLIT_RIDE.of(q, q.body2))
+  send_limbs(q.body2, q.gone2, keep2, front, SPLIT_RIDE.of(q, q.body2), q.spine2, false)
   local h2 = send_neck(q.body2, 2)
   local r2 = side_cut(q.body2, SPLIT_SINK, at, neg)
   log(string.format("split (%s) at %s normal %s (%s), pose %s, limbs %s | %s, chains %s | %s, spine breaks at %s, neck %s | %s",
     q.why, v3(at), v3(n), from, p, table.concat(q.gone2, ","), table.concat(q.gone1, ","), table.concat(front, ","),
-    table.concat(back, ","), tostring(q.spine), h1, h2))
+    table.concat(back, ","), tostring(q.spine) .. (q.spine2 ~= q.spine and " (the copy's at " .. tostring(q.spine2) .. ")" or ""), h1, h2))
   log("split body: " .. r1)
   log("split body copy: " .. r2)
   -- a half that cut nothing falls back to a waist cut too: across her waist in an animated death that had just gone
@@ -2763,7 +2787,7 @@ local function split_physics(q, vel)
   -- the copy's head is closed over: its body comes off and weighs nothing, like a gone limb's
   local gone2 = { table.unpack(q.gone2 or {}) }
   if not (q.spine and q.spine ~= "Bip001-Head") then gone2[#gone2 + 1] = "Bip001-Head" end
-  local b2l = settle_half(b2, at, scale(n, -1), push, gone2, q.spine, false)
+  local b2l = settle_half(b2, at, scale(n, -1), push, gone2, q.spine2, false)
   if ctx.on_cut then for _, b in ipairs(b1) do try(function() ctx.on_cut(q.mesh, b) end) end end
   if ctx.on_broken and q.spine then try(function() ctx.on_broken(q.mesh, q.spine) end) end
   if vel then

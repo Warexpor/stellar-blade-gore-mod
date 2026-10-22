@@ -232,6 +232,7 @@ static int fold_head(skin_info *o, int head)
 // a vertex the vanilla skin ties to a limb this half lets go (hip skin on the other half's thigh twist): it has to
 // stay with the body, so it may shift; not counted
 static unsigned char *gone_sub[2], *keep_sub[2];
+#define POP_CM 4.0f // see the kept skin check: how far skin on the free side of a broken spine may shift at the cut
 // a flag from the environment: set and not empty (test/run.sh passes ACROSS= for "no")
 static int env_on(const char *k) { const char *v = getenv(k); return v && *v; }
 // tied to a limb this half keeps (its arm hanging below a waist cut, the cape on it): may lie behind the plane
@@ -321,13 +322,19 @@ static void write_obj(const char *fn, const skin_info *o)
 static const char *NOSINK_PRE[] = { "Bip001", "SC_", "Ab_" };
 static const char *NOSINK_PART[] = { "Hair", "Cape", "Breast", "Prop" };
 // the spine bones the lid rides, as gore.lua sends them after the limbs (SPLIT_RIDE.of); NORIDE=1: none (axis bands).
-// The copy (half B) lets its head go free, so it never rides it
-static void set_ride(int copy)
+// The copy (half B) lets its head go free, so it never rides it; with the spine broken (brk), each half rides only
+// its own side of the break (A the break bone and up)
+static void set_ride(int copy, int brk)
 {
     static const char *ride[] = { "Bip001-Head", "Bip001-Neck", "Bip001-Spine2", "Bip001-Spine1", "Bip001-Spine", "Bip001-Pelvis" };
     nride = 0;
     if (env_on("NORIDE")) return;
-    for (int i = copy ? 1 : 0; i < 6; i++) if (bone(ride[i]) >= 0) ride_bones[nride++] = bone(ride[i]);
+    int si = -1;
+    for (int i = 0; i < 6; i++) if (brk >= 0 && bone(ride[i]) == brk) si = i;
+    for (int i = 0; i < 6; i++) {
+        int ok = si < 0 ? (!copy || i > 0) : copy ? i > si : i <= si;
+        if (ok && bone(ride[i]) >= 0) ride_bones[nride++] = bone(ride[i]);
+    }
 }
 static void base_nosink(void)
 {
@@ -1259,6 +1266,14 @@ int main(int argc, char **argv)
     for (int k = 0; k < 3; k++) n[k] /= ln;
     // ACROSS=1: the blade level through Spine1 (a cut across the waist; the half with the head keeps the front)
     if (env_on("ACROSS")) for (int k = 0; k < 3; k++) n[k] = axis[k];
+    // LOW=<cm>: that far up the spine from the pelvis instead (with ACROSS: a waist split low enough to break her spine
+    // at Bip001-Spine, her half letting the pelvis go, playtest 40)
+    float atl[3];
+    if (getenv("LOW")) {
+        float lo = (float)atof(getenv("LOW"));
+        for (int k = 0; k < 3; k++) atl[k] = pp[k] + axis[k] * lo;
+        at = atl;
+    }
     // BESIDE=<cm>: as gore.lua's splitBeside, leaned about her front-to-back axis from the pelvis to that far beside
     // her neck, the head on A's side
     float atb[3];
@@ -1283,6 +1298,38 @@ int main(int argc, char **argv)
         if (mid[0] * n[0] + mid[1] * n[1] + mid[2] * n[2] < 0) gone1[ng1++] = bone(roots[r]); else gone2[ng2++] = bone(roots[r]);
     }
     printf("plane at %.1f %.1f %.1f normal %.2f %.2f %.2f, %d limbs each side\n", at[0], at[1], at[2], n[0], n[1], n[2], ng1);
+    // where the spine breaks, as gore.lua's spine_break (SPINE_TOL 4 cm): the first bone up the chain past which every
+    // bone is on A's side. Each half's ragdoll lets go of the other side of it (settle_half)
+    int brk = -1;
+    {
+        static const char *chain[] = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck", "Bip001-Head" };
+        float hs[6];
+        int okc = 1;
+        for (int i = 0; i < 6; i++) {
+            int bi = bone(chain[i]);
+            if (bi < 0) { okc = 0; break; }
+            float *t = space + bi * 12 + 4;
+            hs[i] = (t[0] - at[0]) * n[0] + (t[1] - at[1]) * n[1] + (t[2] - at[2]) * n[2];
+        }
+        if (okc && hs[0] < -4)
+            for (int i = 1; i < 6 && brk < 0; i++) {
+                int above = 1;
+                for (int j = i; j < 6; j++) if (hs[j] < -4) above = 0;
+                if (above) brk = bone(chain[i]);
+            }
+    }
+    // the copy's break, as gore.lua's copy_break: one bone up when its own legs hang off it (Biped thighs: off Spine)
+    int brk2 = brk;
+    if (brk >= 0) {
+        static const char *chain[] = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck", "Bip001-Head" };
+        for (int r = 0; r < ng1 && brk2 == brk; r++)
+            for (int j = gone1[r]; j >= 0; j = bparent[j])
+                if (j == brk && j != gone1[r]) {
+                    for (int i = 0; i < 5; i++) if (bone(chain[i]) == brk) brk2 = bone(chain[i + 1]);
+                    break;
+                }
+    }
+    printf("spine breaks at %s, the copy's at %s\n", brk >= 0 ? bname[brk] : "none", brk2 >= 0 ? bname[brk2] : "none");
 
     // the neck plane, as gore.lua sends it: at the neck's base, square to the neck. A keeps the head, B lets it go
     int neckb = bone("Bip001-Neck");
@@ -1339,14 +1386,16 @@ int main(int argc, char **argv)
     }
     // half A (her own mesh) keeps the front of the plane, B (the copy) the back
     set_nosink();
-    limbs_comp = (u64)comp_a; ngone = ng1; nkeep = ng2; memcpy(gone_roots, gone1, 4 * ng1); memcpy(keep_roots, gone2, 4 * ng2); set_ride(0);
+    limbs_comp = (u64)comp_a; ngone = ng1; nkeep = ng2; memcpy(gone_roots, gone1, 4 * ng1); memcpy(keep_roots, gone2, 4 * ng2); set_ride(0, brk);
+    free_spine = env_on("NOFREE") ? -1 : brk; free_upper = 1; // NOFREE=1: the DLL not told (the bug, for a check)
     if (!env_on("NOCHAINS")) { memcpy(keep_roots + nkeep, chf, 4 * nchf); nkeep += nchf; memcpy(drop_roots, chb, 4 * nchb); ndrop = nchb; }
     if (heads) { head_comp = (u64)comp_a; head_mode = HEAD_KEEP; head_bone = head; memcpy(head_pw, p2, 12); memcpy(head_nw, n2, 12); }
     skin_cut((u64)comp_a, 0, spine1, at, n, MODE_SIDE, 0, 0, -1);
     strcpy(res_a, lastres);
     printf("A: %.300s\n", lastres);
     set_nosink();
-    limbs_comp = (u64)comp_b; ngone = ng2; nkeep = ng1; memcpy(gone_roots, gone2, 4 * ng2); memcpy(keep_roots, gone1, 4 * ng1); set_ride(1);
+    limbs_comp = (u64)comp_b; ngone = ng2; nkeep = ng1; memcpy(gone_roots, gone2, 4 * ng2); memcpy(keep_roots, gone1, 4 * ng1); set_ride(1, brk2);
+    free_spine = env_on("NOFREE") ? -1 : brk2; free_upper = 0;
     ndrop = 0;
     if (!env_on("NOCHAINS")) { memcpy(keep_roots + nkeep, chb, 4 * nchb); nkeep += nchb; memcpy(drop_roots, chf, 4 * nchf); ndrop = nchf; }
     if (heads) { head_comp = (u64)comp_b; head_mode = HEAD_DROP; head_bone = head; memcpy(head_pw, p2, 12); memcpy(head_nw, n2, 12); }
@@ -1487,6 +1536,17 @@ int main(int argc, char **argv)
         float *nn = h ? neg : n;
         int kept = 0, kept_moved = 0, gone = 0, gone_off = 0, worst_v = -1, behind_kept = 0, head_kept = 0, head_all = 0;
         float worst = 0;
+        // the other side of a broken spine (free in game): kept skin on it moves to a kept bone, which isn't posed as
+        // it was, so that skin may shift a little at the cut (POP_CM), never stretch after the free bones
+        unsigned char *fr = calloc(NB, 1);
+        int fb = h ? brk2 : brk, popped = 0;
+        float pop = 0;
+        if (fb >= 0) {
+            unsigned char *sp = calloc(NB, 1);
+            for (int i = 0; i < NB; i++) sp[i] = i == fb || (bparent[i] >= 0 && sp[bparent[i]]);
+            for (int i = 1; i < NB; i++) fr[i] = h ? sp[i] : !sp[i];
+            free(sp);
+        }
         for (int v = 0; v < NV; v++) {
             float x[3]; skin_v(&o[v], v, x);
             float *p0 = orig + v * 3;
@@ -1514,7 +1574,10 @@ int main(int argc, char **argv)
                     }
                 }
                 kept++;
-                if (mv > 0.5f) { kept_moved++; if (mv > worst) { worst = mv; worst_v = v; } }
+                int onfree = 0;
+                { skin_info vo; orig_info(v, &vo); for (int i = 0; i < 8; i++) if (vo.weights[i] && fr[vo.bones[i]]) onfree = 1; }
+                if (onfree && mv > 0.5f) { popped++; if (mv > pop) pop = mv; }
+                else if (mv > 0.5f) { kept_moved++; if (mv > worst) { worst = mv; worst_v = v; } }
             } else {
                 gone++;
                 float hx = (x[0] - at[0]) * nn[0] + (x[1] - at[1]) * nn[1] + (x[2] - at[2]) * nn[2];
@@ -1542,7 +1605,9 @@ int main(int argc, char **argv)
         if (heads) printf(", head kept %d of %d", head_kept, head_all);
         printf("\n");
         // the other half's skin left standing on this one (no sink found for it); A keeps all of the head, B none
-        fail |= kept_moved > kept / 200 || behind_kept > kept / 200;
+        if (fb >= 0) printf("half %c: %d kept vertices on the free side of the spine shifted at the cut, %.1f cm at most\n", h ? 'B' : 'A', popped, pop);
+        free(fr);
+        fail |= kept_moved > kept / 200 || behind_kept > kept / 200 || pop > POP_CM;
         if (heads) fail |= h == 0 ? head_kept < head_all : head_kept > head_all / 200;
     }
     // posed: she keeps falling after the cut (the spine and head turn further): kept skin must still match the
@@ -1575,6 +1640,14 @@ int main(int argc, char **argv)
                 skin_info vo; orig_info(v, &vo);
                 // the copy's neck skin rides the neck alone: it must not follow the head's bend
                 if (h && heads) fold_head(&vo, head);
+                // nor the other side of a broken spine, free in game: A's pelvis weight rides the break bone, B's
+                // weight above its break the bone under it
+                int fb = h ? brk2 : brk;
+                if (fb >= 0) for (int i = 0; i < 8; i++) if (vo.weights[i] && vo.bones[i] > 0) {
+                    int in = 0;
+                    for (int j = vo.bones[i]; j >= 0 && !in; j = bparent[j]) in = j == fb;
+                    if (h ? in : !in) vo.bones[i] = h ? bparent[fb] : fb;
+                }
                 float a[3], b[3];
                 float *cur = refinv; refinv = refinv0; skin_v(&vo, v, a); refinv = cur;
                 skin_v(&o[v], v, b);
@@ -1656,6 +1729,14 @@ int main(int argc, char **argv)
             for (int r = 0; r < ng; r++) if (gr[r] == i) sub[i] = 1;
             if (h && i == bone("Bip001-Head")) sub[i] = 1;
             if (!sub[i] && bparent[i] >= 0 && sub[bparent[i]]) sub[i] = 1;
+        }
+        // and with the spine broken, the other side of the break: A lets go of all but the break bone's subtree (the
+        // pelvis and its hip helpers), B of that subtree. Not a chain the half keeps (it isn't let go of)
+        if ((h ? brk2 : brk) >= 0) {
+            unsigned char *sp = calloc(NB, 1);
+            for (int i = 0; i < NB; i++) sp[i] = i == (h ? brk2 : brk) || (bparent[i] >= 0 && sp[bparent[i]]);
+            for (int i = 1; i < NB; i++) if ((h ? sp[i] : !sp[i]) && chain[i] != (h ? 2 : 1)) sub[i] = 1;
+            free(sp);
         }
         float before[3], *bx = malloc(12 * NV);
         for (int v = 0; v < NV; v++) skin_v(&o[v], v, bx + v * 3);
