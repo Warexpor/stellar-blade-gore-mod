@@ -81,7 +81,7 @@ With `dev = true` in `settings.lua`:
 
 F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own).
 
-F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
+Shift+F4 during her death holds it: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
 
 ## Building from source
 

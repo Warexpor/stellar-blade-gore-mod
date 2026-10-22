@@ -461,6 +461,7 @@ local DOWN = { Getup = true, FastGetup = true, Down = true, DownFaceUp = true, D
 local NOT_DOWN = "SBGore_NotDown"
 -- done: decorator address -> the decorator; orig: its name -> { field -> names }; pending: { obj, t } made since
 local down = { on = false, done = {}, orig = {}, pending = {} }
+local DOWN_MS = 2
 local function decorators() return try(function() return FindAllOf("SBBTDecorator_SbCheckActorEffect") end) or {} end
 local function swap_names(d, key, field, list, back)
   local o = down.orig[key]
@@ -493,7 +494,7 @@ local function swap_names(d, key, field, list, back)
   end
   return changed
 end
-local function attack_down(on, list)
+local function attack_down(on, list, quiet)
   local nd, nn = 0, 0
   for _, d in ipairs(list or decorators()) do
     -- (by address for the ones already seen: a name for each of them every scan was a stutter of its own)
@@ -508,10 +509,11 @@ local function attack_down(on, list)
     end
   end
   if not on then down.done, down.orig = {}, {} end
-  if nd > 0 then
+  if nd > 0 and not quiet then
     log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", on and "they attack her while she is down"
       or "they wait while she is down again", nn, nd))
   end
+  return nd, nn
 end
 local function down_tick()
   local want = cfg().attackDown == true
@@ -533,17 +535,23 @@ local function down_tick()
     if not ok then log("enemies: knockdown checks not watched: " .. tostring(err)) end
   end
   if not down.scanned then down.scanned = true; attack_down(true); return end
-  if #down.pending == 0 or down.pending[1].t > os.clock() then return end
-  local ready, rest = {}, {}
-  for _, x in ipairs(down.pending) do
-    if x.t <= os.clock() then
-      -- a new object: an address seen before was another decorator, since collected
-      local a = valid(x.o) and addr(x.o)
-      if a then down.done[a] = nil; ready[#ready + 1] = x.o end
-    else rest[#rest + 1] = x end
+  -- the new ones a few at a time, at most DOWN_MS a tick: a fight's worth loading at once (an enemy's whole tree) was
+  -- 62-127 ms in one tick, at a death too (playtest). Due in order, as they were made
+  local t0 = os.clock()
+  while #down.pending > 0 and down.pending[1].t <= t0 and os.clock() - t0 < DOWN_MS / 1000 do
+    local x = table.remove(down.pending, 1)
+    -- a new object: an address seen before was another decorator, since collected
+    local a = valid(x.o) and addr(x.o)
+    if a then
+      down.done[a] = nil
+      local d1, n1 = attack_down(true, { x.o }, true)
+      down.nd, down.nn = (down.nd or 0) + d1, (down.nn or 0) + n1
+    end
   end
-  down.pending = rest
-  if #ready > 0 then attack_down(true, ready) end
+  if #down.pending == 0 and (down.nd or 0) > 0 then
+    log(string.format("they attack her while she is down: %d knockdown checks in %d of the enemies' decision nodes", down.nn, down.nd))
+    down.nd, down.nn = 0, 0
+  end
 end
 
 -- every tick of hers (main.lua), pawn and mesh hers

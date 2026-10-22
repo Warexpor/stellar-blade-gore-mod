@@ -22,6 +22,7 @@ return {
                                -- game respawns her after that), so her cut body stays behind the screen; "timer": at
                                -- recoverAfter, under the screen
   screenWait = 4,              --   seconds past recoverAfter a death with no death screen at all (F5's) waits for one
+  reviveAt = 7,                -- the revive item's screen (she carries one) is held hidden this many seconds into the death
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
                                -- after her pelvis a step a tick and the camera stuttered after her (playtest 38)
   cameraStill = true,          -- at a death the view holds still where it is till she gets up: the game moves her pawn

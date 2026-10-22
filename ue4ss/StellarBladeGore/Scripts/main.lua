@@ -643,13 +643,30 @@ end
 -- its own, playtest), looked for at most every 2 s in a death while it isn't found. Never its class default
 -- (FindFirstOf gave that, kept for good: no death screen was ever seen), and it lives inside the main HUD, so it is
 -- never in the viewport itself: shown when it and its CanvasPanel_Dead are visible
-local dead_hud = { next = 0 }
+-- Both it and the revive item's screen are caught as they are made (every widget made in a death has its class
+-- read): the scan every 2 s while it wasn't found was 60 ms each in a big level, and the death screen's class only
+-- loads at the death. One scan a death is left, from 5 s in, for one made before the mod loaded
+local dead_hud = { scans = 0 }
+do
+  local ok, err = pcall(NotifyOnNewObject, "/Script/UMG.UserWidget", function(o)
+    -- (any time: the death screen may be made in the frame she dies, before the mod's tick knows it)
+    local cls = try(function() return o:GetClass():GetFName():ToString() end)
+    if (cls == "WB_MainHUD_Dead_C" or cls == "WB_MainHUD_ResurrectionItem_C")
+      and tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then return end
+    if cls == "WB_MainHUD_Dead_C" then dead_hud.w = o
+    elseif cls == "WB_MainHUD_ResurrectionItem_C" then dead_hud.rv = o end
+    if active and cls and (cls:find("Dead") or cls:find("Resurrect") or cls:find("Revive")) then
+      dead_hud.made = (dead_hud.made and dead_hud.made .. ", " or "") .. cls
+    end
+  end)
+  if not ok then print("[StellarBladeGore] widgets: NotifyOnNewObject failed: " .. tostring(err) .. "\n") end
+end
 local function death_screen()
   local w = dead_hud.w
   if not valid(w) then
     dead_hud.w = nil
-    if os.clock() < dead_hud.next then return false end
-    dead_hud.next = os.clock() + 2
+    if dead_hud.scans > 0 then return false end
+    dead_hud.scans = 1
     for _, x in ipairs(try(function() return FindAllOf("WB_MainHUD_Dead_C") end) or {}) do
       if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then w = x end
     end
@@ -702,7 +719,7 @@ local screen = { n = 0 }
 -- loaded (tried once a second in a death till then); none had ever been hooked, as the screen was never seen
 local SCREEN_FNS = { WB_Common_btn_1_Event_0 = "press", WB_Common_btn_2_Event_0 = "press", WB_Common_btn_1_Event = "press",
   WB_Common_btn_2_Event = "press", FinishPressAnimation = "press", FinishYouDieAnimation = "shown" }
-function screen.reset() screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.last = false, false, false, false, false, nil end
+function screen.reset() dead_hud.scans, dead_hud.made, screen.rv.shown = 0, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen = false end
 function screen.hook()
   if screen.hooked or os.clock() < (screen.retry or 0) then return end
   screen.retry = os.clock() + 1
@@ -729,10 +746,66 @@ end
 -- recoverAfter + screenWait s in (a death without one: F5's)
 function screen.ready(t)
   if tune.recoverOn ~= "button" or screen.press or screen.gone then return true end
+  -- the revive screen held or up: she waits for the player's choice
+  local rv = screen.rv
+  if rv.shown and not rv.down then return false end
+  for _, v in pairs(rv.held or {}) do if v ~= false then return false end end
   return not screen.seen and t >= (tune.recoverAfter or 10) + (tune.screenWait or 4)
+end
+-- the revive item's screen: with one on her the game puts its death screen up the moment she dies, over her death
+-- (playtest; without one it fades in at about 7 s). Whichever screen is up before tune.reviveAt s into the death (the
+-- death screen, or WB_MainHUD_ResurrectionItem should that be it) is held hidden and off till then. Taken down after
+-- it showed (the item used or not) with no death screen up REVIVE_WAIT s later, she was revived and is got up at
+-- once (`revive screen: ...` in the log)
+screen.rv = {}
+local REVIVE_WAIT = 2.5
+function screen.revive(t)
+  local rv = screen.rv
+  if not active or saved.manual then
+    for w, vis in pairs(rv.held or {}) do if valid(w) then try(function() w:SetVisibility(vis); w:SetIsEnabled(true) end) end end
+    rv.held, rv.up, rv.down, rv.told = nil, nil, nil, nil
+    return
+  end
+  if dead_hud.made and not rv.told then
+    rv.told = true
+    log(string.format("revive screen: made %.1f s into the death: %s", t, dead_hud.made))
+  end
+  local on = false
+  for _, w in ipairs({ dead_hud.w, dead_hud.rv }) do
+    if valid(w) then
+      local vis = try(function() return w:GetVisibility() end) or 1 -- 1 collapsed, 2 hidden
+      local up = vis ~= 1 and vis ~= 2 and try(function() return w:IsVisible() end) ~= false
+      rv.held = rv.held or {}
+      if t < (tune.reviveAt or 7) or screen.frozen then
+        if up then
+          if not rv.held[w] then
+            rv.held[w] = vis
+            log(string.format("revive screen: %s up %.1f s into the death, held hidden %s",
+              tostring(try(function() return w:GetClass():GetFName():ToString() end)), t,
+              screen.frozen and "while the death is held (Shift+F4)" or string.format("till %.0f s", tune.reviveAt or 7)))
+          end
+          try(function() w:SetVisibility(1); w:SetIsEnabled(false) end)
+        end
+      elseif rv.held[w] ~= nil and rv.held[w] ~= false then
+        try(function() w:SetVisibility(rv.held[w]); w:SetIsEnabled(true) end)
+        rv.held[w], up = false, true
+        rv.shown = true
+        log(string.format("revive screen: shown %.1f s into the death", t))
+      end
+      on = on or up
+    end
+  end
+  -- held (Shift+F4): the screens hidden by the mod don't count as gone
+  if not rv.shown or screen.frozen then return end
+  if on then rv.up, rv.down = true, nil
+  elseif rv.up and not rv.down then rv.down = t; log(string.format("revive screen: gone %.1f s into the death", t))
+  elseif rv.down and not screen.revived and t - rv.down >= REVIVE_WAIT and not death_screen() then
+    screen.revived = true
+  end
 end
 function screen.probe(pawn)
   screen.n = screen.n + 1
+  try(function() screen.revive(polls * POLL_MS / 1000 + ahead) end)
   if active and not saved.manual then screen.hook() end
   -- only in a death, from 5 s in (the screen fades in at 7)
   if screen.n % 15 ~= 0 or not active or saved.manual or polls * POLL_MS / 1000 + ahead < 5 then return end
@@ -740,7 +813,7 @@ function screen.probe(pawn)
   -- the moment it showed, playtest); while the hook says it is up, what the widget reads is logged
   local on = death_screen()
   if not on then
-    if screen.vis then
+    if screen.vis and not screen.frozen then
       if screen.last then log("death screen: gone"); screen.last = nil end
       screen.gone = true
     end
@@ -857,6 +930,19 @@ local function recover(pawn, mesh, why)
   if gore then try(function() gore.cleanup(pawn, mesh) end) end
   if physfix then try(function() physfix.stop() end) end
   local steps = { "unlock(" .. unlock(pawn, mesh) .. ")" }
+  -- the game's own ragdoll count stays 1 after a real death till its respawn (NotifyBP_ReInitActor) clears it; the
+  -- revive item's "revive here" never respawns her, so she stayed ragdolled to the game: stuck to the floor, and her
+  -- next death's ragdoll key did nothing (a vanilla death, playtest). Cleared here as the respawn does
+  local ri = try(function() return pawn.RagdollInfo end)
+  if ri and (try(function() return ri.EnableRagdollCount end) or 0) ~= 0 then
+    local ok = try(function()
+      ri.EnableRagdollCount = 0
+      ri.CurrentActiveTime = 0.0
+      ri.BlendWeight = 0.0
+      return true
+    end)
+    steps[#steps + 1] = "ragdollCount" .. (ok and "" or "!")
+  end
   if heldShow then
     heldShow = false
     local ok, err = pcall(function() pawn:StopAllShow() end)
@@ -935,11 +1021,12 @@ local function watch(pawn, mesh)
   local cloc = cap and try(function() return cap:K2_GetComponentLocation() end)
   local mloc = try(function() return mesh:K2_GetComponentLocation() end)
   local ploc = try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end)
-  log(string.format("a%03d parent=%s capsule%s mesh%s pelvis%s pelvisGap=%.0f visible=%s hidden=%s sim=%s meshLockup=%s",
+  log(string.format("a%03d parent=%s capsule%s mesh%s pelvis%s pelvisGap=%.0f visible=%s hidden=%s sim=%s meshLockup=%s move=%s",
     after, name(try(function() return mesh:GetAttachParent() end)), v3(cloc), v3(mloc), v3(ploc), dist(ploc, cloc),
     tostring(try(function() return mesh:IsVisible() end)), tostring(try(function() return pawn.bHidden end)),
     tostring(try(function() return mesh:IsSimulatingPhysics(FName("None")) end)),
-    tostring(try(function() return mesh.bLockupSimulatePhysics end))))
+    tostring(try(function() return mesh.bLockupSimulatePhysics end)),
+    tostring(try(function() return pawn.CharacterMovement.MovementMode end))))
 end
 
 -- the camera rides her capsule, which stays where she died while her ragdoll slides and tumbles away: the capsule
@@ -1949,6 +2036,14 @@ RegisterKeyBind(Key.F7, on_key("F7", sandbox_ragdoll, true))
 RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face, true))
 RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover, true))
 RegisterKeyBind(Key.F6, on_key("F6", load_tune))
+-- Shift+F4 in a death: hold it, no death screen and no getting up till pressed again (the screen then comes back);
+-- the game respawning her on its own still ends it
+RegisterKeyBind(Key.F4, { ModifierKey.SHIFT }, on_key("Shift+F4", function()
+  if not active or saved.manual then log("Shift+F4: no death to hold"); return end
+  screen.frozen = not screen.frozen
+  log(string.format("Shift+F4: death %s %.1f s in", screen.frozen and "held, no death screen or getting up till Shift+F4 again" or "let go",
+    polls * POLL_MS / 1000 + ahead))
+end))
 -- Esc on her death: fast forward to the death screen (tune.deathSkip; parked for now, untested)
 -- RegisterKeyBind(Key.ESCAPE, on_key("Esc", function() if active then skip_start(find_eve()) end end))
 RegisterKeyBind(Key.F9, on_key("F9", sandbox_slice, true))
@@ -2141,6 +2236,7 @@ local function tick()
 
   tp.mark("find")
   try(function() screen.probe(pawn) end)
+  tp.mark("death screen")
   if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh, tp.mark) end
   tp.mark("enemies")
   if gore then
@@ -2259,6 +2355,14 @@ local function tick()
     if respawned and after == 5 then log("after respawn: unpin(" .. reattach_transform(mesh) .. ")") end
     if chatty and after % 10 == 0 then watch(pawn, mesh) end
     if chatty and after % 60 == 0 then log("ragdoll state after: " .. ragdoll_state(pawn)) end
+    -- revived where she lay (the item): no respawn comes, and the death left her movement off (MOVE_None)
+    if not respawned and after == 90 then -- ~3 s after she got up
+      local mm = try(function() return pawn.CharacterMovement.MovementMode end)
+      if mm == 0 then
+        local ok = try(function() pawn.CharacterMovement:SetMovementMode(1, 0); return true end)
+        log("revived in place: her movement was off, now walking" .. (ok and "" or " (failed)"))
+      end
+    end
     if not attached_to_capsule(pawn, mesh) and after - lastRecover >= 30 then
       lastRecover = after
       recover(pawn, mesh, "off the capsule at a" .. after)
@@ -2273,12 +2377,13 @@ local function tick()
   end
 
   if active then skip_tick() end
-  if active and not saved.manual and (screen.respawn or polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10)
-    and screen.ready(polls * POLL_MS / 1000 + ahead)) then
+  if active and not saved.manual and (screen.respawn or not screen.frozen and (screen.revived or polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10)
+    and screen.ready(polls * POLL_MS / 1000 + ahead))) then
     -- get her up ourselves before the game respawns her (the sandbox (F8) recovery always worked, the one after the
     -- game's respawn never did), once a death screen button is pressed (tune.recoverOn)
     log(string.format("recovering after %.1f s of ragdoll (%.1f of the game's), before the game respawns her (%s)",
       polls * POLL_MS / 1000, polls * POLL_MS / 1000 + ahead, screen.respawn and "the game is respawning her"
+      or screen.revived and "revived with the item: the revive screen went and no death screen came"
       or tune.recoverOn ~= "button" and "recoverAfter" or screen.press and "a death screen button"
       or screen.gone and "the death screen went away" or screen.seen and "?" or "no death screen"))
     try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
