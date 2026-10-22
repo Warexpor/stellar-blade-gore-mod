@@ -18,7 +18,7 @@
 //                        doesn't lose her array. Found once a hit leaves what reads as one array (its copies)
 //                        hit 2: her death (HP 0); hit 3: her HUD's HP bar reads LocX (ProgressBar_HP.Percent, the one
 //                        HUD value the game keeps live): candidates whose HP / MaxHP is within RATIO_TOL of it stay,
-//                        and one array left is found as after a hit
+//                        and one array left after RATIO_READS readings is found as after a hit
 //   vz                   follow nothing
 //   vt                   one tick of following: what happened goes to sbslice.evt (nothing when nothing did)
 typedef unsigned long long u64;
@@ -152,8 +152,11 @@ typedef struct { unsigned char n, moving; u32 off[3]; float hp0, hp, mhp, sh, ms
 #define CAND_MOVING 6
 // how far HP / MaxHP may be off her HP bar (the bar is drawn from them; a blend or rounding at most)
 #define RATIO_TOL 0.015f
+// HP bar readings that narrowed the candidates since the note: one reading is never enough to take one (of thousands
+// of candidates, a stranger's ratio matched 0.879 within RATIO_TOL and was taken for hers, thirty-second playtest)
+#define RATIO_READS 2
 static cand_t cands[MAX_CAND];
-static int ncand, cand_mode;
+static int ncand, cand_mode, ratio_reads;
 static void cand_add(int n, u32 o0, u32 o1, u32 o2, const float *f)
 {
     if (ncand >= MAX_CAND || f[S_HP] <= 0) return;
@@ -351,7 +354,7 @@ int stats_cmd(const u16 *txt, int len, const float *loc, const float *dir)
     if (f[0] < 0x10000 && !(c == 'y' && f[0] == 0)) { stats_result("err bad actor"); return 1; }
     if (c == 's') {
         int keepn = npaths;
-        cand_mode = 1; ncand = 0;
+        cand_mode = 1; ncand = 0; ratio_reads = 0;
         stats_find(f[0]); // (its paths stay as they were: candidates only)
         cand_mode = 0;
         npaths = keepn;
@@ -367,6 +370,7 @@ int stats_cmd(const u16 *txt, int len, const float *loc, const float *dir)
         int hit = f[1] == 1 || f[1] == 2, death = f[1] == 2, ratio = f[1] == 3, k = 0, dropped = 0;
         float pct = loc[0];
         if (ratio && !(pct > 0 && pct < 1)) { stats_result("err bad ratio"); return 1; }
+        ratio_reads += ratio;
         if (death) {
             int any = 0;
             for (int i = 0; i < ncand && !any; i++) {
@@ -401,7 +405,7 @@ int stats_cmd(const u16 *txt, int len, const float *loc, const float *dir)
         int same = ncand > 0 && ncand <= MAX_PATHS;
         for (int i = 1; i < ncand && same; i++)
             same = cands[i].hp == cands[0].hp && cands[i].mhp == cands[0].mhp && cands[i].sh == cands[0].sh && cands[i].msh == cands[0].msh;
-        if ((hit || ratio) && same) {
+        if ((hit || (ratio && ratio_reads >= RATIO_READS)) && same) {
             npaths = 0;
             for (int i = 0; i < ncand; i++) {
                 path_len[npaths] = cands[i].n;

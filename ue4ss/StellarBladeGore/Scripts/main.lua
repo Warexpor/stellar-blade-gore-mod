@@ -1499,6 +1499,11 @@ local function animated_death(pawn, mesh, push)
     log(string.format("death: ragdoll show (ImpulseLimitVelocity %s)", tostring(v)))
     return false
   end
+  -- in the air: her fall animation played on mid-air and she sank at 1.2 m/s for 3 s (thirty-fifth playtest)
+  if try(function() return pawn.CharacterMovement:IsFalling() end) then
+    log("death: animated show in the air, the ragdoll instead")
+    return false
+  end
   try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
   try(function() mesh:SetSimulatePhysics(false) end)
   return anim_fall(pawn, mesh, push)
@@ -1507,7 +1512,7 @@ end
 -- her fall plays on as the death (the show's own, or one of DEATH_FALLS over it)
 anim_fall = function(pawn, mesh, push)
   local a = tune.active or {}
-  animDeath = { pawn = pawn, mesh = mesh, push = push }
+  animDeath = { pawn = pawn, mesh = mesh, push = push, z0 = try(function() return mesh:K2_GetComponentLocation().Z end) }
   log(string.format("death: animated fall, physics off (pelvis simulating %s)",
     tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
   local fall = forceFall
@@ -1568,7 +1573,7 @@ local function tick()
   if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh) end
   tp.mark("enemies")
   if gore then
-    gore.tick(pawn)
+    gore.tick(pawn, tp.mark)
     tp.mark("gore")
     -- gore can switch an animated death to the ragdoll (a split after its splitAnim): read it again, or this tick
     -- saw a death with no fall and no ragdoll and ended it (she was put back whole mid death)
@@ -1645,6 +1650,11 @@ local function tick()
     tp.mark("fall")
     gore_death(pawn, mesh, h)
     tp.mark("death cut")
+  elseif not sim and active and animDeath and polls <= 45 and (try(function() return pawn.CharacterMovement:IsFalling() end)
+    or (animDeath.z0 or -1e9) - (try(function() return mesh:K2_GetComponentLocation().Z end) or -1e9) > 25) then
+    -- her fall plays on in the air (the game didn't say falling when she died, or she went off a ledge in it): her
+    -- feet sank 25 cm under where she died, or her movement says falling
+    ragdoll_now("in the air")
   elseif not sim and active and animDeath then
     -- her own fall: the death continues without physics
     if polls == 15 then

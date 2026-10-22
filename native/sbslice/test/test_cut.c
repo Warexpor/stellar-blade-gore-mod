@@ -28,6 +28,9 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #define DisableThreadLibraryCalls DisableThreadLibraryCalls_
 #define VirtualAlloc VirtualAlloc_
 #define VirtualFree VirtualFree_
+#define VirtualProtect VirtualProtect_
+#define FlushInstructionCache FlushInstructionCache_
+#define GetCurrentProcess GetCurrentProcess_
 #define DllMain DllMain_
 #define SBSLICE_HOSTED
 #include "../sbslice.c"
@@ -52,6 +55,9 @@ int mem_readable(u64 p, u64 n)
 #undef DisableThreadLibraryCalls
 #undef VirtualAlloc
 #undef VirtualFree
+#undef VirtualProtect
+#undef FlushInstructionCache
+#undef GetCurrentProcess
 static char lastres[8192];
 HANDLE CreateThread_(void *a, u64 b, u32(WINAPI *c)(void *), void *d, u32 e, u32 *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return 0; }
 void Sleep_(u32 x) { (void)x; }
@@ -65,6 +71,9 @@ int GetModuleHandleExW_(u32 a, const void *b, void **c) { (void)a;(void)b;(void)
 int DisableThreadLibraryCalls_(void *a) { (void)a; return 1; }
 void *VirtualAlloc_(void *a, u64 n, u32 t, u32 p) { (void)a;(void)t;(void)p; void *m = mmap(0, n, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0); return m == MAP_FAILED ? 0 : m; }
 int VirtualFree_(void *a, u64 n, u32 t) { (void)a;(void)n;(void)t; return 1; } // leak, fine
+int VirtualProtect_(void *a, u64 n, u32 p, u32 *o) { (void)a;(void)n;(void)p;(void)o; return 0; } // the NeedCPUData patch: never in the harness
+int FlushInstructionCache_(HANDLE h, const void *a, u64 n) { (void)h;(void)a;(void)n; return 1; }
+HANDLE GetCurrentProcess_(void) { return 0; }
 
 // ---- synthetic mesh -----
 // SPINE_HELP2 and PELVIS_HELP are helpers no vertex uses: free sinks for the split (bands, the leg's point)

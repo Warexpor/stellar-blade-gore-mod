@@ -1,9 +1,10 @@
 -- Sandbox tuning, re-read on F6 (no restart). Applies to F7 test ragdolls; the collision switches also
 -- apply to real deaths.
 return {
-  push = 450,                  -- F7: cm/s the whole body is shoved (its centre of mass moves; 0 = none)
-  impulse = 900,               --   cm/s the upper body gets on top (spread over chest, neck, head, arms; 0 = none)
-  legKick = 550,               --   cm/s her feet (calves less) are swept the other way, so she goes over and lands on
+  push = 200,                  -- F7: cm/s the whole body is shoved (its centre of mass moves; 0 = none; 450 threw
+                               --   her 5-8 m/s, far harder than any death)
+  impulse = 400,               --   cm/s the upper body gets on top (spread over chest, neck, head, arms; 0 = none)
+  legKick = 250,               --   cm/s her feet (calves less) are swept the other way, so she goes over and lands on
                                --   her back with "back"
   direction = "back",          -- "back", "forward", "left", "right" of...
   relativeTo = "eve",          --   ..."eve" (her own facing) or "camera" (the camera's view)
@@ -31,8 +32,8 @@ return {
                                --   does nothing while she is alive, so the script starts it)
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
                                -- F9 rolls the cuts only, F10 marks, F11 splits
-      limb = 40,               --   the arm or thigh nearest the hit comes off
-      head = 20,               --   beheaded (the face goes with the head, the neck gets a stump)
+      limb = 30,               --   the arm or thigh nearest the hit comes off
+      head = 30,               --   beheaded (the face goes with the head, the neck gets a stump)
       torso = 30,              --   cut in half at the waist
       split = 10,              --   cut in half top to bottom along the blade; only counts when the killing blow
                                --   came down from above (else the others are rolled)
@@ -52,6 +53,9 @@ return {
     bladeSplit = 0.2,          --   share of those blades through her body that split her in two (else the odds above
                                --   are rolled): a blade made up for a death the game reported no hit for always
                                --   crossed the spine, so every real death was a split
+    bodyBias = 0.5,            -- share of killing blades that would take an arm or leg that take the head or cut her
+                               --   across the waist instead (by the head : torso odds above); enemy swings mostly
+                               --   cross a limb, so beheadings and waist cuts were rare (0 = the blade decides)
     sliceTilt = 50,            -- a limb cut along a blade leans with it at most this many degrees off square
     limbReach = 12,            -- a blade meeting an arm or leg this close to the hit, with the hit
     spineReach = 15,           --   further than this from the spine, takes that limb (else the plane decides)
@@ -117,8 +121,8 @@ return {
                                --   bone. F10 puts one on a part at random. false = living hits leave nothing
       delay = 0.25,            --   s after the hit (a killing blow's hit gets the death cut instead)
       needDamage = true,       --   only a hit that took HP off her bar (a guarded or parried one leaves none)
-      length = 12,             --   cm long (a forearm's or calf's shorter: it stays on the part's curve)
-      width = 2.2,             --   cm wide
+      length = 14,             --   cm long (a forearm's or calf's shorter: it stays on the part's curve)
+      width = 4,               --   cm wide, the box: the sword scar's streak fills about a third of it
       scale = 1.0,             --   both, each mark 75-125 % of it at random
       depth = 0.5,             --   how far its box reaches into her, times the part's radius
       max = 12,                --   on her at once, the oldest goes first
@@ -140,14 +144,16 @@ return {
     chains = "detach",         -- an accessory chain hanging off a cut limb (CH_P_EVE_09's capes off the upper arms):
                                -- "detach" cuts it off and lets it fall on its own, "body" hangs it on the body
     throw = 250,               -- cm/s the severed piece gets, away from the body (0 = it just drops)
-    deathThrow = 650,          -- cm/s a piece cut off by a killing blow flies with, the way the blow went
-    legThrow = 1.4,            -- a cut-off leg gets this many times the throw (it dropped at her feet)
+    deathThrow = 280,          -- cm/s a piece cut off by a killing blow flies with, the way the blow went (650 with
+                               --   pieceGravity sent it 5-10 m)
+    legThrow = 1.4,            -- a cut-off leg gets this many times the throw when it just drops off (it dropped at
+                               --   her feet); not on a killing blow's
     legLift = 0.35,            --   and leans this much more upward
     pieceGravity = 0.55,       -- share of gravity a cut-off arm or leg falls with, for its first pieceFloat s (1 = full:
     pieceFloat = 3,            --   it dropped like a stone)
     throwTicks = 3,           -- ticks after a cut the piece is kept at least as fast as its throw (the throw went in
                                --   the tick its bodies started simulating and was mostly lost)
-    splitFly = 200,            -- cm/s the cut off half of a death split flies with, the way the blow went
+    splitFly = 200,            -- cm/s both halves of a death split fly with, the way the blow went
     caps = true,               -- flesh caps over both openings
     capScale = 1.05,           -- cap size relative to the opening's outline (1 = ends exactly on the skin)
     boneStubs = true,          -- a snapped bone (the game's GM_Brokenbone) in each limb and neck stump
@@ -187,7 +193,19 @@ return {
     linearDamping = 0.2,       -- the main bodies' damping, as the data mod sets it (vanilla 5.0: she falls slowly)
     angularDamping = 1.0,      --   (vanilla 10: she turns as if under water)
     hardLimits = true,         -- the main joints' limits stop dead instead of giving way
+    weldKinematic = true,      -- every outfit: the joints of the bodies its asset makes kinematic (breasts, neck pieces,
+                               -- arm twists, armour plates) are locked solid, so in the ragdoll they ride their bone
+                               -- instead of buzzing against soft 0.1-1 deg limits
+    quietJiggle = true,        -- the torso's jiggle bodies (breasts) collide with nothing: inside her chest they shoved
+                               -- her arms and torso every frame and she buzzed on the floor
     lockLoose = true,          -- bodies with no joint (cape and skirt anchors) are locked to the body above them
+    steady = true,             -- every outfit: solver iterations raised on every body, and the ends turn-damped (joints
+    positionIterations = 16,   --   came apart and snapped back with the engine's 8 / 1: she was shot off at 10-23 m/s
+    velocityIterations = 4,    --   and her hands and head spun at the cap for seconds)
+    endsAngularDamping = { head = 2.0, hands = 3.0, feet = 3.0 },
+    complete = true,           -- an asset missing main bodies (CH_P_EVE_21: no thighs) is swapped for completeWith: a
+                               -- body-less thigh stayed on the hip while the cut calf flew, its clothes stretched
+    completeWith = "/Game/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit_Physics.CH_P_EVE_InnerSuit_Physics",
     borrow = true,             -- a mesh with no physics asset (no ragdoll) gets <mesh>_Physics, else fallback
     fallback = "/Game/Art/Character/PC/CH_P_EVE_01/CH_P_EVE_01_Physics.CH_P_EVE_01_Physics",
   },
@@ -210,7 +228,7 @@ return {
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s
     momentum = 1.0,            -- share of her speed before death carried into the fall (0 = drops on the spot)
     momentumMax = 1500,        -- cm/s
-    impact = 450,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
+    impact = 200,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
                                -- from the attacker when the game gives no direction)
     impactUp = 0.15,           -- upward share of that push
     twist = 35,                -- deg/s random turn about the vertical as she goes down (0 = none)
@@ -240,6 +258,15 @@ return {
       linear = true,           -- a main body flying off faster than her torso by more than linearOver cm/s (and
       linearOver = 1200,       --   faster than linearFloor) is slowed to that every tick (a hand shot off at 15000
       linearFloor = 1500,      --   cm/s, nineteenth playtest)
+      launchTime = 0.5,        -- s: over the start every main body, torso too, is held to her momentum + impact +
+      launchOver = 400,        --   launchOver cm/s (+ the fall since): a leg cut mid-fall shot her off at 16 m/s
+    },
+    fall = {                   -- a death in the air fell at a steady 2 m/s: from when her pelvis drops faster than
+      enabled = true,          --   start cm/s until it slows under land cm/s, the bodies still on her are kept at
+      start = 100,             --   least as fast downward as a free fall from then (gravity: share of it), up to
+      land = 60,               --   max cm/s
+      gravity = 1.0,
+      max = 1500,
     },
     settle = {                 -- lying still: tone off and every body asleep, so she stops jittering on the floor
       enabled = true,
@@ -300,11 +327,12 @@ return {
   glassCannon = {              -- realistic glass cannon (glass.lua); Shift+F8 turns it on and off in game
     enabled = false,           -- off by default
     shieldGuard = true,        -- while her shield is up a hit takes the shield, never HP; with it down any hit kills
+    barDrop = 0.002,           -- her HP bar dropping more than this since the last tick is a hit with the shield down: she dies
     damageMult = 8,            -- what enemies near her lose (HP and shield) is multiplied by this
     foeReach = 4000,           -- cm: enemies this near her get it
     reach = 60,                -- cm: the enemy weapon's step passing this near a part of her landed there
     swingBack = 0.45,          -- s of the weapon's trail looked back over at a hit
     meshHitWindow = 0.6,       -- s: else her mesh's hit this recent says where
-    deathWait = 0.35,          -- s: HP 0 not taken as a death by then, the mod's own death runs
+    deathWait = 0.3,           -- s: HP 0 not taken as a death by then, the game's ActorDead is called; as long again, the mod's own death
   },
 }

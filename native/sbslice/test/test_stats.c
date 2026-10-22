@@ -219,8 +219,11 @@ int main(void)
         check(!strncmp(res, "err bad ratio", 13), "a full bar (everything at full matches it) is refused");
         e2[S_HP] = 410.5f;
         cmd(s5, 0.41049999f, 0, 0, 0);
+        check(!strncmp(res, "more 1", 6) && npaths == 0, "one bar reading never takes an array, however few are left");
+        e2[S_HP] = 300;
+        cmd(s5, 0.3f, 0, 0, 0);
         printf("search bar: %s\n", res);
-        check(!strncmp(res, "ok found=1 paths=6a8,158,30 hp=410.50", 37), "her HP bar finds her array");
+        check(!strncmp(res, "ok found=1 paths=6a8,158,30 hp=300.00", 37), "her HP bar's second reading finds her array");
         npaths = 0;
         e2[S_HP] = 300;
         cmd(s1, 0, 0, 0, 0);

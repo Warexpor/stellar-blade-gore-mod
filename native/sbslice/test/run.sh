@@ -50,6 +50,9 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       # seam's point rides a still helper of the stump's body, nothing stretches to a moving one or to the chest
       on arm && [[ -z $posed ]] && jobs+=("real thigh cut $m near the knee, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.81|$m"
                                          "real thigh cut $m, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|$m")
+      # both thighs off (the right first), the hip's correctives moving: the second seam never collapses into the first
+      # stump (twenty-ninth playtest: the crotch stretched between them)
+      on arm && [[ -z $posed ]] && jobs+=("real thigh cuts $m, both legs|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4 LEGFIRST=Bip001-R-Thigh|$m")
       # a calf cut: its stub's carrier rides the thigh, never the hip's jiggle body (a body of its own)
       on arm && [[ -z $posed ]] && jobs+=("real calf cut $m|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|$m")
       # a stub carrier must have held still while she played: helpers that swung, or none watched yet, carry nothing
@@ -64,9 +67,15 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
     jobs+=("real split CH_P_EVE_10|POSED=|CH_P_EVE_10" "real split CH_P_EVE_10 (posed)|POSED=1|CH_P_EVE_10"
            "real split CH_P_EVE_10, correctives driven|DRIVEN=1|CH_P_EVE_10" "real split CH_P_EVE_09, correctives driven|DRIVEN=1|CH_P_EVE_09")
   fi
+  # a waist cut once the watch has seen every helper move (playtest 30, InnerSuit after an arm and the head came off):
+  # a moved helper still takes each side's seam, none stays on its old weights stretched between the halves
+  on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit.uasset ]] &&
+    jobs+=("real waist cut CH_P_EVE_InnerSuit, every helper moved|WAIST=1 ALLMOVED=1|CH_P_EVE_InnerSuit"
+           "real waist cut CH_P_EVE_InnerSuit after the left arm, every helper moved|WAIST=1 ARMFIRST=1 ALLMOVED=1|CH_P_EVE_InnerSuit")
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real thigh cut CH_P_EVE_10, her elbow by the hip|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47 ELBOWHIP=1|CH_P_EVE_10"
            "real calf cut CH_P_EVE_10|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|CH_P_EVE_10"
+           "real thigh cuts CH_P_EVE_10, both legs|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4 LEGFIRST=Bip001-R-Thigh|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10 near the knee, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.81|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"

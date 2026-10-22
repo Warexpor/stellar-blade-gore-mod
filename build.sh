@@ -89,7 +89,7 @@ SRC=$CACHE/source
 # version) is skipped with a note. mods.txt: "<mod> <package>" for each package a mod ships, in load order.
 rm -rf "$SRC"; mkdir -p "$SRC"
 ln -s "$PAKS"/*.utoc "$PAKS"/*.ucas "$SRC/"
-: > "$SRC/mods.txt"
+: > "$SRC/mods.txt"; : > "$SRC/remount.txt"
 load_order() { # ~mods-relative paths on stdin, in the order the game mounts them
   python3 -c 'import sys; print("".join(sorted(sys.stdin, key=str.lower)), end="")'
 }
@@ -102,7 +102,15 @@ while IFS= read -r rel; do
   rank=$((rank + 1))
   link=$(printf 'zzmod%04dx_P' "$rank")
   ln -s "$toc" "$SRC/$link.utoc"; ln -s "${toc%.utoc}.ucas" "$SRC/$link.ucas"
-  "$RETOC" list --path "$toc" | awk -v m="$stem" '$NF ~ /\.uasset$/ { p = $NF; sub(/^.*\/SB\/Content\//, "", p); sub(/\.uasset$/, "", p); print m, p }' >> "$SRC/mods.txt"
+  # a mod cooked in a project of another name mounts at ../../../<Project>/Content/ (SBPR does): still /Game/,
+  # so its packages replace the game's; remount.txt notes them for legacy() below
+  "$RETOC" list --path "$toc" | awk -v m="$stem" -v rm="$SRC/remount.txt" '$NF ~ /\.uasset$/ { p = $NF
+    sub(/\.uasset$/, "", p)
+    if (!sub(/^.*\/SB\/Content\//, "", p) && match(p, /^(\.\.\/)*[^\/]+\/Content\//)) {
+      root = substr(p, 1, RLENGTH - 9); sub(/^(\.\.\/)*/, "", root); p = substr(p, RLENGTH + 1)
+      print m, root, p >> rm
+    }
+    print m, p }' >> "$SRC/mods.txt"
   # a mod mounted after ours wins over it in game, so what it shares with ours stays its own, unpatched
   if [[ $(printf '%s\n' "$rel" "$NAME.utoc" | load_order | tail -1) == "$rel" ]]; then
     log "mods: $rel loads after this mod; rename it to sort before $NAME if it replaces an outfit"
@@ -129,6 +137,14 @@ legacy() { # extract packages (SB/Content-relative, one per line on stdin) to $W
   local args=() r
   while read -r r; do [[ -f $W/vanilla/SB/Content/$r.uasset ]] || args+=(-f "Content/$r."); done
   (( ${#args[@]} )) && "$RETOC" to-legacy --no-shaders --no-script-objects "${args[@]}" "$SRC" "$W/vanilla" >/dev/null
+  # a remounted mod's package lands under its own root next to the game's: move it over the game's when that
+  # mod is the last to ship it (the one the game loads)
+  local mod root f
+  while read -r mod root r; do
+    [[ -f $W/vanilla/$root/Content/$r.uasset && $(mod_of "$r") == "$mod" ]] || continue
+    mkdir -p "$(dirname "$W/vanilla/SB/Content/$r")"; rm -f "$W/vanilla/SB/Content/$r".*
+    for f in "$W/vanilla/$root/Content/$r".*; do mv -f "$f" "$W/vanilla/SB/Content/$r.${f##*.}"; done
+  done < "$SRC/remount.txt"
   return 0
 }
 undumped() { # the packages on stdin that have no JSON yet

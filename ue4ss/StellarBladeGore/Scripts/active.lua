@@ -198,6 +198,7 @@ local function momentum(mesh, g)
   local cap = g.momentumMax or 1500
   if l > cap then v = vec(v.X * cap / l, v.Y * cap / l, v.Z * cap / l); l = cap end
   if l < 20 then return ", standing still" end
+  run.mom = l
   local ok = try(function() mesh:SetAllPhysicsLinearVelocity(v, true); return true end)
   return string.format(", momentum %.0f cm/s%s", l, ok and "" or " (failed)")
 end
@@ -292,8 +293,9 @@ local function weapons_back()
   return n
 end
 
--- each weapon rides an invisible box of its mesh's size, simulated, starting with her hand's speed plus a toss
-local function drop_weapons(pawn, mesh, g)
+-- each weapon rides an invisible box of its mesh's size, simulated, starting with her hand's speed plus a toss.
+-- only: drop just the weapons it says yes to (a cut arm's); one already dropped stays on its box
+local function drop_weapons(pawn, mesh, g, only)
   if g.dropWeapon == false then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.BoxComponent") end)
   if not valid(cls) then return ", weapons: no BoxComponent class" end
@@ -301,7 +303,14 @@ local function drop_weapons(pawn, mesh, g)
     or speeds[#speeds] or vec(0, 0, 0)
   local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
   local names = {}
+  local held = {}
+  for _, d in ipairs(dropped) do held[d.comp] = true end
+  local list = {}
   for _, w in ipairs(weapons(pawn)) do
+    if not held[w] and (not only or only(w)) then list[#list + 1] = w end
+  end
+  if only and #list == 0 then return "" end
+  for _, w in ipairs(list) do
     -- the imported bounds (GetBounds adds the asset's bounds extension: 217 cm for her sword), capped at weaponMaxCm
     local function bnd(fn) return try(function() local x = fn(); return { o = vec(x.Origin.X, x.Origin.Y, x.Origin.Z),
       e = vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z) } end) end
@@ -690,6 +699,22 @@ local function lin_vel(comp, b)
 end
 local function clamp_flung(comp, s)
   if s.linear == false then return end
+  -- the start: nothing she has moves faster than her momentum and the blow (and the fall since) allow. A ragdoll
+  -- that started mid-fall (a leg cut) shot her torso off at 1600 cm/s with 57 of momentum, thirty-fourth playtest
+  if run.t < (s.launchTime or 0.5) then
+    local lim = (run.mom or 0) + (cfg().impact or 200) + (s.launchOver or 400) + 981 * run.t
+    for b in pairs(MASS) do
+      local v = lin_vel(comp, b)
+      local l = v and len(v)
+      if l and l > lim then
+        local k = lim / l
+        try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FName(b)) end)
+        run.launched = (run.launched or 0) + 1
+        if run.launched == 1 then log(string.format("launched: %s at %.0f cm/s slowed to %.0f at %.2f s", b, l, lim, run.t)) end
+      end
+    end
+    return
+  end
   local ref = 0
   for _, b in ipairs(TORSO) do
     local v = lin_vel(comp, b)
@@ -805,9 +830,47 @@ local function settle(dt)
   tone_stop()
   local n = 0
   for _, c in ipairs(comps) do if valid(c) then n = n + sleep(c) end end
-  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies asleep, %d spins slowed to the cap, %d flung bodies slowed", run.t, top,
-    drift == math.huge and -1 or drift, n, run.clamped or 0, run.flung or 0))
+  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies asleep, %d spins slowed to the cap, %d flung bodies slowed, %d launched", run.t, top,
+    drift == math.huge and -1 or drift, n, run.clamped or 0, run.flung or 0, run.launched or 0))
   if run.rolls then log("rolled about the bone since the start (deg): " .. roll_report(run.mesh, run.rolls)) end
+end
+
+-- her fall: a death in the air fell at a steady 2 m/s for over a second, as if under water (thirty-fifth playtest).
+-- From when her pelvis starts dropping until it lands, the bodies still on her are kept at least as fast downward as
+-- a free fall from then would be (up to fall.max)
+local function fall_assist(dt)
+  local f = cfg().fall or {}
+  if f.enabled == false or run.piece or run.split or run.asleep or run.landed or not valid(run.mesh) then return end
+  local comp = run.mesh
+  local v = lin_vel(comp, "Bip001-Pelvis")
+  if not v then return end
+  local g = 981 * (f.gravity or 1.0)
+  if not run.fallT then
+    if v.Z > -(f.start or 100) then return end
+    run.fallT = run.t + v.Z / g -- when a free fall would have been this fast
+  end
+  if v.Z > -(f.land or 60) then
+    run.landed = true
+    log(string.format("fall: landed at %.2f s after %.2f s falling, %d ticks sped up (at most %.0f cm/s)", run.t,
+      run.t - run.fallT, run.fallSped or 0, run.fallTop or 0))
+    return
+  end
+  local want = -math.min(g * (run.t - run.fallT), f.max or 1500)
+  local dz = want - v.Z
+  if dz >= 0 then return end
+  -- the bodies a cut took off fly on their own
+  local function on_her(b)
+    for r in pairs(severed) do
+      if r == b or try(function() return comp:BoneIsChildOf(FName(b), FName(r)) end) then return false end
+    end
+    return true
+  end
+  for b in pairs(MASS) do
+    local bv = on_her(b) and lin_vel(comp, b)
+    if bv then try(function() comp:SetPhysicsLinearVelocity(vec(bv.X, bv.Y, bv.Z + dz), false, FName(b)) end) end
+  end
+  run.fallSped = (run.fallSped or 0) + 1
+  run.fallTop = math.max(run.fallTop or 0, -want)
 end
 
 function M.tick(dt)
@@ -835,6 +898,7 @@ function M.tick(dt)
   end
   settle(dt)
   if not run then return end
+  fall_assist(dt)
   clamp_spin()
   if run.impactAt and run.t >= run.impactAt then
     run.impactAt = nil
@@ -890,9 +954,26 @@ function M.freed(comp, bone)
   freed[a][tostring(bone)] = true
 end
 
--- a limb came off: its root stops pulling towards the body (its own joints keep their fading tone)
+-- a limb came off: its root stops pulling towards the body (its own joints keep their fading tone). A cut arm lets
+-- go of the weapons it held: in a death show's fall the animation kept her sword in the air, in an invisible hand
 function M.on_cut(mesh, bone)
   M.broken(mesh, bone)
+  local b = tostring(bone)
+  local side = b:match("^Bip001%-(%a)%-")
+  if side and (b:find("Clavicle") or b:find("UpperArm") or b:find("Forearm") or b:find("Hand")) then
+    local pawn = try(function() return mesh:GetOwner() end)
+    -- held in the cut arm's hand: weapons hang off Bip001-Prop1/2 (children of Bip001, the animation puts them in
+    -- the hand), so it goes by where the grip is
+    local hand = try(function() local v = mesh:GetSocketLocation(FName("Bip001-" .. side .. "-Hand")); return vec(v.X, v.Y, v.Z) end)
+    local function in_hand(w)
+      local at = try(function() local v = w:K2_GetComponentLocation(); return vec(v.X, v.Y, v.Z) end)
+      if not (hand and at) then return false end
+      local dx, dy, dz = at.X - hand.X, at.Y - hand.Y, at.Z - hand.Z
+      return dx * dx + dy * dy + dz * dz < 30 * 30
+    end
+    local r = valid(pawn) and drop_weapons(pawn, mesh, cfg(), in_hand) or ""
+    if r ~= "" then log("cut " .. b .. r) end
+  end
   if not (run and valid(run.pac)) then return end
   drive(run.pac, bone, 0, cfg().tone or {})
 end

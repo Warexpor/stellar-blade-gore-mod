@@ -308,7 +308,9 @@ def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
     assets = dict(spec["assets"])
     phys_mesh = {}
     for mesh, phys in pairs:
-        if mesh not in assets:
+        # the meshes themselves only when asked: sbslice.dll keeps every mesh's LOD0 CPU copy, and a repacked copy of
+        # an outfit mod's mesh crashed the game's loader when she put some of them on (SBPR, CyberneticDress & co.)
+        if mesh not in assets and job.get("cpuaccess", False):
             assets[mesh] = {"mode": "cpuaccess", "lods": job["cpuaccess_lods"]}
         if phys != "-":
             phys_mesh.setdefault(phys, mesh)

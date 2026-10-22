@@ -116,6 +116,21 @@
         "StartTime": 0.0
       }
     },
+    "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Laser": {
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 300.0,
+        "StartTime": 0.35
+      },
+      "_comment": "Laser trap deaths (and P_EVE_Dead_Laser_BalanceBeam): vanilla plays a 2 s additive twitch with a shock decal and sparks and no ragdoll key, so she never simulated and main.lua never saw a death. The key starts her ragdoll 0.35 s into the jolt, a soft push (no blow to follow); the death then cuts like any other (a made-up blade, no skill hit)"
+    },
+    "Art/Show/CH_P_EVE_01/Basic/P_EVE_Dead_Laser_BalanceBeam": {
+      "mode": "inject",
+      "set": {
+        "ImpulsePower": 300.0,
+        "StartTime": 0.35
+      }
+    },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_AirDead": {
       "mode": "inject",
       "set": {
@@ -371,6 +386,8 @@
     "skip": [
       "*Hair*"
     ],
+    "_comment_cpuaccess": "false: the outfit meshes are not repacked (only their physics assets): sbslice.dll keeps every skeletal mesh's LOD0 CPU copy at load (NeedCPUData), so the cut reads any outfit. The copies of outfit mods' meshes (SBPR's, 37 of them) crashed the game's async loader on some outfit changes (three crash dumps, all in the loader, right after CH_P_EVE_30). true repacks every mesh with LOD0 CPU access again, for a game without the DLL",
+    "cpuaccess": false,
     "cpuaccess_lods": [
       0
     ],

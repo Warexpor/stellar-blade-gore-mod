@@ -25,6 +25,9 @@ __declspec(dllimport) int WINAPI GetModuleHandleExW(u32, const void *, void **);
 __declspec(dllimport) int WINAPI DisableThreadLibraryCalls(void *);
 __declspec(dllimport) void *WINAPI VirtualAlloc(void *, u64, u32, u32);
 __declspec(dllimport) int WINAPI VirtualFree(void *, u64, u32);
+__declspec(dllimport) int WINAPI VirtualProtect(void *, u64, u32, u32 *);
+__declspec(dllimport) int WINAPI FlushInstructionCache(HANDLE, const void *, u64);
+__declspec(dllimport) HANDLE WINAPI GetCurrentProcess(void);
 
 int _fltused = 0;
 #ifndef SBSLICE_HOSTED
@@ -53,6 +56,7 @@ void *memset(void *d, int c, u64 n)
 #define RVA_WEAK_PTR_GET 0x2ba3ab0                           // FWeakObjectPtr::Get
 #define RVA_GUOBJECTARRAY 0x6dd7230                          // FUObjectArray GUObjectArray (UE4SS logs it)
 #define RVA_GMALLOC 0x706b500                                // FMalloc *GMalloc (UE4SS logs it); vtable Malloc +0x10, Free +0x30
+#define RVA_NEED_CPU_DATA 0x4529a30                          // USkeletalMesh::NeedCPUData(LOD): LODInfo[LOD].bAllowCPUAccess
 #define INVALID_HANDLE ((HANDLE)(long long)-1)
 
 static u64 exe;
@@ -179,6 +183,7 @@ typedef u32 (*index_get_fn)(u64 self, u32 i);
 // without a triangle reaching across the body.
 static struct { u64 mesh, comp; int bone, down, proj, carry; float m[16], at[3], pm[16]; } sinks[MAX_SINKS]; // comp: the cut's
 #define SINK_IN 2.0f // cm a sink's collapse point sits inside its own side of the cut
+#define SINK_REUSE_CM 8.0f // an earlier cut's sink serves a seam whose joint is this close to where it collapses
 static int nsinks;
 
 // bones that never become a sink (Lua sends them before a cut, per mesh asset: the main skeleton, hair, capes,
@@ -213,7 +218,7 @@ static float watch_dt[MAX_BONES], watch_dc[MAX_BONES];
 // had named them in "n". The split's seam (26000 vertices) collapsed onto the spine's Ab-AX3 family of correctives on
 // CH_P_EVE_10, and in a ragdoll death they stood up in sheets as tall as she was (twenty-sixth playtest); a cost on
 // them wasn't enough, they were the only helpers of their bands
-static unsigned char wmoved[MAX_BONES], nsx[MAX_BONES];
+static unsigned char wmoved[MAX_BONES], nsx[MAX_BONES], nsm[MAX_BONES];
 // a split half's limbs, decided by Lua from where each limb is (a limb never splits lengthwise): roots of the limbs
 // that go with the other half, and of the ones that stay. For the next MODE_SIDE cut on that component
 #define MAX_LIMB_ROOTS 8
@@ -1230,6 +1235,22 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
 // to give up: stable, a leaf, few vertices of its own (a helper, not a main deformer like the pelvis). An earlier
 // cut's sink is free. Never B or its parent (they carry the limb and the stump), never the root. PLANE / HOLE want
 // it on its own side of the plane / inside the body (every mode), or the collapsed skin would poke out through the cap.
+// where an earlier cut's sink collapses its skin now (world): its bone's pose applied to its collapse point. 0 for a
+// carrier (its skin isn't collapsed) or no pose
+static int sink_point(const cut_ctx *c, int bone, float *o)
+{
+    const float *t = pose_of(c, bone);
+    if (!t) return 0;
+    for (int i = 0; i < nsinks; i++) {
+        if (sinks[i].mesh != c->sm || sinks[i].bone != bone || sinks[i].carry) continue;
+        float l[3] = { sinks[i].at[0] * t[8], sinks[i].at[1] * t[9], sinks[i].at[2] * t[10] }, r[3];
+        quat_rot(t, l, r);
+        for (int k = 0; k < 3; k++) o[k] = t[4 + k] + r[k];
+        return 1;
+    }
+    return 0;
+}
+
 static int find_sink(const sink_args *a, int s, int sd)
 {
     const cut_ctx *c = a->c;
@@ -1240,6 +1261,15 @@ static int find_sink(const sink_args *a, int s, int sd)
         if (a->nosink && a->nosink[i]) continue;
         // nothing reuses a flattening sink
         if (is_proj_sink(c, i)) continue;
+        // an earlier cut's sink pulls its skin to that cut's opening: free only for a seam right there. The second
+        // thigh's seam collapsed into the first thigh's stump (its hip helper, Dm-R-Thigh-point) and stretched across
+        // the crotch (twenty-ninth playtest). A carrier's skin shows: never anyone's sink
+        if (is_sink(c, i)) {
+            float q[3];
+            if (!sink_point(c, i, q)) continue;
+            float e0 = q[0] - a->joint[0], e1 = q[1] - a->joint[1], e2 = q[2] - a->joint[2];
+            if (e0 * e0 + e1 * e1 + e2 * e2 > SINK_REUSE_CM * SINK_REUSE_CM) continue;
+        }
         const float *t = pose_of(c, i);
         if (!t) continue;
         float d0 = t[4] - a->joint[0], d1 = t[5] - a->joint[1], d2 = t[6] - a->joint[2], d = d0 * d0 + d1 * d1 + d2 * d2;
@@ -1439,7 +1469,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     }
     // (a limb cut whose only other choice rides a body two away takes one after all, see below)
     // and a bone the GPU doesn't skin (not active) is never a sink nor a carrier, unless it can be made active
-    for (int i = 0; i < nb; i++) nsx[i] = (ns && ns[i]) || wmoved[i] || (!act_arr && !bactive[i]);
+    // (nsm: the same without the watch, for a seam that finds nothing else)
+    for (int i = 0; i < nb; i++) {
+        nsm[i] = (ns && ns[i]) || (!act_arr && !bactive[i]);
+        nsx[i] = nsm[i] || wmoved[i];
+    }
     ns = nsx;
 
     // a split half: the limbs that go with the other half and the ones that stay (subtrees of Lua's roots), and what
@@ -1733,6 +1767,15 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                         if (score < bd) { bd = score; best = i; }
                     }
                     if (best > 0 && borrow_bone(secs, s, best, inmap, nb)) secsink[s * 2 + sd] = best;
+                }
+                // still none: every helper of that side moved while she played (a long watch saw them all). A moving
+                // sink drags its seam's point a little; with none the seam kept its old weights and stretched between
+                // the halves of a waist cut (playtest 30, after an arm or the head had come off), or the limb side
+                // vanished whole
+                if (secsink[s * 2 + sd] < 0 && mode == MODE_CUT && nmoved) {
+                    sink_args sm = sa;
+                    sm.nosink = nsm;
+                    secsink[s * 2 + sd] = find_sink(&sm, s, sd);
                 }
                 // the one it has rides another body than its side's stump, or the animation moves it: the seam's point
                 // would move against the opening and stretch it. A helper that held still on the stump's own body is
@@ -3039,6 +3082,27 @@ static const u16 ERR[] = u"ue4ss\\Mods\\StellarBladeGore\\sbslice.err";
 
 void spawner_start(void); // spawner.c: the enemy spawner window
 
+// Every skeletal mesh keeps a CPU copy of its LOD 0 (the cut reads it), so outfit mods need no bAllowCPUAccess
+// repack. NeedCPUData opens with `test edx,edx; js <null LODInfo>`; the js becomes `jle <return 1>`, so LOD <= 0
+// answers yes and the rest still read bAllowCPUAccess. The render data asks it while a mesh loads: anything loaded
+// before this DLL keeps what it had.
+static const char *cpu_state = "cpu copy patch not tried";
+
+static void patch_cpu_access(void)
+{
+    unsigned char *p = (unsigned char *)(exe + RVA_NEED_CPU_DATA);
+    static const unsigned char want[] = { 0x85, 0xd2, 0x78, 0x1b, 0x3b, 0x91, 0x08, 0x01, 0x00, 0x00 };
+    if (p[2] == 0x7e && p[3] == 0x28) { cpu_state = "cpu copy LOD0 on (already)"; return; }
+    for (int i = 0; i < (int)sizeof want; i++)
+        if (p[i] != want[i]) { cpu_state = "cpu copy patch skipped: NeedCPUData bytes differ (other game build?)"; return; }
+    u32 old;
+    if (!VirtualProtect(p, 4, 0x40 /*PAGE_EXECUTE_READWRITE*/, &old)) { cpu_state = "cpu copy patch failed: VirtualProtect"; return; }
+    *(volatile unsigned short *)(p + 2) = 0x287e; // jle +0x28 (the `mov al,1; ret`), one aligned 2-byte store
+    VirtualProtect(p, 4, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, 4);
+    cpu_state = "cpu copy LOD0 on";
+}
+
 static u32 WINAPI worker(void *arg)
 {
     (void)arg;
@@ -3065,8 +3129,14 @@ static u32 WINAPI worker(void *arg)
             for (int i = 0; i < 0x40; i++) {
                 if (f[i] == thunk || f[i] == (u64)exec_slice) {
                     f[i] = (u64)exec_slice;
-                    char ok[40] = "patched +0x";
+                    char ok[160] = "patched +0x";
                     hex64(ok + 11, (u64)i * 8);
+                    int n = 0;
+                    while (ok[n]) n++;
+                    ok[n++] = ',';
+                    ok[n++] = ' ';
+                    for (const char *c = cpu_state; *c && n < (int)sizeof ok - 1; c++) ok[n++] = *c;
+                    ok[n] = 0;
                     write_file(OK, ok);
                     goto next;
                 }
@@ -3087,6 +3157,7 @@ int WINAPI DllMain(void *inst, u32 reason, void *reserved)
         DisableThreadLibraryCalls(inst);
         GetModuleHandleExW(0x4 /*FROM_ADDRESS*/ | 0x1 /*PIN*/, (const void *)DllMain, &self);
         exe = (u64)GetModuleHandleW(0);
+        patch_cpu_access();
         CreateThread(0, 0, worker, 0, 0, 0);
         spawner_start();
     }

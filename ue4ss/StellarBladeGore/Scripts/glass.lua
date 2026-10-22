@@ -1,7 +1,11 @@
 -- Realistic glass cannon mode (tune.glassCannon, off by default; Shift+F8 turns it on and off in game).
 -- While her shield is up a hit takes the shield, never HP. Once it is down, any hit kills her, cut where it landed
 -- (along the weapon's swing when there was one). Her blows do damageMult times the damage.
--- Her HP and shield live in native memory only, so sbslice.dll finds them (stats.c: anchored on what her HUD shows,
+-- The kill goes by her HUD's HP bar (ProgressBar_HP.Percent, which the game keeps live): the game's shield takes a
+-- hit first, so the bar dropping at all is a hit with the shield down. That needs nothing found in memory; the
+-- search for her stats went wrong in every playtest (twenty-second to thirty-second: none found, or a stranger's).
+-- Her HP and shield live in native memory only, so sbslice.dll looks for them (the damage multiplier, the shield's
+-- guard, a death the game takes as its own need them) (stats.c: anchored on what her HUD shows,
 -- WB_MainHUD_PlayerInfo's HpValue, MaxHpValue, ShieldValue, MaxShieldValue; the game fills those only now and then,
 -- so without them the search goes by her HP bar, ProgressBar_HP.Percent, which the game does keep live (of every
 -- stats-shaped array, the ones whose HP / MaxHP reads what the bar shows) and by hits (the ones whose HP drops when
@@ -56,13 +60,24 @@ local function num(w, k) local x = try(function() return w[k] end); return type(
 local function hud_values()
   if not (valid(st.hud) and (num(st.hud, "MaxHpValue") or 0) > 0) then
     st.hud = nil
+    -- the bar's widget found already and showing no MaxHP: nothing to look for (FindAllOf took 50 ms every 5 s, a
+    -- hitch each time, thirty-second playtest)
+    if valid(st.barHud) then
+      if (num(st.barHud, "MaxHpValue") or 0) <= 0 then return nil end
+      st.hud = st.barHud
+    end
+  end
+  if not st.hud then
     if os.clock() < st.hudTry then return nil end
     st.hudTry = os.clock() + 5
     local all = try(function() return FindAllOf(HUD) end) or {}
     st.huds = #all
     for _, w in ipairs(all) do
       local name = try(function() return w:GetFullName() end) or ""
-      if valid(w) and not name:find("Default__") and (num(w, "MaxHpValue") or 0) > 0 then st.hud = w; break end
+      if valid(w) and not name:find("Default__") then
+        if not valid(st.barHud) and type(try(function() return w.ProgressBar_HP.Percent end)) == "number" then st.barHud = w end
+        if (num(w, "MaxHpValue") or 0) > 0 then st.hud = w; break end
+      end
     end
     if not st.hud then return nil end
   end
@@ -274,6 +289,62 @@ local function leg_bone(mesh, bone)
   return bone:find("Thigh") and up or low
 end
 
+-- the game's own stat and death calls: client RPCs on her controller (SBNetworkPlayerController), which a single-player
+-- game runs locally. The game itself never sends them in single player, so what they do with these arguments is being
+-- found out (the log says what the HP bar did after each)
+local function game_call(pawn, fn, ...)
+  local args = { ... }
+  local pc = try(function() return pawn.Controller end)
+  local g = try(function() return pawn.BroadcastSpawnInfo.ActorGuid end)
+  if not (valid(pc) and g) then return "no controller or actor guid" end
+  for i, a in ipairs(args) do if a == "guid" then args[i] = g end end
+  local ok, err = pcall(function() pc[fn](pc, table.unpack(args)) end)
+  return ok and string.format("sent (guid %d)", g) or tostring(err)
+end
+-- her MaxHP as the HUD's HP text shows it ("123 / 123"; the text is stale, its maximum isn't), or nil
+local function text_mhp()
+  local t = valid(st.barHud) and try(function() return st.barHud.TextBlock_HPInfo:GetText():ToString() end)
+  return t and tonumber(t:match("/%s*([%d%.]+)"))
+end
+
+-- her shield, off the HUD: one widget per segment (WB_MainHud_Shield_N in HB_Shield_Slots, each a ProgressBar_Shield).
+-- true while any shown segment holds some, false when none does, nil when the HUD has none to read
+local function shield_up()
+  local w = st.barHud
+  if not valid(w) then return nil end
+  -- the segments are their own widgets (WB_MainHud_Shield_C), not reachable as properties of the HUD's (none were,
+  -- thirty-fourth playtest: "0 segments"): looked for among all of them, at most every 5 s while none are known
+  local slots = {}
+  for _, sl in ipairs(st.shieldSlots or {}) do if valid(sl) then slots[#slots + 1] = sl end end
+  if #slots == 0 and os.clock() >= (st.shieldTry or 0) then
+    st.shieldTry = os.clock() + 5
+    for _, sl in ipairs(try(function() return FindAllOf("WB_MainHud_Shield_C") end) or {}) do
+      local name = try(function() return sl:GetFullName() end) or ""
+      if valid(sl) and not name:find("Default__") then slots[#slots + 1] = sl end
+    end
+    st.shieldSlots = slots
+    if #slots > 0 then st.shieldLogged = nil end
+  end
+  local up, seen, desc = false, 0, {}
+  for _, sl in ipairs(slots) do
+    local pct = valid(sl) and try(function() return sl.ProgressBar_Shield.Percent end)
+    if type(pct) == "number" then
+      local shown = try(function() return sl:IsVisible() end) ~= false
+      seen = seen + 1
+      desc[#desc + 1] = string.format("%.2f%s", pct, shown and "" or " hidden")
+      if shown and pct > 0.01 then up = true end
+    end
+  end
+  if not st.shieldLogged then
+    st.shieldLogged = true
+    log(string.format("glass: her shield on the HUD: %d segments (%s)", seen, table.concat(desc, ", ")))
+  end
+  if seen == 0 then return nil end
+  if up ~= st.shieldWas then log("glass: her shield " .. (up and "up" or "down") .. " (" .. table.concat(desc, ", ") .. ")") end
+  st.shieldWas = up
+  return up
+end
+
 -- any hit with the shield down: she dies now. Her HP goes to 0; if the game doesn't take that as a death within deathWait
 -- seconds, the mod's own death runs (main.lua: ragdoll, the cut, up again after recoverAfter at full HP)
 local function kill(pawn, mesh, part)
@@ -281,10 +352,19 @@ local function kill(pawn, mesh, part)
   local bone
   if kind == "arm" then bone = arm_bone(mesh, part.bone) elseif kind == "leg" then bone = leg_bone(mesh, part.bone) end
   st.kill = { kind = kind, part = part, bone = bone, t = os.clock() }
-  ctx.gore.command("vy0") -- no guard on the way down
-  local r = ctx.gore.command(string.format("vw%s,%x", hex(pawn), S_HP), v(0))
-  st.dying = { t = os.clock(), pawn = pawn, mesh = mesh }
-  log(string.format("glass: %s hit (%s) with the shield down: instant death, HP to 0: %s", kind, part.src, r))
+  st.barSeen = nil
+  os.remove(EVT) -- (a hit the DLL told of too: not taken again once she is up)
+  local r
+  if st.found then
+    ctx.gore.command("vy0") -- no guard on the way down
+    r = "HP to 0: " .. ctx.gore.command(string.format("vw%s,%x", hex(pawn), S_HP), v(0))
+  else
+    -- (ApplyStat's value read as the HP to set: 0. Read as a change, it does nothing, and ActorDead follows)
+    r = "HP to 0 through the game's ApplyStat: " .. game_call(pawn, "ClientBroadcast_ActorApplyStat", 0, "guid", S_HP, 0, true, true, 0, 0)
+  end
+  -- the game's death, else its ActorDead call, else the mod's own death (tick)
+  st.dying = { t = os.clock(), step = 0, pawn = pawn, mesh = mesh }
+  log(string.format("glass: %s hit (%s) with the shield down: instant death, %s", kind, part.src, r))
 end
 
 local function on_hit(pawn, mesh, line)
@@ -292,6 +372,38 @@ local function on_hit(pawn, mesh, line)
   local part = hit_part(pawn, mesh)
   log(string.format("glass: %s; landed on %s (%s)", line, part.bone, part.src))
   kill(pawn, mesh, part)
+end
+
+-- her HP bar dropped since the last tick: a hit with the shield down (with it up, or within 0.8 s of a hit it took,
+-- not). Not while the game is paused (a menu: gear
+-- that raises her MaxHP lowers the bar's share); the reading after a pause starts over
+local function bar_hit(pawn, mesh)
+  if not valid(st.gs) then st.gs = try(function() return StaticFindObject("/Script/Engine.Default__GameplayStatics") end) end
+  local gs = st.gs
+  if valid(gs) and try(function() return gs:IsGamePaused(pawn) end) == true then st.barSeen = nil; return false end
+  local pct = bar_pct()
+  local last = st.barSeen
+  st.barSeen = pct
+  -- the shield as it was before this tick's reading (a hit that breaks it is still the shield's)
+  local was = st.shieldUp
+  st.shieldUp = shield_up()
+  if not (pct and last and pct < last - (cfg().barDrop or 0.002)) then return false end
+  if os.clock() - (st.guardT or -9) < 0.8 then return false end
+  if was or st.shieldUp then
+    -- the game lets part of a hit through the shield: given back (the shield takes it all)
+    local mhp = text_mhp()
+    local r = "no MaxHP on the HUD"
+    if mhp and not st.found and cfg().shieldGuard ~= false then
+      r = game_call(pawn, "ClientBroadcast_ActorApplyStat", 0, "guid", S_HP, last * mhp, true, true, 0, last * mhp)
+      st.restore = { t = os.clock(), from = pct, to = last }
+    end
+    -- the bar slides down over a few ticks (1.000 -> 0.994, then 0.951): the rest of the slide is this hit's too
+    st.guardT = os.clock()
+    log(string.format("glass: her HP bar %.3f -> %.3f with her shield up: no death, HP given back (%s)", last, pct, r))
+    return false
+  end
+  on_hit(pawn, mesh, string.format("her HP bar %.3f -> %.3f", last, pct))
+  return true
 end
 
 -- the enemies near her: their losses multiplied (damageMult), each told to the DLL once
@@ -335,14 +447,31 @@ function M.tick(pawn, mesh)
   if not st.on then st.on = true; log("glass cannon on: the shield takes the hits, with it down any hit kills, " .. (cfg().damageMult or 8) .. "x her damage") end
   -- her death on its way: the game's own, else the mod's
   if st.dying then
-    if os.clock() - st.dying.t >= (cfg().deathWait or 0.35) then
+    local d, age, wait = st.dying, os.clock() - st.dying.t, cfg().deathWait or 0.3
+    if d.step == 0 and age >= wait then
+      d.step = 1
+      log(string.format("glass: still up %.2f s on (HP bar %s): the game's ActorDead: %s", age, tostring(bar_pct(true)),
+        game_call(pawn, "ClientBroadcast_ActorDead", 0, "guid", 0, 0, 0, 0, false, false)))
+    elseif d.step == 1 and age >= 2 * wait then
       st.dying = nil
       st.faked = true
-      log("glass: the game didn't take HP 0 as a death, the mod's own death instead")
+      log(string.format("glass: the game took neither as a death (HP bar %s): the mod's own death", tostring(bar_pct(true))))
       ctx.death(pawn, mesh)
     end
     return
   end
+  -- a shield hit's HP given back: what the bar did (finding out what ApplyStat takes)
+  if st.restore and os.clock() - st.restore.t >= 0.3 then
+    log(string.format("glass: HP bar %.3f after giving back %.3f (wanted %.3f)", bar_pct(true) or -1, st.restore.from, st.restore.to))
+    st.restore = nil
+  end
+  M.follow(pawn, mesh)
+  if not st.dying then bar_hit(pawn, mesh) end
+end
+
+-- her stats in memory: looked for, then followed (the shield's guard, the enemies' multiplied losses, hits the DLL saw)
+function M.follow(pawn, mesh)
+  local gore = ctx.gore
   if not st.found then
     if os.clock() < st.nextFind then return end
     st.nextFind = os.clock() + 5
@@ -405,6 +534,7 @@ function M.tick(pawn, mesh)
       on_hit(pawn, mesh, line)
       if st.dying then return end
     elseif w == "guard" then
+      st.guardT = os.clock() -- (the bar may dip before the HP given back shows: not a hit)
       log("glass: " .. line .. " (the shield took it, HP given back)")
     elseif w == "shield" then
       if st.shieldLogs < 50 then st.shieldLogs = st.shieldLogs + 1; log("glass: " .. line) end
@@ -462,20 +592,21 @@ end
 
 -- the mod's own death is over and she is up: full HP again, followed again
 function M.revived(pawn)
+  st.barSeen = nil
   if not st.faked then return end
   st.faked = false
   local r = ctx.gore.command("vr" .. hex(pawn))
   local mhp = tonumber(r:match("maxhp=([%d.]+)"))
   if mhp then ctx.gore.command(string.format("vw%s,%x", hex(pawn), S_HP), v(mhp)) end
   st.eve = nil
-  log("glass: up again after the mod's death, HP back to " .. tostring(mhp))
+  log("glass: up again after the mod's death, " .. (mhp and "HP back to " .. mhp or "HP as it was (her stats not found)"))
 end
 
 -- a new level: every actor is new (the stats' path stays)
 function M.forget()
   if st.on and ctx.gore and ctx.gore.state() == "ready" then pcall(ctx.gore.command, "vz") end
   st.on, st.eve, st.foes, st.dying, st.kill, st.faked, st.hud, st.hudLogged = false, nil, {}, nil, nil, false, nil, false
-  st.cands, st.candsOf, st.barLast, st.barSent, st.barHud, st.barTry = nil, nil, nil, nil, nil, 0
+  st.cands, st.candsOf, st.barLast, st.barSent, st.barHud, st.barTry, st.barSeen = nil, nil, nil, nil, nil, 0, nil
 end
 
 return M

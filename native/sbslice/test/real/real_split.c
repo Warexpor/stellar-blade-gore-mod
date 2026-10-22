@@ -23,6 +23,9 @@
 #define DisableThreadLibraryCalls DisableThreadLibraryCalls_
 #define VirtualAlloc VirtualAlloc_
 #define VirtualFree VirtualFree_
+#define VirtualProtect VirtualProtect_
+#define FlushInstructionCache FlushInstructionCache_
+#define GetCurrentProcess GetCurrentProcess_
 #define DllMain DllMain_
 #define SBSLICE_HOSTED
 #include "../../sbslice.c"
@@ -47,6 +50,9 @@ int mem_readable(u64 p, u64 n)
 #undef DisableThreadLibraryCalls
 #undef VirtualAlloc
 #undef VirtualFree
+#undef VirtualProtect
+#undef FlushInstructionCache
+#undef GetCurrentProcess
 static char lastres[65536];
 HANDLE CreateThread_(void *a, u64 b, u32(WINAPI *c)(void *), void *d, u32 e, u32 *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return 0; }
 void Sleep_(u32 x) { (void)x; }
@@ -60,6 +66,9 @@ int GetModuleHandleExW_(u32 a, const void *b, void **c) { (void)a;(void)b;(void)
 int DisableThreadLibraryCalls_(void *a) { (void)a; return 1; }
 void *VirtualAlloc_(void *a, u64 n, u32 t, u32 p) { (void)a;(void)t;(void)p; void *m = mmap(0, n, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0); return m == MAP_FAILED ? 0 : m; }
 int VirtualFree_(void *a, u64 n, u32 t) { (void)a;(void)n;(void)t; return 1; }
+int VirtualProtect_(void *a, u64 n, u32 p, u32 *o) { (void)a;(void)n;(void)p;(void)o; return 0; } // the NeedCPUData patch: never in the harness
+int FlushInstructionCache_(HANDLE h, const void *a, u64 n) { (void)h;(void)a;(void)n; return 1; }
+HANDLE GetCurrentProcess_(void) { return 0; }
 
 static int NB, NV, NSEC, NIDX;
 static int *bparent; static char (*bname)[32];
@@ -361,6 +370,9 @@ static void set_nosink(void)
     // thigh's body-side seam went to a chest helper 44 cm off and stretched the opening up to it
     if (env_on("HIPMOVED")) for (int i = 0; i < NB; i++)
         if (strstr(bname[i], "Venter") || strstr(bname[i], "-AX2")) watch_dt[i] = 1e30f;
+    // ALLMOVED=1: every helper moved while she played (a longer watch in game saw them all move). A waist cut found no
+    // sink for one side then and left its seam on the old weights, stretched between the halves (playtest 30)
+    if (env_on("ALLMOVED")) for (int i = 0; i < NB; i++) if (strncmp(bname[i], "Bip001", 6)) watch_dt[i] = 1e30f;
 }
 
 // gore.lua's limb roots: a limb or head cut keeps its sinks off every other limb (OLDNOSINK=1: as before, any)
@@ -653,6 +665,25 @@ int main(int argc, char **argv)
                 memcpy(t, keep, 16);
             }
         }
+        // LEGFIRST=<thigh>: that thigh came off first (0.4 down it, square to it, collapsed), as a killing swing through
+        // both legs: the crotch between them stretched (twenty-ninth playtest)
+        int lf = getenv("LEGFIRST") ? bone(getenv("LEGFIRST")) : -1, nfirst = 0;
+        if (lf >= 0) {
+            int lc = -1;
+            for (int i = 0; i < NB; i++) if (bparent[i] == lf && strstr(bname[i], "Calf")) lc = i;
+            if (lc < 0) { fprintf(stderr, "no calf under %s\n", bname[lf]); return 1; }
+            float *ap = space + lf * 12 + 4, *bp = space + lc * 12 + 4, aat[3], an[3], al = 0;
+            for (int k = 0; k < 3; k++) { aat[k] = ap[k] + (bp[k] - ap[k]) * 0.4f; an[k] = bp[k] - ap[k]; al += an[k] * an[k]; }
+            for (int k = 0; k < 3; k++) an[k] /= __builtin_sqrtf(al);
+            set_nosink(); other_limbs_nosink(lf);
+            limbs_comp = (u64)comp_a; ngone = 0; nkeep = 0; nride = 0; ndrop = 0;
+            skin_cut((u64)comp_a, 0, lf, aat, an, MODE_CUT, 0, 0, -1);
+            printf("leg first: %.200s\n", lastres);
+            if (strncmp(lastres, "ok", 2)) { printf("FAIL: the leg cut first failed\n"); return 1; }
+            skin_collapse();
+            const char *q = strstr(lastres, " sinks=");
+            for (q = q ? q + 7 : 0, nfirst = q && *q != ' '; q && *q && *q != ' '; q++) nfirst += *q == ',';
+        }
         set_nosink();
         other_limbs_nosink(ua);
         // the cape goes whole with the arm, as gore.lua sends it (the 4th group); KEEPCAPE=1 keeps it on the body
@@ -668,10 +699,11 @@ int main(int argc, char **argv)
         // every sink of the cut on the cut's own limb or off the limbs (the body), none on another arm or leg
         {
             const char *q = strstr(lastres, " sinks=");
-            int own = limb_of(ua), wrong = 0;
-            for (q = q ? q + 7 : 0; q && *q && *q != ' '; ) {
+            int own = limb_of(ua), wrong = 0, k = 0;
+            for (q = q ? q + 7 : 0; q && *q && *q != ' '; k++) {
                 int i = atoi(q);
-                if (i > 0 && i < NB && limb_of(i) >= 0 && limb_of(i) != own) { printf("arm: sink %s is on %s\n", bname[i], bname[limb_of(i)]); wrong++; }
+                // (the first leg's own sinks are on that leg)
+                if (k >= nfirst && i > 0 && i < NB && limb_of(i) >= 0 && limb_of(i) != own) { printf("arm: sink %s is on %s\n", bname[i], bname[limb_of(i)]); wrong++; }
                 while (*q && *q != ',' && *q != ' ') q++;
                 if (*q == ',') q++;
             }
@@ -861,6 +893,13 @@ int main(int argc, char **argv)
                 float *t = space + i * 12, nq[4]; qmul(q, t, nq); memcpy(t, nq, 16);
                 float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + 40; t[5] = r[1]; t[6] = r[2] - 20;
             }
+            // the first leg flies its own way: 40 cm the other side and 20 down
+            if (lf >= 0) {
+                unsigned char *ls = calloc(NB, 1);
+                for (int i = 0; i < NB; i++) ls[i] = i == lf || (bparent[i] >= 0 && ls[bparent[i]]);
+                for (int i = 0; i < NB; i++) if (ls[i]) { space[i * 12 + 4] -= 40; space[i * 12 + 6] -= 20; }
+                free(ls);
+            }
             // detached, the cape falls its own way: 30 cm back and 25 down, turned the other way
             if (detach) {
                 float q2[4] = { -0.3826834f, 0, 0, 0.9238795f };
@@ -953,6 +992,8 @@ int main(int argc, char **argv)
             if (left) { printf("FAIL: %d of the stub's %d carried vertices didn't turn with %s\n", left, n, bname[pb]); bad = 1; }
         }
         if (hid > still_hid) { printf("FAIL: the arm flung off stretches %d more triangles that stay visible\n", hid - still_hid); bad = 1; }
+        // the second leg's seam stays at its own opening: on the first leg's sink it stretched to that stump
+        if (lf >= 0 && still_hid > 0) { printf("FAIL: %d triangles stretch with both legs off, before either moves\n", still_hid); bad = 1; }
         printf("arm (cape %s): %d cape vertices, %d went with the arm; %d forearm vertices, %d stayed on the body\n%s\n",
             detach ? "detached, counted: not on its own bones" : onbody ? "kept on the body" : with ? "with the arm" : "not named",
             nc, cgone, nf, fleft, bad || fleft > nf / 200 ? "FAIL" : "PASS");
@@ -989,6 +1030,7 @@ int main(int argc, char **argv)
             if (!strcmp(bname[j], "Bip001-L-Clavicle") || !strcmp(bname[j], "Bip001-R-Clavicle") || !strcmp(bname[j], "Bip001-L-Thigh") || !strcmp(bname[j], "Bip001-R-Thigh")) nosink[i] = 1;
         skin_cut((u64)comp_a, 0, spine1, at2, nn, MODE_CUT, 0, 0, -1);
         printf("waist: %.300s\n", lastres);
+        if (!strstr(lastres, " unsunk=0 ")) { printf("FAIL: seam vertices left with no sink\n"); return 1; }
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
         unsigned char *arm = calloc(NB, 1), *upper = calloc(NB, 1);
         for (int i = 0; i < NB; i++) {
