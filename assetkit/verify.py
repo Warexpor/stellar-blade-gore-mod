@@ -196,12 +196,27 @@ for rel, job in spec["assets"].items():
                 pri = fv["DefaultInstance.PriAxis2.PriAxis2"]
                 a, b, n = ([q["X"], q["Y"], q["Z"]] for q in (pri, fv[sec], fo[sec]))
                 c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-                turn = math.degrees(math.atan2(sum(x * y for x, y in zip(n, c)), sum(x * y for x, y in zip(n, b))))
-                if abs(turn - lim["turn"]) > 0.01:
-                    fail.append(f"{tag}: {child} frame 2 turned {turn:.2f} instead of {lim['turn']}")
+                if "swing1" in lim:
+                    # the sideways swing (patch_shows.py): frame 2 turned by "turn" about PriAxis2, then by "tilt"
+                    # about its Z, and the cone's Swing1 half angle set
+                    exp["DefaultInstance.ProfileInstance.ConeLimit.Swing1LimitDegrees"] = float(lim["swing1"])
+                    exp["DefaultInstance.ProfileInstance.ConeLimit.Swing1Motion"] = "ACM_Limited"
+                    t = math.radians(lim["turn"])
+                    tb = [b[i] * math.cos(t) + c[i] * math.sin(t) for i in range(3)]
+                    t = math.radians(lim["tilt"])
+                    want_p = [a[i] * math.cos(t) + tb[i] * math.sin(t) for i in range(3)]
+                    want_s = [tb[i] * math.cos(t) - a[i] * math.sin(t) for i in range(3)]
+                    got_p = [fo["DefaultInstance.PriAxis2.PriAxis2"][k] for k in "XYZ"]
+                    got_s = n
+                    if max(abs(x - y) for x, y in zip(got_p + got_s, want_p + want_s)) > 1e-4:
+                        fail.append(f"{tag}: {child} frame 2 is not turned {lim['turn']} and tilted {lim['tilt']}")
+                else:
+                    turn = math.degrees(math.atan2(sum(x * y for x, y in zip(n, c)), sum(x * y for x, y in zip(n, b))))
+                    if abs(turn - lim["turn"]) > 0.01:
+                        fail.append(f"{tag}: {child} frame 2 turned {turn:.2f} instead of {lim['turn']}")
                 limited.append(child)
             for k in set(fo) | set(exp):
-                if lim and k == sec:
+                if lim and (k == sec or (k == "DefaultInstance.PriAxis2.PriAxis2" and "swing1" in lim)):
                     continue
                 a, b = fo.get(k), exp.get(k)
                 if not (a == b or (isinstance(a, (int, float)) and isinstance(b, (int, float)) and abs(a - b) < 1e-4)):

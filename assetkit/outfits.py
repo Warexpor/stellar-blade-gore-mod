@@ -299,7 +299,35 @@ def joint_limits(phys, bones, ranges):
         lo, hi = (-r["back"], r["front"]) if ahead > 0 else (-r["front"], r["back"])
         lo, hi = lo + at_bind, hi + at_bind
         out[child] = {"twist": round((hi - lo) / 2, 2), "turn": round((hi + lo) / 2, 2)}
-        notes.append(f"{child} {at_bind:+.0f} at bind, twist {out[child]['twist']} turned {out[child]['turn']:+}")
+        note = f"{child} {at_bind:+.0f} at bind, twist {out[child]['twist']} turned {out[child]['turn']:+}"
+        # the sideways swing (Swing1, about frame 2's Z: towards and away from her midline for a shoulder), when the
+        # range says how far: the engine's cone is the same both ways round the asset's zero, +-45 deg by default,
+        # and the bind pose's arms hang 30 deg out, so an arm folded 15 deg into her chest (playtest 43). Frame 2,
+        # already turned for the twist, is turned about its Z to centre the cone between "inward" and "outward"
+        if "inward" in r and "outward" in r and "Bip001-Pelvis" in names:
+            t = math.radians(out[child]["turn"])
+            p2 = _inst_vec(inst, "PriAxis2", (1.0, 0.0, 0.0))
+            s2 = _inst_vec(inst, "SecAxis2", (0.0, 1.0, 0.0))
+            c2 = cross(p2, s2)
+            s2 = tuple(s2[i] * math.cos(t) + c2[i] * math.sin(t) for i in range(3))
+            f2 = _frame(R[a], p2, s2)
+            rel = [[dot(f2[i], f1[j]) for j in range(3)] for i in range(3)]
+            w = math.sqrt(max(0.0, 1 + rel[0][0] + rel[1][1] + rel[2][2])) / 2
+            q = ((rel[2][1] - rel[1][2]) / (4 * w), (rel[0][2] - rel[2][0]) / (4 * w), (rel[1][0] - rel[0][1]) / (4 * w), w)
+            n = math.hypot(q[0], q[3])
+            sw = qmul(q, (-q[0] / n, 0.0, 0.0, q[3] / n))  # the swing: q without its twist
+            s0 = math.degrees(2 * math.atan2(sw[2], sw[3]))
+            side = sub(T[c], T[names.index("Bip001-Pelvis")])
+            lat = cross(fwd, (0.0, 0.0, 1.0))
+            out_dir = mul(lat, 1.0 if dot(side, lat) > 0 else -1.0)
+            if abs(dot(f2[2], fwd)) < 0.5:
+                notes.append(f"{child}: its Swing1 doesn't swing it sideways ({dot(f2[2], fwd):+.2f})")
+            else:
+                sign = 1.0 if dot(cross(f2[2], limb), out_dir) > 0 else -1.0
+                out[child]["swing1"] = round((r["inward"] + r["outward"]) / 2, 2)
+                out[child]["tilt"] = round(s0 + sign * (r["outward"] - r["inward"]) / 2, 2)
+                note += f", swing1 {out[child]['swing1']} tilted {out[child]['tilt']:+} ({s0:+.1f} at bind)"
+        notes.append(note)
     return out, notes
 
 def cmd_expand(spec, root, bones_root, pairs_file, out_spec):

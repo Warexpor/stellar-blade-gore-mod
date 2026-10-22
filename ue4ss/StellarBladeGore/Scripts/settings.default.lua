@@ -9,10 +9,10 @@ return {
     --   enabled = true,          -- a hit she lives through leaves a slash of blood on her skin (healing fades it)
     -- },
     death = {                  -- relative odds of what her death does when the blow doesn't decide it
-      limb = 30,               --   an arm or leg off
-      head = 22,               --   beheaded
-      torso = 38,              --   cut in half at the waist
-      split = 10,              --   cut in half top to bottom (only on a blow from above)
+      limb = 40,               --   an arm or leg off
+      head = 28,               --   beheaded
+      torso = 20,              --   cut in half at the waist
+      split = 12,              --   cut in half top to bottom (only on a blow from above)
     },
     afterHits = {
       enabled = true,          -- enemies swinging at her body after she died cut it again
@@ -31,6 +31,7 @@ return {
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill
+    attackDown = true,         -- they keep attacking her while she is knocked down (false: they wait, as in the game)
   },
   dev = false,                 -- test keys (F5, F7-F11 and their Shift/Ctrl variants), the enemy spawner, the glass
                                -- cannon mode (Shift+F8) and the schema dump on first start; see the README

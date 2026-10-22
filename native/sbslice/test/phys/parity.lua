@@ -85,9 +85,9 @@ for i = 2, #arg do
   for _, c in ipairs(cons) do
     local di = c.DefaultInstance
     local cone, tw = di.ProfileInstance.ConeLimit, di.ProfileInstance.TwistLimit
-    print(string.format("C %s %d %d %.6f %.6f %s %d %.6f %s %.7f %.7f %.7f", di.ConstraintBone1:ToString(), cone.Swing1Motion,
+    print(string.format("C %s %d %d %.6f %.6f %s %d %.6f %s %.7f %.7f %.7f %.7f %.7f %.7f", di.ConstraintBone1:ToString(), cone.Swing1Motion,
       cone.Swing2Motion, cone.Swing1LimitDegrees, cone.Swing2LimitDegrees, tostring(cone.bSoftConstraint), tw.TwistMotion,
-      tw.TwistLimitDegrees, tostring(tw.bSoftConstraint), di.SecAxis2.X, di.SecAxis2.Y, di.SecAxis2.Z))
+      tw.TwistLimitDegrees, tostring(tw.bSoftConstraint), di.SecAxis2.X, di.SecAxis2.Y, di.SecAxis2.Z, di.PriAxis2.X, di.PriAxis2.Y, di.PriAxis2.Z))
   end
   print("T " .. tostring(asked))
   for _, c in ipairs(added) do

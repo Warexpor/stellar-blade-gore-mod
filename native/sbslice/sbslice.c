@@ -1387,12 +1387,14 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // a second block for islands (hanging pieces), layers (holes) and the split: per vertex island parent, counts,
     // weights, reach, sink, kind; per bone the split's limb flags, sink types and roots; per section layer flags and
     // the split's band and limb sinks
-    u64 bytes2 = (u64)nv * (8 * 4 + 6) + (u64)nb * (4 + 4) + (u64)c.nsec * (1 + 4 * (2 * SPLIT_BANDS + MAX_LIMB_ROOTS + 1)) + 64;
+    u64 bytes2 = (u64)nv * (11 * 4 + 6) + (u64)nb * (4 + 4) + (u64)c.nsec * (1 + 4 * (2 * SPLIT_BANDS + MAX_LIMB_ROOTS + 1)) + 64;
     unsigned char *mem2 = VirtualAlloc(0, bytes2, 0x3000, 0x04);
     if (!mem2) { VirtualFree(mem, 0, 0x8000); skin_result("err out of memory"); return; }
     int *upar = (int *)mem2, *icnt = upar + nv, *iwl = icnt + nv, *iwb = iwl + nv, *vsink = iwb + nv;
     float *iext = (float *)(vsink + nv), *iup = iext + nv, *idn = iup + nv; // reach, and how far past the plane each way
-    int *rootof = (int *)(idn + nv), *secband = rootof + nb, *secfar = secband + (u64)c.nsec * SPLIT_BANDS;
+    int *iown = (int *)(idn + nv), *iownb = iown + nv; // vertices mostly on their own side's bones: limb side, body side
+    int *ikw = iownb + nv;                              // weight on the chains a limb cut keeps on the body (the cape)
+    int *rootof = ikw + nv, *secband = rootof + nb, *secfar = secband + (u64)c.nsec * SPLIT_BANDS;
     int *secroot = secfar + (u64)c.nsec * SPLIT_BANDS, *secneck = secroot + (u64)c.nsec * MAX_LIMB_ROOTS;
     unsigned char *iflag = (unsigned char *)(secneck + c.nsec), *vkind = iflag + nv, *vroot = vkind + nv;
     unsigned char *vcn = vroot + nv, *idec = vcn + nv, *gonebone = idec + nv, *keepbone = gonebone + nb, *btype = keepbone + nb, *secore = btype + nb;
@@ -1676,7 +1678,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             }
             if (any_off) {
                 int *iside = vsink; // limb side vertices per island (vsink is the split's, later)
-                for (int v = 0; v < nv; v++) { upar[v] = v; icnt[v] = iwl[v] = iwb[v] = iside[v] = 0; iext[v] = iup[v] = idn[v] = 0; iflag[v] = idec[v] = 0; }
+                for (int v = 0; v < nv; v++) { upar[v] = v; icnt[v] = iwl[v] = iwb[v] = iside[v] = 0; iext[v] = iup[v] = idn[v] = 0; iown[v] = iownb[v] = ikw[v] = 0; iflag[v] = idec[v] = 0; }
                 for (int i = 0; i + 2 < ni; i += 3) {
                     u32 a = index_get(ib, i), e = index_get(ib, i + 1), f = index_get(ib, i + 2);
                     if (a >= (u32)nv || e >= (u32)nv || f >= (u32)nv) continue;
@@ -1690,12 +1692,16 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     int r = uf_find(upar, v);
                     icnt[r]++;
                     iside[r] += side[v] != 0;
+                    int wl = 0, wb = 0;
                     for (int i = 0; i < MAX_INF; i++) {
                         int mb = out[v].bones[i];
                         unsigned char w = out[v].weights[i];
                         if (!w || mb < 0 || mb >= nb) continue;
-                        if (limb[mb]) iwl[r] += w; else iwb[r] += w;
+                        if (limb[mb]) wl += w; else wb += w;
+                        if (anykeep && keepcut[mb]) ikw[r] += w;
                     }
+                    iwl[r] += wl; iwb[r] += wb;
+                    if (side[v] ? wl > wb : wb > wl) { if (side[v]) iown[r]++; else iownb[r]++; }
                     iflag[r] |= (unsigned char)((seam[v] ? 1 : 0) | (side[v] ? 2 : 4));
                     const float *x = xs + (u64)v * 3;
                     float d2 = (x[0] - p[0]) * (x[0] - p[0]) + (x[1] - p[1]) * (x[1] - p[1]) + (x[2] - p[2]) * (x[2] - p[2]);
@@ -1733,14 +1739,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     if ((long long)mn * 100 > (long long)tot * ISLAND_MINOR_PCT && iup[r] > cross * ISLAND_TIED_REACH
                         && idn[r] > cross * ISLAND_TIED_REACH && mreach <= cross * ISLAND_TIED_MAX) continue;
                     if ((long long)mn * 100 <= (long long)tot * ISLAND_MINOR_PCT) idec[r] = iwl[r] > iwb[r] ? 2 : 1;
+                    // its few vertices past the plane reaching far down the other side, most of them on that side's
+                    // bones: cut like the body. Sent whole, they lost those weights to the other side's: CH_P_EVE_14's
+                    // leg laces (14% of their vertices 62 cm down the thigh, on the leg's bones) went with her body,
+                    // the knee's skin glued to her spine, a sheet from the severed leg to her (playtest screenshot). The
+                    // cape past an arm cut, on its own chain's bones kept on the body, still goes whole
+                    else if (mreach > cross * ISLAND_TIED_MAX && (vl < vb ? iown[r] : iownb[r]) * 2 > vmn && !ikw[r]) continue;
                     else if (vmn * 100 <= icnt[r] * ISLAND_MINOR_PCT || (icnt[r] <= ISLAND_MAX_VERTS && iext[r] <= reach * reach))
                         idec[r] = vl > vb ? 2 : 1;
                 }
                 for (int r = 0; r < nv; r++) islands_moved += idec[r] == 1 || idec[r] == 2;
 #ifdef SBSLICE_HOSTED
                 if (getenv("ISLANDS")) for (int r = 0; r < nv; r++) if (icnt[r] > 20 && ((iflag[r] & 1) || (iflag[r] & 6) == 6))
-                    fprintf(stderr, "island %d sec %d: %d verts (%d limb side), weight limb %d body %d, up %.1f down %.1f reach %.1f -> %d\n",
-                        r, vsec[r], icnt[r], iside[r], iwl[r], iwb[r], iup[r] * tm[8], idn[r] * tm[8], __builtin_sqrtf(iext[r]) * tm[8], idec[r]);
+                    fprintf(stderr, "island %d sec %d: %d verts (%d limb side, %d / %d on their side's bones), weight limb %d body %d kept chains %d, up %.1f down %.1f reach %.1f -> %d\n",
+                        r, vsec[r], icnt[r], iside[r], iown[r], iownb[r], iwl[r], iwb[r], ikw[r], iup[r] * tm[8], idn[r] * tm[8], __builtin_sqrtf(iext[r]) * tm[8], idec[r]);
 #endif
                 for (int v = 0; v < nv; v++) {
                     int s = vsec[v];
@@ -3063,7 +3075,8 @@ static void bind_cmd(const u64 *f, int k)
     skin_result(out);
 }
 
-// "t<physics asset>,<bodies>": no body of the asset collides with another (the build's self_collision false, every
+// "t<physics asset>,<bodies>[,<a>,<b>...]": no body of the asset collides with another but the pairs listed (body
+// indices, a < b: her arms and her chest, physfix.lua), always rewritten when there are any (the build's self_collision false, every
 // pair in UPhysicsAsset::CollisionDisableTable, a TMap<FRigidBodyIndexPair, bool> the engine hands the physics scene
 // by pointer when it makes her ragdoll's bodies, so a table changed before then is the one used). The map isn't
 // reflected, so it is found by its contents: a TSet (TSparseArray of 20 byte elements {a, b, bool, HashNextId,
@@ -3110,7 +3123,13 @@ static int pair_set(u64 s, int nbodies)
     return -1;
 }
 static int known_at = -1, known_variant = -1; // where the first table was, and its hash
-static void table_cmd(u64 pa, int nbodies)
+#define PT_KEEP 256 // pairs that collide: her arms and legs, and every cut-off piece against the rest of her
+static int kept_pair(const u64 *keep, int nkeep, int a, int b)
+{
+    for (int i = 0; i < nkeep; i++) if ((int)keep[2 * i] == a && (int)keep[2 * i + 1] == b) return 1;
+    return 0;
+}
+static void table_cmd(u64 pa, int nbodies, const u64 *keep, int nkeep)
 {
     if (pa < 0x10000 || nbodies < 2 || nbodies > 4096) { skin_result("err bad asset"); return; }
     if (!mem_readable(pa, PT_SCAN + 80)) { skin_result("err asset unreadable"); return; }
@@ -3128,10 +3147,16 @@ static void table_cmd(u64 pa, int nbodies)
     if (at < 0) { skin_result(known_at >= 0 ? "err no table where the others were" : "err no table"); return; }
     known_at = at; known_variant = variant;
     u64 s = pa + at;
-    int old = *(int *)(s + 8), m = nbodies * (nbodies - 1) / 2;
+    int nk = 0;
+    for (int i = 0; i < nkeep; i++)
+        if ((int)keep[2 * i] >= 0 && keep[2 * i] < keep[2 * i + 1] && (int)keep[2 * i + 1] < nbodies
+            && !kept_pair(keep, i, (int)keep[2 * i], (int)keep[2 * i + 1])) nk++;
+    int old = *(int *)(s + 8), m = nbodies * (nbodies - 1) / 2 - nk;
+    if (m < 1) { skin_result("err nothing left in the table"); return; }
     char msg[96], *o = put(msg, "ok table +");
     o = put_int(o, at); o = put(o, " "); o = put_int(o, old); o = put(o, " -> "); o = put_int(o, m);
-    if (old == m) { o = put(o, " already"); *o = 0; skin_result(msg); return; }
+    if (nkeep) { o = put(o, " colliding "); o = put_int(o, nk); }
+    if (old == m && !nkeep) { o = put(o, " already"); *o = 0; skin_result(msg); return; }
     u32 hs = hash_buckets((u32)m), words = ((u32)m + 31) / 32;
     unsigned char *data = ue_malloc((u64)m * PT_ELEM);
     u32 *bits = ue_malloc((u64)words * 4);
@@ -3146,12 +3171,14 @@ static void table_cmd(u64 pa, int nbodies)
     for (u32 w = 0; w < words; w++) bits[w] = 0;
     int i = 0;
     for (int a = 0; a < nbodies; a++)
-        for (int b = a + 1; b < nbodies; b++, i++) {
+        for (int b = a + 1; b < nbodies; b++) {
+            if (nkeep && kept_pair(keep, nkeep, a, b)) continue;
             int *e = (int *)(data + (u64)i * PT_ELEM);
             int bucket = (int)(pair_hash(variant, a, b) & (hs - 1));
             e[0] = a; e[1] = b; e[2] = 0; e[3] = hash[bucket]; e[4] = bucket;
             hash[bucket] = i;
             bits[i >> 5] |= 1u << (i & 31);
+            i++;
         }
     void *odata = *(void **)s, *obits = *(void **)(s + 32), *ohash = *(int *)(s + 72) > 1 ? *(void **)(s + 64) : 0;
     // (game thread, before the physics step: nothing reads the table meanwhile)
@@ -3221,9 +3248,10 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         return;
     }
     if (txt[0] == 't') {
-        u64 tf[2] = { 0, 0 };
-        parse_fields(txt + 1, len - 1, tf, 2);
-        table_cmd(tf[0], (int)tf[1]);
+        static u64 tf[2 + 2 * PT_KEEP]; // (static: 4 KB on the stack wants a stack probe; game thread only)
+        for (int i = 0; i < 2 + 2 * PT_KEEP; i++) tf[i] = 0;
+        int k = parse_fields(txt + 1, len - 1, tf, 2 + 2 * PT_KEEP);
+        table_cmd(tf[0], (int)tf[1], tf + 2, k > 2 ? (k - 2) / 2 : 0);
         return;
     }
     if (txt[0] == 'u') {

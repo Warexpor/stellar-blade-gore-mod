@@ -439,7 +439,7 @@
       "LinearDamping": 0.2,
       "AngularDamping": 1.0
     },
-    "_comment_limits": "The main joints bend about their twist axis (PhAT framed them as hinges), limited the same both ways round a zero of the asset's own, as soft limits: vanilla knees went 19 deg past straight, elbows 24, hips bent forward only 30 and back as far, the spine 5 deg a joint, and the soft limits gave way further under a push (she folded at odd angles). 'ranges': how far each joint's far end ('end') may swing towards her front and her back from the bind pose, in degrees; outfits.py measures each asset's zero and turns its frame 2 to centre the range ('limits' in the expanded spec). 'swing' overrides cone limits (Swing1 = sideways for the hips). 'hard_limits': every angular limit of the grouped bodies' joints stops dead instead of springing (bSoftConstraint off).",
+    "_comment_limits": "The main joints bend about their twist axis (PhAT framed them as hinges), limited the same both ways round a zero of the asset's own, as soft limits: vanilla knees went 19 deg past straight, elbows 24, hips bent forward only 30 and back as far, the spine 5 deg a joint, and the soft limits gave way further under a push (she folded at odd angles). 'ranges': how far each joint's far end ('end') may swing towards her front and her back from the bind pose, in degrees; outfits.py measures each asset's zero and turns its frame 2 to centre the range ('limits' in the expanded spec). 'inward' / 'outward' (the shoulders and hips): how far it may swing sideways towards her midline and away from it, from the bind pose (the engine's cone was +-45 deg round the A pose: an arm folded 15 deg into her chest, the hips' 30 crossed her legs); outfits.py sets Swing1 to half of it and turns frame 2 about its Z to centre it. 'swing' overrides cone limits. 'hard_limits': every angular limit of the grouped bodies' joints stops dead instead of springing (bSoftConstraint off).",
     "ranges": {
       "Bip001-L-Calf": {
         "end": "Bip001-L-Foot",
@@ -464,22 +464,30 @@
       "Bip001-L-Thigh": {
         "end": "Bip001-L-Calf",
         "front": 110,
-        "back": 20
+        "back": 20,
+        "inward": 15,
+        "outward": 45
       },
       "Bip001-R-Thigh": {
         "end": "Bip001-R-Calf",
         "front": 110,
-        "back": 20
+        "back": 20,
+        "inward": 15,
+        "outward": 45
       },
       "Bip001-L-UpperArm": {
         "end": "Bip001-L-Forearm",
         "front": 120,
-        "back": 40
+        "back": 40,
+        "inward": 25,
+        "outward": 50
       },
       "Bip001-R-UpperArm": {
         "end": "Bip001-R-Forearm",
         "front": 120,
-        "back": 40
+        "back": 40,
+        "inward": 25,
+        "outward": 50
       },
       "Bip001-Spine1": {
         "end": "Bip001-Spine2",
@@ -497,14 +505,7 @@
         "back": 15
       }
     },
-    "swing": {
-      "Bip001-L-Thigh": {
-        "Swing1LimitDegrees": 30.0
-      },
-      "Bip001-R-Thigh": {
-        "Swing1LimitDegrees": 30.0
-      }
-    },
+    "swing": {},
     "hard_limits": true
   }
 }

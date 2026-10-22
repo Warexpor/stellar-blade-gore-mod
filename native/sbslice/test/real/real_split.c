@@ -635,10 +635,22 @@ int main(int argc, char **argv)
     // vertex the vanilla skin puts mostly on the cape must stay on the body, every one mostly on the forearm's subtree
     // must go with the arm
     if (env_on("ARM")) {
-        int ua = bone(getenv("ARMBONE") ? getenv("ARMBONE") : "Bip001-L-UpperArm"), fa = bone(getenv("ARMEND") ? getenv("ARMEND") : "Bip001-L-Forearm"), cape = bone("Ab_CapeL01");
+        int ua = bone(getenv("ARMBONE") ? getenv("ARMBONE") : "Bip001-L-UpperArm"), fa = bone(getenv("ARMEND") ? getenv("ARMEND") : "Bip001-L-Forearm");
         if (ua < 0 || fa < 0) { fprintf(stderr, "no left arm\n"); return 1; }
+        // CAPE=<root,root...>: the chains named to stay on the body (CH_P_EVE_14's leg straps: Ab_LLA01,Ab_LLB01), the
+        // cape by default
+        int capes[8], ncape = 0;
+        {
+            char cl[256];
+            snprintf(cl, sizeof cl, "%s", getenv("CAPE") ? getenv("CAPE") : "Ab_CapeL01");
+            for (char *tk = strtok(cl, ","); tk && ncape < 8; tk = strtok(0, ",")) {
+                int c = bone(tk);
+                if (c >= 0) capes[ncape++] = c;
+            }
+        }
+        int cape = ncape ? capes[0] : -1;
         // (an outfit with no cape, CH_P_EVE_30: the arm cut alone; it had been skipped, and its stump came out hollow)
-        if (cape < 0) printf("arm: no Ab_CapeL01 on this mesh, the arm alone\n");
+        if (cape < 0) printf("arm: no %s on this mesh, the arm alone\n", getenv("CAPE") ? getenv("CAPE") : "Ab_CapeL01");
         // DOWN=1: her idle pose's arm, hanging down her side (the bind pose holds it out): the arm's subtree turned about
         // the shoulder until the elbow is under it, 12 degrees out from the body
         if (env_on("DOWN")) {
@@ -744,8 +756,9 @@ int main(int argc, char **argv)
         // own; KEEPCAPE=1 leaves it on the body (tune.gore.chains "body"), WITH=1 sends it whole with the arm
         int keep = cape >= 0 && !env_on("NOKEEP"), detach = keep && !env_on("KEEPCAPE") && !env_on("WITH");
         int onbody = keep && !env_on("WITH"), with = keep && env_on("WITH");
-        limbs_comp = (u64)comp_a; ngone = 0; nkeep = onbody; keep_roots[0] = cape; nride = 0;
-        ndrop = with; drop_roots[0] = cape;
+        limbs_comp = (u64)comp_a; ngone = 0; nkeep = onbody ? ncape : 0; nride = 0;
+        ndrop = with ? ncape : 0;
+        memcpy(keep_roots, capes, 4 * ncape); memcpy(drop_roots, capes, 4 * ncape);
         skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1);
         printf("arm: %.300s\n", lastres);
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
@@ -800,8 +813,12 @@ int main(int argc, char **argv)
             return 0;
         }
         unsigned char *capeall = calloc(NB, 1);
-        for (int i = 0; i < NB; i++) capeall[i] = i == cape || (bparent[i] >= 0 && capeall[bparent[i]]);
-        if (detach) {
+        for (int i = 0; i < NB; i++) {
+            for (int k = 0; k < ncape; k++) if (i == capes[k]) capeall[i] = 1;
+            if (bparent[i] >= 0 && capeall[bparent[i]]) capeall[i] = 1;
+        }
+        for (int ck = 0; detach && ck < ncape; ck++) {
+            int cape = capes[ck];
             // the cape's own cut: at its root joint, square to its first link, its bones allowed as sinks
             int c2 = -1;
             for (int i = 0; i < NB; i++) if (bparent[i] == cape) c2 = i;
@@ -828,7 +845,7 @@ int main(int argc, char **argv)
         }
         unsigned char *capeb = calloc(NB, 1), *fore = calloc(NB, 1), *armb = calloc(NB, 1);
         for (int i = 0; i < NB; i++) {
-            capeb[i] = i == cape || (bparent[i] >= 0 && capeb[bparent[i]]);
+            capeb[i] = capeall[i];
             fore[i] = i == fa || (bparent[i] >= 0 && fore[bparent[i]]);
             armb[i] = (i == ua || (bparent[i] >= 0 && armb[bparent[i]]));
         }
@@ -858,6 +875,13 @@ int main(int argc, char **argv)
                 }
             }
             if (wf > 127) { nf++; fleft += !onarm; }
+            if (wf > 127 && !onarm && getenv("DBGFORE")) {
+                static int sf = 0;
+                float x[3]; skin_v(&vo, v, x);
+                if (sf++ < 12) { printf("fore v%d h=%.1f:", v, (x[0]-at2[0])*nn[0]+(x[1]-at2[1])*nn[1]+(x[2]-at2[2])*nn[2]);
+                for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]);
+                printf(" ->"); for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s=%d", bname[ov_a[v].bones[i]], ov_a[v].weights[i]); printf("\n"); }
+            }
         }
         // what else goes with the arm, per section: vertices the vanilla skin puts mostly off the arm (an outfit piece
         // over the shoulder, a strap) that the cut takes along all the same

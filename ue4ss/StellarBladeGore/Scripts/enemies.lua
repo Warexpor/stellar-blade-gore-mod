@@ -447,9 +447,109 @@ function M.kill_nearest(pawn)
   log(string.format("kill: %s %x, %.0f cm off, ragdolled", e.kind.alias, ba, bd))
 end
 
+-- Enemies attack her while she is knocked down (tune.enemies.attackDown): the game's enemy behaviour trees hold the
+-- attack while the target has a knockdown effect (an SbCheckActorEffect decorator on the target: her own knockdowns
+-- and tumbles, the shared Getup, FastGetup, Down, DownFace*; about 100 of the 149 trees). Those names are swapped for
+-- one no effect has, in every such decorator loaded (the trees' nodes are shared by every enemy running them), and
+-- put back when it is turned off. The monsters' own KnockDownForward / Backward, the revival item's and the QTE's
+-- are left alone. Trees load with their levels: all of them are looked for once (FindAllOf, 50-90 ms: every 3 s it
+-- was a stutter of its own, playtest), then each new one is caught as it is made and swapped a second later, once
+-- its asset's names are in
+local DOWN = { Getup = true, FastGetup = true, Down = true, DownFaceUp = true, DownFaceUp_E = true, DownFaceDown = true,
+  DownFaceDown_E = true, KnockDownForward_Eve = true, KnockDownBackward_Eve = true, KnockDownForwardTumbling_Eve = true,
+  KnockDownBackwardTumbling_Eve = true, KnockDownForwardTumblingReady_Eve = true, KnockDownBackwardTumblingReady_Eve = true }
+local NOT_DOWN = "SBGore_NotDown"
+-- done: decorator address -> the decorator; orig: its name -> { field -> names }; pending: { obj, t } made since
+local down = { on = false, done = {}, orig = {}, pending = {} }
+local function decorators() return try(function() return FindAllOf("SBBTDecorator_SbCheckActorEffect") end) or {} end
+local function swap_names(d, key, field, list, back)
+  local o = down.orig[key]
+  local changed = 0
+  if list then
+    local arr = try(function() return d[field] end)
+    if not arr then return 0 end
+    try(function() arr:ForEach(function(i, e)
+      local nm = e:get():ToString()
+      if back then
+        local was = o and o[field] and o[field][i]
+        if was and nm == NOT_DOWN then e:set(FName(was)); changed = changed + 1 end
+      elseif DOWN[nm] then
+        down.orig[key] = down.orig[key] or {}
+        down.orig[key][field] = down.orig[key][field] or {}
+        down.orig[key][field][i] = nm
+        e:set(FName(NOT_DOWN)); changed = changed + 1
+      end
+    end) end)
+  else
+    local nm = try(function() return d[field]:ToString() end)
+    if back then
+      local was = o and o[field]
+      if was and nm == NOT_DOWN then try(function() d[field] = FName(was) end); changed = 1 end
+    elseif nm and DOWN[nm] then
+      down.orig[key] = down.orig[key] or {}
+      down.orig[key][field] = nm
+      try(function() d[field] = FName(NOT_DOWN) end); changed = 1
+    end
+  end
+  return changed
+end
+local function attack_down(on, list)
+  local nd, nn = 0, 0
+  for _, d in ipairs(list or decorators()) do
+    -- (by address for the ones already seen: a name for each of them every scan was a stutter of its own)
+    local a = valid(d) and addr(d)
+    -- only the checks on the target (ActorType Target: 1)
+    local key = a and (not on or not down.done[a]) and try(function() return d.ActorType end) == 1 and try(function() return d:GetFullName() end)
+    if a and on then down.done[a] = d end
+    if key then
+      local k = swap_names(d, key, "EffectAlias", false, not on) + swap_names(d, key, "OrCheck_EffectAliasArray", true, not on)
+        + swap_names(d, key, "AndCheck_EffectAliasArray", true, not on)
+      if k > 0 then nd, nn = nd + 1, nn + k end
+    end
+  end
+  if not on then down.done, down.orig = {}, {} end
+  if nd > 0 then
+    log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", on and "they attack her while she is down"
+      or "they wait while she is down again", nn, nd))
+  end
+end
+local function down_tick()
+  local want = cfg().attackDown == true
+  if want ~= down.on then
+    down.on = want
+    if not want then
+      local list = {}
+      for _, d in pairs(down.done) do if valid(d) then list[#list + 1] = d end end
+      attack_down(false, list)
+    end
+    down.scanned, down.pending = false, {}
+  end
+  if not want then return end
+  if not down.hooked then
+    down.hooked = true
+    local ok, err = pcall(NotifyOnNewObject, "/Script/SB.SBBTDecorator_SbCheckActorEffect", function(o)
+      if down.on then down.pending[#down.pending + 1] = { o = o, t = os.clock() + 1 } end
+    end)
+    if not ok then log("enemies: knockdown checks not watched: " .. tostring(err)) end
+  end
+  if not down.scanned then down.scanned = true; attack_down(true); return end
+  if #down.pending == 0 or down.pending[1].t > os.clock() then return end
+  local ready, rest = {}, {}
+  for _, x in ipairs(down.pending) do
+    if x.t <= os.clock() then
+      -- a new object: an address seen before was another decorator, since collected
+      local a = valid(x.o) and addr(x.o)
+      if a then down.done[a] = nil; ready[#ready + 1] = x.o end
+    else rest[#rest + 1] = x end
+  end
+  down.pending = rest
+  if #ready > 0 then attack_down(true, ready) end
+end
+
 -- every tick of hers (main.lua), pawn and mesh hers
 function M.tick(pawn, mesh)
   n = n + 1
+  down_tick()
   if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end
   local g = cfg()
   local gore = ctx.gore
@@ -529,6 +629,7 @@ end
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()
   known, mine, expect, hand = {}, {}, {}, {}
+  down.done, down.next = {}, 0
   freed = false
 end
 

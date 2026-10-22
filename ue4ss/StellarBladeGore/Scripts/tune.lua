@@ -16,7 +16,12 @@ return {
                                -- rest and flings her); true forces it
   hairCollision = false,       -- true = SBHair keeps PhysicsOnly collision during the ragdoll
   massScale = 1.0,             -- SetAllMassScale on every body
-  recoverAfter = 9,            -- seconds of ragdoll before the script gets her up (the death screen, 8 s in, covers it)
+  recoverAfter = 9,            -- seconds of ragdoll before the script gets her up (the death screen, 8 s in, covers it);
+                               -- not the test keys' (F7, F11, F9 on a ragdoll): those wait for F8
+  recoverOn = "button",        -- "button": a death waits past recoverAfter till a death screen button is pressed (the
+                               -- game respawns her after that), so her cut body stays behind the screen; "timer": at
+                               -- recoverAfter, under the screen
+  screenWait = 4,              --   seconds past recoverAfter a death with no death screen at all (F5's) waits for one
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
                                -- after her pelvis a step a tick and the camera stuttered after her (playtest 38)
   cameraStill = true,          -- at a death the view holds still where it is till she gets up: the game moves her pawn
@@ -49,10 +54,10 @@ return {
                                --   does nothing while she is alive, so the script starts it)
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
                                -- F9 rolls the cuts only, F10 marks, F11 splits
-      limb = 30,               --   the arm or thigh nearest the hit comes off
-      head = 22,               --   beheaded (the face goes with the head, the neck gets a stump)
-      torso = 38,              --   cut in half at the waist
-      split = 10,              --   cut in half top to bottom along the blade; only counts when the killing blow
+      limb = 40,               --   the arm or thigh nearest the hit comes off
+      head = 28,               --   beheaded (the face goes with the head, the neck gets a stump)
+      torso = 20,              --   cut in half at the waist
+      split = 12,              --   cut in half top to bottom along the blade; only counts when the killing blow
                                --   came down from above (else the others are rolled)
     },
     bladeChance = 0.85,        -- a death whose killing hit the game reported cuts along that blade: the neck
@@ -64,8 +69,9 @@ return {
       enabled = true,          --   reach cm of the hit, at most max cuts, one after the other
       reach = 40,
       max = 3,
-      body = true,             -- an arm it took first (raised to block) doesn't stop it: where its plane goes on
+      body = true,             -- an arm or leg it took first doesn't stop it: where its plane goes on
       bodyReach = 60,          --   through her spine within bodyReach cm of the hit, her body is cut too
+      bodyGraze = 10,          --   (and a plane passing this close beside her spine goes through her flank: cut on it)
     },
     bladeSplit = 0.2,          --   share of those blades through her body that split her in two (else the odds above
                                --   are rolled): a blade made up for a death the game reported no hit for always
@@ -77,8 +83,9 @@ return {
     limbReach = 12,            -- a blade meeting an arm or leg this close to the hit, with the hit
     spineReach = 15,           --   further than this from the spine, takes that limb (else the plane decides)
     splitDown = 0.6,           -- how steeply a swing must come down to split (share of its direction pointing down)
-    weaponSwing = true,        -- the killing blade follows the nearest enemy's weapon (its weapon bones by name, else
-                               --   its hands), sampled every tick while she lives; false: a made-up swing
+    weaponSwing = true,        -- the killing blade follows the nearest enemy's weapon (its weapon meshes' blade line,
+                               --   else its weapon bones by name, else its hands), sampled every tick while she
+                               --   lives; false: a made-up swing
     swingReach = 500,          --   cm: the enemy followed is the nearest this close
     swingWindow = 0.6,         --   seconds of its weapon kept; the fastest step in them is the killing swing
     swingMinSpeed = 300,       --   cm/s it must reach to count (slower: the made-up swing)
@@ -198,6 +205,11 @@ return {
     bleedPulse = 0.35,         -- seconds between spurts while an opening bleeds (each follows the stump's turn)
     capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps and lids
     debugCaps = false,         -- every cap and lid glows bright green (a test: are the split's shards lids or skin?)
+    bloodTint = {              -- her bleed's and hit blood's colour (MPC_BloodParameters, global: the game's own blood
+      DefaultBlood = { 0.06, 0.002, 0.005 },   -- on her too); the game's 0.15, 0, 0 / 0.23, 0.05, 0 / 0.15 sprayed
+      DefaultBlood2 = { 0.08, 0.004, 0.008 },  -- bright red. false = the game's
+      EmissiveBloodMinValue = 0.02,
+    },
     capBloodColor = { 0.12, 0.005, 0.002 }, -- its glow (BloodColor, emissive: the material's own 10, 2.4, 0 lit the
                                -- stumps bright orange); nil = the material as it is
     bodyBlood = {              -- her skin's own blood layer (MPC_PCDirtyOffset, read by Eve's skin material) raised on
@@ -231,20 +243,26 @@ return {
       ["Bip001-R-Calf"] = { e = "Bip001-R-Foot", front = 3, back = 140 },
       ["Bip001-L-Forearm"] = { e = "Bip001-L-Hand", front = 145, back = 3 },
       ["Bip001-R-Forearm"] = { e = "Bip001-R-Hand", front = 145, back = 3 },
-      ["Bip001-L-Thigh"] = { e = "Bip001-L-Calf", front = 110, back = 20 },
-      ["Bip001-R-Thigh"] = { e = "Bip001-R-Calf", front = 110, back = 20 },
-      ["Bip001-L-UpperArm"] = { e = "Bip001-L-Forearm", front = 120, back = 40 },
-      ["Bip001-R-UpperArm"] = { e = "Bip001-R-Forearm", front = 120, back = 40 },
+      ["Bip001-L-Thigh"] = { e = "Bip001-L-Calf", front = 110, back = 20, inward = 15, outward = 45 },
+      ["Bip001-R-Thigh"] = { e = "Bip001-R-Calf", front = 110, back = 20, inward = 15, outward = 45 },
+      ["Bip001-L-UpperArm"] = { e = "Bip001-L-Forearm", front = 120, back = 40, inward = 25, outward = 50 },
+      ["Bip001-R-UpperArm"] = { e = "Bip001-R-Forearm", front = 120, back = 40, inward = 25, outward = 50 },
       ["Bip001-Spine1"] = { e = "Bip001-Spine2", front = 15, back = 8 },
       ["Bip001-Spine2"] = { e = "Bip001-Neck", front = 15, back = 8 },
       ["Bip001-Neck"] = { e = "Bip001-Head", front = 25, back = 15 },
-    },
-    swing = {                  -- cone limits set outright (Swing1 = the hip's sideways swing)
-      ["Bip001-L-Thigh"] = { Swing1LimitDegrees = 30 },
-      ["Bip001-R-Thigh"] = { Swing1LimitDegrees = 30 },
-    },
+    },                         -- inward / outward (shoulders, hips): how far it swings sideways towards her midline and away,
+                               -- from the bind pose (the engine's +-45 round the A pose folded an arm into her chest, the
+                               -- hips' +-30 crossed her legs)
+    swing = {},                -- cone limits set outright, by joint
     collisionTable = true,     -- none of her bodies collide with each other, only the world: sbslice.dll fills the
                                -- asset's collision table (its "t"); without the DLL quietJiggle stands in
+    armCollision = true,       --   but her arms collide with her hips, chest and thighs and with each other, and her
+                               --   legs with each other (an arm went through her body in the ragdoll); a pair whose
+                               --   bodies' shapes are within armGap cm
+                               --   of each other as she goes limp is left out (overlapping bodies fling apart)
+    armGap = 2,
+    pieceCollision = true,     --   and a cut-off arm, leg or head with the rest of her (it fell through her); the pairs
+                               --   touching where she is cut are left out, as armGap
     weldKinematic = true,      -- every outfit: the joints of the bodies its asset makes kinematic (breasts, neck pieces,
                                -- arm twists, armour plates) are locked solid, so in the ragdoll they ride their bone
                                -- instead of buzzing against soft 0.1-1 deg limits
@@ -339,6 +357,7 @@ return {
   },
   enemies = {                  -- gore on generic humanoid enemies, and the enemy spawner (enemies.lua; dev only)
     enabled = true,            -- false: no gore on them (the spawner still works)
+    attackDown = true,         -- they attack her while she is knocked down (the game holds them till she is up)
     nativeSlice = false,       -- the game's own monster slicer on them (off: it hides parts its own way, on top of ours)
     reach = 2500,              -- cm from Eve: enemies further off are left alone (their hits aren't followed)
     cutChance = 1.0,           -- a kill near her takes something off

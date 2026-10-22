@@ -22,7 +22,7 @@ static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 static void cmd(const char *s)
 {
-    static u16 w[512]; int n = 0;
+    static u16 w[16384]; int n = 0;
     while (s[n]) { w[n] = (u16)s[n]; n++; }
     w[n] = 0; // an FString counts its terminator
     unsigned char p[0x40] = { 0 }, stack[0x40] = { 0 };
@@ -165,6 +165,36 @@ static void test_table(int variant, int nbodies, int corrupt)
     printf("table (%d bodies, hash variant %d): %s; every one of %d pairs found\n", nbodies, variant, lastres, m);
     cmd(c);
     CHECK(strstr(lastres, " already") != 0 && ngm - ngm0 == 3, "table again: %s", lastres);
+    // pairs left colliding (her arms and her chest): out of the table, every other pair in it, rewritten each time
+    // (a repeat, an out-of-range and a reversed pair don't count)
+    if (!variant && nbodies >= 20) {
+        char k[160];
+        snprintf(k, sizeof k, "t%llx,%x,3,11,5,12,3,11,0,%x,9,2", (unsigned long long)(u64)asset, nbodies, nbodies);
+        cmd(k);
+        CHECK(strstr(lastres, " colliding 2") != 0 && *(int *)(asset + AT + 8) == m - 2, "table, two pairs colliding: %s", lastres);
+        int bad = 0;
+        for (int a = 0; a < nbodies; a++) for (int b = a + 1; b < nbodies; b++)
+            bad += (find(asset + AT, variant, a, b) < 0) != ((a == 3 && b == 17) || (a == 5 && b == 18));
+        CHECK(!bad, "table, two pairs colliding: %d pairs wrong", bad);
+        cmd(k);
+        CHECK(strstr(lastres, " already") == 0 && *(int *)(asset + AT + 8) == m - 2, "table, colliding again: %s", lastres);
+        cmd(c);
+        CHECK(*(int *)(asset + AT + 8) == m, "table, every pair back: %s", lastres);
+        printf("table, two pairs left colliding: %s\n", lastres);
+        // more pairs than the first limit (64): every pair of body 0 and of body 1 with the rest (a cut piece's)
+        int np = 0;
+        char *big = malloc(16 * 1024), *o = big + sprintf(big, "t%llx,%x", (unsigned long long)(u64)asset, nbodies);
+        for (int a = 0; a < 2; a++) for (int b = a + 1; b < nbodies && np < 120; b++, np++) o += sprintf(o, ",%x,%x", a, b);
+        cmd(big);
+        CHECK(*(int *)(asset + AT + 8) == m - np, "table, %d pairs colliding: %s", np, lastres);
+        bad = 0;
+        for (int a = 0; a < nbodies; a++) for (int b = a + 1; b < nbodies; b++) bad += (find(asset + AT, variant, a, b) < 0) != (a < 2);
+        CHECK(!bad || np < 2 * nbodies - 3, "table, %d pairs colliding: %d pairs wrong", np, bad);
+        cmd(c);
+        CHECK(*(int *)(asset + AT + 8) == m, "table, every pair back after %d: %s", np, lastres);
+        printf("table, %d pairs left colliding: ok\n", np);
+        free(big);
+    }
     free(pairs);
 }
 

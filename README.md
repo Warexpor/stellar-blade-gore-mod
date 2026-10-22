@@ -40,7 +40,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 |---|---|---|
 | `gore.enabled` | `true` | All cuts and blood. |
 <!-- | `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. | -->
-| `gore.death` | 30 / 22 / 38 / 10 | Odds of a limb, a beheading, a waist cut or a split down the middle, when the blow doesn't decide. |
+| `gore.death` | 40 / 28 / 20 / 12 | Odds of a limb, a beheading, a waist cut or a split down the middle, when the blow doesn't decide. |
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
 | `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster. It slides smoothly after her body till you fly it, and stops short of walls. |
@@ -49,6 +49,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `cameraMove` | 400 | Flying speed, cm a second (up to 15 m from where it started). |
 <!-- | `deathSkip` | `true` | Esc on her death fast forwards to the death screen instead of the wait. | -->
 | `enemies.enabled` | `true` | Cuts on the humanoid enemies you kill. |
+| `enemies.attackDown` | `true` | Enemies keep attacking her while she is knocked down (`false`: they wait till she is up, as in the game). |
 | `dev` | `false` | Test keys, the enemy spawner and the glass cannon mode (see below). |
 
 Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
@@ -77,6 +78,8 @@ With `dev = true` in `settings.lua`:
 | Shift+F6 | The spawner window |
 | Ctrl+F6 | Kill the enemy nearest her |
 | Shift+F8 | Glass cannon mode: the shield takes the hits, then one hit kills |
+
+F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own).
 
 F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
 

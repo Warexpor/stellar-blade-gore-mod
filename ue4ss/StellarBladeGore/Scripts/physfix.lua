@@ -129,6 +129,10 @@ local function qrot(q, v) -- q {x, y, z, w}
   local m = cross(u, { c0[1] + v[1] * w, c0[2] + v[2] * w, c0[3] + v[3] * w })
   return { v[1] + 2 * m[1], v[2] + 2 * m[2], v[3] + 2 * m[3] }
 end
+local function qmul(a, b)
+  return { a[4] * b[1] + a[1] * b[4] + a[2] * b[3] - a[3] * b[2], a[4] * b[2] - a[1] * b[3] + a[2] * b[4] + a[3] * b[1],
+    a[4] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[4], a[4] * b[4] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3] }
+end
 local function frame(q, pri, sec) local x, y = qrot(q, pri), qrot(q, sec); return { x, y, cross(x, y) } end
 local function round2(x) return tonumber(string.format("%.2f", x)) end
 local atan2 = math.atan2 or math.atan
@@ -163,8 +167,36 @@ function M.joint_ranges(cons, bind, ranges)
           local lo, hi
           if ahead > 0 then lo, hi = -r.back, r.front else lo, hi = -r.front, r.back end
           lo, hi = lo + atBind, hi + atBind
-          out[c.child] = { twist = round2((hi - lo) / 2), turn = round2((hi + lo) / 2) }
-          notes[#notes + 1] = string.format("%s %+.0f at bind, twist %s turned %+g", c.child, atBind, out[c.child].twist, out[c.child].turn)
+          local o = { twist = round2((hi - lo) / 2), turn = round2((hi + lo) / 2) }
+          out[c.child] = o
+          local note = string.format("%s %+.0f at bind, twist %s turned %+g", c.child, atBind, o.twist, o.turn)
+          -- the sideways swing (Swing1, about frame 2's Z) when the range says how far in and out: frame 2, turned
+          -- for the twist, is turned about its Z to centre the cone there (the engine's +-45 round the A pose let an
+          -- arm fold 15 deg into her chest, playtest 43)
+          local pel = bind["Bip001-Pelvis"]
+          if r.inward and r.outward and pel then
+            local sec2 = M.turned(c.pri2, c.sec2, o.turn)
+            local g2 = frame(ba.q, c.pri2, sec2)
+            local rl = {}
+            for i = 1, 3 do rl[i] = {}; for j = 1, 3 do rl[i][j] = dot(g2[i], f1[j]) end end
+            local qw = math.sqrt(math.max(0, 1 + rl[1][1] + rl[2][2] + rl[3][3])) / 2
+            local q = { (rl[3][2] - rl[2][3]) / (4 * qw), (rl[1][3] - rl[3][1]) / (4 * qw), (rl[2][1] - rl[1][2]) / (4 * qw), qw }
+            local n = math.sqrt(q[1] * q[1] + q[4] * q[4])
+            local sw = qmul(q, { -q[1] / n, 0, 0, q[4] / n }) -- the swing: q without its twist
+            local s0 = math.deg(2 * atan2(sw[3], sw[4]))
+            local lat = cross(fwd, { 0, 0, 1 })
+            if dot(vsub(bc.t, pel.t), lat) < 0 then lat = { -lat[1], -lat[2], -lat[3] } end
+            local side = dot(g2[3], fwd)
+            if math.abs(side) < 0.5 then
+              note = note .. string.format("; its Swing1 doesn't swing it sideways (%+.2f)", side)
+            else
+              local sign = dot(cross(g2[3], unit(vsub(be.t, bc.t))), lat) > 0 and 1 or -1
+              o.swing1 = round2((r.inward + r.outward) / 2)
+              o.tilt = round2(s0 + sign * (r.outward - r.inward) / 2)
+              note = note .. string.format(", swing1 %s tilted %+g (%+.1f at bind)", o.swing1, o.tilt, s0)
+            end
+          end
+          notes[#notes + 1] = note
         end
       end
     end
@@ -218,6 +250,15 @@ function M.fix_joints(joints, lims, g)
         tw.TwistLimitDegrees = l.twist
         local s = M.turned(j.pri2, j.sec2, l.turn)
         d.SecAxis2.X, d.SecAxis2.Y, d.SecAxis2.Z = s[1], s[2], s[3]
+        if l.swing1 then
+          -- the sideways swing: the cone's half angle, frame 2 turned by tilt about its Z (pri x sec)
+          cone.Swing1LimitDegrees, cone.Swing1Motion = l.swing1, ACM_LIMITED
+          local t, a = math.rad(l.tilt), j.pri2
+          local pa = { a[1] * math.cos(t) + s[1] * math.sin(t), a[2] * math.cos(t) + s[2] * math.sin(t), a[3] * math.cos(t) + s[3] * math.sin(t) }
+          local sb = { s[1] * math.cos(t) - a[1] * math.sin(t), s[2] * math.cos(t) - a[2] * math.sin(t), s[3] * math.cos(t) - a[3] * math.sin(t) }
+          d.PriAxis2.X, d.PriAxis2.Y, d.PriAxis2.Z = pa[1], pa[2], pa[3]
+          d.SecAxis2.X, d.SecAxis2.Y, d.SecAxis2.Z = sb[1], sb[2], sb[3]
+        end
         nr = nr + 1
       end
       return true
@@ -247,10 +288,6 @@ local function bind_pose(mesh, sk, names)
   return out
 end
 
-local function qmul(a, b)
-  return { a[4] * b[1] + a[1] * b[4] + a[2] * b[3] - a[3] * b[2], a[4] * b[2] - a[1] * b[3] + a[2] * b[4] + a[3] * b[1],
-    a[4] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[4], a[4] * b[4] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3] }
-end
 
 -- a locked joint for each loose body (M.loose_bodies) to the body above it, as the data mod adds them (outfits.py
 -- orphan_joints, patch_shows.py add_joints): a new PhysicsConstraintTemplate, frame 1 the child bone, frame 2 the
@@ -430,7 +467,7 @@ local function fix_defaults(pa, mesh, sk)
   local loose = g.lockLoose ~= false and M.loose_bodies(pa, mesh) or {}
   local bind
   if (g.ranges or #loose > 0) and dll() == "ready" then
-    local names = { ["Bip001-L-Toe0"] = true, ["Bip001-L-Foot"] = true }
+    local names = { ["Bip001-L-Toe0"] = true, ["Bip001-L-Foot"] = true, ["Bip001-Pelvis"] = true }
     for _, j in ipairs(joints) do
       local r = (g.ranges or {})[j.child]
       if r then names[j.child], names[j.parent], names[r.e] = true, true, true end
@@ -654,6 +691,217 @@ function M.start(pawn, mesh)
   local s = #done > 0 and ("loose bodies locked: " .. table.concat(done, ", ")) or "no loose bodies"
   log(s)
   return s
+end
+
+-- her arms against her body and each other, and her legs against each other: the collision table (sbslice.dll's "t") leaves these pairs out, so
+-- they collide while every other pair of hers doesn't. A pair whose bodies are within armGap cm of each other as she
+-- goes limp is left out: bodies that start overlapping fling apart. The gap is between the bodies' own shapes (their
+-- capsules where she is then): measured between the bones with a 22 cm margin, the upper arms never collided with her
+-- chest and the forearms mostly didn't, and her arms went through her body as before (playtest 43). Returns the pairs
+-- (bone names) and what to log; none without the DLL's table. Each death writes the table again, for her pose then
+local ARM_BONES = { "Bip001-L-UpperArm", "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-R-UpperArm", "Bip001-R-Forearm", "Bip001-R-Hand" }
+local CHEST_BONES = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2" }
+-- a bone's segment when its body's shapes can't be read: to the next bone down the chain (a hand: 8 cm on along the
+-- forearm), as thick as her bodies are on the vanilla outfits
+local SEG_TO = { ["Bip001-L-UpperArm"] = "Bip001-L-Forearm", ["Bip001-L-Forearm"] = "Bip001-L-Hand",
+  ["Bip001-R-UpperArm"] = "Bip001-R-Forearm", ["Bip001-R-Forearm"] = "Bip001-R-Hand",
+  ["Bip001-Pelvis"] = "Bip001-Spine", ["Bip001-Spine"] = "Bip001-Spine1",
+  ["Bip001-Spine1"] = "Bip001-Spine2", ["Bip001-Spine2"] = "Bip001-Neck",
+  ["Bip001-L-Thigh"] = "Bip001-L-Calf", ["Bip001-L-Calf"] = "Bip001-L-Foot", ["Bip001-L-Foot"] = "Bip001-L-Toe0",
+  ["Bip001-R-Thigh"] = "Bip001-R-Calf", ["Bip001-R-Calf"] = "Bip001-R-Foot", ["Bip001-R-Foot"] = "Bip001-R-Toe0" }
+local SEG_R = { UpperArm = 3, Forearm = 2.5, Hand = 2.5, Pelvis = 11, Spine = 7, Spine1 = 8, Spine2 = 8, Thigh = 7,
+  Calf = 5.5, Foot = 4.5 }
+local function seg_dist(p, q, r, s)
+  local best
+  for i = 0, 8 do
+    local t = i / 8
+    local a = { p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t, p[3] + (q[3] - p[3]) * t }
+    for j = 0, 8 do
+      local u = j / 8
+      local b = { r[1] + (s[1] - r[1]) * u, r[2] + (s[2] - r[2]) * u, r[3] + (s[3] - r[3]) * u }
+      local d = vsub(a, b)
+      d = math.sqrt(dot(d, d))
+      if not best or d < best then best = d end
+    end
+  end
+  return best
+end
+-- FRotator::Quaternion
+local function rotator_quat(r)
+  local h = math.pi / 360
+  local sp, cp = math.sin(r.Pitch * h), math.cos(r.Pitch * h)
+  local sy, cy = math.sin(r.Yaw * h), math.cos(r.Yaw * h)
+  local sr, cr = math.sin(r.Roll * h), math.cos(r.Roll * h)
+  return { cr * sp * sy - sr * cp * cy, -cr * sp * cy - sr * cp * sy, cr * cp * sy - sr * sp * cy, cr * cp * cy + sr * sp * sy }
+end
+-- a body's shapes where its bone is now, as capsules { a, b, r } (a sphere: a == b; a box: its long axis)
+local function body_capsules(mesh, bs, b)
+  local x = try(function()
+    local t = mesh:GetSocketTransform(FName(b), 0) -- RTS_World
+    local q, p = t.Rotation, t.Translation
+    return { q = { q.X, q.Y, q.Z, q.W }, t = { p.X, p.Y, p.Z }, s = t.Scale3D.X }
+  end)
+  if not x then return nil end
+  local out = {}
+  local function place(c, rot, half, r)
+    local at = qrot(x.q, { c.X * x.s, c.Y * x.s, c.Z * x.s })
+    at = { at[1] + x.t[1], at[2] + x.t[2], at[3] + x.t[3] }
+    local ax = qrot(qmul(x.q, rot), half)
+    out[#out + 1] = { vsub(at, ax), { at[1] + ax[1], at[2] + ax[2], at[3] + ax[3] }, r * x.s }
+  end
+  try(function()
+    local g = bs.AggGeom
+    g.SphylElems:ForEach(function(_, e)
+      local el = e:get()
+      place(el.Center, rotator_quat(el.Rotation), { 0, 0, el.Length / 2 * x.s }, el.Radius)
+    end)
+    g.SphereElems:ForEach(function(_, e)
+      local el = e:get()
+      place(el.Center, { 0, 0, 0, 1 }, { 0, 0, 0 }, el.Radius)
+    end)
+    g.BoxElems:ForEach(function(_, e)
+      local el = e:get()
+      local ext = { el.X / 2, el.Y / 2, el.Z / 2 }
+      local k = (ext[1] >= ext[2] and ext[1] >= ext[3]) and 1 or (ext[2] >= ext[3] and 2 or 3)
+      local sorted = { ext[1], ext[2], ext[3] }
+      table.sort(sorted)
+      local half = { 0, 0, 0 }
+      half[k] = (ext[k] - sorted[2]) * x.s
+      place(el.Center, rotator_quat(el.Rotation), half, sorted[2])
+    end)
+  end)
+  return #out > 0 and out or nil
+end
+-- the collision table with every pair of hers apart but these (bone names): sbslice.dll's answer
+function M.arm_table(pa, pairs)
+  local idx, n = {}, 0
+  for i, bs in ipairs(bodies_of(pa)) do idx[try(function() return bs.BoneName:ToString() end) or ""] = i - 1; n = i end
+  local nums = {}
+  for _, p in ipairs(pairs) do
+    local i, j = idx[p[1]], idx[p[2]]
+    if i and j then nums[#nums + 1] = string.format("%x,%x", math.min(i, j), math.max(i, j)) end
+  end
+  return ctx.gore.command(string.format("t%x,%x", pa:GetAddress(), n) .. (#nums > 0 and ("," .. table.concat(nums, ",")) or ""))
+end
+-- the pairs of cand (bone names) whose bodies are at least gap cm apart where she is now, and those nearer (to log)
+local function measure(mesh, pa, cand, gap)
+  local bodies = bodies_of(pa)
+  local idx = {}
+  for i, bs in ipairs(bodies) do idx[try(function() return bs.BoneName:ToString() end) or ""] = i - 1 end
+  local function loc(b) local l = try(function() return mesh:GetSocketLocation(FName(b)) end); return l and { l.X, l.Y, l.Z } end
+  local guessed = 0
+  local caps = {}
+  local function shapes(b)
+    if caps[b] ~= nil then return caps[b] or nil end
+    local c = idx[b] and body_capsules(mesh, bodies[idx[b] + 1], b)
+    if not c then
+      -- the bone's segment, as thick as SEG_R says
+      local a = loc(b)
+      local e = a and SEG_TO[b] and loc(SEG_TO[b])
+      if a and not e then
+        local fa = loc((b:gsub("Hand", "Forearm")))
+        local d = fa and vsub(a, fa)
+        local l = d and math.sqrt(dot(d, d))
+        e = l and l > 1 and { a[1] + d[1] / l * 8, a[2] + d[2] / l * 8, a[3] + d[3] / l * 8 } or a
+      end
+      if a then c = { { a, e, SEG_R[b:gsub("Bip001%-", ""):gsub("^[LR]%-", "")] or 3 } }; guessed = guessed + 1 end
+    end
+    caps[b] = c or false
+    return c
+  end
+  local pairs, near = {}, {}
+  for _, c in ipairs(cand) do
+    local i, j = idx[c[1]], idx[c[2]]
+    local s1, s2 = i and shapes(c[1]), j and shapes(c[2])
+    if s1 and s2 then
+      local d
+      for _, x in ipairs(s1) do
+        for _, y in ipairs(s2) do
+          local v = seg_dist(x[1], x[2], y[1], y[2]) - x[3] - y[3]
+          if not d or v < d then d = v end
+        end
+      end
+      if d >= gap then
+        pairs[#pairs + 1] = c
+      else
+        near[#near + 1] = string.format("%s/%s %.0f", (c[1]:gsub("Bip001%-", "")), (c[2]:gsub("Bip001%-", "")), d)
+      end
+    end
+  end
+  return pairs, near, guessed
+end
+local function short(p) return (p[1]:gsub("Bip001%-", "")) .. "/" .. (p[2]:gsub("Bip001%-", "")) end
+local function told(pairs, near, guessed, r)
+  local names = {}
+  for _, p in ipairs(pairs) do names[#names + 1] = short(p) end
+  return string.format("%d pairs collide%s; %d touching, left out%s%s, %s", #pairs,
+    #names > 0 and (": " .. table.concat(names, " ")) or "", #near, #near > 0 and (" (" .. table.concat(near, ", ") .. " cm)") or "",
+    guessed > 0 and string.format("; %d bodies' shapes unread, guessed from the bones", guessed) or "", r)
+end
+
+function M.arm_collision(mesh, pa)
+  local g = cfg()
+  if g.enabled == false or g.collisionTable == false or not valid(pa) or dll() ~= "ready" then return {}, "no table" end
+  local cand = {}
+  if g.armCollision ~= false then
+    for _, a in ipairs(ARM_BONES) do
+      for _, c in ipairs(CHEST_BONES) do cand[#cand + 1] = { a, c } end
+    end
+    for _, a in ipairs({ "Bip001-L-UpperArm", "Bip001-L-Forearm", "Bip001-L-Hand" }) do
+      for _, b in ipairs({ "Bip001-R-UpperArm", "Bip001-R-Forearm", "Bip001-R-Hand" }) do cand[#cand + 1] = { a, b } end
+    end
+    -- her forearms and hands against her thighs, and her legs against each other (the hips swing 15 deg in: the
+    -- legs stop on each other instead of crossing)
+    for _, a in ipairs({ "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-R-Forearm", "Bip001-R-Hand" }) do
+      for _, b in ipairs({ "Bip001-L-Thigh", "Bip001-R-Thigh" }) do cand[#cand + 1] = { a, b } end
+    end
+    for _, a in ipairs({ "Bip001-L-Thigh", "Bip001-L-Calf", "Bip001-L-Foot" }) do
+      for _, b in ipairs({ "Bip001-R-Thigh", "Bip001-R-Calf", "Bip001-R-Foot" }) do cand[#cand + 1] = { a, b } end
+    end
+  end
+  local pairs, near, guessed = measure(mesh, pa, cand, g.armGap or 2)
+  local r = M.arm_table(pa, pairs)
+  if r:sub(1, 3) ~= "ok " then return {}, "table NOT written: " .. r end
+  return pairs, told(pairs, near, guessed, r)
+end
+
+-- a cut-off piece (the main bodies at and below roots, bone names) against the rest of her main bodies: those pairs
+-- collide too, on top of base (the pairs colliding so far), but the ones touching where she is cut (the piece's root
+-- against the body it came off). Before, a cut arm or leg fell through her as if she weren't there. -> every pair
+-- colliding now (nil if the table wasn't written) and what to log
+function M.piece_collision(mesh, pa, roots, base)
+  local g = cfg()
+  if g.enabled == false or g.collisionTable == false or g.pieceCollision == false or not valid(pa) or dll() ~= "ready" then
+    return nil, "no table"
+  end
+  local inside = {}
+  local names = {}
+  for _, bs in ipairs(bodies_of(pa)) do
+    local b = try(function() return bs.BoneName:ToString() end)
+    if b and MAIN[b] then
+      names[#names + 1] = b
+      for _, r in ipairs(roots) do
+        if b == r or try(function() return mesh:BoneIsChildOf(FName(b), FName(r)) end) == true then inside[b] = true end
+      end
+    end
+  end
+  local have = {}
+  for _, p in ipairs(base) do have[p[1] .. "|" .. p[2]] = true; have[p[2] .. "|" .. p[1]] = true end
+  local cand = {}
+  for _, a in ipairs(names) do
+    if inside[a] then
+      for _, b in ipairs(names) do
+        if not inside[b] and not have[a .. "|" .. b] then cand[#cand + 1] = { a, b } end
+      end
+    end
+  end
+  local pairs, near, guessed = measure(mesh, pa, cand, g.armGap or 2)
+  local all = {}
+  for _, p in ipairs(base) do all[#all + 1] = p end
+  for _, p in ipairs(pairs) do all[#all + 1] = p end
+  local r = M.arm_table(pa, all)
+  if r:sub(1, 3) ~= "ok " then return nil, "table NOT written: " .. r end
+  return all, told(pairs, near, guessed, r)
 end
 
 -- recovery: the locks go (the mesh's bodies are re-made by the game anyway)

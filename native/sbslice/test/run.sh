@@ -125,6 +125,14 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
            "real thigh cut CH_P_EVE_10, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
            "real split CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 POSED=|CH_P_EVE_10")
+  # CH_P_EVE_14's thigh, its leg straps (chains off the hip, along the thigh) over the plane kept on the body as gore.lua
+  # does, mid-thigh and high up: its laces down the leg (14% of their vertices past the plane, on the leg's bones) are
+  # cut like the body, none of the knee left on her spine (playtest screenshot: a sheet from the severed leg to her)
+  E14="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1"
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
+    for at in 0.4 0.2; do
+      jobs+=("real thigh cut CH_P_EVE_14_1 at $at, leg straps kept on the body|ARM=1 KEEPCAPE=1 CAPE=Ab_LLA01,Ab_LLB01 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=$at $E14|CH_P_EVE_14_1")
+    done
   on mark && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real hit mark CH_P_EVE_10|MARK=1|CH_P_EVE_10" "real hit mark CH_P_EVE_10 (posed)|MARK=1 POSED=1|CH_P_EVE_10")
 fi

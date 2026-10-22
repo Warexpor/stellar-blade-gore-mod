@@ -586,6 +586,16 @@ def joint_limits(d, job):
             t = math.radians(lim["turn"])
             n = [b[i] * math.cos(t) + c[i] * math.sin(t) for i in range(3)]
             sec.update({"X": n[0], "Y": n[1], "Z": n[2]})
+            # the sideways swing ("swing1", outfits.py): the cone's half angle, frame 2 turned by "tilt" about its Z
+            # (pri x sec) to centre it between how far in and out the limb may swing
+            if "swing1" in lim:
+                _struct_field(d, cone, "Swing1LimitDegrees", lambda: _float_prop("Swing1LimitDegrees", 0))["Value"] = float(lim["swing1"])
+                _struct_field(d, cone, "Swing1Motion", lambda: _motion("Swing1Motion", "EAngularConstraintMotion", "ACM_Limited"))["Value"] = "ACM_Limited"
+                b, t = n, math.radians(lim["tilt"])
+                na = [a[i] * math.cos(t) + b[i] * math.sin(t) for i in range(3)]
+                nb = [b[i] * math.cos(t) - a[i] * math.sin(t) for i in range(3)]
+                pri.update({"X": na[0], "Y": na[1], "Z": na[2]})
+                sec.update({"X": nb[0], "Y": nb[1], "Z": nb[2]})
         done.append(child)
     missing = set(limits) - set(done)
     if missing:

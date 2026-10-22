@@ -144,13 +144,13 @@ for name, w in want.items():
                 continue
             k = seen[c["child"]] = seen.get(c["child"], -1) + 1
             v = g["C"][c["child"]][k]
-            mine = (int(v[0]), int(v[1]), float(v[2]), float(v[3]), v[4] == "true", int(v[5]), float(v[6]), v[7] == "true", [float(x) for x in v[8:11]])
+            mine = (int(v[0]), int(v[1]), float(v[2]), float(v[3]), v[4] == "true", int(v[5]), float(v[6]), v[7] == "true", [float(x) for x in v[8:11]], [float(x) for x in v[11:14]])
             cc, tw = c["cone"], c["twist"]
             theirs = (cc["Swing1Motion"], cc["Swing2Motion"], cc["Swing1LimitDegrees"], cc["Swing2LimitDegrees"], cc["bSoftConstraint"],
-                      tw["TwistMotion"], tw["TwistLimitDegrees"], tw["bSoftConstraint"], c["sec2"])
+                      tw["TwistMotion"], tw["TwistLimitDegrees"], tw["bSoftConstraint"], c["sec2"], c["pri2"])
             ok = mine[:2] == theirs[:2] and mine[4] == theirs[4] and mine[5] == theirs[5] and mine[7] == theirs[7] \
                 and close(mine[2], theirs[2], 1e-3) and close(mine[3], theirs[3], 1e-3) and close(mine[6], theirs[6], 1e-3) \
-                and all(close(a, b, 2e-5) for a, b in zip(mine[8], theirs[8]))
+                and all(close(a, b, 2e-5) for k in (8, 9) for a, b in zip(mine[k], theirs[k]))
             if not ok:
                 errs.append(f"{c['child']} joint {mine}, build {theirs}")
         n = w["n"]
