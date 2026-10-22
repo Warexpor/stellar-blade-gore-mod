@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Expand the spec's "outfits" job into per-asset cpuaccess / physics jobs for every Eve outfit.
 
-  outfits.py meshes  <spec> <EquipmentTable.json>                candidate mesh packages (SB/Content-relative)
+  outfits.py meshes  <spec> <EquipmentTable.json> [mods.txt]     candidate mesh packages (SB/Content-relative)
   outfits.py physics <spec> <meshinfo.log>                       "<mesh> <physics asset>" for usable body meshes
   outfits.py expand  <spec> <json_root> <bones_root> <pairs_file> <out_spec>
 
-Outfit meshes come from EquipmentTable (every SkeletalMesh path under Art/Character/PC/CH_P_EVE*), filtered to
+Outfit meshes come from EquipmentTable (every SkeletalMesh path under Art/Character/PC/CH_P_EVE*, and every path
+another mod ships, from build.sh's mods.txt: an outfit mod may point the table at meshes of its own), filtered to
 meshes on Eve's body skeleton. Each physics asset gets the job's groups, and its "except" pairs are measured: two
 bodies (of different groups, or not grouped at all) that are closer than rest_margin cm in the mesh's bind pose
 would be shoved apart by the solver every frame (the flinging), so they stay non-colliding. Bodies no constraint
@@ -35,13 +36,14 @@ def selected(job, rel):
     return not any(fnmatch.fnmatch(name, p) for p in job.get("skip", []))
 
 
-def cmd_meshes(spec, table):
+def cmd_meshes(spec, table, mods=None):
     job = job_of(spec)
     text = open(table).read()
+    shipped = {l.split()[1] for l in open(mods) if len(l.split()) == 2} if mods else set()
     found = set()
-    for m in re.finditer(r"/Game/(Art/Character/PC/CH_P_EVE[^\"'.]*)\.[A-Za-z0-9_]+", text):
+    for m in re.finditer(r"/Game/([^\"'.]+)\.[A-Za-z0-9_]+", text):
         rel = m.group(1)
-        if selected(job, rel):
+        if (rel.startswith("Art/Character/PC/CH_P_EVE") or rel in shipped) and selected(job, rel):
             found.add(rel)
     for rel in sorted(found):
         print(rel)
@@ -52,13 +54,15 @@ def main_export(d):
 
 
 def cmd_physics(spec, meshinfo):
-    """sbtool meshinfo's "ok <rel> <skeleton> <physics package>" lines -> "<mesh> <physics asset>" for body meshes."""
+    """sbtool meshinfo's "ok <rel> <skeleton> <physics package>" lines -> "<mesh> <physics asset>" for body meshes.
+    A body mesh with no physics asset ("-": an outfit mod's mesh exported without one, e.g. Eve with no Clothes on)
+    is "<mesh> -": it still gets CPU access, and physfix.lua gives it its vanilla physics asset in game."""
     job = job_of(spec)
     for line in open(meshinfo):
         f = line.split()
-        if len(f) != 4 or f[0] != "ok" or f[2] != job["skeleton"] or not f[3].startswith(PREFIX):
+        if len(f) != 4 or f[0] != "ok" or f[2] != job["skeleton"] or not (f[3].startswith(PREFIX) or f[3] == "-"):
             continue
-        print(f[1], f[3][len(PREFIX):])
+        print(f[1], f[3][len(PREFIX):] if f[3] != "-" else "-")
 
 
 # --- bind-pose geometry -------------------------------------------------------------------------------------
@@ -306,7 +310,8 @@ def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
     for mesh, phys in pairs:
         if mesh not in assets:
             assets[mesh] = {"mode": "cpuaccess", "lods": job["cpuaccess_lods"]}
-        phys_mesh.setdefault(phys, mesh)
+        if phys != "-":
+            phys_mesh.setdefault(phys, mesh)
     report = []
     for phys, mesh in sorted(phys_mesh.items()):
         if phys in assets:
@@ -326,7 +331,10 @@ def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
         assets[phys] = {"mode": "physics", "groups": job["groups"], "except": [[a, b] for a, b, _ in over],
                         "body": job["body"], "joints": joints, "limits": limits, "swing": job.get("swing", {}),
                         "hard_limits": job.get("hard_limits", True), "optional_bodies": True,
-                        "accessory_collision": job.get("accessory_collision", False)}
+                        "accessory_collision": job.get("accessory_collision", False),
+                        "self_collision": job.get("self_collision", True),
+                        "lock_below": job.get("lock_below", 0.0),
+                        "locked_joints": job.get("locked_joints", [])}
     out = dict(spec)
     out["assets"] = assets
     json.dump(out, open(out_spec, "w"), indent=2)
@@ -336,7 +344,7 @@ def cmd_expand(spec, root, bones_root, pairs_file, out_spec):
 if __name__ == "__main__":
     cmd, spec = sys.argv[1], json.load(open(sys.argv[2]))
     if cmd == "meshes":
-        cmd_meshes(spec, sys.argv[3])
+        cmd_meshes(spec, *sys.argv[3:5])
     elif cmd == "physics":
         cmd_physics(spec, sys.argv[3])
     elif cmd == "expand":

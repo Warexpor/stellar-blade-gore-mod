@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install UE4SS (Stellar Blade build) + the Stellar Blade Gore Mod script + the SBSlice native helper (gore).
 #   ./ue4ss/install.sh            install
-#   ./ue4ss/install.sh --uninstall
+#   ./ue4ss/install.sh --uninstall       this mod only (UE4SS and other mods stay)
+#   ./ue4ss/install.sh --uninstall-all   UE4SS too
 # Steam launch option needed: WINEDLLOVERRIDES="dwmapi=n,b" ... %command%
 set -euo pipefail
 
@@ -18,6 +19,12 @@ OLDS=("$MODS/EveRagdollProbe" "$MODS/Severed") # the script's earlier names
 [[ -f $BIN/SB-Win64-Shipping.exe ]] || { echo "game not found at $GAME (set SB_GAME)"; exit 1; }
 
 if [[ ${1:-} == --uninstall ]]; then
+  # only ours: UE4SS and other mods stay (--uninstall-all removes UE4SS too)
+  rm -rf "$NEW" "$MODS/SBSlice" "${OLDS[@]}" && echo "removed StellarBladeGore and SBSlice from $MODS"
+  [[ -f $MODS/mods.txt ]] && sed -i -E '/^\s*(SBSlice|StellarBladeGore)\s*:/d' "$MODS/mods.txt"
+  exit 0
+fi
+if [[ ${1:-} == --uninstall-all ]]; then
   rm -fv "$BIN/dwmapi.dll"
   rm -rf "$BIN/ue4ss" && echo "removed $BIN/ue4ss"
   exit 0
@@ -52,12 +59,18 @@ touch "$NEW/enabled.txt"
 rm -rf "$MODS/SBSlice"
 mkdir -p "$MODS/SBSlice/dlls"
 cp "$CACHE/sbslice/main.dll" "$MODS/SBSlice/dlls/main.dll"
-cat > "$MODS/mods.txt" <<'EOF'
-SBSlice : 1
-StellarBladeGore : 1
-
-; Built-in keybinds, do not move up!
-Keybinds : 1
-EOF
+# mods.txt: ours on, every other mod's line kept as it is, Keybinds last (UE4SS wants it there)
+python3 - "$MODS/mods.txt" <<'PY'
+import os, re, sys
+p = sys.argv[1]
+lines = open(p).read().splitlines() if os.path.exists(p) else []
+ours = ("SBSlice", "StellarBladeGore", "Keybinds")
+keep = [l for l in lines if re.split(r"\s*:", l.strip(), maxsplit=1)[0] not in ours
+        and not l.strip().startswith("; Built-in keybinds")]
+while keep and not keep[-1].strip():
+    keep.pop()
+out = ["SBSlice : 1", "StellarBladeGore : 1"] + keep + ["", "; Built-in keybinds, do not move up!", "Keybinds : 1"]
+open(p, "w").write("\n".join(out) + "\n")
+PY
 echo "installed UE4SS + StellarBladeGore into $BIN"
 echo "log: $NEW/stellarbladegore.log (and $BIN/ue4ss/UE4SS.log)"

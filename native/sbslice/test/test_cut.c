@@ -30,6 +30,9 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #define DllMain DllMain_
 #define SBSLICE_HOSTED
 #include "../sbslice.c"
+void spawner_start(void) {} // the window is Win32 only
+int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (void)l; (void)a; (void)b; return 0; } // stats.c: test_stats.c
+int mem_readable(u64 p, u64 n) { (void)p; (void)n; return 0; } // stats.c
 #undef CreateThread
 #undef Sleep
 #undef CreateFileW
@@ -527,13 +530,22 @@ int main(void)
         skin_cut((u64)comp_buf, 0, THIGH, cp, cn, MODE_CUT, 0, 0, -1, 0);
         printf("pieces: %.160s\n", strstr(lastres, " pieces=") ? strstr(lastres, " pieces=") : lastres);
         skin_collapse();
-        int a_sink = -1, a_bad = 0, b_bad = 0, b_off = 0;
-        for (int v = base; v < base + 12; v++) {
-            int ok = override_w[v].weights[0] == 255 && is_sink(&sc, override_w[v].bones[0]);
-            if (!ok || (a_sink >= 0 && override_w[v].bones[0] != a_sink)) a_bad++;
-            a_sink = override_w[v].bones[0];
-        }
+        int a_bad = 0, a_off = 0, b_bad = 0, b_off = 0;
         for (int i = 0; i < NB; i++) if (i == THIGH || i == CALF || i == THIGH_HELP) space[i * 12 + 4] += 40;
+        // strap A, tied to both and reaching 13 cm past the cut each way, is cut (it vanished into a sink once, which
+        // read as the cut taking a piece of the outfit, and sent whole it stood off the body where the leg had been):
+        // its rows clear of the seam stay put on the body (z 65, 70) or go with the leg (z 45, 50); strap B, on the
+        // leg's bones alone, goes with the leg whole
+        for (int v = base; v < base + 12; v++) {
+            float x[3]; skin(&override_w[v], xpos[v], x);
+            if (xpos[v][2] > 62) {
+                for (int i = 0; i < MAX_INF; i++) {
+                    int bb = override_w[v].bones[i];
+                    if (override_w[v].weights[i] && (bb == THIGH || bb == CALF || bb == THIGH_HELP || is_sink(&sc, bb))) a_bad++;
+                }
+                a_off += fabsf_(x[0] - xpos[v][0]) > 0.01f || fabsf_(x[2] - xpos[v][2]) > 0.01f;
+            } else if (xpos[v][2] < 52) a_off += fabsf_(x[0] - xpos[v][0] - 40) > 0.01f;
+        }
         for (int v = base + 12; v < base + 24; v++) {
             float x[3]; skin(&override_w[v], xpos[v], x);
             for (int i = 0; i < MAX_INF; i++) {
@@ -543,9 +555,9 @@ int main(void)
             b_off += fabsf_(x[0] - xpos[v][0] - 40) > 0.01f;
         }
         for (int i = 0; i < NB; i++) space[i * 12 + 4] = 0;
-        printf("pieces: strap A %s (%d off one sink), strap B along with the leg (%d not on leg bones, %d not moved)\n",
-               a_bad ? "not gone" : "gone into one sink", a_bad, b_bad, b_off);
-        modebad |= a_bad || b_bad || b_off || !strstr(lastres, " pieces=1/1");
+        printf("pieces: strap A cut (%d leg or sink weights over the cut, %d off its side), strap B along with the leg (%d not on leg bones, %d not moved)\n",
+               a_bad, a_off, b_bad, b_off);
+        modebad |= a_bad || a_off || b_bad || b_off || !strstr(lastres, " pieces=1");
         skin_restore(0);
 
         // a hole where the ray comes out through the plate: the plate stays, the skin under it gets the hole

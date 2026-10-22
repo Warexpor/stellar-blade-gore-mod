@@ -124,8 +124,10 @@
       }
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Start": {
+      "_comment_hold": "hold: seconds the show runs on after the fall, on its last frame. It ended 0.9 s after, and the game's dead pose (her death show's, a different one) snapped in; 120 s outlasts the death screen (respawn reloads the level)",
       "_comment": "Death animations made from her knockdown falls (the knockdown shows and animations stay as they are): P_Eve_Dead with the fall swapped in, held on its last frame, Eve_Dead_Common (the death face and voice) kept, no ragdoll key. main.lua plays one at random over an animated death (tune.active.animatedPool), F5 cycles through them",
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Start",
       "length": 1.6666666,
@@ -133,6 +135,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Start1": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Start1",
       "length": 1.6666666,
@@ -140,6 +143,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Forward": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Forward",
       "length": 2.0,
@@ -147,6 +151,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_Knock_Down_Backward": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_Knock_Down_Backward",
       "length": 2.0,
@@ -154,6 +159,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_S_Fw": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_S_Fw",
       "length": 2.0,
@@ -161,6 +167,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_S_Bw": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_S_Bw",
       "length": 2.5,
@@ -168,6 +175,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_Tumble_Fw": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_Tumble_Fw",
       "length": 1.6,
@@ -175,6 +183,7 @@
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveDeath_KnockDown_Tumble_Bw": {
       "mode": "animshow",
+      "hold": 120.0,
       "from": "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead",
       "anim": "/Game/Art/Character/PC/CH_P_EVE_01/Animation/Result_State_KnockDown_Tumble_Bw",
       "length": 2.1,
@@ -192,20 +201,20 @@
           "Explosion1DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion1",
           "Explosion2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion2",
           "AirborneDeadShow": "CH_P_EVE_01/Basic/P_Eve_AirDead",
-          "DefaultDeadUIDelayTime": 8.0,
-          "StandDeadUIDelayTime": 8.0,
-          "Step0DeadUIDelayTime": 8.0,
-          "Step1DeadUIDelayTime": 8.0,
-          "Step2DeadUIDelayTime": 8.0,
-          "Step3DeadUIDelayTime": 8.0,
-          "Explosion1DeadUIDelayTime": 8.0,
-          "Explosion2DeadUIDelayTime": 8.0,
-          "Custom2DeadUIDelayTime": 8.0,
-          "Custom3DeadUIDelayTime": 8.0,
-          "Custom5DeadUIDelayTime": 8.0,
-          "Custom9DeadUIDelayTime": 8.0,
-          "DownDeadUIDelayTime": 8.0,
-          "AirborneDeadUIDelayTime": 8.0
+          "DefaultDeadUIDelayTime": 7.0,
+          "StandDeadUIDelayTime": 7.0,
+          "Step0DeadUIDelayTime": 7.0,
+          "Step1DeadUIDelayTime": 7.0,
+          "Step2DeadUIDelayTime": 7.0,
+          "Step3DeadUIDelayTime": 7.0,
+          "Explosion1DeadUIDelayTime": 7.0,
+          "Explosion2DeadUIDelayTime": 7.0,
+          "Custom2DeadUIDelayTime": 7.0,
+          "Custom3DeadUIDelayTime": 7.0,
+          "Custom5DeadUIDelayTime": 7.0,
+          "Custom9DeadUIDelayTime": 7.0,
+          "DownDeadUIDelayTime": 7.0,
+          "AirborneDeadUIDelayTime": 7.0
         }
       }
     },
@@ -258,6 +267,74 @@
       "mode": "notify",
       "voice": "die3",
       "at": 0.0813
+    },
+    "Art/Character/Monster/CH_M_NA_16/CH_M_NA_16": {
+      "_comment": "Generic humanoid enemies' bodies (enemies.lua, tune.enemies.kinds: the skulls, the lab mutant, the statues, the lurkers): LOD0 CPU access, so their corpses can be cut as Eve is",
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_17/CH_M_NA_17": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_17/CH_M_NA_17_1": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_19/CH_M_NA_19": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_35/CH_M_NA_35": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_40/CH_M_NA_40": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_40/CH_M_NA_40_B": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_40/CH_M_NA_40_C": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/Monster/CH_M_NA_45/CH_M_NA_45": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/NPC/CH_NPC_AirborneSquad/CH_NPC_AirborneSquad_Body": {
+      "_comment": "The Airborne Squad angels (tune.enemies.kinds N_AirborneSquad) wear CH_P_EVE_01_Body (the outfits job covers it) and CH_P_EVE_Face_003; their own body mesh (ST_AirborneSquad_MeshState may swap it in) and that face get LOD0 CPU access for their cuts",
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
+    },
+    "Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_003": {
+      "mode": "cpuaccess",
+      "lods": [
+        0
+      ]
     }
   },
   "_comment_ui_delay": "Seconds before the death/respawn UI appears, so the ragdoll is visible. Vanilla is 0 for these (desert hole uses 2.5).",
@@ -334,6 +411,12 @@
     "lock_orphans": true,
     "_comment_accessory_collision": "false: every body outside the groups (hair, cape, breast and hip jiggle, neck pieces) collides with nothing of hers, only the world. CH_P_EVE_09 had 114 such pairs with her main bodies; the jiggle bodies inside her torso shoved the thighs and arms and the cape got pinned under her, and she shook on the floor",
     "accessory_collision": false,
+    "_comment_self_collision": "false: none of her bodies collide with each other at all, only with the world. With the groups colliding, an arm or leg landing on her own body set every joint jittering until each part found the floor (eighteenth playtest), and the runtime switch (tune.selfCollision, the mesh ignoring PhysicsBody) didn't stop it. Limbs may pass through her now",
+    "self_collision": false,
+    "_comment_lock_below": "With hard_limits, a main joint's motion limited to fewer degrees than this is locked instead. Hard limits a few degrees wide (clavicles 5, the shoulder's roll 5, the hip's sideways swing 5, the neck 5, pelvis to spine twist 5) sat at their limit all the time and every joint buzzed, even in mid-air (eighteenth playtest)",
+    "lock_below": 6.0,
+    "_comment_locked_joints": "Joints locked whole (none now). Locking the clavicles (they buzzed in their 15 deg twist) hung both arms rigidly off the light neck, and the spine and pelvis buzzed on 40-60% of ticks instead (eighteenth playtest)",
+    "locked_joints": [],
     "_comment_body": "Damping on the torso and limb bodies: vanilla linear 5.0 capped her fall at ~2 m/s, angular 10.0 made her topple and turn as if under water (both only matter in a ragdoll, the bodies are kinematic in gameplay)",
     "body": {
       "LinearDamping": 0.2,

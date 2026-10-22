@@ -55,6 +55,20 @@ local BLADE_AT_MIN = 0.3
 -- side collapses onto a borrowed bone no face vertex uses (Spine1), made to follow the head
 local SPLIT_SINK = "Bip001-Spine1"
 local SPLIT_RIDE = { "Bip001-Head", "Bip001-Neck", "Bip001-Spine2", "Bip001-Spine1", "Bip001-Spine", "Bip001-Pelvis" }
+-- the ones a half's lid and sheet may ride: never a bone that half lets go of (settle_half: the copy's head, the
+-- other end of a broken spine), which falls free and spins, and the lid stretched after it in tall flashing sheets
+-- (ragdoll deaths, playtest 26). q.spine: where the spine breaks (her half keeps it and what is above it)
+function SPLIT_RIDE.of(q, comp)
+  local s, si, list = q.spine, nil, {}
+  for i, b in ipairs(SPLIT_RIDE) do if b == s then si = i end end
+  local copy = comp ~= q.mesh
+  for i, b in ipairs(SPLIT_RIDE) do
+    local ok = not si or (copy and i > si) or (not copy and i <= si)
+    if copy and b == "Bip001-Head" and not (s and s ~= b) then ok = false end
+    if ok then list[#list + 1] = b end
+  end
+  return #list > 0 and list or SPLIT_RIDE
+end
 local LIMB_ROOTS = { "Bip001-L-UpperArm", "Bip001-R-UpperArm", "Bip001-L-Thigh", "Bip001-R-Thigh" }
 -- what each kind of cut picks from, nearest to the hit (no lower limbs: a whole limb reads better)
 local POOL = {
@@ -89,15 +103,34 @@ local FX = {
   hit = "/Game/Art/FX/Char/Common/Hit/PC/NS_HitBlood_PC_01.NS_HitBlood_PC_01",
   splat = "/Game/Art/FX/Char/Common/Hit/Flesh/NS_Hit_Flesh_Decal_Strong_01.NS_Hit_Flesh_Decal_Strong_01",
 }
--- the game's own gore sounds (sound cues, played where it happens): the slice of a Naytiba's limb, the gore splash of
--- a boss finisher, a power hit's blood and the flesh impact, a finisher's stab
+-- the game's own gore sounds (sound cues, played where it happens): each kind has a few sets of cues from the same
+-- family (the slice of a Naytiba's limb, a boss finisher's gore splash, a power hit's blood, a finisher's flesh stab),
+-- one set per event, never one with a cue that played in the last few seconds (a cue that is still playing drops its
+-- next start: an arm cut right after a thigh's was silent, sixteenth playtest). The finishers' bass-heavy gore layers
+-- (Boss_Gore, Crawler, Quadruped) were too much
+local SFX
+do -- (a block: the main chunk is near Lua's 200 locals)
 local function cue(p) return "/Game/Sound/Character/" .. p .. "." .. p:match("([^/]+)$") end
-local SFX = {
-  cut = { cue("Hit/Slice/Mon_slice_Big_Cue") },
-  big = { cue("Hit/Slice/Mon_slice_Big_Cue"), cue("Skill/Link/Boss/PC_LinkAttack_Boss_Gore_Splash_Cue") },
-  rupture = { cue("Hit/hit_common_blood_power_00_Cue"), cue("Hit/CPS_LinkAttack_Flesh_Impact_FX_Cue") },
-  stab = { cue("Skill/Link/Boss/PC_LinkAttack_Boss_Flesh_Stab1_Cue") },
+local L = "Skill/Link/Boss/"
+local SLICE_BIG, SLICE_SMALL = cue("Hit/Slice/Mon_slice_Big_Cue"), cue("Hit/Slice/Mon_slice_Small_Cue")
+local SPLASH, BLOOD = cue(L .. "PC_LinkAttack_Boss_Gore_Splash_Cue"), cue("Hit/hit_Linkskill_Blood_01_Cue")
+SFX = {
+  cut = { { SLICE_BIG }, { SLICE_SMALL }, { SLICE_SMALL, BLOOD } },
+  big = { { SLICE_BIG, SPLASH }, { SLICE_SMALL, SPLASH }, { SLICE_BIG, BLOOD } },
+  rupture = {
+    { cue("Hit/hit_common_blood_power_00_Cue"), cue("Hit/CPS_LinkAttack_Flesh_Impact_FX_Cue") },
+    { cue("Hit/hit_common_blood_power_00_Cue"), cue("Hit/CPS_LinkAttack_Flesh_Impact_FX_Light_Cue") },
+  },
+  stab = {
+    { cue(L .. "PC_LinkAttack_Boss_Flesh_Stab1_Cue") },
+    { cue(L .. "PC_LinkAttack_Boss_Flesh_Stab2_Cue") },
+    { cue(L .. "PC_LinkAttack_Boss_Flesh_Stab3_Cue") },
+  },
 }
+end
+local SFX_GAP = 3.0 -- s a cue rests after it played
+local sfx_last = {} -- cue path -> os.clock() it last played
+
 -- the cap: the engine's sphere (radius 50) flattened onto the opening, with the game's cut-flesh material
 local CAP_MESH = "/Engine/BasicShapes/Sphere.Sphere"
 -- the game's meat (lit, its own colour, normal and ORM maps on UV0), as on the Nest's flesh. MI_CutDamage, the cap
@@ -126,11 +159,24 @@ local forced = {}   -- address -> component this script forced to LOD0
 local clones = {}   -- components made for a split (the other half's body), destroyed on cleanup
 local rehomed = {}  -- { comp, parent, socket, master }: gloves, suit pieces, accessories moved onto a split's copy
 local copy_watch = nil -- { comp, n }: a split's copy, its ragdoll logged for a couple of seconds
+local limb_watch = nil -- { mesh, bone, kept, anchor, n }: a limb cut's stretched skin and hanging chains, logged at 1 and 5 s
+local skinned = {}      -- split lids that bend with her spine: { actor, pmc, comp, bones, v = per vertex skin, n }
 -- the cut in progress, in stages a few ticks apart (see M.slice): { stage, wait, pawn, mesh, hit, why, ... }
 local pending = nil
+local queued = {}   -- more cuts from the same killing blow (multiCut), each started once the one before it is done
 local collision_saved = nil -- the living mesh's collision setup, while a cut piece needs world collision
 local self_saved = nil      -- { mesh, resp }: her PhysicsBody response before a cut turned self-collision off
+-- enemies (enemies.lua): the same cuts on a generic humanoid enemy's corpse. Everything a cut leaves (caps, effects,
+-- bleeds, pools, delayed steps, the cut records) is tagged with the enemy it was made for (owned: item -> its
+-- address; Eve's are untagged or false), so a corpse going away takes only its own, and her recovery leaves theirs.
+-- cur: the enemy the code running now cuts (nil: Eve). Their mesh assets are shared by every enemy of the kind, so
+-- their sinks are put back once the last cut corpse of a kind is gone (see M.enemy_gone). faced: enemies built like
+-- Eve (the Airborne Squad: her skeleton, a separate face mesh), cut with her rules: the face goes with the head
+local enemy = { owned = setmetatable({}, { __mode = "k" }), cur = nil, faced = {} }
 local TICK_S = 0.033 -- main.lua polls every 33 ms
+-- the main bodies of a cut-off piece, below its root bone (side left out)
+local PIECE_CHAIN = { Thigh = { "Thigh", "Calf", "Foot" }, Calf = { "Calf", "Foot" }, UpperArm = { "UpperArm", "Forearm", "Hand" },
+  Forearm = { "Forearm", "Hand" } }
 local cache = {}
 
 local function cfg() return ctx.tune.gore or {} end
@@ -142,13 +188,17 @@ local function read_file(p) local f = io.open(p, "r"); if not f then return nil 
 
 local function load_obj(path)
   -- nothing roots the Niagara systems once their components are cleaned up, so GC frees them; a cached
-  -- wrapper then points at a dead object (crash on the next death's blood spawn). Re-check every use.
-  if cache[path] and valid(cache[path]) then return cache[path] end
+  -- wrapper then points at a dead object (crash on the next death's blood spawn). Checking the cached wrapper wasn't
+  -- enough: a freed object's address gets reused, IsValid then passes on whatever lives there now, and a sound cue
+  -- read that way crashed PlaySoundAtLocation (attenuation pointer 0x1, eighteenth playtest's F11). Found by path
+  -- every time instead
   local o = try(function() return StaticFindObject(path) end)
   if not valid(o) and LoadAsset then o = try(function() return LoadAsset(path) end) end
   if not valid(o) then o = try(function() return StaticFindObject(path) end) end
   cache[path] = valid(o) and o or false
   if not valid(o) then log("could not load " .. path) end
+  -- an asset (not a native class or default object) stays loaded from now on: see native.root
+  if valid(o) and path:sub(1, 8) ~= "/Script/" and native.root then native.root(path, o) end
   return valid(o) and o or nil
 end
 
@@ -162,15 +212,32 @@ local function norm(a)
   return l > 1e-4 and scale(a, 1 / l) or nil
 end
 
+-- a cut stage's time, step by step (mark), logged by stage_tick when the stage shows as a stutter: the cuts
+-- hitched with no sbslice command over 15 ms (twenty-fifth playtest)
+local prof
+local function mark(what)
+  if not prof then return end
+  local t = os.clock()
+  local ms = (t - prof.t) * 1000
+  if ms >= 1 then prof[#prof + 1] = string.format("%s %.0f", what, ms) end
+  prof.t = t
+end
+
 -- one command to sbslice.dll (see exec_slice there); the answer it leaves in sbslice.cut
 local function command(s, p, n)
+  mark("lua")
   os.remove(RESULT)
   local cdo = load_obj(CHEAT_CDO)
   if not cdo then return "err no cheat manager" end
   p, n = p or vec(0, 0, 0), n or vec(0, 0, 0)
+  local t0 = os.clock()
   local ok, err = pcall(function()
     cdo:SBRewardGroupDropFormationPathLocation(FName("None"), p.X, p.Y, p.Z, s, n.X, n.Y, n.Z)
   end)
+  -- a command that holds the game thread long enough to show as a stutter (the split's, eighteenth playtest)
+  local ms = (os.clock() - t0) * 1000
+  if ms >= (cfg().slowMs or 15) then log(string.format("sbslice %s took %.0f ms", s:sub(1, 1), ms)) end
+  mark("sbslice " .. s:sub(1, 1))
   if not ok then return "err call: " .. tostring(err) end
   return read_file(RESULT) or "err no answer"
 end
@@ -178,10 +245,13 @@ end
 -- sbslice's stretch probe on comp's LOD0, its bone indices named
 local function stretch_report(comp)
   local r = command(string.format("s%x,0", comp:GetAddress()))
-  return (r:gsub("(%d+):(%d+):([%d%.]+)", function(i, n, far)
-    local name = try(function() return comp:GetBoneName(tonumber(i)):ToString() end) or i
-    return string.format("%s x%s (%s cm off it)", name, n, far)
-  end))
+  local function nm(i) return try(function() return comp:GetBoneName(tonumber(i)):ToString() end) or i end
+  local head, shown = r:match("^(.-) shown=(.*)$")
+  head = (head or r):gsub("(%d+):(%d+):([%d%.]+)", function(i, n, far) return string.format("%s x%s (%s cm off it)", nm(i), n, far) end)
+  if not shown then return head end
+  -- the triangles that show (not wholly on sinks), by bone
+  shown = shown:gsub("(%d+):(%d+)", function(i, n) return string.format("%s x%s", nm(i), n) end)
+  return head .. " shown=" .. shown
 end
 
 -- handshake with sbslice.dll: hand it the UFunction to repoint, then wait for its answer
@@ -224,16 +294,75 @@ local function sfx(kind, pawn, at)
   if g.sounds == false or not at then return end
   local gs = load_obj("/Script/Engine.Default__GameplayStatics")
   if not gs then return end
-  for _, path in ipairs(SFX[kind] or {}) do
+  -- the sets in random order; the first with no cue still ringing, else the one whose newest cue is the oldest
+  local sets, now = SFX[kind] or {}, os.clock()
+  local order = {}
+  for i = 1, #sets do order[i] = i end
+  for i = #order, 2, -1 do local j = math.random(i); order[i], order[j] = order[j], order[i] end
+  local pick, pick_age = nil, -1
+  for _, i in ipairs(order) do
+    local age = math.huge
+    for _, path in ipairs(sets[i]) do age = math.min(age, now - (sfx_last[path] or -1e9)) end
+    if age >= SFX_GAP then pick = i; break end
+    if age > pick_age then pick, pick_age = i, age end
+  end
+  local played = {}
+  for _, path in ipairs(pick and sets[pick] or {}) do
     local snd = load_obj(path)
     if snd then
+      -- no owning actor: the cues' concurrency is per owner, so a cut right after another on her was dropped as the
+      -- same sound playing again (leg cuts came out silent, fifteenth playtest)
       local ok, err = pcall(function()
         gs:PlaySoundAtLocation(pawn, snd, vec(at.X, at.Y, at.Z), { Pitch = 0, Yaw = 0, Roll = 0 }, g.soundVolume or 1.0,
-          0.95 + math.random() * 0.1, 0.0, nil, nil, pawn)
+          0.92 + math.random() * 0.16, 0.0, nil, nil, nil)
       end)
-      if not ok then log("sound " .. path .. ": " .. tostring(err)) end
+      if ok then
+        sfx_last[path] = now
+        played[#played + 1] = path:match("([^/.]+)%.[^.]+$") or path
+      else
+        log("sound " .. path .. ": " .. tostring(err))
+      end
+    else
+      log("sound " .. path .. " didn't load")
     end
   end
+  log(string.format("sound %s: %s", kind, #played > 0 and table.concat(played, ", ") or "none"))
+end
+
+-- ---- her voice (tune.gore.voice) ----
+-- Eve's own death cry (vo_eve_die_*, SoundWaves under Sound/Dialogue/ActionVoice/Eve, localized like the game's
+-- voice), once, the moment she dies. Nothing after: the screams on later cuts and the moans and last breath that
+-- followed played on over her body (twentieth playtest). Any death, real or a test key's, starts it (main.lua on_start)
+local vox = { last = {} } -- one local for all of it (the chunk is at its 200-local limit)
+vox.DIR = "/Game/Sound/Dialogue/ActionVoice/Eve/"
+vox.DIE = {}
+for i = 1, 5 do
+  local n = string.format("vo_eve_die_%02d_VO", i)
+  vox.DIE[i] = vox.DIR .. n .. "." .. n
+end
+vox.ATTENUATION = "/Game/Sound/SoundAsset/Attenuations/Character/PC_ActionVoice.PC_ActionVoice"
+-- vox.last: recording -> os.clock() it last played (none twice within voice.rest s)
+function M.voice_death(pawn, mesh)
+  local v = cfg().voice or {}
+  if v.enabled == false or v.cry == false then return end
+  local gs = load_obj("/Script/Engine.Default__GameplayStatics")
+  local at = valid(mesh) and try(function()
+    local x = mesh:GetSocketLocation(FName("Bip001-Head")); return { X = x.X, Y = x.Y, Z = x.Z }
+  end) or try(function() local x = pawn:K2_GetActorLocation(); return { X = x.X, Y = x.Y, Z = x.Z } end)
+  if not (gs and at) then return end
+  local now, rest, fresh = os.clock(), v.rest or 8, {}
+  for _, path in ipairs(vox.DIE) do if now - (vox.last[path] or -1e9) >= rest then fresh[#fresh + 1] = path end end
+  if #fresh == 0 then fresh = vox.DIE end
+  local path = fresh[math.random(#fresh)]
+  local snd = load_obj(path)
+  if not snd then log("voice: " .. path .. " didn't load"); return end
+  local vol = v.volume or 1.0
+  local ok, err = pcall(function()
+    gs:PlaySoundAtLocation(pawn, snd, vec(at.X, at.Y, at.Z), { Pitch = 0, Yaw = 0, Roll = 0 }, vol,
+      0.97 + math.random() * 0.06, 0.0, load_obj(vox.ATTENUATION), nil, nil)
+  end)
+  if ok then vox.last[path] = now end
+  log(string.format("voice: %s at %.2f%s", path:match("([^/.]+)$") or path, vol, ok and "" or (" failed: " .. tostring(err))))
 end
 
 local function niagara(sys_path, comp, bone, loc, attached, rot)
@@ -266,6 +395,8 @@ local function mesh_name(comp)
   return valid(m) and try(function() return m:GetFName():ToString() end) or nil
 end
 local function name_of(comp) return mesh_name(comp) or "?" end
+-- a component's mesh asset (its address): an enemy's sinks are put back per asset
+function enemy.asset(comp) local m = valid(comp) and try(function() return comp.SkeletalMesh end); return valid(m) and addr(m) or nil end
 local function already_cut(mesh, bone)
   local a = addr(mesh)
   for _, c in ipairs(cuts) do if c.addr == a and c.bone == bone then return true end end
@@ -274,7 +405,7 @@ end
 
 -- the parts to try, closest to the hit first; only the one tune names, if it names one
 local function rank_bones(mesh, hit, kind)
-  local want = cfg().bone or "auto"
+  local want = not enemy.cur and cfg().bone or "auto"
   if PARTS[want] then return already_cut(mesh, want) and {} or { want } end
   local list = {}
   for _, bone in ipairs(POOL[kind or "limb"] or POOL.limb) do
@@ -370,7 +501,8 @@ end
 local cap_mid_logged = false
 local function set_cap_material(comp, mat)
   if not mat then return end
-  local c = cfg().capBloodColor
+  -- debugCaps: every cap and lid glows green, to tell them apart from her skin in game
+  local c = cfg().debugCaps and { 0, 8, 0 } or cfg().capBloodColor
   local mid = c and try(function() return comp:CreateDynamicMaterialInstance(0, mat, FName("None")) end)
   if valid(mid) then
     local ok = try(function()
@@ -417,7 +549,7 @@ local function cap(pawn, mesh, o, bone, built)
     return a, root
   end
   local kind
-  local a, root
+  local a, root, lid
   local pmc_cls = o.p and load_obj("/Script/ProceduralMeshComponent.ProceduralMeshComponent")
   if pmc_cls then
     local c, verts, tris, normals, uvs, tangents, colors
@@ -438,6 +570,7 @@ local function cap(pawn, mesh, o, bone, built)
         try(function() pmc:SetCollisionEnabled(0) end)
         try(function() pmc:SetCastShadow(false) end)
         kind = string.format("lid %d points", #o.p)
+        lid = pmc
       else
         try(function() pmc:K2_DestroyComponent(pmc) end)
       end
@@ -464,16 +597,32 @@ local function cap(pawn, mesh, o, bone, built)
   end
   -- EAttachmentRule::KeepWorld = 1
   try(function() a:K2_AttachToComponent(mesh, FName(bone), 1, 1, 1, false) end)
-  return a, kind
+  return a, kind, lid
 end
 
 -- a snapped bone in a stump: GM_Brokenbone, its long axis along the opening's normal (out of that side), as thick as
 -- stubBone of the opening's narrow radius, sticking out stubOut of it (scaled by that radius), riding the cap's bone.
 -- Its own axes are read from its bounds (the longest one is the bone), so the asset's orientation doesn't matter
 local stub_dims = nil
--- her back on a plane with normal z: square to her spine, away from her front (her right is from the left hip and
--- shoulder to the right ones, forward is right x up in UE's axes)
-local function back_on(mesh, z)
+-- her back on a plane with normal z: square to her spine, away from her front. A Bip001 spine bone's own -Z points
+-- to her back (within 15 degrees on every outfit's skeleton, pelvis to head), so it is read off the spine bone at
+-- the cut (bone, else Spine1). It came from the hips and shoulders before (her right from the left thigh and upper
+-- arm to the right ones), which were wherever her cut-off limbs lay by then: a waist cut after both arms and legs
+-- put the spine stub off to her side (seventeenth playtest)
+local SPINE_BONES = { ["Bip001-Pelvis"] = 1, ["Bip001-Spine"] = 1, ["Bip001-Spine1"] = 1, ["Bip001-Spine2"] = 1, ["Bip001-Neck"] = 1, ["Bip001-Head"] = 1 }
+local function back_on(mesh, z, bone)
+  local km = load_obj("/Script/Engine.Default__KismetMathLibrary")
+  local b = SPINE_BONES[bone or ""] and bone or "Bip001-Spine1"
+  local up = km and try(function()
+    local r = mesh:GetSocketRotation(FName(b))
+    local v = km:GetUpVector({ Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll })
+    return vec(v.X, v.Y, v.Z)
+  end)
+  if up then
+    local back = scale(up, -1)
+    local back_z = norm(sub(back, scale(z, dot(back, z))))
+    if back_z then return back_z end
+  end
   local pel, neck = bone_loc(mesh, "Bip001-Pelvis"), bone_loc(mesh, "Bip001-Neck")
   local right = vec(0, 0, 0)
   for _, pr in ipairs({ { "Bip001-L-Thigh", "Bip001-R-Thigh" }, { "Bip001-L-UpperArm", "Bip001-R-UpperArm" } }) do
@@ -508,7 +657,9 @@ end
 -- the spine runs near her back, not through the middle of the opening: a stub on a spine or neck bone moves from
 -- the opening's centre towards her back, this share of the opening's half depth that way
 local SPINE_BACK = 0.55
-local function stub(pawn, mesh, o, bone)
+-- spine: the cut goes through the spine or the neck (a thigh's parent is Bip001-Spine too, and by that bone's name its
+-- hip stump's stub sat halfway to her back, sixteenth playtest)
+local function stub(pawn, mesh, o, bone, rides, spine)
   local g = cfg()
   if g.boneStubs == false or not (o and o.z and o.e) then return nil end
   local sm = load_obj(g.stubMesh or STUB_MESH)
@@ -538,8 +689,8 @@ local function stub(pawn, mesh, o, bone)
   elseif d.long == "Y" then rot = try(function() return km:MakeRotFromY(z) end)
   else rot = try(function() return km:MakeRotFromZ(z) end) end
   local c = outline_centre(o) or o.c
-  if bone and (bone:find("Spine") or bone:find("Neck") or bone:find("Head") or bone:find("Pelvis")) then
-    local back = back_on(mesh, z)
+  if spine then
+    local back = back_on(mesh, z, bone)
     if back and o.x then
       local x = norm(sub(o.x, scale(z, dot(o.x, z))))
       local y = x and cross(z, x)
@@ -581,7 +732,7 @@ local function stub(pawn, mesh, o, bone)
     local off = add(add(scale(fwd, d.o.X * sc.X), scale(right, d.o.Y * sc.Y)), scale(up, d.o.Z * sc.Z))
     try(function() a:K2_SetActorLocation(sub(mid, off), false, {}, false) end)
   end
-  try(function() a:K2_AttachToComponent(mesh, FName(bone), 1, 1, 1, false) end)
+  try(function() a:K2_AttachToComponent(mesh, FName(rides or bone), 1, 1, 1, false) end)
   return a
 end
 
@@ -610,9 +761,10 @@ local function spine_halves(q, comp, o, list)
   if not back then return 0 end
   local width, flat = g.splitSpineWidth or 3.0, g.splitSpineFlat or 1.2
   local lift = (g.splitLidPush or 0.2) + flat * 0.25
-  local made = 0
+  local made, rides = 0, {}
+  for _, b in ipairs(SPLIT_RIDE.of(q, comp)) do rides[b] = true end
   for _, sg in ipairs(SPINE_SEGS) do
-    local a0, b0 = bone_loc(comp, sg[1]), bone_loc(comp, sg[2])
+    local a0, b0 = rides[sg[1]] and bone_loc(comp, sg[1]), bone_loc(comp, sg[2])
     -- only where the plane runs along the spine (a cut across it has no spine to show lengthwise)
     if a0 and b0 and math.abs(dot(sub(a0, o.c), z)) < 6 and math.abs(dot(sub(b0, o.c), z)) < 6 then
       local function on_plane(v) return sub(v, scale(z, dot(sub(v, o.c), z))) end
@@ -894,7 +1046,9 @@ local function nosink_list(comp)
   for i = 0, n - 1 do
     local nm = try(function() return comp:GetBoneName(i):ToString() end) or "None"
     local bad = nm == "Root" or nm == "None"
-    for _, pre in ipairs(NOSINK_PREFIX) do if nm:sub(1, #pre) == pre then bad = true end end
+    -- an enemy's Ab_ bones are its own deform helpers (the skulls' head has no other: without them its head had
+    -- nothing to close on and vanished); a lurker's tentacles stay sinks too (its head closes on them)
+    for _, pre in ipairs(NOSINK_PREFIX) do if nm:sub(1, #pre) == pre and not (enemy.cur and not enemy.faced[enemy.cur] and pre == "Ab_") then bad = true end end
     for _, part in ipairs(NOSINK_PART) do if nm:find(part, 1, true) then bad = true end end
     if bad then list[#list + 1] = string.format("%x", i) end
   end
@@ -902,17 +1056,77 @@ local function nosink_list(comp)
   if key and n > 0 then nosink_cache[key] = s end
   return s
 end
-local function send_nosink(comp)
-  local r = command(string.format("n%x,%s", comp:GetAddress(), nosink_list(comp)))
+-- a cut through the spine also keeps its sinks off the arms and legs: they swing on their own, and the bind pose's
+-- arms hang down at the waist, where a waist cut's strap seam collapsed onto a triceps helper (seventeenth playtest)
+local LIMB_ROOTS = { "Bip001-L-Clavicle", "Bip001-R-Clavicle", "Bip001-L-Thigh", "Bip001-R-Thigh" }
+local limbs_cache = {}
+local function limbs_list(comp)
+  local sm = try(function() return comp.SkeletalMesh end)
+  local key = valid(sm) and addr(sm)
+  if key and limbs_cache[key] then return limbs_cache[key] end
+  local n = try(function() return comp:GetNumBones() end) or 0
+  local list = {}
+  for i = 0, n - 1 do
+    local nm = try(function() return comp:GetBoneName(i):ToString() end) or "None"
+    for _, r in ipairs(LIMB_ROOTS) do
+      if nm == r or try(function() return comp:BoneIsChildOf(FName(nm), FName(r)) end) == true then list[#list + 1] = string.format("%x", i); break end
+    end
+  end
+  local s = table.concat(list, ",")
+  if key and n > 0 then limbs_cache[key] = s end
+  return s
+end
+-- bones that may never carry a stub (after ffff in the same command): the rig's Dm- drivers, which the animation points
+-- at limbs (Dm-Spine-bland, blending Spine and Spine1, carried a waist cut's stub after the flying upper body). An
+-- enemy's every bone: its mesh asset is shared with the live enemies of its kind, whose skin on a carrier would move
+-- with the cut one's matrix
+local nocarry_cache = {}
+local function nocarry_list(comp)
+  local sm = try(function() return comp.SkeletalMesh end)
+  local key = valid(sm) and (addr(sm) .. (enemy.cur and "e" or ""))
+  if key and nocarry_cache[key] then return nocarry_cache[key] end
+  local n = try(function() return comp:GetNumBones() end) or 0
+  local list = {}
+  for i = 0, n - 1 do
+    local nm = enemy.cur and "" or (try(function() return comp:GetBoneName(i):ToString() end) or "None")
+    if enemy.cur or nm:sub(1, 3) == "Dm-" or nm:sub(1, 3) == "Dm_" then list[#list + 1] = string.format("%x", i) end
+  end
+  local s = table.concat(list, ",")
+  if key and n > 0 then nocarry_cache[key] = s end
+  return s
+end
+
+local function send_nosink(comp, torso)
+  local s = nosink_list(comp)
+  if torso then
+    -- each bone once: the DLL reads at most as many fields as she has bones (and Bip001-* limb bones are in both)
+    local seen, out = {}, {}
+    for h in (s .. "," .. limbs_list(comp)):gmatch("[^,]+") do if not seen[h] then seen[h] = true; out[#out + 1] = h end end
+    s = table.concat(out, ",")
+  end
+  local nc = nocarry_list(comp)
+  local r = command(string.format("n%x,%s,ffff%s", comp:GetAddress(), s, nc ~= "" and ("," .. nc) or ""))
   if r:sub(1, 2) ~= "ok" then log("nosink list refused: " .. r) end
 end
 
 -- one sbslice.dll cut on a component: "c<comp>,<lod>,<bone>,<mode>,<radius in mm>[,<depth in mm>]", all hex
-local function cut_command(comp, index, mode, radius, at, n, depth)
-  send_nosink(comp)
+local function cut_command(comp, index, mode, radius, at, n, depth, torso)
+  send_nosink(comp, torso)
   local s = string.format("c%x,0,%x,%x,%x", comp:GetAddress(), index, mode or 0, math.floor((radius or 0) * 10 + 0.5))
   if depth then s = s .. string.format(",%x", math.floor(depth * 10 + 0.5)) end
   return command(s, at, n)
+end
+
+-- (load_obj's) an asset the cuts use, kept loaded for good once loaded (sbslice "o" roots it): nothing else held
+-- them, so garbage collection freed them between deaths and every cut loaded the bone stub, the cap material, the
+-- effects and the sounds again from the pak on the game thread (stubs 54 ms, bleeds 35, blood 24: twenty-fifth
+-- playtest). Tried once a path; a refusal is logged
+native.rooted = {}
+function native.root(path, o)
+  if native.rooted[path] ~= nil or native.state ~= "ready" then return end
+  local r = command(string.format("o%x", o:GetAddress()))
+  native.rooted[path] = r:sub(1, 2) == "ok"
+  if not native.rooted[path] then log("keeping " .. path .. " loaded refused: " .. r) end
 end
 
 local function ok_cut(r) return r:sub(1, 2) == "ok" and (num(r, "seam") or 0) + (num(r, "limb") or 0) > 0 end
@@ -938,6 +1152,8 @@ local function face_of(pawn, mesh)
   return face
 end
 
+M.face_of = face_of
+
 -- her hair (mesh slots Hair1, Ponytail, PonytailShort) that is showing
 local HAIR_SLOTS = { [2] = true, [3] = true, [4] = true }
 local function hair_of(pawn)
@@ -959,10 +1175,19 @@ end
 -- they floated where she was cut. Each goes to the half it lies on (its socket, else the middle of its bounds),
 -- except what the head carries (face, hair, earrings, hairpins): her half keeps the head whole
 local function rehome(q, b2, at, n)
+  q.pieces = { her = {}, copy = {} }
   local skip = {}
   for _, c in ipairs({ q.mesh, b2, q.face }) do local a = addr(c); if a then skip[a] = true end end
   for _, c in ipairs(clones) do local a = addr(c); if a then skip[a] = true end end
   for _, c in ipairs(hair_of(q.pawn)) do local a = addr(c); if a then skip[a] = true end end
+  -- nor our own caps: her lid and spine pieces stand out of her half, over the plane on the copy's side, so they
+  -- went to the copy too and rode its bones; her half lay open and the copy carried both lids, the second one in
+  -- flat shards off its body as the halves moved apart (eighteenth playtest)
+  for _, act in ipairs(caps) do
+    local root = valid(act) and try(function() return act:K2_GetRootComponent() end)
+    local a = root and addr(root)
+    if a then skip[a] = true end
+  end
   local me = addr(q.mesh)
   local ks = load_obj("/Script/Engine.Default__KismetSystemLibrary")
   local kids = {}
@@ -1001,8 +1226,10 @@ local function rehome(q, b2, at, n)
           try(function() c:K2_AttachToComponent(b2, socket, 1, 1, 1, false) end)
         end
         moved[#moved + 1] = name_of(c) .. (mastered and "" or "@" .. sname)
+        if mastered then q.pieces.copy[#q.pieces.copy + 1] = c end
       else
         kept = kept + 1
+        if mastered then q.pieces.her[#q.pieces.her + 1] = c end
       end
     end
   end
@@ -1010,7 +1237,32 @@ local function rehome(q, b2, at, n)
     #moved > 0 and table.concat(moved, ", ") or "none", kept))
 end
 
+-- outfit pieces on a split half's pose (sleeves, gloves, a suit part over both arms) whose bones of the limbs that
+-- went with the other half are hidden: the half's own skin there is gone, but a piece spanning both sides stayed
+-- whole and followed the dropped limb's bones, which flop on unseen: a third arm on the half (eighteenth playtest).
+-- PBO_None (0): only how they show; hiding with PBO_Term on her mesh stopped her ragdoll (playtest 13)
+local hid = {} -- { comp, bone }
+local function hide_gone(pieces, bones)
+  local names, n = {}, 0
+  for _, c in ipairs(pieces or {}) do
+    local any = false
+    for _, b in ipairs(bones or {}) do
+      if b ~= "Bip001-Head" and valid(c) and try(function() return c:GetBoneIndex(FName(b)) end) ~= -1
+        and try(function() c:HideBoneByName(FName(b), 0); return true end) then
+        hid[#hid + 1] = { comp = c, bone = b }
+        any = true
+      end
+    end
+    if any then n = n + 1; names[#names + 1] = name_of(c) end
+  end
+  return n, table.concat(names, ",")
+end
+
 local function restore_rehomed()
+  for _, h in ipairs(hid) do
+    if valid(h.comp) then try(function() h.comp:UnHideBoneByName(FName(h.bone)) end) end
+  end
+  hid = {}
   for _, r in ipairs(rehomed) do
     local c = r.comp
     if valid(c) and valid(r.parent) then
@@ -1067,8 +1319,34 @@ local function from_body(f, v) return add(add(scale(f.x, v.X), scale(f.y, v.Y)),
 -- CHAIN_OFF cm off the bone (twist bones lie on it). CH_P_EVE_09's cape hangs off the upper arm's twist bone, half way
 -- down the arm, and went off with the arm (sbslice keeps their skin on the body: "g" before the cut)
 local CHAIN_BODIES, CHAIN_OFF = 3, 3
+-- how far the bodies of each chain a limb cut kept on the body hang from the bone they were hung on (cm), to tell a
+-- stretched cape from stretched skin in the log
+local function chain_reach(mesh, tops, anchor)
+  local pa = ctx.physics_of(mesh)
+  local from = valid(pa) and bone_loc(mesh, anchor)
+  if not from then return "no physics" end
+  local list = {}
+  try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then list[#list + 1] = bs.BoneName:ToString() end end) end)
+  local out = {}
+  for _, c in ipairs(tops) do
+    local far, n, last = 0, 0, c
+    for _, d in ipairs(list) do
+      if d == c or try(function() return mesh:BoneIsChildOf(FName(d), FName(c)) end) == true then
+        local l = bone_loc(mesh, d)
+        if l then
+          n = n + 1
+          local r = len(sub(l, from))
+          if r > far then far, last = r, d end
+        end
+      end
+    end
+    out[#out + 1] = string.format("%s: %d bodies, farthest %s %.0f cm from %s", c, n, last, far, anchor)
+  end
+  return table.concat(out, "; ")
+end
+
 local function kept_chains(mesh, bone, a, b)
-  local pa = try(function() return mesh:GetPhysicsAsset() end) or try(function() return mesh.SkeletalMesh.PhysicsAsset end)
+  local pa = ctx.physics_of(mesh)
   if not valid(pa) then return {} end
   local list, has = {}, {}
   try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then local n = bs.BoneName:ToString(); list[#list + 1] = n; has[n] = true end end) end)
@@ -1097,6 +1375,36 @@ local function kept_chains(mesh, bone, a, b)
     if not inner then tops[#tops + 1] = c end
   end
   return tops
+end
+
+-- a chain a limb cut kept on the body (the cape off the upper arm's twist bone), cut off at the joint it hangs from as
+-- a piece of its own (tune.gore.chains "detach"): the plane through that parent joint, facing down the chain, so all
+-- of it is in front. Its own bones may be its sinks this once (they never are: they swing, and the seam swung with
+-- them; here the seam is the chain's own top); the limb's bones may not be the body side's sink, the limb is gone
+-- (an earlier cut's biceps sink pulled the cape's seam off with the arm). Kept on the body instead, the arm's 80 cm
+-- cape hung straight down from the shoulder (sixteenth playtest)
+local function detach_cut(mesh, top, limb)
+  local index = try(function() return mesh:GetBoneIndex(FName(top)) end)
+  local parent = parent_bone(mesh, top)
+  local a, b = parent and bone_loc(mesh, parent), bone_loc(mesh, top)
+  local n = a and b and norm(sub(b, a))
+  if not (index and index >= 0 and n) then return "err no chain " .. top end
+  local nb = try(function() return mesh:GetNumBones() end) or 0
+  local under = function(x, y) return try(function() return mesh:BoneIsChildOf(FName(x), FName(y)) end) == true end
+  local skip, list = {}, {}
+  for h in nosink_list(mesh):gmatch("[^,]+") do skip[tonumber(h, 16)] = true end
+  for i = 0, nb - 1 do
+    local nm = try(function() return mesh:GetBoneName(i):ToString() end) or "None"
+    local chain = nm == top or under(nm, top)
+    if chain and nm ~= top then skip[i] = nil
+    elseif not chain and (nm == limb or under(nm, limb)) then skip[i] = true end
+  end
+  for i = 0, nb - 1 do if skip[i] then list[#list + 1] = string.format("%x", i) end end
+  local nc = nocarry_list(mesh)
+  local r = command(string.format("n%x,%s,ffff%s", mesh:GetAddress(), table.concat(list, ","), nc ~= "" and ("," .. nc) or ""))
+  if r:sub(1, 2) ~= "ok" then return "err nosink " .. r end
+  command(string.format("g%x", mesh:GetAddress()))
+  return command(string.format("c%x,0,%x,%x,0", mesh:GetAddress(), index, MODE.cut), a, n)
 end
 
 -- blade: { t, n } where the blade's plane crosses this limb (t along it) and its normal: the cut goes there, leaning
@@ -1143,7 +1451,8 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   -- a head takes the whole face along first; without that its neck would stretch from the body to the head. Cut on
   -- the neck's plane instead (MODE_PLANE), 8300 face vertices vanished into the stump and the head flew off faceless
   local fr
-  if part.kind == "head" then
+  -- (an enemy's head is on its body mesh: the neck's plane cut alone)
+  if part.kind == "head" and not (enemy.cur and not face) then
     local fi = valid(face) and try(function() return face:GetBoneIndex(FName(bone)) end)
     if not fi or fi < 0 then log("head skipped: no face mesh with " .. bone); return nil end
     fr = cut_command(face, fi, MODE.whole, part.radius, at, n)
@@ -1165,13 +1474,46 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
     end
     command(table.concat(f, ","))
   end
-  local r = cut_command(mesh, index, part.mode, part.radius, at, n)
+  -- an enemy's head is cut like a limb: the plane's mode makes what is past it vanish (Eve's goes on her face mesh)
+  local mode = (part.kind == "head" and enemy.cur and not face) and MODE.cut or part.mode
+  local r = cut_command(mesh, index, mode, part.radius, at, n, nil, part.kind == "torso")
   log(string.format("cut %s (%s) at %.2f %s normal %s%s: %s", bone, why, t, v3(at), v3(n), lean, r))
-  if r:sub(1, 2) ~= "ok" or (num(r, "seam") or 0) == 0 or (part.kind ~= "head" and (num(r, "limb") or 0) == 0) then
+  -- a body whose neck ends under the plane (a nude mod's body: its neck stops low and the face's own neck goes on up
+  -- from there) has nothing to cut at the head's height: lower down the neck until it has (fifteenth playtest: the
+  -- head never came off on Eve with no Clothes on). The face goes whole anyway
+  if part.kind == "head" and r:sub(1, 2) == "ok" and (num(r, "seam") or 0) == 0 then
+    for _, lower in ipairs({ 0.5, 0.3, 0.12, 0 }) do
+      if lower < t then
+        -- (the empty cut changed no weight: nothing to undo, and "x" would undo her earlier cuts too)
+        t, at = lower, add(a, scale(sub(b, a), lower))
+        r = cut_command(mesh, index, mode, part.radius, at, n)
+        log(string.format("cut %s lower down the neck at %.2f %s: %s", bone, t, v3(at), r))
+        if r:sub(1, 2) ~= "ok" or (num(r, "seam") or 0) > 0 then break end
+      end
+    end
+  end
+  if r:sub(1, 2) ~= "ok" or (num(r, "seam") or 0) == 0 or ((part.kind ~= "head" or (enemy.cur and not fr)) and (num(r, "limb") or 0) == 0) then
     if fr then log("face put back: " .. command(string.format("x%x,0", face:GetAddress()))) end
+    -- an enemy cut that changed weights but took nothing off (what was past the plane had nothing to close on and
+    -- vanished): its weights off again when nothing else was cut on it, and kept on record, so its sinks go back
+    -- with the corpse's
+    if enemy.cur and r:sub(1, 2) == "ok" and (num(r, "seam") or 0) > 0 then
+      local ma, earlier = addr(mesh), false
+      for _, c in ipairs(cuts) do if c.addr == ma then earlier = true end end
+      if not earlier then log("cut undone: " .. command(string.format("x%x,0,1", ma))) end
+      cuts[#cuts + 1] = { mesh = mesh, addr = ma, bone = "failed:" .. bone, sm = enemy.asset(mesh) }
+    end
     return nil
   end
-  return { at = at, n = n, result = r, face = fr and face, face_result = fr, kept = kept }
+  local detached = {}
+  if #kept > 0 and g.chains ~= "body" then
+    for _, c in ipairs(kept) do
+      local dr = detach_cut(mesh, c, bone)
+      log(string.format("cut %s off %s: %s", c, bone, dr))
+      if ok_cut(dr) then detached[#detached + 1] = c end
+    end
+  end
+  return { at = at, n = n, result = r, face = fr and face, face_result = fr, kept = kept, detached = detached }
 end
 
 -- stage 1: new weights on the GPU, caps placed (hidden); nothing visible changes yet
@@ -1184,26 +1526,44 @@ local function stage_cut(q)
   -- a death cut follows the killing blow (the death key's impulse, set by now)
   -- (a blade's beheading: its swing)
   local blow = q.out or (q.why == "death" and try(function() local v = q.pawn.RagdollInfo.ImpulseValue; return vec(v.X, v.Y, v.Z) end)) or nil
-  for _, b in ipairs(q.blade and { q.blade.bone } or rank_bones(q.mesh, q.hit, q.kind)) do
+  for _, b in ipairs(q.bone and { q.bone } or q.blade and { q.blade.bone } or rank_bones(q.mesh, q.hit, q.kind)) do
+    -- her own fall can't stand on a leg that's gone (both thighs off, and she still played it, eighteenth playtest)
+    if (q.why == "death" or q.why == "after") and cfg().legRagdoll ~= false and (b:find("Thigh") or b:find("Calf") or b:find("Foot"))
+      and ctx.animated and ctx.animated() and ctx.on_need_ragdoll then
+      try(function() ctx.on_need_ragdoll("a leg off") end)
+    end
     q.c = cut_limb(q.pawn, q.mesh, b, q.why, blow, q.face, q.blade)
+    mark("cut " .. b)
     if q.c then q.bone = b; break end
   end
   if not q.bone then log("nothing cut (" .. q.why .. ")"); return false end
-  cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone }
+  cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone, sm = enemy.asset(q.mesh) }
   if q.c.face then cuts[#cuts + 1] = { mesh = q.c.face, addr = addr(q.c.face), bone = "face" } end
   q.parent = parent_bone(q.mesh, q.bone)
   -- a head's own opening is the bottom of the face's neck
   q.ob, q.ol = opening(q.c.result, "b"), q.c.face_result and opening(q.c.face_result, "l") or opening(q.c.result, "l")
+  -- the caps and stubs ride the bone each opening's rim rides (the DLL's bb / lb): a thigh's stump follows the hip's
+  -- twist helpers, not the pelvis, and a stub on the pelvis slid off to the stump's edge as she moved
+  local function ride(key, fallback)
+    local i = num(q.c.result, key)
+    local nm = i and i >= 0 and try(function() return q.mesh:GetBoneName(i):ToString() end)
+    return (nm and nm ~= "None") and nm or fallback
+  end
+  q.rideB = ride("bb", q.parent or q.bone)
+  q.rideL = q.c.face_result and q.bone or ride("lb", q.bone)
   q.caps, q.kinds = {}, {}
   if cfg().caps ~= false then
-    q.caps[1], q.kinds[1] = cap(q.pawn, q.mesh, q.ob, q.parent or q.bone)
-    q.caps[2], q.kinds[2] = cap(q.pawn, q.mesh, q.ol, q.bone)
+    q.caps[1], q.kinds[1] = cap(q.pawn, q.mesh, q.ob, q.rideB)
+    q.caps[2], q.kinds[2] = cap(q.pawn, q.mesh, q.ol, q.rideL)
+    mark("caps")
   end
-  -- a bone in both stumps (the head's: the neck's spine)
+  -- a bone in both stumps (the head's: the neck's spine); its look (spine or limb bone) goes by the cut's bones
   q.stubs = {}
   if cfg().caps ~= false then
-    q.stubs[#q.stubs + 1] = stub(q.pawn, q.mesh, q.ob, q.parent or q.bone)
-    q.stubs[#q.stubs + 1] = stub(q.pawn, q.mesh, q.ol, q.bone)
+    local spine = not (PARTS[q.bone] and PARTS[q.bone].kind == "limb")
+    q.stubs[#q.stubs + 1] = stub(q.pawn, q.mesh, q.ob, q.parent or q.bone, q.rideB, spine)
+    q.stubs[#q.stubs + 1] = stub(q.pawn, q.mesh, q.ol, q.bone, q.rideL, spine)
+    mark("stubs")
   end
   return true
 end
@@ -1214,7 +1574,8 @@ end
 local function stage_wound(q)
   local g = cfg()
   local nwounds = 0
-  for _, c in ipairs(cuts) do if c.bone:sub(1, 6) == "wound:" then nwounds = nwounds + 1 end end
+  local ma = addr(q.mesh)
+  for _, c in ipairs(cuts) do if c.addr == ma and c.bone:sub(1, 6) == "wound:" then nwounds = nwounds + 1 end end
   if nwounds >= (g.maxWounds or 6) then log("wound skipped: already " .. nwounds); return false end
   -- the segment nearest the hit, else a random one
   local best, bd, ba, bb
@@ -1273,7 +1634,7 @@ local function stage_wound(q)
   local ride = wb and wb >= 0 and try(function() return q.mesh:GetBoneName(wb):ToString() end) or best.bone
   if ride == "None" then ride = best.bone end
   q.bone = "wound:" .. (nwounds + 1)
-  cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone }
+  cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone, sm = enemy.asset(q.mesh) }
   q.ride, q.c = ride, { at = triple(r, "hit", 1) or at, n = out, result = r }
   -- torn flesh at the bottom of the dent: the cut-flesh material on a flattened dome sitting on the pressed-in skin
   -- (the skin goes onto a plane depth under where the ray left the body), hidden until it opens
@@ -1349,7 +1710,7 @@ end
 local function stage_wound_open(q)
   local g = cfg()
   local k = command("k")
-  if g.blood ~= false then blood_up(q.pawn) end
+  if g.blood ~= false and not enemy.cur then blood_up(q.pawn) end
   sfx(q.style == "stab" and "stab" or "rupture", q.pawn, q.c.at)
   if g.blood ~= false then
     niagara(FX.hit, q.pawn, nil, q.c.at, false)
@@ -1379,7 +1740,8 @@ end
 -- shoved out of the stump every frame (an upper body cut off a standing Eve spun wildly against her kinematic hips).
 -- So after a cut her bodies stop colliding with each other (PhysicsBody = 5), until she recovers
 local function no_self_collision(mesh)
-  if not self_saved then
+  -- (an enemy's corpse never gets up: nothing to put back)
+  if not self_saved and not enemy.cur then
     self_saved = { mesh = mesh, resp = try(function() return mesh:GetCollisionResponseToChannel(5) end) }
   end
   try(function() mesh:SetCollisionResponseToChannel(5, 0) end)
@@ -1393,9 +1755,26 @@ local CHAIN_SWING, CHAIN_TWIST = 40, 20
 local function hang_chains(q)
   local kept = q.c and q.c.kept or {}
   if #kept == 0 then return "" end
+  -- cut off on their own: their joint to the limb breaks and they fall where they are
+  local det = q.c.detached or {}
+  if #det > 0 then
+    for _, c in ipairs(det) do
+      local at = bone_loc(q.mesh, c)
+      try(function() q.mesh:BreakConstraint(vec(0, 0, 0), at or q.c.at, FName(c)) end)
+      try(function() q.mesh:SetAllBodiesBelowSimulatePhysics(FName(c), true, true) end)
+    end
+    local free = {}
+    for _, c in ipairs(kept) do
+      local d = false
+      for _, x in ipairs(det) do if x == c then d = true end end
+      if not d then free[#free + 1] = c end
+    end
+    if #free == 0 then return table.concat(det, ",") .. " cut off on its own" end
+    kept = free
+  end
   local cls = try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintComponent") end)
   if not valid(cls) then return "chains: no PhysicsConstraintComponent class" end
-  local pa = try(function() return q.mesh:GetPhysicsAsset() end) or try(function() return q.mesh.SkeletalMesh.PhysicsAsset end)
+  local pa = ctx.physics_of(q.mesh)
   local has = {}
   if valid(pa) then
     try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then has[bs.BoneName:ToString()] = true end end) end)
@@ -1431,15 +1810,30 @@ local function stage_open(q)
   -- on a living Eve the mesh has no physics collision with the world, so the piece would fall through the floor:
   -- give it the death ragdoll's profile until she recovers (her own bodies stay kinematic)
   local world = ""
-  if not collision_saved and try(function() return q.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true then
+  local still = try(function() return q.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true
+  if still and enemy.cur then
+    -- an enemy's corpse not simulating (yet): the ragdoll's profile, nothing to put back
+    try(function() q.mesh:SetCollisionProfileName(FName("Ragdoll"), true) end)
+    try(function() q.mesh:SetCollisionResponseToChannel(2, 0) end)
+    world = ", world collision on"
+  elseif still and not collision_saved then
     local c = { mesh = q.mesh, resp = {} }
     c.obj = try(function() return q.mesh:GetCollisionObjectType() end)
     c.enabled = try(function() return q.mesh:GetCollisionEnabled() end)
     c.profile = try(function() return q.mesh:GetCollisionProfileName():ToString() end)
     for ch = 0, 31 do c.resp[ch] = try(function() return q.mesh:GetCollisionResponseToChannel(ch) end) end
     try(function() q.mesh:SetCollisionProfileName(FName("Ragdoll"), true) end)
+    -- and none with her own capsule, which blocks physics bodies: the upper body of a waist cut fell inside it and
+    -- jiggled on the floor as the capsule shoved it every frame (sixteenth playtest; arms and legs flew clear of it)
+    try(function() q.mesh:SetCollisionResponseToChannel(2, 0) end) -- ECC_Pawn
+    local cap = try(function() return q.pawn.CapsuleComponent end)
+    if valid(cap) then
+      c.cap, c.capResp = cap, try(function() return cap:GetCollisionResponseToChannel(5) end) -- ECC_PhysicsBody
+      try(function() cap:SetCollisionResponseToChannel(5, 0) end)
+    end
     collision_saved = c
-    world = string.format(", world collision on (was %s, enabled %s)", tostring(c.profile), tostring(c.enabled))
+    world = string.format(", world collision on (was %s, enabled %s)%s", tostring(c.profile), tostring(c.enabled),
+      c.cap and string.format(", her capsule ignores it (was %s)", tostring(c.capResp)) or "")
     -- the piece weighs what a body part weighs, not the outfit's 100 kg chest and 80 kg cape links (active.lua does
     -- this for ragdolls)
     if ctx.on_piece then
@@ -1447,43 +1841,95 @@ local function stage_open(q)
       if m then world = world .. ", " .. m end
     end
   end
+  mark("collision")
   no_self_collision(q.mesh)
+  mark("self collision")
   -- off it goes: the constraint at the limb's root breaks (its bodies start simulating if she was alive)
   local broke = try(function() q.mesh:BreakConstraint(vec(0, 0, 0), q.c.at, FName(q.bone)); return true end)
-  if ctx.on_cut then try(function() ctx.on_cut(q.mesh, q.bone) end) end
+  mark("break")
+  if ctx.on_cut and not enemy.cur then try(function() ctx.on_cut(q.mesh, q.bone) end) end
+  mark("on_cut")
   local nh = hang_chains(q)
+  mark("chains")
   if nh ~= "" then world = world .. ", " .. nh end
   -- a killing blow sends the piece flying the way it hit her (q.fly), else it drops off away from the body; every
   -- body of the piece gets the speed (the root's alone dragged the rest, a small push)
   local throw = q.fly and (g.deathThrow or 650) or (g.throw or 250)
+  -- a leg is the big piece: it gets more (legThrow), or it dropped at her feet
+  local leg = q.bone:find("Thigh") or q.bone:find("Calf")
+  if leg then throw = throw * (g.legThrow or 1.4) end
   if throw > 0 then
     local v = q.fly and norm(add(add(q.fly, scale(q.c.n, 0.35)), vec((math.random() - 0.5) * 0.3, (math.random() - 0.5) * 0.3, 0.45)))
       or norm(add(q.c.n, vec((math.random() - 0.5) * 0.6, (math.random() - 0.5) * 0.6, 0.4)))
     v = v or q.c.n
+    if leg then v = norm(add(v, vec(0, 0, g.legLift or 0.35))) or v end
     try(function() q.mesh:AddImpulseToAllBodiesBelow(scale(v, throw), FName(q.bone), true, true) end)
     if q.fly then log(string.format("piece flies with the blow: %s at %.0f cm/s", v3(v), throw)) end
+    -- the throw went in the tick the piece's bodies were set simulating (a leg cut switches her fall to the ragdoll
+    -- that same tick) and was mostly lost: cut-off legs dropped at her feet as if too heavy (twentieth playtest). For
+    -- the next few ticks every main body of the piece is kept at least that fast along the throw
+    local chain = PIECE_CHAIN[q.bone:gsub("^Bip001%-%a%-", "")] or {}
+    local side = q.bone:match("^Bip001%-(%a)%-")
+    local mesh = q.mesh
+    for k = 1, (g.throwTicks or 3) do
+      later[#later + 1] = { n = k, fn = function()
+        if not valid(mesh) then return end
+        local slow = 0
+        for _, part in ipairs(chain) do
+          local b = FName("Bip001-" .. side .. "-" .. part)
+          local cur = try(function() local x = mesh:GetPhysicsLinearVelocity(b); return vec(x.X, x.Y, x.Z) end)
+          local along = cur and dot(cur, v)
+          if along and along < throw then
+            local nv = add(cur, scale(v, throw - along))
+            if try(function() mesh:SetPhysicsLinearVelocity(nv, false, b); return true end) then slow = slow + 1 end
+          end
+        end
+        if k == (g.throwTicks or 3) then
+          local root = try(function() local x = mesh:GetPhysicsLinearVelocity(FName(q.bone)); return vec(x.X, x.Y, x.Z) end)
+          log(string.format("piece %s: %.0f cm/s along the throw after %d ticks (%d bodies sped up on the last)", q.bone,
+            root and dot(root, v) or -1, k, slow))
+        end
+      end }
+    end
   end
+  mark("throw")
   for _, a in pairs(q.caps) do if valid(a) then try(function() a:SetActorHiddenInGame(false) end) end end
   for _, a in pairs(q.stubs or {}) do if valid(a) then try(function() a:SetActorHiddenInGame(false) end) end end
+  mark("show caps")
   if g.blood ~= false then
-    blood_up(q.pawn)
-    if q.parent then track_opening(q, q.caps[1], q.ob, q.mesh, q.parent) end
-    track_opening(q, q.caps[2], q.ol, q.mesh, q.bone)
+    if not enemy.cur then blood_up(q.pawn) end
+    if q.parent then track_opening(q, q.caps[1], q.ob, q.mesh, q.rideB or q.parent) end
+    track_opening(q, q.caps[2], q.ol, q.mesh, q.rideL or q.bone)
   end
   if g.blood ~= false then
     if g.sliceFx == true then niagara(FX.slice, q.pawn, nil, q.c.at, false) end
     niagara(FX.splat, q.pawn, nil, q.c.at, false)
   end
-  sfx((q.bone == "Bip001-Head" or q.bone == "Bip001-Spine1") and "big" or "cut", q.pawn, q.c.at)
+  mark("blood")
+  -- a leg is as big a cut as the head or the waist
+  sfx((q.bone == "Bip001-Head" or q.bone == "Bip001-Spine1" or q.bone:find("Thigh") or q.bone:find("Calf")) and "big" or "cut",
+    q.pawn, q.c.at)
   if g.blood ~= false then
     -- bleed from both openings, for a while: from the cap, which rides on that side's bone, else from the
     -- opening's centre on the bone; oriented like that bone (the effect was made for bone attachment)
     local left = math.floor((g.bleedTime or 2.5) / TICK_S + 0.5)
-    if q.parent then bleed_from(q, q.caps[1], q.ob, q.parent, left) end
-    bleed_from(q, q.caps[2], q.ol, q.bone, left)
+    if q.parent then bleed_from(q, q.caps[1], q.ob, q.rideB or q.parent, left) end
+    bleed_from(q, q.caps[2], q.ol, q.rideL or q.bone, left)
   end
+  mark("sound, bleed")
   log(string.format("%s off (%s): %s, constraint broken=%s, caps %s / %s%s", q.bone, q.why, k, tostring(broke == true),
     tostring(q.kinds[1]), tostring(q.kinds[2]), world))
+  if PARTS[q.bone] and PARTS[q.bone].kind ~= "head" then
+    local anchor = parent_bone(q.mesh, q.bone)
+    local pa = ctx.physics_of(q.mesh)
+    local has = {}
+    if valid(pa) then
+      try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then has[bs.BoneName:ToString()] = true end end) end)
+    end
+    while anchor and not has[anchor] do anchor = parent_bone(q.mesh, anchor) end
+    -- (diagnostics: the stretch probe skins every vertex on the CPU, a stutter of its own; tune.gore.probes)
+    if cfg().probes then limb_watch = { mesh = q.mesh, bone = q.bone, kept = q.c.kept or {}, anchor = anchor, n = 0 } end
+  end
 end
 
 -- ---- vertical split ----
@@ -1551,9 +1997,47 @@ local function limb_sides(comp, at, n)
   return gone, keep
 end
 
--- tell the DLL a half's limbs for its next split cut, and the bones its lid pieces ride (the flattened skin behind
--- the lid bands by them): "g<comp>,<gone roots>,0,<kept roots>,0,<ride bones>"
-local function send_limbs(comp, gone, keep)
+-- a split's accessory chains: the top of each chain of physics bodies (not Bip001) hanging off the torso or neck, not
+-- off a limb (those go with it) or the head (kept whole by the half that keeps it), on the side of the plane where
+-- its bodies lie on average. Each half keeps the chains on its side whole and drops the others whole: halved, the
+-- neck chain's swinging half stretched to the flattened sheet across the opening (fifteenth playtest)
+local function split_chains(comp, at, n)
+  local pa = ctx.physics_of(comp)
+  if not valid(pa) then return {}, {} end
+  local list, has = {}, {}
+  try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then local nm = bs.BoneName:ToString(); list[#list + 1] = nm; has[nm] = true end end) end)
+  local function under(x, y) return try(function() return comp:BoneIsChildOf(FName(x), FName(y)) end) == true end
+  local front, back = {}, {}
+  for _, c in ipairs(list) do
+    local p = parent_bone(comp, c)
+    -- a top: its parent has no body of its own outside Bip001
+    local top = not c:find("^Bip001")
+    local q = p
+    while top and q and not q:find("^Bip001") do
+      if has[q] then top = false end
+      q = parent_bone(comp, q)
+    end
+    local anchored = top and q and q ~= "Bip001-Head"
+    if anchored then for _, l in ipairs(LIMB_ROOTS) do if q == l or under(q, l) then anchored = false end end end
+    if anchored then
+      local sum, k = 0, 0
+      for _, d in ipairs(list) do
+        if d == c or under(d, c) then
+          local l = bone_loc(comp, d)
+          if l then sum = sum + dot(sub(l, at), n); k = k + 1 end
+        end
+      end
+      if k >= 2 then
+        if sum >= 0 then front[#front + 1] = c else back[#back + 1] = c end
+      end
+    end
+  end
+  return front, back
+end
+
+-- tell the DLL a half's limbs for its next split cut, the bones its lid pieces ride (the flattened skin behind the
+-- lid bands by them) and the accessory chains it drops: "g<comp>,<gone roots>,0,<kept roots>,0,<ride bones>,0,<drop>"
+local function send_limbs(comp, gone, keep, drop, ride)
   local f = {}
   local function add_bones(list)
     for _, b in ipairs(list) do
@@ -1565,14 +2049,18 @@ local function send_limbs(comp, gone, keep)
   f[#f + 1] = "0"
   add_bones(keep)
   f[#f + 1] = "0"
-  add_bones(SPLIT_RIDE)
+  add_bones(ride or SPLIT_RIDE)
+  if drop and #drop > 0 then
+    f[#f + 1] = "0"
+    add_bones(drop)
+  end
   return command(string.format("g%x,%s", comp:GetAddress(), table.concat(f, ",")))
 end
 
 -- a split's lid: the opening's outline (hips, waist, ribs, shoulder, neck: concave) flat on the plane, ear-clipped,
 -- with a skirt round it reaching grow cm past the skin, pushed push cm out of the half, both faces. One rigid lid would stick out of a
 -- bending ragdoll, so it comes in pieces, each triangle on the spine bone nearest to it, each piece riding that bone
-local function flat_lid(o, comp, grow, push)
+local function flat_lid(o, comp, grow, push, ride)
   local n = #o.p
   local z = o.z
   local c = vec(0, 0, 0)
@@ -1652,9 +2140,10 @@ local function flat_lid(o, comp, grow, push)
       tris[#tris + 1] = { i, n + j, j }
     end
   end
-  -- pieces by the nearest spine bone
+  -- pieces by the nearest spine bone, or (splitLidSkin) one piece that bends with the spine (skin_lid)
+  local one = cfg().splitLidSkin ~= false
   local bones = {}
-  for _, b in ipairs(SPLIT_RIDE) do
+  for _, b in ipairs(ride) do
     local l = bone_loc(comp, b)
     if l then bones[#bones + 1] = { name = b, at = vec(l.X, l.Y, l.Z) } end
   end
@@ -1662,7 +2151,7 @@ local function flat_lid(o, comp, grow, push)
   local function world(i) return add(add(c, add(scale(u, gx[i]), scale(w, gy[i]))), scale(z, push)) end
   local pieces, order = {}, {}
   for _, t in ipairs(tris) do
-    local m = scale(add(add(world(t[1]), world(t[2])), world(t[3])), 1 / 3)
+    local m = one and c or scale(add(add(world(t[1]), world(t[2])), world(t[3])), 1 / 3)
     local best, bd = nil, nil
     for _, b in ipairs(bones) do
       local d = sub(m, b.at)
@@ -1681,11 +2170,13 @@ local function flat_lid(o, comp, grow, push)
     for _, i in ipairs(list) do mid = add(mid, world(i)) end
     mid = scale(mid, 1 / #list)
     local verts, normals, uvs, tangents, colors, out = {}, {}, {}, {}, {}, {}
+    pc.wv, pc.wn = {}, {}
     for side = 1, 2 do
       local nz = side == 1 and z or scale(z, -1)
       local at = {}
       for _, i in ipairs(list) do
         verts[#verts + 1] = sub(world(i), mid)
+        pc.wv[#verts], pc.wn[#verts] = world(i), nz
         normals[#normals + 1] = nz
         -- the lid's own plane coordinates: the texture runs on from one piece to the next
         uvs[#uvs + 1] = { X = gx[i] / 12 + 0.5, Y = gy[i] / 12 + 0.5 }
@@ -1700,8 +2191,104 @@ local function flat_lid(o, comp, grow, push)
       end
     end
     pc.built = { mid, verts, out, normals, uvs, tangents, colors }
+    pc.skin = one
   end
   return order, core
+end
+
+-- quaternions as UE4SS hands them ({ X, Y, Z, W }): v turned by q, and by q's inverse
+local function qrot(q, v)
+  local tx, ty, tz = 2 * (q.Y * v.Z - q.Z * v.Y), 2 * (q.Z * v.X - q.X * v.Z), 2 * (q.X * v.Y - q.Y * v.X)
+  return vec(v.X + q.W * tx + q.Y * tz - q.Z * ty, v.Y + q.W * ty + q.Z * tx - q.X * tz, v.Z + q.W * tz + q.X * ty - q.Y * tx)
+end
+local function qinv(q) return { X = -q.X, Y = -q.Y, Z = -q.Z, W = q.W } end
+local function bone_tm(comp, b)
+  return try(function()
+    local x = comp:GetSocketTransform(FName(b), 0) -- RTS_World
+    return { t = vec(x.Translation.X, x.Translation.Y, x.Translation.Z), q = { X = x.Rotation.X, Y = x.Rotation.Y, Z = x.Rotation.Z, W = x.Rotation.W } }
+  end)
+end
+
+-- a split lid in one piece that bends with her spine, as the flattened skin behind it does: each vertex rides the
+-- two spine bones it lies between (SPLIT_RIDE, head to pelvis), blended by where along them it is, and lids_tick
+-- moves the vertices every tick. Riding a bone a piece, the lid cracked into shards as she bent (eighteenth playtest)
+local function skin_lid(comp, actor, pmc, pc, ride)
+  local chain = {}
+  for _, b in ipairs(ride) do
+    local tm = bone_tm(comp, b)
+    if tm then chain[#chain + 1] = { name = b, tm = tm } end
+  end
+  if #chain == 0 or not pc.wv then return false end
+  local v = {}
+  for k, p in ipairs(pc.wv) do
+    local ja, jb, t, bd = 1, 1, 0, nil
+    for j = 1, math.max(#chain - 1, 1) do
+      local a, b = chain[j].tm.t, chain[math.min(j + 1, #chain)].tm.t
+      local ab = sub(b, a)
+      local l2 = dot(ab, ab)
+      local x = l2 > 1e-6 and math.min(math.max(dot(sub(p, a), ab) / l2, 0), 1) or 0
+      local d = sub(p, add(a, scale(ab, x)))
+      d = dot(d, d)
+      if not bd or d < bd then ja, jb, t, bd = j, math.min(j + 1, #chain), x, d end
+    end
+    local qa, qb = qinv(chain[ja].tm.q), qinv(chain[jb].tm.q)
+    v[k] = { a = ja, b = jb, t = t, la = qrot(qa, sub(p, chain[ja].tm.t)), lb = qrot(qb, sub(p, chain[jb].tm.t)),
+      na = qrot(qa, pc.wn[k]), nb = qrot(qb, pc.wn[k]) }
+  end
+  local names = {}
+  for j, c2 in ipairs(chain) do names[j] = c2.name end
+  skinned[#skinned + 1] = { actor = actor, pmc = pmc, comp = comp, bones = names, v = v, n = 0 }
+  return true
+end
+
+local lid_ms = { n = 0, sum = 0, top = 0 }
+local lids_step
+local function lids_tick()
+  if #skinned == 0 then
+    if lid_ms.n > 0 then
+      log(string.format("split lids followed her for %d ticks: %.1f ms a tick, %.1f at most", lid_ms.n, lid_ms.sum / lid_ms.n, lid_ms.top))
+      lid_ms = { n = 0, sum = 0, top = 0 }
+    end
+    return
+  end
+  local t0 = os.clock()
+  lids_step()
+  local ms = (os.clock() - t0) * 1000
+  lid_ms.n, lid_ms.sum, lid_ms.top = lid_ms.n + 1, lid_ms.sum + ms, math.max(lid_ms.top, ms)
+end
+lids_step = function()
+  local limit = (cfg().splitLidFollow or 12) / TICK_S
+  for i = #skinned, 1, -1 do
+    local s = skinned[i]
+    s.n = s.n + 1
+    local at = s.n <= limit and valid(s.pmc) and valid(s.comp) and valid(s.actor) and try(function()
+      local x = s.actor:GetTransform()
+      return { t = vec(x.Translation.X, x.Translation.Y, x.Translation.Z), q = qinv({ X = x.Rotation.X, Y = x.Rotation.Y, Z = x.Rotation.Z, W = x.Rotation.W }) }
+    end)
+    local tms = {}
+    if at then
+      for j, b in ipairs(s.bones) do
+        tms[j] = bone_tm(s.comp, b)
+        if not tms[j] then at = nil; break end
+      end
+    end
+    local ok = false
+    if at then
+      local verts, normals = {}, {}
+      for k, w in ipairs(s.v) do
+        local A, B = tms[w.a], tms[w.b]
+        local pa, pb = add(A.t, qrot(A.q, w.la)), add(B.t, qrot(B.q, w.lb))
+        local na, nb = qrot(A.q, w.na), qrot(B.q, w.nb)
+        local p = add(scale(pa, 1 - w.t), scale(pb, w.t))
+        verts[k] = qrot(at.q, sub(p, at.t))
+        normals[k] = qrot(at.q, norm(add(scale(na, 1 - w.t), scale(nb, w.t))) or na)
+      end
+      ok = try(function() s.pmc:UpdateMeshSection_LinearColor(0, verts, normals, {}, {}, {}, {}, {}, {}); return true end)
+        or try(function() s.pmc:UpdateMeshSection_LinearColor(0, verts, normals, {}, {}, {}); return true end)
+      if not ok then log("split lid: the procedural mesh didn't take the update, it stays rigid") end
+    end
+    if not ok then table.remove(skinned, i) end
+  end
 end
 
 -- one half's caps: the lid over the opening along the spine, in pieces riding the spine bones, and a domed one over
@@ -1709,28 +2296,34 @@ end
 local function split_caps(q, comp, r, list)
   if cfg().caps == false then return end
   local g = cfg()
+  local ride = SPLIT_RIDE.of(q, comp)
   local o = opening(r, "s0")
   if o and o.p then
-    local pieces, nt = flat_lid(o, comp, g.splitLidGrow or 0.4, g.splitLidPush or 0.2)
-    local made = 0
+    local pieces, nt = flat_lid(o, comp, g.splitLidGrow or 0.4, g.splitLidPush or 0.2, ride)
+    local made, bent = 0, 0
     for _, pc in ipairs(pieces or {}) do
-      local a, kind = cap(q.pawn, comp, o, pc.bone, pc.built)
+      local a, kind, pmc = cap(q.pawn, comp, o, pc.bone, pc.built)
+      if a and pmc and pc.skin and skin_lid(comp, a, pmc, pc, ride) then bent = bent + 1 end
       if a then
         made = made + 1
-        list[#list + 1] = { actor = a, o = o, ride = pc.bone, comp = comp, kind = kind }
+        list[#list + 1] = { actor = a, o = o, ride = pc.bone, comp = comp, kind = kind, whole = pc.skin }
       end
     end
     local ns = spine_halves(q, comp, o, list)
-    log(string.format("split lid on %s: %d points, %d triangles, %d pieces, %d spine pieces", name_of(comp), #o.p, nt or 0, made, ns))
+    log(string.format("split lid on %s: %d points, %d triangles, %d pieces (%d bending with the spine), %d spine pieces", name_of(comp),
+      #o.p, nt or 0, made, bent, ns))
   elseif o then
-    local ride = nearest_bone(comp, o.c, SPLIT_RIDE)
-    local a, kind = cap(q.pawn, comp, o, ride)
-    if a then list[#list + 1] = { actor = a, o = o, ride = ride, comp = comp, kind = kind } end
+    local at = nearest_bone(comp, o.c, ride)
+    local a, kind = cap(q.pawn, comp, o, at)
+    if a then list[#list + 1] = { actor = a, o = o, ride = at, comp = comp, kind = kind } end
   end
   local nk = opening(r, "n")
   if nk then
-    local a, kind = cap(q.pawn, comp, nk, "Bip001-Neck")
-    if a then list[#list + 1] = { actor = a, o = nk, ride = "Bip001-Neck", comp = comp, kind = kind } end
+    local nb = "Bip001-Neck"
+    for _, b in ipairs(ride) do if b == nb then nb = nil; break end end
+    nb = nb and nearest_bone(comp, nk.c, ride) or "Bip001-Neck"
+    local a, kind = cap(q.pawn, comp, nk, nb)
+    if a then list[#list + 1] = { actor = a, o = nk, ride = nb, comp = comp, kind = kind } end
   end
 end
 
@@ -1824,14 +2417,21 @@ local function stage_split_cut(q)
   q.gone1, q.gone2 = limb_sides(q.mesh, at, n)
   -- her half keeps the head, face and hair whole, on their own animation; the copy's neck closes. The DLL holds one
   -- neck plane, for the next split cut of that component
-  send_limbs(q.mesh, q.gone1, q.gone2)
+  local front, back = split_chains(q.mesh, at, n)
+  local keep1, keep2 = {}, {}
+  for _, b in ipairs(q.gone2) do keep1[#keep1 + 1] = b end
+  for _, b in ipairs(front) do keep1[#keep1 + 1] = b end
+  for _, b in ipairs(q.gone1) do keep2[#keep2 + 1] = b end
+  for _, b in ipairs(back) do keep2[#keep2 + 1] = b end
+  send_limbs(q.mesh, q.gone1, keep1, back, SPLIT_RIDE.of(q, q.mesh))
   local h1 = send_neck(q.mesh, 1)
   local r1 = side_cut(q.mesh, SPLIT_SINK, at, n)
-  send_limbs(q.body2, q.gone2, q.gone1)
+  send_limbs(q.body2, q.gone2, keep2, front, SPLIT_RIDE.of(q, q.body2))
   local h2 = send_neck(q.body2, 2)
   local r2 = side_cut(q.body2, SPLIT_SINK, at, neg)
-  log(string.format("split (%s) at %s normal %s (%s), pose %s, limbs %s | %s, spine breaks at %s, neck %s | %s", q.why,
-    v3(at), v3(n), from, p, table.concat(q.gone2, ","), table.concat(q.gone1, ","), tostring(q.spine), h1, h2))
+  log(string.format("split (%s) at %s normal %s (%s), pose %s, limbs %s | %s, chains %s | %s, spine breaks at %s, neck %s | %s",
+    q.why, v3(at), v3(n), from, p, table.concat(q.gone2, ","), table.concat(q.gone1, ","), table.concat(front, ","),
+    table.concat(back, ","), tostring(q.spine), h1, h2))
   log("split body: " .. r1)
   log("split body copy: " .. r2)
   if not (ok_cut(r1) and ok_cut(r2)) then return false end
@@ -1858,6 +2458,50 @@ local function set_mass(comp, bone, k)
   if m and m > 0 then try(function() comp:SetMassOverrideInKg(FName(bone), m * k, true) end) end
 end
 
+-- the torso's helper bones (the split's flattening sinks are picked among them) in their parents' space: a helper the
+-- animation drives (an aim or corrective bone) moves off its parent while the half lies still, and the skin
+-- flattened onto it stretches out of the lid (eighteenth playtest's flat shards on Ab-*-Shoulder0, Pectro0, AX1)
+local HELPER_PARENTS = { ["Bip001-Pelvis"] = true, ["Bip001-Spine"] = true, ["Bip001-Spine1"] = true, ["Bip001-Spine2"] = true, ["Bip001-Neck"] = true }
+local function helper_pose(comp)
+  local out = {}
+  local nb = try(function() return comp:GetNumBones() end) or 0
+  for i = 0, nb - 1 do
+    local nm = try(function() return comp:GetBoneName(i):ToString() end)
+    local par = nm and (nm:sub(1, 3) == "Ab-" or nm:sub(1, 3) == "Dm-") and parent_bone(comp, nm)
+    -- a Dm- helper's own children too (Ab-R-AX1 under Dm-R-Trape under Dm-R-Trape-Cnt)
+    local top = par
+    while top and top:sub(1, 3) == "Dm-" do top = parent_bone(comp, top) end
+    if top and HELPER_PARENTS[top] then
+      local t = try(function()
+        local x = comp:GetSocketTransform(FName(nm), 3) -- RTS_ParentBoneSpace
+        return { p = vec(x.Translation.X, x.Translation.Y, x.Translation.Z), q = { x.Rotation.X, x.Rotation.Y, x.Rotation.Z, x.Rotation.W } }
+      end)
+      if t then out[nm] = t end
+    end
+  end
+  return out
+end
+local function helper_drift(comp, base)
+  if not (valid(comp) and base) then return "?" end
+  local list = {}
+  for nm, b in pairs(base) do
+    local t = try(function()
+      local x = comp:GetSocketTransform(FName(nm), 3)
+      return { p = vec(x.Translation.X, x.Translation.Y, x.Translation.Z), q = { x.Rotation.X, x.Rotation.Y, x.Rotation.Z, x.Rotation.W } }
+    end)
+    if t then
+      local d = len(sub(t.p, b.p))
+      local c = math.abs(t.q[1] * b.q[1] + t.q[2] * b.q[2] + t.q[3] * b.q[3] + t.q[4] * b.q[4])
+      local deg = math.deg(2 * math.acos(math.min(c, 1)))
+      if d > 0.5 or deg > 5 then list[#list + 1] = { nm = nm, d = d, deg = deg } end
+    end
+  end
+  table.sort(list, function(x, y) return x.d + x.deg / 10 > y.d + y.deg / 10 end)
+  local parts = {}
+  for i = 1, math.min(8, #list) do parts[#parts + 1] = string.format("%s %.1f cm %.0f deg", list[i].nm, list[i].d, list[i].deg) end
+  return #parts > 0 and table.concat(parts, ", ") or "none"
+end
+
 -- one half's ragdoll: the limbs that went with the other half (gone, as its skin was cut) come off and fall free,
 -- the spine weighs half, a push away from the other half and a tip that topples the halves apart. Hiding them with
 -- their bodies (HideBoneByName, PBO_Term) stopped her ragdoll the tick the split opened, and her mesh never
@@ -1874,7 +2518,7 @@ local function settle_half(comp, at, n, push, gone, spine, upper)
     try(function() comp:BreakConstraint(vec(0, 0, 0), bone_loc(comp, spine) or at, FName(spine)) end)
     if not upper then broke[#broke + 1] = spine end
   end
-  local pa = try(function() return comp:GetPhysicsAsset() end) or try(function() return comp.SkeletalMesh.PhysicsAsset end)
+  local pa = ctx.physics_of(comp)
   local names = {}
   if valid(pa) then
     try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then names[#names + 1] = bs.BoneName:ToString() end end) end)
@@ -1890,12 +2534,13 @@ local function settle_half(comp, at, n, push, gone, spine, upper)
     end
     local l = bone_loc(comp, bn)
     local h = l and dot(sub(l, at), n) or 0
+    -- (not the neck: halved, the 4.5 kg head shook on it)
     -- what the half lets go of falls free, invisible, at its own mass: at 0.02 kg the chains shook and went through
     -- the floor, and kinematic they froze in the air where she was cut, with whatever still rode them (a floating
     -- piece of the outfit)
     if off then
       if ctx.on_free then try(function() ctx.on_free(comp, bn) end) end
-    elseif math.abs(h) < 4 then set_mass(comp, bn, 0.5) end
+    elseif math.abs(h) < 4 and bn ~= "Bip001-Neck" and bn ~= "Bip001-Head" then set_mass(comp, bn, 0.5) end
   end
   if push > 0 then try(function() comp:AddImpulseToAllBodiesBelow(scale(n, push), FName("Bip001-Pelvis"), true, true) end) end
   -- a cut down her length: the upper body leans out more than the hips, so the halves fall open like a split log
@@ -1911,7 +2556,7 @@ end
 local function split_physics(q, vel)
   local g = cfg()
   local b2 = q.body2
-  local pa = try(function() return q.mesh:GetPhysicsAsset() end) or try(function() return q.mesh.SkeletalMesh.PhysicsAsset end)
+  local pa = ctx.physics_of(q.mesh)
   -- the copy was made without collision, so it has no physics bodies: a profile change doesn't create them (only
   -- SetCollisionEnabled does), and SetSimulatePhysics then did nothing. The copy stood frozen where she was cut
   try(function() b2:SetCollisionEnabled(3) end)
@@ -1930,7 +2575,7 @@ local function split_physics(q, vel)
   end
   local sim2 = try(function() return b2:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true
   rehome(q, b2, q.c.at, q.c.n)
-  copy_watch = { comp = b2, her = q.mesh, n = 0 }
+  if cfg().probes then copy_watch = { comp = b2, her = q.mesh, n = 0, helpers = { her = helper_pose(q.mesh), copy = helper_pose(b2) } } end
   if ctx.on_copy then try(function() ctx.on_copy(b2) end) end
   -- she stood still while it was cut; now both halves fall, before they get pushed apart
   if ctx.on_release then try(function() ctx.on_release() end) end
@@ -1962,6 +2607,11 @@ local function split_physics(q, vel)
     log(string.format("split: the cut off half flies with the blow, %s at %.0f cm/s", v3(v), fly))
   end
   log(string.format("split falls apart (%s): limbs off %s | %s", q.why, table.concat(b1, ","), table.concat(b2l, ",")))
+  local p = q.pieces or {}
+  local n1, w1 = hide_gone(p.her, b1)
+  local n2, w2 = hide_gone(p.copy, b2l)
+  log(string.format("split: outfit pieces with the other half's limbs hidden: %d of %d on her half (%s), %d of %d on the copy (%s)",
+    n1, #(p.her or {}), w1, n2, #(p.copy or {}), w2))
 end
 
 local function stage_split_open(q)
@@ -1995,7 +2645,7 @@ local function stage_split_open(q)
     -- bleeding along the seam: from the chest and neck lids of each half
     local left = math.floor((g.bleedTime or 2.5) / TICK_S + 0.5)
     for _, c in ipairs(q.caps) do
-      if valid(c.actor) and c.kind ~= "spine" and (q.plane or c.ride == "Bip001-Spine2" or c.ride == "Bip001-Neck" or c.ride == "Bip001-Spine") then
+      if valid(c.actor) and c.kind ~= "spine" and (q.plane or c.whole or c.ride == "Bip001-Spine2" or c.ride == "Bip001-Neck" or c.ride == "Bip001-Spine") then
         local qq = { mesh = c.comp }
         bleed_from(qq, c.actor, c.o, c.ride, left)
       end
@@ -2015,7 +2665,9 @@ end
 
 local start -- below; a degenerate split falls back to a waist cut through it
 local aimed -- M.aim: the next cut's flying direction
-local function split_tick(q)
+local split_stage
+local function split_tick(q) split_stage(q) end
+split_stage = function(q)
   if q.stage == "cut" then
     if stage_split_prep(q) then q.stage = "cut2"; q.wait = 2; return end
   elseif q.stage == "cut2" then
@@ -2063,12 +2715,17 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade, style)
   if g.enabled == false then return false end
   if native.state ~= "ready" then log(kind .. " skipped (" .. why .. "): sbslice.dll is " .. native.state); return false end
   if pending then log(kind .. " skipped (" .. why .. "): another cut is still opening"); return false end
-  local face = kind == "head" or (kind ~= "split" and not blade and (PARTS[g.bone or ""] or {}).kind == "head")
+  -- an enemy is never split (a split rebuilds Eve's outfit pieces and needs her whole), and has no face of its own
+  if enemy.cur and kind == "split" then log("split skipped (" .. why .. "): not on an enemy"); return false end
+  local tb = not enemy.cur and PARTS[g.bone or ""] or {}
+  local face = not enemy.cur and (kind == "head" or (kind ~= "split" and not blade and tb.kind == "head"))
+  -- (an enemy built like her: its face whenever the cut may take the head)
+  if enemy.cur and enemy.faced[enemy.cur] then face = kind == "head" or (blade ~= nil and kind ~= "split") end
   face = face and face_of(pawn, mesh) or nil
   local waited = force_lod(mesh)
   if face then waited = force_lod(face) or waited end
-  pending = { stage = "cut", wait = waited and 2 or 0, pawn = pawn, mesh = mesh, hit = hit, why = why, kind = kind,
-    face = face, out = out, plane = plane, blade = blade, style = style,
+  pending = { stage = "cut", wait = waited and 2 or 0, t0 = os.clock(), pawn = pawn, mesh = mesh, hit = hit, why = why, kind = kind,
+    face = face, out = out, plane = plane, blade = blade, style = style, owner = enemy.cur, bone = M.bone_once,
     fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil }
   aimed = nil
   -- the blade's plane and directions in her own frame, so they move with her until the cut is made
@@ -2080,24 +2737,41 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade, style)
   end
   -- an animated death (main.lua) plays her own fall; cutting her in two needs the ragdoll
   local halves = kind == "split" or kind == "torso"
-    or (kind ~= "wound" and not blade and (PARTS[g.bone or ""] or {}).kind == "torso")
+    or (kind ~= "wound" and not blade and tb.kind == "torso")
   -- unless it is a split and she is playing her fall: then both halves play on with it for tune.gore.splitAnim
   -- seconds before they come apart (split_tick)
   local anim = why == "death" and kind == "split" and (g.splitAnim or 0.7) > 0 and ctx.animated and ctx.animated()
   if anim then
     pending.anim = g.splitAnim or 0.7
-    local pa = try(function() return mesh:GetPhysicsAsset() end) or try(function() return mesh.SkeletalMesh.PhysicsAsset end)
+    local pa = ctx.physics_of(mesh)
     pending.bodies = {}
     if valid(pa) then
       try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then pending.bodies[#pending.bodies + 1] = bs.BoneName:ToString() end end) end)
     end
-  elseif why == "death" and halves and ctx.on_need_ragdoll then
+  elseif (why == "death" or why == "after") and halves and ctx.on_need_ragdoll then
     try(function() ctx.on_need_ragdoll(kind) end)
   end
   -- a split comes first, then the fall: she is held where she is until it opens
   if kind == "split" and not anim and ctx.on_hold then try(function() ctx.on_hold(mesh) end) end
   M.tick(pawn)
   return true
+end
+
+-- that part (a PARTS bone) cut off, whatever tune.gore.bone says (glass.lua: where the hit landed)
+function M.slice_bone(pawn, mesh, bone, hit, why)
+  if not PARTS[bone] or already_cut(mesh, bone) then return false end
+  M.bone_once = bone
+  local ok = start(pawn, mesh, hit, why, PARTS[bone].kind)
+  M.bone_once = nil
+  return ok
+end
+function M.has_cut(mesh, bone) return already_cut(mesh, bone) end
+-- a command to sbslice.dll and its answer; quiet: no answer (one a tick, glass.lua's stats tick)
+M.command = command
+function M.quiet(s)
+  local cdo = load_obj(CHEAT_CDO)
+  if not cdo then return false end
+  return pcall(function() cdo:SBRewardGroupDropFormationPathLocation(FName("None"), 0, 0, 0, s, 0, 0, 0) end)
 end
 
 -- the direction the killing blow travelled (world), for the next cut's pieces to fly along (nil: they drop off)
@@ -2109,6 +2783,16 @@ end
 
 -- a split is on its way (it brings its own blood once it opens)
 function M.splitting() return pending ~= nil and pending.kind == "split" end
+-- a cut is opening or queued (a new one now would be skipped)
+function M.busy() return pending ~= nil or #queued > 0 end
+-- the cuts made on this mesh so far, and whether one of them split her
+function M.cuts_on(mesh)
+  local a, n, split = addr(mesh), 0, false
+  for _, c in ipairs(cuts) do
+    if c.addr == a then n = n + 1; split = split or c.bone == "split" or c.bone == "split copy" end
+  end
+  return n, split
+end
 
 function M.slice(pawn, mesh, hit, why, kind) return start(pawn, mesh, hit, why, kind or "limb") end
 -- normal: the split plane's normal (made square to her spine, the plane goes through it), or nil for her left/right
@@ -2131,6 +2815,8 @@ local LIMB_SEGS = {
   { "Bip001-R-Thigh", "Bip001-R-Calf" }, { "Bip001-R-Calf", "Bip001-R-Foot" },
 }
 local function blade_plane(h)
+  -- the plane the enemy's weapon swept (main.lua's weapon_swing)
+  if h.n then return norm(h.n), h.how or "weapon" end
   local d, f = h.dir and norm(h.dir), h.fwd and norm(h.fwd)
   if d and f then
     local c = cross(d, f)
@@ -2173,6 +2859,7 @@ function M.blow(pawn, mesh, h, why)
   local head_s = hs[#hs] >= 0 and 1 or -1
   -- the arm or leg the plane crosses nearest the hit, not along it (a blade running down a limb leaves nothing to cut)
   local best, struck
+  local crossed = {} -- per limb (side and arm / leg): its crossing nearest the hit
   for _, sg in ipairs(LIMB_SEGS) do
     local a, b = bone_loc(mesh, sg[1]), bone_loc(mesh, sg[2])
     local ax = a and b and norm(sub(b, a))
@@ -2183,6 +2870,8 @@ function M.blow(pawn, mesh, h, why)
         local x = add(a, scale(sub(b, a), t))
         local dd = math.sqrt(dot(sub(x, at), sub(x, at)))
         local c = { bone = sg[1], t = t, d = dd, n = n }
+        local limb = sg[1]:match("Bip001%-(%a)%-") .. ((sg[1]:find("Arm") or sg[1]:find("Forearm")) and "arm" or "leg")
+        if not crossed[limb] or dd < crossed[limb].d then crossed[limb] = c end
         if not best or dd < best.d then best = c end
         if h.bone == sg[1] then struck = c end
       end
@@ -2213,10 +2902,94 @@ function M.blow(pawn, mesh, h, why)
   -- a plane past the spine that only takes a thigh at its hip joint (or a calf right at the knee from a blow aimed at
   -- the body) cut the hips: across the waist instead, square to the spine
   local hip = what == "limb" and best and best.bone:find("Thigh") and best.t < 0.25
+  -- more cuts from one wide swing (multiCut): every other arm or leg the plane crosses within reach cm of the hit,
+  -- and the neck when it crosses that near, after the first cut. One cut a death left a sweep through both arms
+  -- taking one of them
+  local mc = cfg().multiCut or {}
+  local reach, most = mc.reach or 40, mc.max or 3
+  local function extras(first)
+    local out = {}
+    if mc.enabled == false or most <= 1 then return out end
+    local skip = first and first.bone and (first.bone:match("Bip001%-(%a)%-") .. ((first.bone:find("Arm") or first.bone:find("Forearm")) and "arm" or "leg"))
+    -- an arm the swing met first (raised to block, held in front of her) doesn't stop it: where its plane goes on
+    -- through her spine below the neck, within bodyReach cm of the hit, her body is cut too, across the chest or the
+    -- waist along the blade (it took the arm alone before)
+    if first and first.kind == "limb" and skip and skip:find("arm") and mc.body ~= false and not already_cut(mesh, "Bip001-Spine1") then
+      local near
+      for i = 1, 4 do
+        if (hs[i] < 0) ~= (hs[i + 1] < 0) then
+          local a, b = bone_loc(mesh, SPINE_CHAIN[i]), bone_loc(mesh, SPINE_CHAIN[i + 1])
+          local tt = hs[i] / (hs[i] - hs[i + 1])
+          local x = a and b and add(a, scale(sub(b, a), tt))
+          local dd = x and math.sqrt(dot(sub(x, at), sub(x, at)))
+          if dd and dd < (mc.bodyReach or 60) and (not near or dd < near.d) then
+            -- (the cut is made between Spine1 and Spine2, the blade's point clamped there: a crossing below it low,
+            -- one above it high)
+            near = { bone = "Bip001-Spine1", t = i == 3 and tt or (i < 3 and 0 or 1), d = dd, n = n }
+          end
+        end
+      end
+      if near then out[#out + 1] = { kind = "torso", blade = near } end
+    end
+    local list = {}
+    for limb, c in pairs(crossed) do if limb ~= skip and c.d < reach then list[#list + 1] = c end end
+    table.sort(list, function(x, y) return x.d < y.d end)
+    for _, c in ipairs(list) do if #out < most - 1 then out[#out + 1] = { kind = "limb", blade = c } end end
+    if first and first.kind ~= "head" and #out < most - 1 and (hs[5] < 0) ~= (hs[6] < 0) and not (out[1] and out[1].kind == "torso") then
+      local nk = bone_loc(mesh, "Bip001-Neck")
+      if nk and math.sqrt(dot(sub(nk, at), sub(nk, at))) < reach then out[#out + 1] = { kind = "head" } end
+    end
+    return out
+  end
+  -- the rest, queued in her own frame (the ragdoll moves on while the first cut opens)
+  local function queue(list)
+    if #list == 0 then return "" end
+    local f = body_frame(mesh)
+    local names = {}
+    for _, e in ipairs(list) do
+      local rel = f and e.blade and to_body(f, e.blade.n)
+      queued[#queued + 1] = function()
+        if e.kind == "head" then return start(pawn, mesh, bone_loc(mesh, "Bip001-Neck") or at, why, "head", h.dir) end
+        local c = { bone = e.blade.bone, t = e.blade.t, d = e.blade.d, n = e.blade.n }
+        local fn = rel and body_frame(mesh)
+        if fn then c.n = norm(from_body(fn, rel)) or c.n end
+        if already_cut(mesh, c.bone) then return false end
+        return start(pawn, mesh, bone_loc(mesh, c.bone) or at, why, e.kind, nil, nil, c)
+      end
+      names[#names + 1] = e.kind == "head" and "head" or e.kind == "torso" and string.format("her body at %s %.0f cm in", e.blade.bone, e.blade.d) or e.blade.bone
+    end
+    return ", then " .. table.concat(names, ", ")
+  end
+  -- a cut down her length (the plane along her spine) at death is off (deathSplit false): the limbs it crosses near
+  -- the hit come off instead, or the death's odds are rolled
+  local axis = (function()
+    local p0, p1 = bone_loc(mesh, "Bip001-Pelvis"), bone_loc(mesh, "Bip001-Neck")
+    return p0 and p1 and norm(sub(p1, p0))
+  end)()
+  local lengthwise = axis and math.abs(dot(axis, n)) < 0.6
+  if (what == "slice" or (not pos and not neg)) and lengthwise and (why == "death" or why == "after") and cfg().deathSplit == false then
+    local list = extras(nil)
+    if #list == 0 or list[1].kind ~= "limb" then
+      log(string.format("blade (%s): %s plane down her length, no split at death (deathSplit off)", why, how))
+      return false
+    end
+    local first = table.remove(list, 1)
+    local more = queue(list)
+    log(string.format("blade (%s): %s plane down her length, no split at death: %s at %.2f instead%s", why, how,
+      first.blade.bone, first.blade.t, more))
+    return start(pawn, mesh, at, why, "limb", nil, nil, first.blade)
+  end
   -- a blade through her body splits her only bladeSplit of the time; else the death's odds are rolled (main.lua)
   local splits = what == "slice" or hip or (what == "limb" and best and off < (cfg().spineReach or 15) and best.bone:find("Calf"))
   if splits and math.random() > (cfg().bladeSplit or 0.2) then
     log(string.format("blade (%s): %s plane through her body, no split this time (bladeSplit %.2f)", why, how, cfg().bladeSplit or 0.2))
+    return false
+  end
+  -- a blow that would split her when she can't be split (h.noSplit: a hit after death on a body already cut; a split
+  -- needs her whole): nothing here, main.lua wounds her instead
+  if h.noSplit and (hip or (what == "limb" and best and off < (cfg().spineReach or 15) and best.bone:find("Calf"))
+    or (what ~= "limb" and what ~= "head")) then
+    log(string.format("blade (%s): %s plane through her body, she is cut already: no split", why, how))
     return false
   end
   if hip or (what == "limb" and best and off < (cfg().spineReach or 15) and best.bone:find("Calf")) then
@@ -2228,14 +3001,33 @@ function M.blow(pawn, mesh, h, why)
       return start(pawn, mesh, at, why, "split", norm(sub(b, a)), { at = at, n = norm(sub(b, a)) })
     end
   end
+  -- a plane that crosses no arm or leg past the spine: the one the blow was aimed at is cut square, when it has one
+  -- (nineteenth playtest: a swing 279 cm off, moved onto her forearm, ran along it and the death rolled its odds)
+  if what == "limb" and not best and h.bone and not already_cut(mesh, h.bone) then
+    for _, sg in ipairs(LIMB_SEGS) do
+      if sg[1] == h.bone then
+        local a, b = bone_loc(mesh, sg[1]), bone_loc(mesh, sg[2])
+        local ax = a and b and norm(sub(b, a))
+        if ax then
+          best = { bone = sg[1], t = CUT_AT_DEFAULT, d = 0, n = ax }
+          how = how .. " (along the limb it was aimed at: cut square)"
+        end
+        break
+      end
+    end
+  end
   local blade = what == "limb" and best or nil
   log(string.format("blade (%s): %s plane at %s normal %s, dir %s fwd %s attack %s, spine %s cm off it -> %s%s",
     why, how, v3(at), vs(n), vs(h.dir), vs(h.fwd), tostring(h.attack_dir), table.concat(spine, "/"), what,
     blade and (" " .. blade.bone .. string.format(" at %.2f", blade.t)) or ""))
   if what == "limb" then
     if not blade then return false end
+    local more = why == "death" and queue(extras({ kind = "limb", bone = blade.bone })) or ""
+    if more ~= "" then log("blade (" .. why .. "): one swing" .. more) end
     return start(pawn, mesh, at, why, "limb", nil, nil, blade)
   elseif what == "head" then
+    local more = why == "death" and queue(extras({ kind = "head" })) or ""
+    if more ~= "" then log("blade (" .. why .. "): one swing" .. more) end
     return start(pawn, mesh, at, why, "head", h.dir)
   end
   -- a plane along her that has every arm and leg on one side only grazes her: the other half was a sliver of skin
@@ -2269,7 +3061,41 @@ function M.blow(pawn, mesh, h, why)
   return start(pawn, mesh, at, why, "split", n, { at = at, n = n })
 end
 
+-- run fn(...) cutting for owner (an enemy's address, nil for Eve): whatever it adds to the lists is tagged with it
+function enemy.run(owner, fn, ...)
+  local prev = enemy.cur
+  enemy.cur = owner
+  local lists = { spawned, bleeds, later, caps, hung, trackers, decals, no_decals, cuts, queued, hid }
+  local n0 = {}
+  for i, l in ipairs(lists) do n0[i] = #l end
+  local r = table.pack(pcall(fn, ...))
+  for i, l in ipairs(lists) do
+    for k = n0[i] + 1, #l do if enemy.owned[l[k]] == nil then enemy.owned[l[k]] = owner or false end end
+  end
+  enemy.cur = prev
+  if not r[1] then error(r[2], 0) end
+  return table.unpack(r, 2, r.n)
+end
+local function owner_of(x) return enemy.owned[x] or nil end
+
+local stage_step
 local function stage_tick(q)
+  local stage, t0 = q.stage, os.clock()
+  prof = { t = t0 }
+  local ok, err = xpcall(stage_step, debug and debug.traceback or tostring, q)
+  mark("rest")
+  local ms = (os.clock() - t0) * 1000
+  M.last_stage = { t = os.clock(), what = string.format("%s stage %s %.0f ms", q.kind, stage, ms) }
+  -- every stage, with how long after the cut was asked for it ran: the cut showed late after her death (twenty-fifth
+  -- playtest)
+  if stage ~= "anim" then
+    log(string.format("%s stage %s at +%.0f ms took %.0f ms%s", q.kind, stage, (t0 - (q.t0 or t0)) * 1000, ms,
+      ms >= (cfg().slowMs or 15) and ": " .. table.concat(prof, ", ") or ""))
+  end
+  prof = nil
+  if not ok then error(err, 0) end
+end
+stage_step = function(q)
   if q.kind == "split" then return split_tick(q) end
   if q.stage == "cut" then
     if (q.kind == "wound" and stage_wound or stage_cut)(q) then q.stage = "open"; q.wait = 2; return end
@@ -2282,17 +3108,53 @@ local function stage_tick(q)
   end
 end
 
+-- her bones looked at while she plays, every WATCH_EVERY ticks: a stub's carrier must be a helper that held still
+-- against its parent all along (sbslice "w"; an animation-driven corrective flung a thigh's stub about, twenty-fifth
+-- playtest)
+M.watching = { every = 5, n = 0 }
+function M.watch(mesh)
+  local w = M.watching
+  if cfg().enabled == false or native.state ~= "ready" or not valid(mesh) then return end
+  w.n = w.n + 1
+  if w.n % w.every ~= 0 then return end
+  local r = command(string.format("w%x", mesh:GetAddress()))
+  if r:sub(1, 2) ~= "ok" and not w.logged then w.logged = true; log("bone watch refused: " .. r) end
+  -- and while she plays, the cuts' assets are loaded (and kept: native.root) one a look, so even the first cut
+  -- loads nothing
+  if not w.preload then
+    local g, list = cfg(), {}
+    for _, v in pairs(FX) do list[#list + 1] = v end
+    for _, sets in pairs(SFX) do for _, set in ipairs(sets) do for _, v in ipairs(set) do list[#list + 1] = v end end end
+    for _, v in ipairs(vox.DIE) do list[#list + 1] = v end
+    for _, v in ipairs(POOL_DECALS) do list[#list + 1] = v end
+    for _, v in ipairs(DRIP_DECALS) do list[#list + 1] = v end
+    for _, v in ipairs({ vox.ATTENUATION, MPC_DIRTY, g.capMaterial or CAP_MATERIAL, g.stubMesh or STUB_MESH }) do list[#list + 1] = v end
+    w.preload, w.next = list, 1
+  end
+  local path = w.preload[w.next]
+  if path then
+    w.next = w.next + 1
+    if not native.rooted[path] then load_obj(path) end
+    if w.next > #w.preload then
+      local n = 0
+      for _, ok in pairs(native.rooted) do if ok then n = n + 1 end end
+      log(string.format("cut assets loaded and kept: %d of %d", n, #w.preload))
+    end
+  end
+end
+
 function M.tick(pawn)
   if cfg().enabled == false then return end
   native_tick()
   blood_tick()
   pools_tick()
+  lids_tick()
   for i = #later, 1, -1 do
     local l = later[i]
     l.n = l.n - 1
     if l.n <= 0 then
       table.remove(later, i)
-      local ok, err = pcall(l.fn)
+      local ok, err = pcall(enemy.run, owner_of(l), l.fn)
       if not ok then log("delayed step failed: " .. tostring(err)) end
     end
   end
@@ -2310,6 +3172,19 @@ function M.tick(pawn)
       table.remove(bleeds, i)
     end
   end
+  if limb_watch then
+    local w = limb_watch
+    w.n = w.n + 1
+    if w.n == 30 or w.n == 150 then
+      if valid(w.mesh) then
+        log(string.format("cut stretch, %s at %.0f s: %s", w.bone, w.n * TICK_S, stretch_report(w.mesh)))
+        if #w.kept > 0 and w.anchor then log(string.format("cut chains, %s at %.0f s: %s", w.bone, w.n * TICK_S, chain_reach(w.mesh, w.kept, w.anchor))) end
+      end
+      if w.n == 150 then limb_watch = nil end
+    elseif not valid(w.mesh) then
+      limb_watch = nil
+    end
+  end
   if copy_watch then
     local w = copy_watch
     w.n = w.n + 1
@@ -2323,16 +3198,23 @@ function M.tick(pawn)
         for _, h in ipairs({ { "her half", w.her }, { "copy", w.comp } }) do
           if valid(h[2]) then log(string.format("split stretch, %s at %.1f s: %s", h[1], w.n * TICK_S, stretch_report(h[2]))) end
         end
+        log(string.format("split helpers off their parents at %.1f s: her half %s | copy %s", w.n * TICK_S,
+          helper_drift(w.her, w.helpers.her), helper_drift(w.comp, w.helpers.copy)))
         if w.n == 60 then copy_watch = nil end
       end
     end
+  end
+  if not pending and #queued > 0 then
+    local nx = table.remove(queued, 1)
+    local ok, err = pcall(enemy.run, owner_of(nx), nx)
+    if not ok then log("next cut of the blow failed: " .. tostring(err)) end
   end
   local q = pending
   if not q then return end
   if not valid(q.mesh) then pending = nil; return end
   if q.wait > 0 then q.wait = q.wait - 1; return end
   -- a stage that throws would run again on every tick and block every later cut: it ends the cut instead
-  local ok, err = xpcall(stage_tick, debug and debug.traceback or tostring, q)
+  local ok, err = xpcall(enemy.run, debug and debug.traceback or tostring, q.owner, stage_tick, q)
   if not ok then
     if pending == q then pending = nil end
     log(string.format("%s (%s) failed at stage %s, dropped: %s", q.kind, q.why, tostring(q.stage), tostring(err)))
@@ -2375,17 +3257,18 @@ function M.undo_split()
     if valid(c) then try(function() c:K2_DestroyComponent(c) end) end
   end
   clones = {}
-  copy_watch = nil
+  copy_watch, limb_watch = nil, nil
   if #cuts == 0 then command("r") end
   release_lods()
 end
 
 -- undo everything before she is reused (respawn / sandbox recover)
-function M.cleanup(pawn, mesh)
+local function cleanup_eve(pawn, mesh, theirs)
   blood_down()
   local nd = pools_clear()
   if nd > 0 then log(string.format("removed %d floor blood decals", nd)) end
   pending = nil
+  queued = {}
   bleeds = {}
   bleed_logged = false
   local n, k = 0, 0
@@ -2401,6 +3284,7 @@ function M.cleanup(pawn, mesh)
     if valid(a) then try(function() a:K2_DestroyActor() end); k = k + 1 end
   end
   caps = {}
+  skinned = {}
   local nh = 0
   for _, pc in ipairs(hung) do
     if valid(pc) then try(function() pc:BreakConstraint() end); try(function() pc:K2_DestroyComponent(pc) end); nh = nh + 1 end
@@ -2430,15 +3314,32 @@ function M.cleanup(pawn, mesh)
     if valid(c) then try(function() c:K2_DestroyComponent(c) end); nc = nc + 1 end
   end
   clones = {}
-  copy_watch = nil
+  copy_watch, limb_watch = nil, nil
   if nc > 0 then steps[#steps + 1] = string.format("copies(%d)", nc) end
   if nh > 0 then steps[#steps + 1] = string.format("chains(%d)", nh) end
-  -- the collapsed helper bones live on the mesh asset, which outlives a destroyed component
-  steps[#steps + 1] = "sinks(" .. command("r") .. ")"
+  -- the collapsed helper bones live on the mesh asset, which outlives a destroyed component. A cut enemy's corpse
+  -- still rides its own asset's sinks (and the BoneMap entries every cut borrows): then only her assets'
+  if #theirs.cuts == 0 then
+    steps[#steps + 1] = "sinks(" .. command("r") .. ")"
+  else
+    local done_sm = {}
+    for _, c in ipairs(cuts) do
+      if c.sm and not done_sm[c.sm] then
+        done_sm[c.sm] = true
+        steps[#steps + 1] = "sinks(" .. command(string.format("r%x", c.sm)) .. ")"
+      end
+    end
+  end
   cuts = {}
-  -- the face, when a head came off
-  for _, comp in pairs(forced) do if valid(comp) and comp ~= mesh then try(function() comp:SetForcedLOD(0) end) end end
-  forced = {}
+  -- the face, when a head came off (an enemy's cut mesh keeps its LOD)
+  local keep_lod = {}
+  for _, c in ipairs(theirs.cuts) do keep_lod[c.addr or 0] = true end
+  for a, comp in pairs(forced) do
+    if not keep_lod[a] then
+      if valid(comp) and comp ~= mesh then try(function() comp:SetForcedLOD(0) end) end
+      forced[a] = nil
+    end
+  end
   local sc = self_saved
   self_saved = nil
   if sc and valid(sc.mesh) and sc.resp then step("self", function() sc.mesh:SetCollisionResponseToChannel(5, sc.resp) end) end
@@ -2451,6 +3352,7 @@ function M.cleanup(pawn, mesh)
       c.mesh:SetCollisionEnabled(c.enabled)
     end)
   end
+  if c and valid(c.cap) and c.capResp then step("capsule", function() c.cap:SetCollisionResponseToChannel(5, c.capResp) end) end
   later = {}
   if valid(mesh) then
     step("lod", function() mesh:SetForcedLOD(0) end)
@@ -2459,11 +3361,161 @@ function M.cleanup(pawn, mesh)
     step("physics", function()
       mesh:SetAllBodiesSimulatePhysics(false)
       mesh:SetSimulatePhysics(false)
-      local pa = mesh.SkeletalMesh.PhysicsAsset
-      mesh:SetPhysicsAsset(pa, true)
+      -- the outfit's own asset, or the one physfix gave a mesh without one (the mesh's own is none then)
+      local pa = ctx.physics_of(mesh)
+      if pa then mesh:SetPhysicsAsset(pa, true) end
     end)
   end
   log(string.format("undid cut of %s: %d caps, %d effects, %s", table.concat(bones, ","), k, n, table.concat(steps, " ")))
+end
+
+-- an enemy's items set aside while her recovery runs, then put back
+local function aside(l)
+  local mine, theirs = {}, {}
+  for _, x in ipairs(l) do if owner_of(x) then theirs[#theirs + 1] = x else mine[#mine + 1] = x end end
+  return mine, theirs
+end
+local function merge(l, more) for _, x in ipairs(more) do l[#l + 1] = x end end
+function M.cleanup(pawn, mesh)
+  local t = {}
+  spawned, t.spawned = aside(spawned)
+  bleeds, t.bleeds = aside(bleeds)
+  later, t.later = aside(later)
+  caps, t.caps = aside(caps)
+  hung, t.hung = aside(hung)
+  trackers, t.trackers = aside(trackers)
+  decals, t.decals = aside(decals)
+  no_decals, t.no_decals = aside(no_decals)
+  cuts, t.cuts = aside(cuts)
+  queued, t.queued = aside(queued)
+  hid, t.hid = aside(hid)
+  local theirs_pending = pending and pending.owner and pending
+  if theirs_pending then pending = nil end
+  local ok, err = pcall(cleanup_eve, pawn, mesh, t)
+  merge(spawned, t.spawned); merge(bleeds, t.bleeds); merge(later, t.later); merge(caps, t.caps); merge(hung, t.hung)
+  merge(trackers, t.trackers); merge(decals, t.decals); merge(no_decals, t.no_decals); merge(cuts, t.cuts)
+  merge(queued, t.queued); merge(hid, t.hid)
+  pending = pending or theirs_pending
+  if not ok then error(err, 0) end
+end
+
+-- ---- enemies (enemies.lua) ----
+-- a cut on an enemy's corpse: along the blade when the blow gives one (gore.blow, never a split), else kind ("limb",
+-- "head", "torso" or "wound"); h: { loc, dir, fwd, n, how, push, bone, style }. Returns what it started, or nil
+function M.enemy_cut(owner, pawn, mesh, h, kind, faced)
+  if faced then enemy.faced[owner] = true end
+  return enemy.run(owner, function()
+    if pending then return nil end
+    h = h or {}
+    M.aim(h.push or h.dir)
+    if kind ~= "wound" and (h.n or (h.dir and h.fwd)) and h.loc then
+      h.noSplit = true
+      if M.blow(pawn, mesh, h, "enemy") then return "blade" end
+      if pending then return nil end
+    end
+    if kind == "wound" then
+      local out = h.dir and scale(norm(vec(h.dir.X, h.dir.Y, h.dir.Z)) or vec(0, 0, 1), -1) or nil
+      return M.wound(pawn, mesh, h.loc, out, "enemy", h.style) and "wound" or nil
+    end
+    return start(pawn, mesh, h.loc, "enemy", kind or "limb") and (kind or "limb") or nil
+  end)
+end
+-- the cuts made on an enemy so far (wounds included), and whether one is still opening
+function M.enemy_cuts(owner)
+  local n = 0
+  for _, c in ipairs(cuts) do if enemy.owned[c] == owner then n = n + 1 end end
+  for _, f in ipairs(queued) do if enemy.owned[f] == owner then n = n + 1 end end
+  return n, pending ~= nil and pending.owner == owner
+end
+-- an enemy's corpse goes (destroyed, hidden for reuse, or up again): everything its cuts left goes with it. how:
+-- nil, the corpse stays (its weights are taken off); "destroyed", its actor is being destroyed (its components and
+-- weights go with it); "vanished", its object is already gone from the game's list (nothing of it is touched, its
+-- memory may be freed: only this script's own caps and floor decals are removed). Its kind's sinks are put back once
+-- no cut corpse of that kind is left (r<asset>), and everything (the borrowed BoneMap entries too) once no cut at all is
+function M.enemy_gone(owner, mesh, how)
+  local gone, lost = how ~= nil, how == "vanished"
+  local nc, nf = 0, 0
+  local sms = {}
+  local function drop(l, fn)
+    local keep = {}
+    for _, x in ipairs(l) do
+      if enemy.owned[x] == owner then
+        if fn then try(function() fn(x) end) end
+      else keep[#keep + 1] = x end
+    end
+    return keep
+  end
+  spawned = drop(spawned, function(c)
+    if not lost and valid(c) then c:Deactivate(); c:K2_DestroyComponent(c); nf = nf + 1 end
+  end)
+  bleeds = drop(bleeds)
+  later = drop(later)
+  queued = drop(queued)
+  hid = drop(hid)
+  trackers = drop(trackers)
+  caps = drop(caps, function(a) if valid(a) then a:K2_DestroyActor(); nc = nc + 1 end end)
+  hung = drop(hung, function(pc) if not lost and valid(pc) then pc:BreakConstraint(); pc:K2_DestroyComponent(pc) end end)
+  decals = drop(decals, function(d) if valid(d) then d:K2_DestroyComponent(d) end end)
+  no_decals = drop(no_decals, function(e)
+    if not gone and valid(e.comp) and addr(e.comp) == e.addr then e.comp:SetReceivesDecals(e.was ~= false) end
+  end)
+  local bones, faces = {}, {}
+  cuts = drop(cuts, function(c)
+    if c.bone == "face" then faces[#faces + 1] = c else bones[#bones + 1] = c.bone end
+    if c.sm then sms[c.sm] = true end
+  end)
+  enemy.faced[owner] = nil
+  if pending and pending.owner == owner then pending = nil end
+  -- (a destroyed actor's memory is still there until the next garbage collection: enemies.lua polls every tick)
+  local a = mesh and addr(mesh) -- (GetAddress reads nothing of the object)
+  if limb_watch and (gone or limb_watch.mesh == mesh) then limb_watch = nil end
+  local steps = {}
+  if a and forced[a] then
+    if not gone and valid(forced[a]) then try(function() forced[a]:SetForcedLOD(0) end) end
+    forced[a] = nil
+  end
+  if a and not gone and valid(mesh) then steps[#steps + 1] = "weights(" .. command(string.format("x%x,0,1", a)) .. ")" end
+  -- an Eve-built enemy's face, cut whole with its head
+  for _, c in ipairs(faces) do
+    if forced[c.addr] then
+      if not gone and valid(forced[c.addr]) then try(function() forced[c.addr]:SetForcedLOD(0) end) end
+      forced[c.addr] = nil
+    end
+    if not gone and valid(c.mesh) and addr(c.mesh) == c.addr then
+      steps[#steps + 1] = "face(" .. command(string.format("x%x,0", c.addr)) .. ")"
+    end
+  end
+  if #cuts == 0 then
+    steps[#steps + 1] = "sinks(" .. command("r") .. ")"
+  else
+    for sm in pairs(sms) do
+      local shared = false
+      for _, c in ipairs(cuts) do if c.sm == sm then shared = true end end
+      if not shared then steps[#steps + 1] = "sinks(" .. command(string.format("r%x", sm)) .. ")" end
+    end
+  end
+  if #bones > 0 or nc > 0 or nf > 0 then
+    log(string.format("enemy %x gone%s: cuts %s, %d caps, %d effects %s", owner, gone and (" (" .. how .. ")") or "",
+      #bones > 0 and table.concat(bones, ",") or "none", nc, nf, table.concat(steps, " ")))
+  end
+end
+
+-- an enemy's corpse dissolving (the game's despawn show swapped its materials): its caps, bone stubs, bleeds and
+-- drips go now (they stayed in the air where it had been). Its cut weights and floor blood stay until it goes
+function M.enemy_fading(owner)
+  local nc, nf = 0, 0
+  local function drop(l, fn)
+    local keep = {}
+    for _, x in ipairs(l) do
+      if enemy.owned[x] == owner then if fn then try(function() fn(x) end) end else keep[#keep + 1] = x end
+    end
+    return keep
+  end
+  caps = drop(caps, function(a) if valid(a) then a:K2_DestroyActor(); nc = nc + 1 end end)
+  spawned = drop(spawned, function(c) if valid(c) then c:Deactivate(); c:K2_DestroyComponent(c); nf = nf + 1 end end)
+  bleeds = drop(bleeds)
+  trackers = drop(trackers)
+  log(string.format("enemy %x dissolving: %d caps, %d effects removed", owner, nc, nf))
 end
 
 -- clear SB's hidden "parent update blocked" counter on a scene component (sbslice.dll, see unpin there);
@@ -2486,10 +3538,11 @@ function M.state() return native.state end
 -- memory may be gone, and UE4SS's IsValid reads it: the first tick after the reload crashed the game
 function M.forget()
   spawned, bleeds, caps, cuts, forced, clones, rehomed = {}, {}, {}, {}, {}, {}, {}
-  later, hung = {}, {}
+  later, hung, queued, skinned, hid = {}, {}, {}, {}, {}
   bleed_logged = false
-  pending, collision_saved, self_saved, copy_watch = nil, nil, nil, nil
-  cache, nosink_cache = {}, {}
+  pending, collision_saved, self_saved, copy_watch, limb_watch = nil, nil, nil, nil, nil
+  enemy.owned, enemy.cur, enemy.faced = setmetatable({}, { __mode = "k" }), nil, {}
+  cache, nosink_cache, nocarry_cache = {}, {}, {}
   -- a collection's values live in the old world, which is gone with them
   body_blood, stub_dims = nil, nil
   decals, trackers, no_decals = {}, {}, {}

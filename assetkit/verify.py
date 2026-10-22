@@ -178,14 +178,18 @@ for rel, job in spec["assets"].items():
                 exp["DefaultInstance.ProfileInstance.TwistLimit.bSoftConstraint"] = False
             for k, val in job.get("swing", {}).get(child, {}).items():
                 exp["DefaultInstance.ProfileInstance.ConeLimit." + k] = float(val)
-            # motions limited to 0 deg are locked
+            # motions limited to 0 deg (with hard limits, under lock_below) are locked
+            below = job.get("lock_below", 0.0) if job.get("hard_limits") else 0.0
             for part, m, dg in (("ConeLimit", "Swing1Motion", "Swing1LimitDegrees"), ("ConeLimit", "Swing2Motion", "Swing2LimitDegrees"),
                                 ("TwistLimit", "TwistMotion", "TwistLimitDegrees")):
                 pre = "DefaultInstance.ProfileInstance." + part + "."
                 if part == "TwistLimit" and lim:
                     continue
-                if str(fv.get(pre + m)).endswith("ACM_Limited") and fv.get(pre + dg) is not None and float(fv[pre + dg]) == 0.0:
+                if str(fv.get(pre + m)).endswith("ACM_Limited") and fv.get(pre + dg) is not None and (float(fv[pre + dg]) == 0.0 or float(fv[pre + dg]) < below):
                     exp[pre + m] = "ACM_Locked"
+            if child in job.get("locked_joints", []):
+                for part, m in (("ConeLimit", "Swing1Motion"), ("ConeLimit", "Swing2Motion"), ("TwistLimit", "TwistMotion")):
+                    exp["DefaultInstance.ProfileInstance." + part + "." + m] = "ACM_Locked"
             sec = "DefaultInstance.SecAxis2.SecAxis2"
             if lim:
                 exp["DefaultInstance.ProfileInstance.TwistLimit.TwistLimitDegrees"] = lim["twist"]
@@ -269,7 +273,11 @@ for rel, job in spec["assets"].items():
             fail.append(f"{tag}: plays {kp.get('AnimResourcePath', {}).get('Value')}")
         if abs(float(kp.get("PlayEndTime", {}).get("Value") or 0) - float(job["length"])) > 1e-3 or kp.get("bHoldEndTime", {}).get("Value") is not True:
             fail.append(f"{tag}: doesn't hold the end at {job['length']} s")
-        print(f"ok  {tag}  plays {name} for {job['length']} s")
+        end = props(main).get("EndTime", {}).get("Value")
+        want_end = float(job["length"]) + float(job.get("hold", 0.9))
+        if end is None or abs(float(end) - want_end) > 1e-3:
+            fail.append(f"{tag}: ends at {end} s, not {want_end}")
+        print(f"ok  {tag}  plays {name} for {job['length']} s, ends at {want_end:g} s")
         continue
     if not rag:
         fail.append(f"{tag}: no ragdoll key after patch")

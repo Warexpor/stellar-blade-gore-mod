@@ -1,0 +1,16 @@
+diff --git i/retoc/src/iostore.rs w/retoc/src/iostore.rs
+index 73df7a6..e96c58a 100644
+--- i/retoc/src/iostore.rs
++++ w/retoc/src/iostore.rs
+@@ -210,7 +210,10 @@ impl IoStoreBackend {
+                 previous_container_name = this_container_name.clone();
+                 previous_container_version = Some(this_container_version);
+             }
+-            if this_container_version != previous_container_version.unwrap() {
++            // Versions up to PerfectHash share the chunk ID layout and the package format (UE4.26/4.27 load mod
++            // containers of an older layout alongside the game's), so only a change across it is refused.
++            let new_layout = |v: EIoStoreTocVersion| v > EIoStoreTocVersion::PerfectHash;
++            if new_layout(this_container_version) != new_layout(previous_container_version.unwrap()) {
+                 bail!(
+                     "Cannot create composite container for containers of different versions: Container {} and {} have different versions {:?} and {:?}",
+                     previous_container_name,

@@ -25,6 +25,9 @@
 #define DllMain DllMain_
 #define SBSLICE_HOSTED
 #include "../../sbslice.c"
+void spawner_start(void) {} // the window is Win32 only
+int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (void)l; (void)a; (void)b; return 0; } // stats.c: test_stats.c
+int mem_readable(u64 p, u64 n) { (void)p; (void)n; return 0; } // stats.c
 #undef CreateThread
 #undef Sleep
 #undef CreateFileW
@@ -175,6 +178,24 @@ static void orig_info(int v, skin_info *o)
     for (int i = 0; i < 8; i++) { o->bones[i] = bmaps[s][wts[v * 16 + i]]; o->weights[i] = wts[v * 16 + 8 + i]; }
 }
 
+// the copy lets its head go (HEAD_DROP): its kept skin hangs nothing on the head's subtree, that weight rides the
+// head's parent (the neck) instead. Returns 1 if o had any on it
+static int fold_head(skin_info *o, int head)
+{
+    if (head < 0 || bparent[head] < 0) return 0;
+    int add = 0, slot = -1;
+    for (int i = 0; i < MAX_INF; i++) {
+        if (!o->weights[i]) continue;
+        int in = 0;
+        for (int a = o->bones[i]; a >= 0 && !in; a = bparent[a]) in = a == head;
+        if (in) { add += o->weights[i]; o->weights[i] = 0; }
+        else if (o->bones[i] == bparent[head]) slot = i;
+    }
+    if (add && slot < 0) for (int i = 0; i < MAX_INF; i++) if (!o->weights[i]) { slot = i; o->bones[i] = bparent[head]; break; }
+    if (add && slot >= 0) o->weights[slot] = (unsigned char)(o->weights[slot] + add);
+    return add > 0;
+}
+
 // a vertex the vanilla skin ties to a limb this half lets go (hip skin on the other half's thigh twist): it has to
 // stay with the body, so it may shift; not counted
 static unsigned char *gone_sub[2], *keep_sub[2];
@@ -264,13 +285,14 @@ static void write_obj(const char *fn, const skin_info *o)
 
 static const char *NOSINK_PRE[] = { "Bip001", "SC_", "Ab_" };
 static const char *NOSINK_PART[] = { "Hair", "Cape", "Breast", "Prop" };
-// the spine bones the lid rides, as gore.lua sends them after the limbs (SPLIT_RIDE); NORIDE=1: none (axis bands)
-static void set_ride(void)
+// the spine bones the lid rides, as gore.lua sends them after the limbs (SPLIT_RIDE.of); NORIDE=1: none (axis bands).
+// The copy (half B) lets its head go free, so it never rides it
+static void set_ride(int copy)
 {
     static const char *ride[] = { "Bip001-Head", "Bip001-Neck", "Bip001-Spine2", "Bip001-Spine1", "Bip001-Spine", "Bip001-Pelvis" };
     nride = 0;
     if (env_on("NORIDE")) return;
-    for (int i = 0; i < 6; i++) if (bone(ride[i]) >= 0) ride_bones[nride++] = bone(ride[i]);
+    for (int i = copy ? 1 : 0; i < 6; i++) if (bone(ride[i]) >= 0) ride_bones[nride++] = bone(ride[i]);
 }
 static void set_nosink(void)
 {
@@ -278,10 +300,19 @@ static void set_nosink(void)
     for (int i = 0; i < MAX_BONES; i++) nosink[i] = 0;
     for (int i = 0; i < NB; i++) {
         int bad = !strcmp(bname[i], "Root");
-        for (int k = 0; k < 3; k++) if (!strncmp(bname[i], NOSINK_PRE[k], strlen(NOSINK_PRE[k]))) bad = 1;
+        // ENEMY=1: gore.lua's list for an enemy: its Ab_ bones are its own deform helpers (the skulls' and the
+        // lurker's head have no others), not accessory chains, so they may be sinks
+        for (int k = 0; k < 3 - env_on("ENEMY"); k++) if (!strncmp(bname[i], NOSINK_PRE[k], strlen(NOSINK_PRE[k]))) bad = 1;
         for (int k = 0; k < 4; k++) if (strstr(bname[i], NOSINK_PART[k])) bad = 1;
         nosink[i] = bad;
+        nocarry[i] = env_on("ENEMY") || !strncmp(bname[i], "Dm-", 3) || !strncmp(bname[i], "Dm_", 3); // as gore.lua sends
     }
+    // NOSINKALL=1: no bone may be a sink, as gore.lua sends for an enemy (its mesh asset is shared by every enemy of
+    // its kind, alive ones too, and a sink collapses on the asset)
+    if (env_on("NOSINKALL")) for (int i = 0; i < NB; i++) nosink[i] = 1;
+    // her bones watched as gore.lua does while she plays, here in the pose of the cut (a carrier must have held still
+    // all along); UNWATCHED=1: never watched, as before the first few seconds of play
+    if (!env_on("UNWATCHED")) for (int k = 0; k < CARRY_WATCH; k++) skin_watch((u64)comp_a);
 }
 
 int main(int argc, char **argv)
@@ -340,23 +371,174 @@ int main(int argc, char **argv)
 
     int spine1 = bone("Bip001-Spine1"), pelvis = bone("Bip001-Pelvis"), head = bone("Bip001-Head");
     if (spine1 < 0 || pelvis < 0 || head < 0) { fprintf(stderr, "no Bip001 spine\n"); return 1; }
+    // LIMB=1: a plain cut of the left upper arm (0.4 down it, square to it) on any mesh, an enemy's say: every vertex the
+    // vanilla skin puts mostly on the forearm's subtree goes with the arm, none with no weight on the arm stays on it
+    if (env_on("LIMB")) {
+        int ua = bone("Bip001-L-UpperArm"), fa = bone("Bip001-L-Forearm");
+        if (ua < 0 || fa < 0) { fprintf(stderr, "no left arm\n"); return 1; }
+        float *a = space + ua * 12 + 4, *b2 = space + fa * 12 + 4, at2[3], nn[3], l = 0;
+        float armat = getenv("ARMAT") ? (float)atof(getenv("ARMAT")) : 0.4f; // ARMAT: where down the upper arm (gore.lua PARTS at)
+        for (int k = 0; k < 3; k++) { at2[k] = a[k] + (b2[k] - a[k]) * armat; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
+        for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+        set_nosink();
+        limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0;
+        skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1, 0);
+        printf("limb: %.300s\n", lastres);
+        if (!ov_a) { printf("FAIL: no override\n"); return 1; }
+        unsigned char *fore = calloc(NB, 1), *armb = calloc(NB, 1);
+        for (int i = 0; i < NB; i++) {
+            fore[i] = i == fa || (bparent[i] >= 0 && fore[bparent[i]]);
+            armb[i] = i == ua || (bparent[i] >= 0 && armb[bparent[i]]);
+        }
+        int nf = 0, fleft = 0, taken = 0;
+        for (int v = 0; v < NV; v++) {
+            skin_info vo; orig_info(v, &vo);
+            int wf = 0, wa = 0, onarm = 0;
+            for (int i = 0; i < 8; i++) if (vo.weights[i]) { if (fore[vo.bones[i]]) wf += vo.weights[i]; if (armb[vo.bones[i]]) wa += vo.weights[i]; }
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) onarm = 1;
+            if (wf > 127) { nf++; fleft += !onarm; }
+            taken += !wa && onarm;
+        }
+        skin_collapse();
+        skin_probe((u64)comp_a, 0);
+        printf("limb probe: %.200s\n", lastres);
+        int bad = fleft > nf / 200 || taken > 0;
+        printf("limb: %d forearm vertices, %d stayed on the body; %d vertices off the arm went with it\n%s\n", nf, fleft, taken, bad ? "FAIL" : "PASS");
+        return bad;
+    }
+    // HEAD=1: an enemy's beheading as gore.lua makes it with no face mesh: MODE_CUT on Bip001-Head, 0.7 of the way
+    // from the neck to the head, square to the neck (MODE_PLANE vanishes the head: Eve's goes on her face mesh). Every vertex mostly on the head's subtree goes with
+    // it, none with no weight on the head or the neck does
+    if (env_on("HEAD")) {
+        int neck = bone("Bip001-Neck");
+        if (neck < 0) { fprintf(stderr, "no neck\n"); return 1; }
+        float *a = space + neck * 12 + 4, *b2 = space + head * 12 + 4, at2[3], nn[3], l = 0;
+        float t = getenv("HEADAT") ? (float)atof(getenv("HEADAT")) : 0.7f; // HEADAT: where between them (gore.lua's at)
+        for (int k = 0; k < 3; k++) { at2[k] = a[k] + (b2[k] - a[k]) * t; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
+        for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+        set_nosink();
+        limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0;
+        skin_cut((u64)comp_a, 0, head, at2, nn, MODE_CUT, 0, 0, -1, 0);
+        printf("head: %.300s\n", lastres);
+        if (!ov_a) { printf("FAIL: no override\n"); return 1; }
+        unsigned char *hb = calloc(NB, 1), *nb2 = calloc(NB, 1);
+        for (int i = 0; i < NB; i++) {
+            hb[i] = i == head || (bparent[i] >= 0 && hb[bparent[i]]);
+            nb2[i] = i == neck || (bparent[i] >= 0 && nb2[bparent[i]]);
+        }
+        int nh = 0, hleft = 0, taken = 0;
+        for (int v = 0; v < NV; v++) {
+            skin_info vo; orig_info(v, &vo);
+            int wh = 0, wn = 0, on = 0;
+            for (int i = 0; i < 8; i++) if (vo.weights[i]) { if (hb[vo.bones[i]]) wh += vo.weights[i]; if (nb2[vo.bones[i]]) wn += vo.weights[i]; }
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && hb[ov_a[v].bones[i]]) on = 1;
+            // (one under the plane stays on the neck, as any cut leaves what is behind it)
+            float x[3]; skin_v(&vo, v, x);
+            float hd = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
+            if (wh > 200 && hd > 1) { nh++; hleft += !on; }
+            taken += !wn && on;
+        }
+        skin_collapse();
+        skin_probe((u64)comp_a, 0);
+        printf("head probe: %.200s\n", lastres);
+        int bad = hleft > nh / 50 || taken > 0;
+        printf("head: %d head vertices over the plane, %d stayed on the body; %d vertices off the neck went with it\n%s\n", nh, hleft, taken, bad ? "FAIL" : "PASS");
+        return bad;
+    }
     // ARM=1: F9's cut of the left upper arm (0.4 down it, square to it), the cape's chain (Ab_CapeL01, hanging off the
     // arm's twist bone) named to stay on the body, as gore.lua does (NOKEEP=1: not named, it goes with the arm). Every
     // vertex the vanilla skin puts mostly on the cape must stay on the body, every one mostly on the forearm's subtree
     // must go with the arm
     if (env_on("ARM")) {
-        int ua = bone("Bip001-L-UpperArm"), fa = bone("Bip001-L-Forearm"), cape = bone("Ab_CapeL01");
+        int ua = bone(getenv("ARMBONE") ? getenv("ARMBONE") : "Bip001-L-UpperArm"), fa = bone(getenv("ARMEND") ? getenv("ARMEND") : "Bip001-L-Forearm"), cape = bone("Ab_CapeL01");
         if (ua < 0 || fa < 0) { fprintf(stderr, "no left arm\n"); return 1; }
-        if (cape < 0) { printf("arm: no Ab_CapeL01 on this mesh, nothing to keep\nPASS\n"); return 0; }
+        // (an outfit with no cape, CH_P_EVE_30: the arm cut alone; it had been skipped, and its stump came out hollow)
+        if (cape < 0) printf("arm: no Ab_CapeL01 on this mesh, the arm alone\n");
+        // DOWN=1: her idle pose's arm, hanging down her side (the bind pose holds it out): the arm's subtree turned about
+        // the shoulder until the elbow is under it, 12 degrees out from the body
+        if (env_on("DOWN")) {
+            float *pp = space + pelvis * 12 + 4, *hp = space + head * 12 + 4, up[3], d[3], o[3], lu = 0, ld = 0;
+            for (int k = 0; k < 3; k++) { up[k] = hp[k] - pp[k]; lu += up[k] * up[k]; }
+            for (int k = 0; k < 3; k++) { up[k] /= __builtin_sqrtf(lu); o[k] = space[ua * 12 + 4 + k]; d[k] = space[fa * 12 + 4 + k] - o[k]; }
+            for (int k = 0; k < 3; k++) ld += d[k] * d[k];
+            ld = __builtin_sqrtf(ld);
+            for (int k = 0; k < 3; k++) d[k] /= ld;
+            // out: the arm's direction off the up axis
+            float du = d[0] * up[0] + d[1] * up[1] + d[2] * up[2], out[3], lo = 0, want[3], lw = 0;
+            for (int k = 0; k < 3; k++) { out[k] = d[k] - up[k] * du; lo += out[k] * out[k]; }
+            for (int k = 0; k < 3; k++) { out[k] /= __builtin_sqrtf(lo); want[k] = -up[k] * 0.978f + out[k] * 0.208f; lw += want[k] * want[k]; }
+            for (int k = 0; k < 3; k++) want[k] /= __builtin_sqrtf(lw);
+            float ax[3] = { d[1] * want[2] - d[2] * want[1], d[2] * want[0] - d[0] * want[2], d[0] * want[1] - d[1] * want[0] };
+            float cs = d[0] * want[0] + d[1] * want[1] + d[2] * want[2], qa[4] = { ax[0], ax[1], ax[2], 1 + cs }, ql = 0;
+            for (int k = 0; k < 4; k++) ql += qa[k] * qa[k];
+            for (int k = 0; k < 4; k++) qa[k] /= __builtin_sqrtf(ql);
+            unsigned char *sub = calloc(NB, 1);
+            for (int i = 0; i < NB; i++) sub[i] = i == ua || (bparent[i] >= 0 && sub[bparent[i]]);
+            for (int i = 0; i < NB; i++) if (sub[i]) {
+                float *t = space + i * 12, nq[4], e[3] = { t[4] - o[0], t[5] - o[1], t[6] - o[2] }, r[3];
+                qmul(qa, t, nq); memcpy(t, nq, 16);
+                quat_rot(qa, e, r); t[4] = o[0] + r[0]; t[5] = o[1] + r[1]; t[6] = o[2] + r[2];
+            }
+            free(sub);
+        }
         float *a = space + ua * 12 + 4, *b2 = space + fa * 12 + 4, at2[3], nn[3], l = 0;
-        for (int k = 0; k < 3; k++) { at2[k] = a[k] + (b2[k] - a[k]) * 0.4f; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
+        float armat = getenv("ARMAT") ? (float)atof(getenv("ARMAT")) : 0.4f; // ARMAT: where down the upper arm (gore.lua PARTS at)
+        for (int k = 0; k < 3; k++) { at2[k] = a[k] + (b2[k] - a[k]) * armat; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
         for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+        // DRIVEN=1: the helpers on the arm's parent swung 20 degrees off it once while she played (a corrective the
+        // animation drives, as the spine's Ab-AX3 that flung a thigh's stub about, twenty-fifth playtest): none may
+        // carry the stub
+        int driven = env_on("DRIVEN") || env_on("UNWATCHED");
+        if (env_on("DRIVEN")) {
+            float q[4] = { 0, __builtin_sinf(0.1745f), 0, __builtin_cosf(0.1745f) };
+            for (int i = 0; i < NB; i++) if (bparent[i] == bparent[ua] && strncmp(bname[i], "Bip001", 6)) {
+                float *t = space + i * 12, o[4], keep[4];
+                memcpy(keep, t, 16); qmul(t, q, o); memcpy(t, o, 16);
+                skin_watch((u64)comp_a);
+                memcpy(t, keep, 16);
+            }
+        }
         set_nosink();
-        int keep = !env_on("NOKEEP");
-        limbs_comp = (u64)comp_a; ngone = 0; nkeep = keep; keep_roots[0] = cape; nride = 0;
+        // the cape goes whole with the arm, as gore.lua sends it (the 4th group); KEEPCAPE=1 keeps it on the body
+        // as gore.lua does by default: kept on the body by the arm's cut, then cut off at its root as a piece of its
+        // own; KEEPCAPE=1 leaves it on the body (tune.gore.chains "body"), WITH=1 sends it whole with the arm
+        int keep = cape >= 0 && !env_on("NOKEEP"), detach = keep && !env_on("KEEPCAPE") && !env_on("WITH");
+        int onbody = keep && !env_on("WITH"), with = keep && env_on("WITH");
+        limbs_comp = (u64)comp_a; ngone = 0; nkeep = onbody; keep_roots[0] = cape; nride = 0;
+        ndrop = with; drop_roots[0] = cape;
         skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1, 0);
         printf("arm: %.300s\n", lastres);
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
+        if (driven) {
+            if (strstr(lastres, " carried=")) { printf("FAIL: a helper that swung while she played (or was never watched) carries the stub\n"); return 1; }
+            printf("arm: no carrier, as wanted\nPASS\n");
+            return 0;
+        }
+        unsigned char *capeall = calloc(NB, 1);
+        for (int i = 0; i < NB; i++) capeall[i] = i == cape || (bparent[i] >= 0 && capeall[bparent[i]]);
+        if (detach) {
+            // the cape's own cut: at its root joint, square to its first link, its bones allowed as sinks
+            int c2 = -1;
+            for (int i = 0; i < NB; i++) if (bparent[i] == cape) c2 = i;
+            // the plane through the joint the cape hangs from (the arm's twist bone), facing down the cape: all of the
+            // cape is in front of it (through the cape's own root, its top went to the twist bone, off with the arm)
+            (void)c2;
+            float *r0 = space + bparent[cape] * 12 + 4, *r1 = space + cape * 12 + 4, cn[3], cl = 0;
+            for (int k = 0; k < 3; k++) { cn[k] = r1[k] - r0[k]; cl += cn[k] * cn[k]; }
+            for (int k = 0; k < 3; k++) cn[k] /= __builtin_sqrtf(cl);
+            // nor the arm's bones as the body side's sink: it is gone (an earlier cut's biceps sink pulled the
+            // cape's seam off with the arm)
+            for (int i = 0; i < NB; i++) {
+                int arm = 0;
+                for (int a = i; a >= 0 && !arm; a = bparent[a]) if (a == ua) arm = 1;
+                if (capeall[i] && i != cape) nosink[i] = 0;
+                else if (arm && !capeall[i]) nosink[i] = 1;
+            }
+            limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0;
+            skin_cut((u64)comp_a, 0, cape, r0, cn, MODE_CUT, 0, 0, -1, 0);
+            printf("cape: %.300s\n", lastres);
+            set_nosink();
+        }
         unsigned char *capeb = calloc(NB, 1), *fore = calloc(NB, 1), *armb = calloc(NB, 1);
         for (int i = 0; i < NB; i++) {
             capeb[i] = i == cape || (bparent[i] >= 0 && capeb[bparent[i]]);
@@ -372,12 +554,209 @@ int main(int argc, char **argv)
             // gone with the arm: any weight on the arm's own bones now
             int onarm = 0;
             for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) onarm = 1;
-            if (wc > 127) { nc++; cgone += onarm; }
+            // with the arm: every weight on the arm's subtree, the cape's included
+            int whole = 1;
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && !armb[ov_a[v].bones[i]] && !capeb[ov_a[v].bones[i]]) whole = 0;
+            int capeonly = 1;
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && !capeb[ov_a[v].bones[i]]) capeonly = 0;
+            if (wc > 127) { nc++; cgone += detach ? !capeonly : with ? whole : onarm; }
+            if (wc > 127 && detach && !capeonly && env_on("DBG")) {
+                static int shown_n = 0;
+                if (shown_n++ < 6) {
+                    printf("dbg v%d:", v);
+                    for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]);
+                    printf(" ->");
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s=%d", bname[ov_a[v].bones[i]], ov_a[v].weights[i]);
+                    printf("\n");
+                }
+            }
             if (wf > 127) { nf++; fleft += !onarm; }
         }
+        // what else goes with the arm, per section: vertices the vanilla skin puts mostly off the arm (an outfit piece
+        // over the shoulder, a strap) that the cut takes along all the same
+        for (int sc = 0; sc < NSEC; sc++) {
+            unsigned char *sec = (unsigned char *)secbuf + sc * 0xe8;
+            int b0 = *(int *)(sec + SEC_BASE_VERTEX), n0 = *(int *)(sec + SEC_NUM_VERTICES), gone = 0, off = 0;
+            for (int v = b0; v < b0 + n0; v++) {
+                int onarm = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) onarm = 1;
+                if (!onarm) continue;
+                gone++;
+                skin_info vo; orig_info(v, &vo);
+                int wa = 0;
+                for (int i = 0; i < 8; i++) if (vo.weights[i] && armb[vo.bones[i]]) wa += vo.weights[i];
+                off += wa <= 127;
+            }
+            int sunk = 0;
+            for (int v = b0; v < b0 + n0; v++) {
+                int all = 1, any = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) { any = 1; if (!is_sink(&(cut_ctx){ .sm = (u64)sm_buf }, ov_a[v].bones[i])) all = 0; }
+                sunk += any && all;
+            }
+            if (gone || sunk) printf("arm: section %d (%d vertices): %d go with the arm, %d of them mostly off it, %d sunk\n", sc, n0, gone, off, sunk);
+            if (env_on("DBGARM")) { // where this section's skin lies against the plane: behind it and gone, in front and kept
+                int behind_gone = 0, front_kept = 0, near_kept = 0; float minb = 1e9f, maxb = -1e9f;
+                for (int v = b0; v < b0 + n0; v++) {
+                    int onarm = 0;
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) onarm = 1;
+                    skin_info vo; orig_info(v, &vo);
+                    float x[3]; skin_v(&vo, v, x);
+                    float hd = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
+                    int wa = 0;
+                    for (int i = 0; i < 8; i++) if (vo.weights[i] && armb[vo.bones[i]]) wa += vo.weights[i];
+                    if (onarm && hd < -1) behind_gone++;
+                    if (!onarm && hd > 1 && wa > 127) front_kept++;
+                    if (!onarm && wa > 127) { near_kept++; if (hd < minb) minb = hd; if (hd > maxb) maxb = hd; }
+                }
+                printf("arm dbg: section %d: %d gone from behind the plane, %d mostly-arm kept in front; mostly-arm kept %d, %.1f..%.1f cm off the plane\n",
+                       sc, behind_gone, front_kept, near_kept, minb, maxb);
+            }
+        }
+        // the body's rim (kept vertices of triangles the arm took part of), posed with the cut's weights once its sinks and
+        // carriers are in: it must still go round the arm. Kept stub skin put on the clavicle snapped back towards the
+        // bind pose and left a 3-of-16-direction sliver 4 cm off the cut, a hollow stump (twenty-second playtest)
+        int rimdirs = 16;
+        {
+            unsigned char *gn = calloc(NV, 1), *rv = calloc(NV, 1);
+            // gone (on the arm) or sunk (wholly on the cut's collapsing sinks, the seam): the rim is what is next to them
+            for (int v = 0; v < NV; v++) {
+                int all = 1, any = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) {
+                    any = 1;
+                    if (armb[ov_a[v].bones[i]]) gn[v] = 1;
+                    int sk = 0;
+                    for (int k = 0; k < nsinks; k++) if (sinks[k].bone == ov_a[v].bones[i] && !sinks[k].carry) sk = 1;
+                    if (!sk) all = 0;
+                }
+                if (any && all) gn[v] = 2;
+            }
+            for (int t = 0; t + 2 < NIDX; t += 3) {
+                int g = !!gn[idx[t]] + !!gn[idx[t + 1]] + !!gn[idx[t + 2]];
+                if (g && g < 3) for (int k = 0; k < 3; k++) if (!gn[idx[t + k]]) rv[idx[t + k]] = 1;
+            }
+            float ax[3] = { __builtin_fabsf(nn[0]) < 0.9f ? 1.0f : 0.0f, __builtin_fabsf(nn[0]) < 0.9f ? 0.0f : 1.0f, 0 }, tt = ax[0] * nn[0] + ax[1] * nn[1];
+            for (int k = 0; k < 3; k++) ax[k] -= tt * nn[k];
+            float al = __builtin_sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+            for (int k = 0; k < 3; k++) ax[k] /= al;
+            float ay[3] = { nn[1] * ax[2] - nn[2] * ax[1], nn[2] * ax[0] - nn[0] * ax[2], nn[0] * ax[1] - nn[1] * ax[0] };
+            for (int pass = 0; pass < 2; pass++) {
+                if (pass) skin_collapse(); // "k"
+                int bins = 0, cnt = 0; float hs = 0, rs = 0;
+                for (int v = 0; v < NV; v++) if (rv[v]) {
+                    skin_info vo; if (pass) vo = ov_a[v]; else orig_info(v, &vo);
+                    float x[3]; skin_v(&vo, v, x);
+                    float d[3] = { x[0] - at2[0], x[1] - at2[1], x[2] - at2[2] }, h = d[0] * nn[0] + d[1] * nn[1] + d[2] * nn[2];
+                    float u = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2], w = d[0] * ay[0] + d[1] * ay[1] + d[2] * ay[2];
+                    int bn = (int)((__builtin_atan2f(w, u) + 3.14159f) / 6.28319f * 16); if (bn > 15) bn = 15; if (bn < 0) bn = 0;
+                    bins |= 1 << bn; cnt++; hs += h; rs += __builtin_sqrtf(u * u + w * w);
+                }
+                if (pass) rimdirs = __builtin_popcount(bins);
+                if (env_on("DBGARM") || (pass && rimdirs < 12)) printf("arm: body rim %s: %d vertices, %d of 16 directions, mean %.1f cm off the plane, %.1f from the axis\n",
+                       pass ? "cut weights" : "vanilla weights", cnt, __builtin_popcount(bins), cnt ? hs / cnt : 0, cnt ? rs / cnt : 0);
+            }
+            free(gn); free(rv);
+        }
+        // the stretch probe with the arm flung off (the arm's subtree turned 45 degrees and moved 40 cm out, 20 down): a
+        // triangle stretched from the body to the dropped arm is the outfit hanging off the shoulder (sixteenth playtest)
+        int still = -1, flung = -1, hid = 0, still_hid = 0;
+        skin_collapse(); // "k", as in game a few frames after the cut
+        {
+            float *saved = malloc(48 * NB);
+            memcpy(saved, space, 48 * NB);
+            skin_probe((u64)comp_a, 0);
+            sscanf(lastres, "ok stretched=%d", &still);
+            printf("arm probe still: %.300s\n", lastres);
+            { char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &still_hid); }
+            still_hid = still - still_hid; // the visible ones
+            float q[4] = { 0.3826834f, 0, 0, 0.9238795f };
+            float ua0[3] = { space[ua * 12 + 4], space[ua * 12 + 5], space[ua * 12 + 6] };
+            float fa0[3] = { space[fa * 12 + 4], space[fa * 12 + 5], space[fa * 12 + 6] };
+            for (int i = 0; i < NB; i++) if (i == ua || armb[i]) {
+                float *t = space + i * 12, nq[4]; qmul(q, t, nq); memcpy(t, nq, 16);
+                float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + 40; t[5] = r[1]; t[6] = r[2] - 20;
+            }
+            // detached, the cape falls its own way: 30 cm back and 25 down, turned the other way
+            if (detach) {
+                float q2[4] = { -0.3826834f, 0, 0, 0.9238795f };
+                for (int i = 0; i < NB; i++) if (capeall[i]) {
+                    float *t = space + i * 12, nq[4]; qmul(q2, t, nq); memcpy(t, nq, 16);
+                    float r[3]; quat_rot(q2, t + 4, r); t[4] = r[0] - 30; t[5] = r[1]; t[6] = r[2] - 25;
+                }
+            }
+            // the game's aim helpers chase the arm (the anim graph points them at it): Dm-L-Side-Point off the
+            // clavicle and Dm-L-Trape-Cnt off Spine2 turn, with everything under them, from where the elbow was to
+            // where it is now
+            const char *aims[2] = { "Dm-L-Side-Point", "Dm-L-Trape-Cnt" };
+            for (int k = 0; k < 2; k++) {
+                int h = bone(aims[k]);
+                if (h < 0) continue;
+                float *o = space + h * 12 + 4, p0[3], p1[3];
+                for (int j = 0; j < 3; j++) { p0[j] = fa0[j] - o[j]; p1[j] = space[fa * 12 + 4 + j] - o[j]; }
+                (void)ua0;
+                float l0 = __builtin_sqrtf(p0[0] * p0[0] + p0[1] * p0[1] + p0[2] * p0[2]), l1 = __builtin_sqrtf(p1[0] * p1[0] + p1[1] * p1[1] + p1[2] * p1[2]);
+                for (int j = 0; j < 3; j++) { p0[j] /= l0; p1[j] /= l1; }
+                float ax[3] = { p0[1] * p1[2] - p0[2] * p1[1], p0[2] * p1[0] - p0[0] * p1[2], p0[0] * p1[1] - p0[1] * p1[0] };
+                float cs = p0[0] * p1[0] + p0[1] * p1[1] + p0[2] * p1[2];
+                float qa[4] = { ax[0], ax[1], ax[2], 1 + cs }, ql = __builtin_sqrtf(qa[0] * qa[0] + qa[1] * qa[1] + qa[2] * qa[2] + qa[3] * qa[3]);
+                for (int j = 0; j < 4; j++) qa[j] /= ql;
+                float org[3] = { o[0], o[1], o[2] };
+                unsigned char *under = calloc(NB, 1);
+                for (int i = 0; i < NB; i++) under[i] = i == h || (bparent[i] >= 0 && under[bparent[i]]);
+                for (int i = 0; i < NB; i++) if (under[i]) {
+                    float *t = space + i * 12, nq[4], d[3] = { t[4] - org[0], t[5] - org[1], t[6] - org[2] }, r[3];
+                    qmul(qa, t, nq); memcpy(t, nq, 16);
+                    quat_rot(qa, d, r); t[4] = org[0] + r[0]; t[5] = org[1] + r[1]; t[6] = org[2] + r[2];
+                }
+                free(under);
+            }
+            skin_probe((u64)comp_a, 0);
+            sscanf(lastres, "ok stretched=%d", &flung);
+            printf("arm probe flung: %.400s\n", lastres);
+            char *h = strstr(lastres, "hidden="); if (h) sscanf(h, "hidden=%d", &hid);
+            memcpy(space, saved, 48 * NB); free(saved);
+            hid = flung - hid;
+        }
         // not named: part of it goes with the arm (the bug), the rest stays torn off on the body
-        int bad = keep ? cgone > nc / 200 : cgone == 0;
-        printf("arm: %d cape vertices, %d went with the arm; %d forearm vertices, %d stayed on the body\n%s\n",
+        int bad = cape < 0 ? 0 : onbody ? cgone > nc / 200 : with ? cgone < nc - nc / 200 : cgone == 0;
+        if (rimdirs < 12) { printf("FAIL: the stump's opening covers %d of 16 directions round the arm\n", rimdirs); bad = 1; }
+        // the stub moves with the limb's parent: the parent's subtree (the limb left out) turned 30 degrees about its
+        // joint, every vertex wholly on a carrier must turn with it. A calf's stub carried on the spine stayed behind as
+        // the thigh swung (twenty-fourth playtest)
+        {
+            int pb = bparent[ua], left = 0, n = 0;
+            unsigned char *ps = calloc(NB, 1);
+            for (int i = 0; i < NB; i++) ps[i] = i == pb || (bparent[i] >= 0 && ps[bparent[i]]);
+            for (int i = 0; i < NB; i++) if (armb[i] || i == ua) ps[i] = 0;
+            float *saved2 = malloc(48 * NB), *x0 = malloc(12 * (size_t)NV);
+            memcpy(saved2, space, 48 * NB);
+            unsigned char *oncar = calloc(NV, 1);
+            for (int v = 0; v < NV; v++) {
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] == 255) for (int k = 0; k < nsinks; k++)
+                    if (sinks[k].carry && sinks[k].bone == ov_a[v].bones[i]) oncar[v] = 1;
+                if (oncar[v]) { skin_v(&ov_a[v], v, x0 + 3 * (size_t)v); n++; }
+            }
+            float q[4] = { 0.258819f, 0, 0, 0.9659258f }, org[3] = { space[pb * 12 + 4], space[pb * 12 + 5], space[pb * 12 + 6] };
+            for (int i = 0; i < NB; i++) if (ps[i]) {
+                float *t = space + i * 12, nq[4], d[3] = { t[4] - org[0], t[5] - org[1], t[6] - org[2] }, r[3];
+                qmul(q, t, nq); memcpy(t, nq, 16);
+                quat_rot(q, d, r); t[4] = org[0] + r[0]; t[5] = org[1] + r[1]; t[6] = org[2] + r[2];
+            }
+            for (int v = 0; v < NV; v++) {
+                if (!oncar[v]) continue;
+                float x[3], *y = x0 + 3 * (size_t)v, d[3] = { y[0] - org[0], y[1] - org[1], y[2] - org[2] }, w[3];
+                skin_v(&ov_a[v], v, x);
+                quat_rot(q, d, w);
+                float e0 = x[0] - org[0] - w[0], e1 = x[1] - org[1] - w[1], e2 = x[2] - org[2] - w[2];
+                if (e0 * e0 + e1 * e1 + e2 * e2 > 1) left++;
+            }
+            memcpy(space, saved2, 48 * NB);
+            free(saved2); free(x0); free(oncar); free(ps);
+            if (env_on("DBGARM")) printf("arm: %d vertices on the carrier, %d left behind by the parent turning\n", n, left);
+            if (left) { printf("FAIL: %d of the stub's %d carried vertices didn't turn with %s\n", left, n, bname[pb]); bad = 1; }
+        }
+        if (hid > still_hid) { printf("FAIL: the arm flung off stretches %d more triangles that stay visible\n", hid - still_hid); bad = 1; }
+        printf("arm (cape %s): %d cape vertices, %d went with the arm; %d forearm vertices, %d stayed on the body\n%s\n",
+            detach ? "detached, counted: not on its own bones" : onbody ? "kept on the body" : with ? "with the arm" : "not named",
             nc, cgone, nf, fleft, bad || fleft > nf / 200 ? "FAIL" : "PASS");
         return bad || fleft > nf / 200;
     }
@@ -389,7 +768,26 @@ int main(int argc, char **argv)
         float *a = space + spine1 * 12 + 4, *b2 = space + spine2 * 12 + 4, at2[3], nn[3], l = 0;
         for (int k = 0; k < 3; k++) { at2[k] = (a[k] + b2[k]) * 0.5f; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
         for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+        // ARMFIRST=1: the left upper arm came off first, as a killing swing through her raised arm that goes on into
+        // her body (multiCut's body follow-through): the arm cut and its collapse, then the waist cut as usual
+        if (env_on("ARMFIRST")) {
+            int ua = bone("Bip001-L-UpperArm"), fa = bone("Bip001-L-Forearm");
+            if (ua < 0 || fa < 0) { fprintf(stderr, "no left arm\n"); return 1; }
+            float *ap = space + ua * 12 + 4, *bp = space + fa * 12 + 4, aat[3], an[3], al = 0;
+            for (int k = 0; k < 3; k++) { aat[k] = ap[k] + (bp[k] - ap[k]) * 0.4f; an[k] = bp[k] - ap[k]; al += an[k] * an[k]; }
+            for (int k = 0; k < 3; k++) an[k] /= __builtin_sqrtf(al);
+            set_nosink();
+            limbs_comp = (u64)comp_a; ngone = 0; nkeep = 0; nride = 0; ndrop = 0;
+            skin_cut((u64)comp_a, 0, ua, aat, an, MODE_CUT, 0, 0, -1, 0);
+            printf("arm first: %.200s\n", lastres);
+            if (strncmp(lastres, "ok", 2)) { printf("FAIL: the arm cut first failed\n"); return 1; }
+            skin_collapse();
+        }
         set_nosink();
+        // as gore.lua for a cut through the spine: nothing on an arm or a leg is a sink (it swings on its own, and
+        // the bind pose's arms hang down at the waist: a strap's seam collapsed onto a triceps helper)
+        for (int i = 0; i < NB; i++) for (int j = i; j >= 0; j = bparent[j])
+            if (!strcmp(bname[j], "Bip001-L-Clavicle") || !strcmp(bname[j], "Bip001-R-Clavicle") || !strcmp(bname[j], "Bip001-L-Thigh") || !strcmp(bname[j], "Bip001-R-Thigh")) nosink[i] = 1;
         skin_cut((u64)comp_a, 0, spine1, at2, nn, MODE_CUT, 0, 0, -1, 0);
         printf("waist: %.300s\n", lastres);
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
@@ -415,8 +813,97 @@ int main(int argc, char **argv)
         }
         printf("waist: %d arm vertices (%d below the cut), %d left on the legs", arms, below, left);
         if (lv >= 0) for (int i = 0; i < MAX_INF; i++) if (ov_a[lv].weights[i]) printf(" %s=%d", bname[ov_a[lv].bones[i]], ov_a[lv].weights[i]);
-        printf("\n%s\n", left > arms / 200 ? "FAIL" : "PASS");
-        return left > arms / 200;
+        printf("\n");
+        // outfit pieces across the cut (belt straps, the harness down her hips) are cut, not sent whole to one side:
+        // nothing mostly on the upper body and 6 cm over the cut stays on the legs (straps stood up off her hips),
+        // nothing mostly off it and 6 cm under the cut goes with the upper body (a gap in her hips; seventeenth playtest)
+        int horns = 0, gaps = 0;
+        for (int v = 0; v < NV; v++) {
+            skin_info vo; orig_info(v, &vo);
+            int w = 0, t = 0;
+            for (int i = 0; i < 8; i++) { t += vo.weights[i]; if (vo.weights[i] && upper[vo.bones[i]]) w += vo.weights[i]; }
+            float x[3]; skin_v(&vo, v, x);
+            float d = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
+            int now = 0;
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && upper[ov_a[v].bones[i]]) now += ov_a[v].weights[i];
+            if (d > 6 && w * 2 > t && now * 2 < t) horns++;
+            if (d < -6 && w * 2 < t && now * 2 > t) {
+                int a2 = 0;
+                for (int i = 0; i < 8; i++) if (vo.weights[i] && arm[vo.bones[i]]) a2 += vo.weights[i];
+                if (a2 * 2 <= t) gaps++;
+            }
+        }
+        printf("waist: %d upper body vertices over the cut stay on the legs, %d hip vertices under it go with the upper body\n", horns, gaps);
+        // the stretch probe with the upper body fallen off (Spine1's subtree turned 45 degrees, 50 cm out and 30 down,
+        // its arms swung): a cut strap must not stretch from the hips to it, nor its edge after an arm
+        int still = -1, flung = -1, hs = 0, hf = 0;
+        skin_collapse();
+        float *saved = malloc(48 * NB);
+        memcpy(saved, space, 48 * NB);
+        // where the legs' skin lies now (none of its weight on the upper body): flinging the upper body must not move it
+        float *legx = malloc(12 * (size_t)NV);
+        unsigned char *onlegs = calloc(NV, 1);
+        for (int v = 0; v < NV; v++) {
+            onlegs[v] = 1;
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && upper[ov_a[v].bones[i]]) onlegs[v] = 0;
+            if (onlegs[v]) skin_v(&ov_a[v], v, legx + 3 * (size_t)v);
+        }
+        skin_probe((u64)comp_a, 0);
+        sscanf(lastres, "ok stretched=%d", &still);
+        char *hh = strstr(lastres, "hidden="); if (hh) sscanf(hh, "hidden=%d", &hs);
+        printf("waist probe still: %.300s\n", lastres);
+        float q[4] = { 0.3826834f, 0, 0, 0.9238795f };
+        for (int i = 0; i < NB; i++) if (upper[i]) {
+            float *t = space + i * 12, nq[4]; qmul(q, t, nq); memcpy(t, nq, 16);
+            float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + 50; t[5] = r[1]; t[6] = r[2] - 30;
+        }
+        // the spine's blend driver goes half way after it, as the animation drives it (between Spine and Spine1): a
+        // stub carried on it stretched the waist after the flying upper body (twenty-third playtest)
+        {
+            int dm = bone("Dm-Spine-bland");
+            if (dm >= 0) {
+                float qh[4] = { 0.1950903f, 0, 0, 0.9807853f }, *t = space + dm * 12, nq[4], r[3];
+                qmul(qh, t, nq); memcpy(t, nq, 16);
+                quat_rot(qh, t + 4, r); t[4] = r[0] + 25; t[5] = r[1]; t[6] = r[2] - 15;
+            }
+        }
+        // and her arms flail on it: each upper arm's subtree turned 60 degrees about the shoulder
+        const char *ua2[2] = { "Bip001-L-UpperArm", "Bip001-R-UpperArm" };
+        for (int k = 0; k < 2; k++) {
+            int h = bone(ua2[k]);
+            if (h < 0) continue;
+            float qa[4] = { 0, k ? -0.5f : 0.5f, 0, 0.8660254f }, org[3] = { space[h * 12 + 4], space[h * 12 + 5], space[h * 12 + 6] };
+            unsigned char *under = calloc(NB, 1);
+            // with the upper arm's helpers that hang off the clavicle (an enemy's Ab-L-UpperArm-Sub, -Twist1): the
+            // animation turns those with the arm, so leaving them behind stretches skin no cut made
+            const char *helper = k ? "-R-UpperArm" : "-L-UpperArm";
+            for (int i = 0; i < NB; i++) under[i] = i == h || (!strncmp(bname[i], "Ab-", 3) && strstr(bname[i], helper)) || (bparent[i] >= 0 && under[bparent[i]]);
+            for (int i = 0; i < NB; i++) if (under[i]) {
+                float *t = space + i * 12, nq[4], d[3] = { t[4] - org[0], t[5] - org[1], t[6] - org[2] }, r[3];
+                qmul(qa, t, nq); memcpy(t, nq, 16);
+                quat_rot(qa, d, r); t[4] = org[0] + r[0]; t[5] = org[1] + r[1]; t[6] = org[2] + r[2];
+            }
+            free(under);
+        }
+        skin_probe((u64)comp_a, 0);
+        sscanf(lastres, "ok stretched=%d", &flung);
+        hh = strstr(lastres, "hidden="); if (hh) sscanf(hh, "hidden=%d", &hf);
+        printf("waist probe flung: %.400s\n", lastres);
+        int legmoved = 0;
+        for (int v = 0; v < NV; v++) {
+            if (!onlegs[v]) continue;
+            float x[3]; skin_v(&ov_a[v], v, x);
+            float *y = legx + 3 * (size_t)v, d0 = x[0] - y[0], d1 = x[1] - y[1], d2 = x[2] - y[2];
+            if (d0 * d0 + d1 * d1 + d2 * d2 > 4) legmoved++;
+        }
+        free(legx); free(onlegs);
+        if (legmoved) printf("FAIL: %d vertices of the legs' skin moved with the upper body flung off\n", legmoved);
+        memcpy(space, saved, 48 * NB); free(saved);
+        int shown = (flung - hf) - (still - hs);
+        if (shown > 0) printf("FAIL: the upper body fallen off stretches %d more triangles that stay visible\n", shown);
+        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0;
+        printf("%s\n", bad ? "FAIL" : "PASS");
+        return bad;
     }
 
     // the split as gore.lua makes it: through Spine1, square to the spine, her left/right
@@ -449,22 +936,108 @@ int main(int argc, char **argv)
     for (int k = 0; k < 3; k++) { p2[k] = (nk[k] + hp[k]) * 0.5f; n2[k] = hp[k] - nk[k]; l2 += n2[k] * n2[k]; }
     for (int k = 0; k < 3; k++) n2[k] /= __builtin_sqrtf(l2);
     int heads = !env_on("NOHEAD");
+    // accessory chains as gore.lua's split_chains (by name here: Ab_ tops off the torso or neck, 2+ bones): A keeps
+    // those in front of the plane and drops the rest, B the other way round
+    int chf[32], nchf = 0, chb[32], nchb = 0;
+    unsigned char *chain = calloc(NB, 1);
+    for (int i = 0; i < NB; i++) {
+        if (strncmp(bname[i], "Ab_", 3) || (bparent[i] >= 0 && !strncmp(bname[bparent[i]], "Ab_", 3))) continue;
+        int q = bparent[i];
+        while (q >= 0 && strncmp(bname[q], "Bip001", 6)) q = bparent[q];
+        int ok = q >= 0 && q != head;
+        for (int r = 0; r < 4 && ok; r++) for (int j = q; j >= 0; j = bparent[j]) if (j == bone(roots[r])) ok = 0;
+        if (!ok) continue;
+        float sum = 0; int k = 0;
+        for (int j = 0; j < NB; j++) {
+            int in = 0;
+            for (int t = j; t >= 0 && !in; t = bparent[t]) in = t == i;
+            if (!in) continue;
+            float *b3 = space + j * 12 + 4;
+            sum += (b3[0] - at[0]) * n[0] + (b3[1] - at[1]) * n[1] + (b3[2] - at[2]) * n[2]; k++;
+            chain[j] = sum >= 0 ? 1 : 2; // fixed below
+        }
+        if (k < 2) { for (int j = 0; j < NB; j++) { int in = 0; for (int t = j; t >= 0 && !in; t = bparent[t]) in = t == i; if (in) chain[j] = 0; } continue; }
+        for (int j = 0; j < NB; j++) { int in = 0; for (int t = j; t >= 0 && !in; t = bparent[t]) in = t == i; if (in) chain[j] = sum >= 0 ? 1 : 2; }
+        if (sum >= 0 && nchf < 32) chf[nchf++] = i; else if (sum < 0 && nchb < 32) chb[nchb++] = i;
+    }
+    printf("chains: %d in front, %d behind:", nchf, nchb);
+    for (int i = 0; i < nchf; i++) printf(" +%s", bname[chf[i]]);
+    for (int i = 0; i < nchb; i++) printf(" -%s", bname[chb[i]]);
+    printf("\n");
     static char res_a[65536], res_b[65536];
+    // DRIVEN=1: the spine's AX correctives (Ab-AX3 and its family, which the animation drives) turned 20 degrees once
+    // while she played: none may be a sink (CH_P_EVE_10's split seam collapsed onto them and stood up in sheets in a
+    // ragdoll death, twenty-sixth playtest)
+    unsigned char *drv = calloc(NB, 1);
+    if (env_on("DRIVEN")) {
+        float q[4] = { 0, __builtin_sinf(0.1745f), 0, __builtin_cosf(0.1745f) }, *keep = malloc(48 * NB);
+        memcpy(keep, space, 48 * NB);
+        for (int i = 0; i < NB; i++) if (strstr(bname[i], "AX")) {
+            float *t = space + i * 12, o[4];
+            qmul(t, q, o); memcpy(t, o, 16);
+            drv[i] = 1;
+        }
+        for (int i = 0; i < NB; i++) if (bparent[i] >= 0 && drv[bparent[i]]) drv[i] = 1; // their children turn against them too
+        skin_watch((u64)comp_a);
+        memcpy(space, keep, 48 * NB);
+        free(keep);
+    }
     // half A (her own mesh) keeps the front of the plane, B (the copy) the back
     set_nosink();
-    limbs_comp = (u64)comp_a; ngone = ng1; nkeep = ng2; memcpy(gone_roots, gone1, 4 * ng1); memcpy(keep_roots, gone2, 4 * ng2); set_ride();
+    limbs_comp = (u64)comp_a; ngone = ng1; nkeep = ng2; memcpy(gone_roots, gone1, 4 * ng1); memcpy(keep_roots, gone2, 4 * ng2); set_ride(0);
+    if (!env_on("NOCHAINS")) { memcpy(keep_roots + nkeep, chf, 4 * nchf); nkeep += nchf; memcpy(drop_roots, chb, 4 * nchb); ndrop = nchb; }
     if (heads) { head_comp = (u64)comp_a; head_mode = HEAD_KEEP; head_bone = head; memcpy(head_pw, p2, 12); memcpy(head_nw, n2, 12); }
     skin_cut((u64)comp_a, 0, spine1, at, n, MODE_SIDE, 0, 0, -1, 0);
     strcpy(res_a, lastres);
     printf("A: %.300s\n", lastres);
     set_nosink();
-    limbs_comp = (u64)comp_b; ngone = ng2; nkeep = ng1; memcpy(gone_roots, gone2, 4 * ng2); memcpy(keep_roots, gone1, 4 * ng1); set_ride();
+    limbs_comp = (u64)comp_b; ngone = ng2; nkeep = ng1; memcpy(gone_roots, gone2, 4 * ng2); memcpy(keep_roots, gone1, 4 * ng1); set_ride(1);
+    ndrop = 0;
+    if (!env_on("NOCHAINS")) { memcpy(keep_roots + nkeep, chb, 4 * nchb); nkeep += nchb; memcpy(drop_roots, chf, 4 * nchf); ndrop = nchf; }
     if (heads) { head_comp = (u64)comp_b; head_mode = HEAD_DROP; head_bone = head; memcpy(head_pw, p2, 12); memcpy(head_nw, n2, 12); }
     skin_cut((u64)comp_b, 0, spine1, at, neg, MODE_SIDE, 0, 0, -1, 0);
     strcpy(res_b, lastres);
     printf("B: %.300s\n", lastres);
     if (!ov_a || !ov_b) { printf("FAIL: no override\n"); return 1; }
     int fail = 0;
+    if (env_on("DRIVEN")) {
+        int bad = 0, any = 0;
+        for (int h = 0; h < 2; h++) {
+            const char *sk = strstr(h ? res_b : res_a, " sinks=");
+            if (!sk) continue;
+            for (const char *p = sk + 7; *p && *p != ' ';) {
+                int b = (int)strtol(p, (char **)&p, 10);
+                any |= drv[b] || 1;
+                if (b >= 0 && b < NB && drv[b]) { printf("FAIL: a driven corrective is a sink: %s\n", bname[b]); bad = 1; }
+                if (*p == ',') p++;
+            }
+        }
+        int n = 0;
+        for (int i = 0; i < NB; i++) n += drv[i];
+        printf("driven: %d correctives watched turning, none a sink: %s\n", n, bad ? "no" : "yes");
+        fail |= bad || !n || !any;
+    }
+    // every vertex mostly on a chain: whole on the half that keeps it (none of it on a sink), all on sinks on the other
+    {
+        cut_ctx cc = { .sm = (u64)sm_buf };
+        int nch = 0, kept_bad = 0, drop_bad = 0;
+        for (int v = 0; v < NV; v++) {
+            skin_info vo; orig_info(v, &vo);
+            int wf = 0, wb = 0;
+            for (int i = 0; i < 8; i++) if (vo.weights[i]) { if (chain[vo.bones[i]] == 1) wf += vo.weights[i]; if (chain[vo.bones[i]] == 2) wb += vo.weights[i]; }
+            if (wf <= 127 && wb <= 127) continue;
+            nch++;
+            skin_info *keep = wf > 127 ? &ov_a[v] : &ov_b[v], *drop = wf > 127 ? &ov_b[v] : &ov_a[v];
+            int ks = 0, ds = 1, any = 0;
+            for (int i = 0; i < MAX_INF; i++) {
+                if (keep->weights[i] && is_sink(&cc, keep->bones[i])) ks = 1;
+                if (drop->weights[i]) { any = 1; if (!is_sink(&cc, drop->bones[i])) ds = 0; }
+            }
+            kept_bad += ks; drop_bad += !(any && ds);
+        }
+        printf("chains: %d vertices, %d on a sink on the half that keeps them, %d not all sunk on the other\n", nch, kept_bad, drop_bad);
+        if (!env_on("NOCHAINS")) fail |= kept_bad > nch / 100 || drop_bad > nch / 100;
+    }
     memcpy(hp2, p2, 12); memcpy(hn2, n2, 12);
     headbones = calloc(NB, 1);
     for (int i = 0; i < NB; i++) headbones[i] = i == head || (bparent[i] >= 0 && headbones[bparent[i]]);
@@ -498,6 +1071,7 @@ int main(int argc, char **argv)
             for (int r = 0; r < ng; r++) if (gr[r] == i) gone_sub[h][i] = 1;
             if (!gone_sub[h][i] && bparent[i] >= 0 && gone_sub[h][bparent[i]]) gone_sub[h][i] = 1;
             for (int r = 0; r < nk; r++) if (kr[r] == i) keep_sub[h][i] = 1;
+            if (!env_on("NOCHAINS") && chain[i] == (h ? 2 : 1)) keep_sub[h][i] = 1;
             if (!keep_sub[h][i] && bparent[i] >= 0 && keep_sub[h][bparent[i]]) keep_sub[h][i] = 1;
         }
     }
@@ -536,6 +1110,10 @@ int main(int argc, char **argv)
             float *p0 = orig + v * 3;
             float hgt = (p0[0] - at[0]) * nn[0] + (p0[1] - at[1]) * nn[1] + (p0[2] - at[2]) * nn[2];
             float mv = dist3(x, p0);
+            {   // the copy's neck skin as the vanilla skin with the head's weight on the neck (see fold_head)
+                skin_info vo; orig_info(v, &vo);
+                if (h && heads && fold_head(&vo, head)) { float y[3], *cur = refinv; refinv = refinv0; skin_v(&vo, v, y); refinv = cur; mv = dist3(x, y); }
+            }
             int hd = heads && !tied_to_kept(h, v) && !tied_to_gone(h, v) && in_head(v, p0);
             head_all += hd;
             if (!vanished_in(&o[v], h ? (u64)comp_b : (u64)comp_a)) {
@@ -611,6 +1189,8 @@ int main(int argc, char **argv)
                 (void)p0; (void)nn;
                 if (vanished_in(&o[v], h ? (u64)comp_b : (u64)comp_a) || tied_to_gone(h, v)) continue;
                 skin_info vo; orig_info(v, &vo);
+                // the copy's neck skin rides the neck alone: it must not follow the head's bend
+                if (h && heads) fold_head(&vo, head);
                 float a[3], b[3];
                 float *cur = refinv; refinv = refinv0; skin_v(&vo, v, a); refinv = cur;
                 skin_v(&o[v], v, b);
@@ -624,30 +1204,52 @@ int main(int argc, char **argv)
             fail |= moved > kept / 200;
             skin_probe(h ? (u64)comp_b : (u64)comp_a, 0);
             printf("half %c bent probe: %.300s\n", h ? 'B' : 'A', lastres);
-            // out through the lid: a vanished vertex ahead of where the lid piece over it went
+            // out through the lid: a vanished vertex ahead of where the lid over it went. The lid as gore.lua's
+            // skin_lid bends it (splitLidSkin, the default): each point between the two ride bones of the spine
+            // segment nearest to it, blended along that segment; LIDRIGID=1 the rigid pieces (each on the nearest bone)
+            int chain[6], nch = 0, rigid = env_on("LIDRIGID");
+            for (int r = h ? 1 : 0; r < 6; r++) if (bone(ride[r]) >= 0) chain[nch++] = bone(ride[r]);
             int poke = 0, sheet = 0, pv = -1, p1 = 0, p2 = 0, p3 = 0; float pworst = 0;
-            for (int v = 0; v < NV; v++) {
+            for (int v = 0; v < NV && nch; v++) {
                 if (!vanished_in(&o[v], h ? (u64)comp_b : (u64)comp_a) || tied_to_gone(h, v)) continue;
                 const float *x0 = xcut[h] + v * 3;
-                int rb = -1; float bd = 1e30f;
-                for (int r = 0; r < 6; r++) {
-                    int b = bone(ride[r]);
-                    if (b < 0) continue;
-                    const float *t = scut + b * 12;
-                    float d = (x0[0] - t[4]) * (x0[0] - t[4]) + (x0[1] - t[5]) * (x0[1] - t[5]) + (x0[2] - t[6]) * (x0[2] - t[6]);
-                    if (d < bd) { bd = d; rb = b; }
-                }
                 // only the sheet on the opening: points deep in the half collapse far behind it
                 float hh = (x0[0] - at[0]) * nn[0] + (x0[1] - at[1]) * nn[1] + (x0[2] - at[2]) * nn[2];
                 if (hh < -1.0f || hh > SHEET_IN + 1.0f) continue;
                 sheet++;
-                const float *t0 = scut + rb * 12, *t1 = space + rb * 12;
-                float d[3] = { x0[0] - t0[4], x0[1] - t0[5], x0[2] - t0[6] }, iq[4] = { -t0[0], -t0[1], -t0[2], t0[3] }, l[3], e[3], nl[3], nw[3];
-                quat_rot(iq, d, l); quat_rot(t1, l, e);
-                quat_rot(iq, nn, nl); quat_rot(t1, nl, nw);
+                int ja = 0, jb = 0; float bt = 0, bd = 1e30f;
+                if (rigid) {
+                    for (int j = 0; j < nch; j++) {
+                        const float *t = scut + chain[j] * 12;
+                        float d = (x0[0] - t[4]) * (x0[0] - t[4]) + (x0[1] - t[5]) * (x0[1] - t[5]) + (x0[2] - t[6]) * (x0[2] - t[6]);
+                        if (d < bd) { bd = d; ja = jb = j; }
+                    }
+                } else for (int j = 0; j < (nch > 1 ? nch - 1 : 1); j++) {
+                    int k = j + 1 < nch ? j + 1 : j;
+                    const float *a0 = scut + chain[j] * 12 + 4, *b0 = scut + chain[k] * 12 + 4;
+                    float ab[3] = { b0[0] - a0[0], b0[1] - a0[1], b0[2] - a0[2] }, ax[3] = { x0[0] - a0[0], x0[1] - a0[1], x0[2] - a0[2] };
+                    float l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                    float t = l2 > 1e-6f ? (ax[0] * ab[0] + ax[1] * ab[1] + ax[2] * ab[2]) / l2 : 0;
+                    t = t < 0 ? 0 : t > 1 ? 1 : t;
+                    float d[3] = { ax[0] - ab[0] * t, ax[1] - ab[1] * t, ax[2] - ab[2] * t }, dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                    if (dd < bd) { bd = dd; ja = j; jb = k; bt = t; }
+                }
+                // the lid point over the vertex and its normal, carried by each end of the segment, then blended
+                float lp[3] = { 0, 0, 0 }, nw[3] = { 0, 0, 0 };
+                for (int e2 = 0; e2 < 2; e2++) {
+                    int rb = chain[e2 ? jb : ja];
+                    float wgt = e2 ? bt : 1 - bt;
+                    const float *t0 = scut + rb * 12, *t1 = space + rb * 12;
+                    float d[3] = { x0[0] - t0[4], x0[1] - t0[5], x0[2] - t0[6] }, iq[4] = { -t0[0], -t0[1], -t0[2], t0[3] }, l[3], e[3], nl[3], ne[3];
+                    quat_rot(iq, d, l); quat_rot(t1, l, e);
+                    quat_rot(iq, nn, nl); quat_rot(t1, nl, ne);
+                    for (int k = 0; k < 3; k++) { lp[k] += (t1[4 + k] + e[k]) * wgt; nw[k] += ne[k] * wgt; }
+                }
+                float nl2 = __builtin_sqrtf(nw[0] * nw[0] + nw[1] * nw[1] + nw[2] * nw[2]);
+                if (nl2 > 1e-6f) for (int k = 0; k < 3; k++) nw[k] /= nl2;
                 float x1[3]; skin_v(&o[v], v, x1);
                 // ahead of the lid: towards the gone side (-n) past the lid's push
-                float ahead = -((x1[0] - t1[4] - e[0]) * nw[0] + (x1[1] - t1[5] - e[1]) * nw[1] + (x1[2] - t1[6] - e[2]) * nw[2]) - (SHEET_IN + 0.2f);
+                float ahead = -((x1[0] - lp[0]) * nw[0] + (x1[1] - lp[1]) * nw[1] + (x1[2] - lp[2]) * nw[2]) - (SHEET_IN + 0.2f);
                 if (ahead > 0.5f) { poke++; if (ahead > pworst) { pworst = ahead; pv = v; } }
                 p1 += ahead > 1; p2 += ahead > 2; p3 += ahead > 3;
             }
@@ -665,8 +1267,10 @@ int main(int argc, char **argv)
         int *gr = h ? gone2 : gone1, ng = h ? ng2 : ng1;
         float *saved = malloc(48 * NB); memcpy(saved, space, 48 * NB);
         unsigned char *sub = calloc(NB, 1);
+        // the copy (B) lets its head go too (settle_half), free and spinning
         for (int i = 0; i < NB; i++) {
             for (int r = 0; r < ng; r++) if (gr[r] == i) sub[i] = 1;
+            if (h && i == bone("Bip001-Head")) sub[i] = 1;
             if (!sub[i] && bparent[i] >= 0 && sub[bparent[i]]) sub[i] = 1;
         }
         float before[3], *bx = malloc(12 * NV);

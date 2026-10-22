@@ -231,7 +231,8 @@ def flip(d, overrides):
 
 def anim_show(d, job):
     """The show's one SBShowAnimKey plays job["anim"] for job["length"] s and holds its last frame; the show ends
-    0.9 s later; the knockdown IK key keeps its share of the animation."""
+    job["hold"] s later (0.9 by default); the knockdown IK key keeps its share of the animation. Ending 0.9 s after
+    the fall handed her to the game's own dead pose (her death show's, not this fall's): she snapped into it."""
     anim, length, rm = job["anim"], float(job["length"]), job.get("rm")
     name = anim.rsplit("/", 1)[1]
     keys = [e for i, e in enumerate(d["Exports"], 1) if e["ClassIndex"] < 0 and imp_name(d, e["ClassIndex"]) == "SBShowAnimKey"]
@@ -261,7 +262,7 @@ def anim_show(d, job):
     main = next(e for e in d["Exports"] if e["OuterIndex"] == 0)
     for p in main["Data"]:
         if p["Name"] == "EndTime":
-            p["Value"] = length + 0.9
+            p["Value"] = length + float(job.get("hold", 0.9))
 
 
 def rename_package(d, src_rel, dst_rel):
@@ -413,6 +414,12 @@ def physics_table(d, job):
             for b in range(len(bones)):
                 if b != a:
                     table.add((min(a, b), max(a, b)))
+    # self_collision false: none of her bodies touch each other, only the world. The runtime switch (main.lua: the
+    # mesh ignores PhysicsBody) didn't stop it: an arm landing on her body still set every joint shaking
+    if not job.get("self_collision", True):
+        for a in range(len(bones)):
+            for b in range(a + 1, len(bones)):
+                table.add((a, b))
     for a, b in job.get("except", []):
         if a in idx and b in idx:
             table.add((min(idx[a], idx[b]), max(idx[a], idx[b])))
@@ -514,9 +521,9 @@ def _struct_field(d, parent, name, make):
     return p
 
 
-def zero_limited(cone, twist, twisted):
-    """(struct, motion prop, degrees prop) of each motion ACM_Limited to 0 deg; the twist only when no range replaces
-    it (twisted)."""
+def zero_limited(cone, twist, twisted, below=0.0):
+    """(struct, motion prop, degrees prop) of each motion ACM_Limited to 0 deg (or under `below`); the twist only when
+    no range replaces it (twisted). A motion with no degrees set is at the engine's default, 45."""
     out = []
     pairs = [(cone, "Swing1Motion", "Swing1LimitDegrees"), (cone, "Swing2Motion", "Swing2LimitDegrees")]
     if not twisted:
@@ -524,7 +531,7 @@ def zero_limited(cone, twist, twisted):
     for lim, m, dg in pairs:
         mp = next((q for q in lim["Value"] if q["Name"] == m), None)
         dp = next((q for q in lim["Value"] if q["Name"] == dg), None)
-        if mp and dp and str(mp["Value"]).endswith("ACM_Limited") and float(dp["Value"]) == 0.0:
+        if mp and dp and str(mp["Value"]).endswith("ACM_Limited") and (float(dp["Value"]) == 0.0 or float(dp["Value"]) < below):
             out.append((lim, mp, dp))
     return out
 
@@ -553,9 +560,15 @@ def joint_limits(d, job):
             for lim in (cone, twist):
                 _struct_field(d, lim, "bSoftConstraint", lambda: _prop("Objects.BoolPropertyData", "bSoftConstraint", False))["Value"] = False
         # a motion "limited" to 0 deg (CH_P_EVE_09's pelvis to spine cone) is locked instead: a hard limit with no
-        # range shook the joint every frame
-        for lim, mk, dk in zero_limited(cone, twist, child in limits):
+        # range shook the joint every frame. So did ranges of a few degrees (clavicles, the shoulder's roll, the hip's
+        # sideways swing, the neck: 5 deg): at their limit all the time, every joint buzzed even in mid-air
+        # (eighteenth playtest), so motions under lock_below degrees are locked too
+        for lim, mk, dk in zero_limited(cone, twist, child in limits, job.get("lock_below", 0.0) if hard else 0.0):
             mk["Value"] = "ACM_Locked"
+        # joints locked whole (locked_joints): the clavicles, whose few degrees of play shook in mid-air
+        if child in job.get("locked_joints", []):
+            for lim, k in ((cone, "Swing1Motion"), (cone, "Swing2Motion"), (twist, "TwistMotion")):
+                _struct_field(d, lim, k, lambda: _motion(k, "EAngularConstraintMotion", "ACM_Locked"))["Value"] = "ACM_Locked"
         for k, v in swing.get(child, {}).items():
             _struct_field(d, cone, k, lambda: _float_prop(k, v))["Value"] = float(v)
         lim = limits.get(child)

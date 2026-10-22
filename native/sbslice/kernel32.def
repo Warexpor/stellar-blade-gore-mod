@@ -12,3 +12,6 @@ GetModuleHandleExW
 DisableThreadLibraryCalls
 VirtualAlloc
 VirtualFree
+MultiByteToWideChar
+WideCharToMultiByte
+VirtualQuery
