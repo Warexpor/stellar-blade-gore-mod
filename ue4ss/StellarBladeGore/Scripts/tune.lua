@@ -129,8 +129,9 @@ return {
                                -- the neck); false = the plane stays at headAt
     jawDrop = 3,               --   at most this many cm down; past it the plane leans back toward her head's own axis
     hitMarks = {               -- a hit she lives through leaves a slash of blood on her skin (no cut): a decal
-      enabled = true,          --   on the skin where it landed (the DLL finds it), along the swing, riding that skin's
-                               --   bone. F10 puts one on a part at random. false = living hits leave nothing
+      enabled = false,         --   on the skin where it landed (the DLL finds it), along the swing, riding that skin's
+                               --   bone. F10 puts one on a part at random. false = living hits leave nothing (parked
+                               --   for now: off, and out of settings.lua and the README)
       delay = 0.25,            --   s after the hit (a killing blow's hit gets the death cut instead)
       needDamage = true,       --   only a hit that took HP off her bar (a guarded or parried one leaves none)
       length = 14,             --   cm long (a forearm's or calf's shorter: it stays on the part's curve)

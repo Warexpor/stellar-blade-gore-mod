@@ -4,8 +4,9 @@
 
 First release.
 
+- Hit marks are parked: `tune.gore.hitMarks.enabled` is false, and the switch is commented out of `settings.default.lua` and the README (with F10). Hits she survives leave nothing, and after-death or corpse hits that don't cut only bleed.
 - Versioning: 0.2.0, logged first thing at start (`Stellar Blade Gore Mod 0.2.0`).
-- `Scripts/settings.lua`: made from the shipped `settings.default.lua` on the first start, so extracting an update over it never overwrites it. The player's switches (gore, hit marks, death odds, cuts after death, her voice, enemy gore, dev), laid over `tune.lua` key by key and re-read with F6. `ue4ss/install.sh` keeps an existing one.
+- `Scripts/settings.lua`: made from the shipped `settings.default.lua` on the first start, so extracting an update over it never overwrites it. The player's switches (gore, death odds, cuts after death, her voice, enemy gore, dev), laid over `tune.lua` key by key and re-read with F6. `ue4ss/install.sh` keeps an existing one.
 - `dev` in `settings.lua`, off by default: the test keys (F5, F7-F11 and their Shift / Ctrl variants), the enemy spawner and its window, the glass cannon mode (Shift+F8) and the schema dump on first start only work with it on. F6 always does.
 - The outfits pak is gone from the release: every outfit, vanilla or any mod's, gets its ragdoll fixes in game (`physfix.lua` and `sbslice.dll`, below), on Windows too. The zip holds one pak, the script and the DLL. `build.sh --install` installs the core pak only (`SB_OUTFITS=1` adds the outfits pak, kept as the reference `test/run.sh phys` checks the in-game fix against). The README's install section gained what to delete when updating from a build with the outfits pak, and what to check when it doesn't work.
 - `package.sh` builds the release zip (`release/StellarBladeGore-<version>.zip`), laid out like the game folder, with the paks built without the other mods (`build.sh` gained `SB_VANILLA=1` and `SB_DIST`) and `enabled.txt` in both UE4SS mods instead of `mods.txt` lines.

@@ -1,6 +1,6 @@
 # Stellar Blade Gore Mod
 
-When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Hits she survives leave slashes of blood that heal away. Generic humanoid enemies you kill get the same cuts.
+When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
 Version 0.2.0. See the [changelog](CHANGELOG.md).
 
@@ -39,7 +39,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | Setting | Default | What it does |
 |---|---|---|
 | `gore.enabled` | `true` | All cuts and blood. |
-| `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. |
+<!-- | `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. | -->
 | `gore.death` | 30 / 22 / 38 / 10 | Odds of a limb, a beheading, a waist cut or a split down the middle, when the blow doesn't decide. |
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
@@ -63,7 +63,7 @@ With `dev = true` in `settings.lua`:
 |---|---|
 | F7 / F8 | Ragdoll her with a shove / get her up |
 | F9 | Cut a limb, the head or the torso |
-| F10 | A hit mark |
+<!-- | F10 | A hit mark | -->
 | F11 | Split her in half |
 | Ctrl+F5 | Play a death |
 | Ctrl+Shift+F5 | Cut her along a made-up blade |
