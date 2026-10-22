@@ -72,6 +72,10 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit.uasset ]] &&
     jobs+=("real waist cut CH_P_EVE_InnerSuit, every helper moved|WAIST=1 ALLMOVED=1|CH_P_EVE_InnerSuit"
            "real waist cut CH_P_EVE_InnerSuit after the left arm, every helper moved|WAIST=1 ARMFIRST=1 ALLMOVED=1|CH_P_EVE_InnerSuit")
+  # side panels under her arms tied to both halves by weight, few vertices over the cut: cut with the body, not sent
+  # whole with the legs to stand up off her hips (thirty-seventh playtest)
+  on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29.uasset ]] &&
+    jobs+=("real waist cut CH_P_EVE_29|WAIST=1|CH_P_EVE_29" "real waist cut CH_P_EVE_29 (posed)|WAIST=1 POSED=1|CH_P_EVE_29")
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real thigh cut CH_P_EVE_10, her elbow by the hip|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47 ELBOWHIP=1|CH_P_EVE_10"
            "real calf cut CH_P_EVE_10|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|CH_P_EVE_10"

@@ -231,6 +231,10 @@ return {
     impact = 200,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
                                -- from the attacker when the game gives no direction)
     impactUp = 0.15,           -- upward share of that push
+    launch = 400,              -- cm/s her whole body is launched along the killing blow on top (deaths only): the
+    launchUp = 0.3,            --   upper body's push alone toppled her on the spot, feet stuck to the floor; upward
+                               --   share lifts her feet off it so she flies (0 = no launch; never on a split)
+    launchTicks = 4,           --   ticks after the push every body on her is kept at least that fast along it
     twist = 35,                -- deg/s random turn about the vertical as she goes down (0 = none)
     dropWeapon = true,         -- her sword falls out of her hand (it hung in the air where she died)
     weaponKg = 1.5,            --   its weight
@@ -275,8 +279,8 @@ return {
       drift = 4,               -- cm: ...none of them got further than this over the last window (shivering in place)
       window = 0.5,            -- seconds the drift is measured over
       time = 0.5,              -- lying still this long (tone off from the start of it), then every body sleeps
-      most = 3,                -- seconds: past this she settles once her bodies drift less than driftMost, however
-      driftMost = 6,           --   fast they shiver
+      most = 2.5,              -- seconds: past this she settles once her bodies drift less than driftMost, however
+      driftMost = 12,          --   fast they shiver (6 left CH_P_EVE_29's feet shaking on the floor for 6 s)
       splitMost = 1.5,         -- the same for a split's halves (they shivered on the floor for 3 s)
       wake = 60,               -- cm/s: something moved her this fast, she settles again
     },

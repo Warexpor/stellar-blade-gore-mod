@@ -1067,7 +1067,18 @@ int main(int argc, char **argv)
             float d = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
             int now = 0;
             for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && upper[ov_a[v].bones[i]]) now += ov_a[v].weights[i];
-            if (d > 6 && w * 2 > t && now * 2 < t) horns++;
+            if (d > 6 && w * 2 > t && now * 2 < t) {
+                horns++;
+                if (env_on("HORNS")) {
+                    int sec = 0;
+                    for (int q = 0; q < NSEC; q++) { unsigned char *sc = (unsigned char *)secbuf + q * 0xe8; if (v >= *(int *)(sc + SEC_BASE_VERTEX)) sec = q; }
+                    printf("horn v%d sec %d at %.1f cm over:", v, sec, d);
+                    for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]);
+                    printf(" ->");
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s=%d", bname[ov_a[v].bones[i]], ov_a[v].weights[i]);
+                    printf("\n");
+                }
+            }
             if (d < -6 && w * 2 < t && now * 2 > t) {
                 int a2 = 0;
                 for (int i = 0; i < 8; i++) if (vo.weights[i] && arm[vo.bones[i]]) a2 += vo.weights[i];

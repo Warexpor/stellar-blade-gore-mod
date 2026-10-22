@@ -203,8 +203,23 @@ local function momentum(mesh, g)
   return string.format(", momentum %.0f cm/s%s", l, ok and "" or " (failed)")
 end
 
--- dir: the blow's direction (horizontal is enough), or nil
-local function impact(mesh, g, dir, boost)
+-- bones gore cut through (limbs, the split's spine break), on the mesh at severedOn: their joints come apart on
+-- purpose, so the probe leaves out every joint whose chain up to its anchor crosses one. Kept across M.start (a
+-- piece cut while she stands, then her death ragdoll) until another mesh starts
+local severed, severedOn = {}, nil
+-- the bodies a cut took off fly on their own
+local function on_her(comp, b)
+  for r in pairs(severed) do
+    if r == b or try(function() return comp:BoneIsChildOf(FName(b), FName(r)) end) then return false end
+  end
+  return true
+end
+
+-- dir: the blow's direction (horizontal is enough), or nil. whole: also launch her whole body along it (deaths):
+-- the upper body's push alone only toppled her, her feet stayed put on the floor and she sank on the spot
+-- (thirty-sixth playtest: the pelvis went 20 cm sideways in a 2.6 m fall). Never a split's halves: they fly with
+-- splitFly already, and on top of the split's own release it shot her half through the floor (thirty-seventh)
+local function impact(mesh, g, dir, boost, whole)
   local out = ""
   boost = boost or g.impact or 350
   if dir and boost > 0 then
@@ -217,6 +232,21 @@ local function impact(mesh, g, dir, boost)
         if try(function() mesh:AddImpulse(vec(d.X * boost * share, d.Y * boost * share, d.Z * boost * share), FName(bone), true); return true end) then n = n + 1 end
       end
       out = string.format(", impact %.0f cm/s on %d bones", boost, n)
+      local l = (whole and not run.split) and (g.launch or 0) or 0
+      if l > 0 then
+        local lu = g.launchUp or 0.3
+        local ld = vec(dir.X / h * (1 - lu) * l, dir.Y / h * (1 - lu) * l, lu * l)
+        local m = 0
+        for b in pairs(MASS) do
+          if on_her(mesh, b) and try(function() mesh:AddImpulse(ld, FName(b), true); return true end) then m = m + 1 end
+        end
+        run.launchV = l
+        -- one push was lost at once: her pelvis read ~110 cm/s a tick later with nothing sideways left, her feet
+        -- still on the floor (thirty-seventh playtest). Like a cut piece's throw, for launchTicks more ticks every
+        -- body still on her is kept at least that fast along it
+        run.launchHold = { d = vec(ld.X / l, ld.Y / l, ld.Z / l), v = l, n = g.launchTicks or 4 }
+        out = out .. string.format(", whole body launched %.0f cm/s (%.0f up) on %d bones", l, lu * l, m)
+      end
     end
   end
   local tw = g.twist or 90
@@ -303,11 +333,17 @@ local function drop_weapons(pawn, mesh, g, only)
     or speeds[#speeds] or vec(0, 0, 0)
   local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
   local names = {}
+  -- by address: UE4SS hands out a new wrapper each call, so a cut re-dropped the sword already on its box, and
+  -- on recovery it went back onto that box, destroyed, left lying on the floor (thirty-seventh playtest)
   local held = {}
-  for _, d in ipairs(dropped) do held[d.comp] = true end
+  for _, d in ipairs(dropped) do
+    local a = try(function() return d.comp:GetAddress() end)
+    if a then held[a] = true end
+  end
   local list = {}
   for _, w in ipairs(weapons(pawn)) do
-    if not held[w] and (not only or only(w)) then list[#list + 1] = w end
+    local a = try(function() return w:GetAddress() end)
+    if not (a and held[a]) and (not only or only(w)) then list[#list + 1] = w end
   end
   if only and #list == 0 then return "" end
   for _, w in ipairs(list) do
@@ -361,10 +397,6 @@ end
 -- (logged at STRETCH_AT seconds, the worst three). A joint the solver can't hold shows as centimetres here
 local STRETCH_AT = { 0.5, 1.0, 2.0, 3.0 }
 local function addr(o) return try(function() return o:GetAddress() end) end
--- bones gore cut through (limbs, the split's spine break), on the mesh at severedOn: their joints come apart on
--- purpose, so the probe leaves out every joint whose chain up to its anchor crosses one. Kept across M.start (a
--- piece cut while she stands, then her death ragdoll) until another mesh starts
-local severed, severedOn = {}, nil
 local function crosses_cut(mesh, bone, up)
   for s in pairs(severed) do
     if s == bone then return true end
@@ -702,7 +734,8 @@ local function clamp_flung(comp, s)
   -- the start: nothing she has moves faster than her momentum and the blow (and the fall since) allow. A ragdoll
   -- that started mid-fall (a leg cut) shot her torso off at 1600 cm/s with 57 of momentum, thirty-fourth playtest
   if run.t < (s.launchTime or 0.5) then
-    local lim = (run.mom or 0) + (cfg().impact or 200) + (s.launchOver or 400) + 981 * run.t
+    local g = cfg()
+    local lim = (run.mom or 0) + (g.impact or 200) + (run.launchV or 0) + (s.launchOver or 400) + 981 * run.t
     for b in pairs(MASS) do
       local v = lin_vel(comp, b)
       local l = v and len(v)
@@ -840,7 +873,8 @@ end
 -- a free fall from then would be (up to fall.max)
 local function fall_assist(dt)
   local f = cfg().fall or {}
-  if f.enabled == false or run.piece or run.split or run.asleep or run.landed or not valid(run.mesh) then return end
+  -- (not while the launch is held: its lift would read as landing)
+  if f.enabled == false or run.piece or run.split or run.asleep or run.landed or run.launchHold or not valid(run.mesh) then return end
   local comp = run.mesh
   local v = lin_vel(comp, "Bip001-Pelvis")
   if not v then return end
@@ -858,15 +892,8 @@ local function fall_assist(dt)
   local want = -math.min(g * (run.t - run.fallT), f.max or 1500)
   local dz = want - v.Z
   if dz >= 0 then return end
-  -- the bodies a cut took off fly on their own
-  local function on_her(b)
-    for r in pairs(severed) do
-      if r == b or try(function() return comp:BoneIsChildOf(FName(b), FName(r)) end) then return false end
-    end
-    return true
-  end
   for b in pairs(MASS) do
-    local bv = on_her(b) and lin_vel(comp, b)
+    local bv = on_her(comp, b) and lin_vel(comp, b)
     if bv then try(function() comp:SetPhysicsLinearVelocity(vec(bv.X, bv.Y, bv.Z + dz), false, FName(b)) end) end
   end
   run.fallSped = (run.fallSped or 0) + 1
@@ -903,7 +930,25 @@ function M.tick(dt)
   if run.impactAt and run.t >= run.impactAt then
     run.impactAt = nil
     local d, from = blow(run.pawn, run.mesh, run.hint)
-    log(string.format("blow from %s%s", from, impact(run.mesh, cfg(), d)))
+    log(string.format("blow from %s%s", from, impact(run.mesh, cfg(), d, nil, true)))
+  elseif run.launchHold then
+    local h = run.launchHold
+    h.n = h.n - 1
+    local sped = 0
+    for b in pairs(MASS) do
+      local cur = on_her(run.mesh, b) and lin_vel(run.mesh, b)
+      local along = cur and (cur.X * h.d.X + cur.Y * h.d.Y + cur.Z * h.d.Z)
+      if along and along < h.v then
+        local k = h.v - along
+        if try(function() run.mesh:SetPhysicsLinearVelocity(vec(cur.X + h.d.X * k, cur.Y + h.d.Y * k, cur.Z + h.d.Z * k), false, FName(b)); return true end) then sped = sped + 1 end
+      end
+    end
+    if h.n <= 0 then
+      run.launchHold = nil
+      local pv = lin_vel(run.mesh, "Bip001-Pelvis")
+      log(string.format("launch held: pelvis %.0f cm/s along it (%d bodies sped up on the last tick)",
+        pv and (pv.X * h.d.X + pv.Y * h.d.Y + pv.Z * h.d.Z) or -1, sped))
+    end
   end
   if not run.pac or run.toneDone then return end
   local t = cfg().tone or {}

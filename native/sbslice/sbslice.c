@@ -991,6 +991,9 @@ static int nremaps;
 #define ISLAND_MAX_CM 40.0f   // ... and so are pieces reaching further than this from the cut
 #define ISLAND_CROSS_CM 6.0f  // ... and pieces reaching this far past the plane on both sides (a rivet's size)
 #define ISLAND_PURE_PCT 3     // ... unless the other side holds at most this much of its weight
+#define ISLAND_TIED_REACH 0.75f // ... and pieces with more than ISLAND_MINOR_PCT of their weight on each side reaching
+                              //     this share of ISLAND_CROSS_CM past it both ways...
+#define ISLAND_TIED_MAX 2.0f    //     ...the side with fewer of its vertices no further than this many ISLAND_CROSS_CM
 // The split: Lua gives the limbs on each side (gone with the other half / staying). What goes is pushed onto the cut
 // plane, not into a point: the torso just behind the plane flattens onto it through sinks that project (one per band
 // along the opening, so no sink is rigid from the neck to the hips), what lies deeper collapses to a point on the plane
@@ -1688,11 +1691,26 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     // on one side's bones alone wherever it lies
                     if ((long long)mn * 100 > (long long)tot * ISLAND_PURE_PCT && iup[r] > cross && idn[r] > cross
                         && vmn * 100 > icnt[r] * ISLAND_MINOR_PCT) continue;
+                    // the same for a piece tied to both by weight, however few of its vertices lie past the plane (4.5
+                    // cm both ways: an arm cut's sleeve edges, 3.4 cm over, cut that way left a stump half open):
+                    // CH_P_EVE_29's side panels (22-30% of their weight on the upper body, 8-12% of their vertices over
+                    // a waist cut) went whole with the legs, their tops standing 6-8 cm up off her hips where her
+                    // torso had been, stretched and open (thirty-seventh playtest). Only when its few vertices over there
+                    // stay close to the plane: the cape past an arm cut (18% of its weight on the arm, its 9% of vertices
+                    // there hanging 67 cm down the arm) still goes whole
+                    float mreach = vl < vb ? iup[r] : idn[r];
+                    if ((long long)mn * 100 > (long long)tot * ISLAND_MINOR_PCT && iup[r] > cross * ISLAND_TIED_REACH
+                        && idn[r] > cross * ISLAND_TIED_REACH && mreach <= cross * ISLAND_TIED_MAX) continue;
                     if ((long long)mn * 100 <= (long long)tot * ISLAND_MINOR_PCT) idec[r] = iwl[r] > iwb[r] ? 2 : 1;
                     else if (vmn * 100 <= icnt[r] * ISLAND_MINOR_PCT || (icnt[r] <= ISLAND_MAX_VERTS && iext[r] <= reach * reach))
                         idec[r] = vl > vb ? 2 : 1;
                 }
                 for (int r = 0; r < nv; r++) islands_moved += idec[r] == 1 || idec[r] == 2;
+#ifdef SBSLICE_HOSTED
+                if (getenv("ISLANDS")) for (int r = 0; r < nv; r++) if (icnt[r] > 20 && ((iflag[r] & 1) || (iflag[r] & 6) == 6))
+                    fprintf(stderr, "island %d sec %d: %d verts (%d limb side), weight limb %d body %d, up %.1f down %.1f reach %.1f -> %d\n",
+                        r, vsec[r], icnt[r], iside[r], iwl[r], iwb[r], iup[r] * tm[8], idn[r] * tm[8], __builtin_sqrtf(iext[r]) * tm[8], idec[r]);
+#endif
                 for (int v = 0; v < nv; v++) {
                     int s = vsec[v];
                     if (s == 0xffff || secore[s]) continue;
