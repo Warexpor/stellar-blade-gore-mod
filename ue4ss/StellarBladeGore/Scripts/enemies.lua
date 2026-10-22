@@ -8,7 +8,7 @@
 -- waist, never a split), and her swings through its corpse cut it again. The game's own monster slicer is switched
 -- off on them (tune.enemies.nativeSlice). When the corpse starts dissolving its caps and bleeds go (gore.enemy_fading);
 -- when it goes (destroyed, hidden for reuse, or up again) the rest of its gore goes with it (gore.enemy_gone).
--- Spawner: F5 spawns the kind picked (Shift+F5 picks the next) in front of her, Shift+F6 opens the spawner window
+-- Spawner (only with settings.lua's dev on): F5 spawns the kind picked (Shift+F5 picks the next) in front of her, Shift+F6 opens the spawner window
 -- (sbslice.dll, native/sbslice/spawner.c), which lists the kinds and asks for spawns (and kills) through spawner.req. Spawning
 -- goes through the game's own SBNetworkPlayerController:ServerRequest_CreateActor (CharacterTable ID, position,
 -- rotation), which runs locally in single player.
@@ -450,7 +450,7 @@ end
 -- every tick of hers (main.lua), pawn and mesh hers
 function M.tick(pawn, mesh)
   n = n + 1
-  if n % 8 == 0 then read_req(pawn); read_state(pawn) end
+  if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end
   local g = cfg()
   local gore = ctx.gore
   if g.enabled == false or not gore or ((ctx.tune.gore or {}).enabled == false) then return end

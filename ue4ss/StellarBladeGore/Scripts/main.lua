@@ -23,8 +23,10 @@
 -- Enemies (enemies.lua): F5 spawns the picked humanoid enemy in front of her, Shift+F5 picks the next, Shift+F6 shows
 -- or hides the spawner window (sbslice.dll), Ctrl+F6 ragdolls the followed one nearest her (the passive Airborne
 -- Squad die no other way); her killing blows and hits on their corpses cut them like her.
--- Glass cannon (glass.lua, off by default, Shift+F8): the shield guards her HP, once it is down an arm hit takes the
--- arm off, a leg hit only damages, a head or body hit kills her there; her blows do several times the damage.
+-- Glass cannon (glass.lua, off by default, Shift+F8): the shield guards her HP, once it is down any hit kills her, cut
+-- where it landed; her blows do several times the damage.
+-- Settings: settings.lua (the player's switches) over tune.lua. The test keys, the spawner and the glass cannon only
+-- work with its dev on.
 -- Hits: the game tells clients about every skill hit (SBNetworkPlayerController:ClientBroadcast_SkillHitResult,
 -- with the swing's direction); the last one on Eve decides whether a killing blow came down from above. In single
 -- player it never fires: the blow is made up from her mesh's hit or the nearest enemy (death_hit). Every killing
@@ -33,6 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
+local VERSION = "0.2.0"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -44,6 +47,10 @@ local NO_COLLISION = 0
 local BONES = { "Bip001-Pelvis", "Bip001-Head", "Bip001-R-Hand" }
 
 local TUNE_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/tune.lua"
+local SETTINGS_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/settings.lua"
+-- what ships: copied to settings.lua on the first start, so a zip extracted over an update never overwrites the
+-- player's own
+local SETTINGS_DEFAULT = "ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua"
 local GORE_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/gore.lua"
 local ACTIVE_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/active.lua"
 local PHYSFIX_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/physfix.lua"
@@ -75,9 +82,32 @@ local XYZ, PYR = { "X", "Y", "Z" }, { "Pitch", "Yaw", "Roll" }
 local cachedPawn, pawnAddr, pawnSeen = nil, nil, 0
 local tune = {}
 local goreCtx = { tune = tune }
+-- settings.lua (the player's few switches) laid over tune.lua (every knob), key by key
+local function overlay(dst, src)
+  for k, v in pairs(src) do
+    if type(v) == "table" and type(dst[k]) == "table" then overlay(dst[k], v) else dst[k] = v end
+  end
+end
+local function first_settings()
+  local f = io.open(SETTINGS_PATH, "r")
+  if f then f:close(); return end
+  local d = io.open(SETTINGS_DEFAULT, "r")
+  if not d then return end
+  local text = d:read("*a"); d:close()
+  local o = io.open(SETTINGS_PATH, "w")
+  if o then o:write(text); o:close(); log("settings.lua made from settings.default.lua")
+  else log("settings.lua couldn't be written: settings.default.lua is used as it is") end
+end
+
 local function load_tune()
+  first_settings()
   local ok, t = pcall(dofile, TUNE_PATH)
   if ok and type(t) == "table" then
+    local sok, s = pcall(dofile, SETTINGS_PATH)
+    if not sok and tostring(s):find("No such file", 1, true) then sok, s = pcall(dofile, SETTINGS_DEFAULT) end
+    if sok and type(s) == "table" then overlay(t, s)
+    elseif not tostring(s):find("No such file", 1, true) then log("settings.lua failed: " .. tostring(s)) end
+    t.dev = t.dev == true
     tune = t
     goreCtx.tune = t
     local keys = {}
@@ -94,6 +124,7 @@ local function load_tune()
     log("tune.lua failed: " .. tostring(t))
   end
 end
+log(string.format("Stellar Blade Gore Mod %s", VERSION))
 load_tune()
 
 local gore, rag, physfix = nil, nil, nil
@@ -374,12 +405,39 @@ local function sandbox_face()
   faceCheck = { at = os.clock() + 0.8, mesh = mesh, pawn = pawn }
 end
 
+-- SB's ragdoll drags the capsule (and the camera on it) after a bone, RagdollInfo.CapsuleComponentFollowingSocket, a
+-- step every tick: the camera stuttered after her (playtest 38). The data mod clears it in every death show's ragdoll
+-- key, but an animated death that goes ragdoll partway, or a test ragdoll, never runs one, and the default is
+-- Bip001-Pelvis. Cleared on every ragdoll tick (tune.capsuleStill); hold.at is where the capsule was at the start
+local hold = nil
+local function hold_capsule(pawn, sim)
+  if tune.capsuleStill == false then return end
+  local ri = try(function() return pawn.RagdollInfo end)
+  local cur = ri and try(function() return ri.CapsuleComponentFollowingSocket:ToString() end)
+  if cur and cur ~= "None" then
+    try(function() ri.CapsuleComponentFollowingSocket = FName("None") end)
+    if not (hold and hold.cleared) then log("capsule: the ragdoll had it follow " .. cur .. ", now it stays where she died") end
+  end
+  local c = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  if not hold then hold = { at = c, far = 0 } end
+  -- the farthest it got while she was ragdolled (recovery's move to her body comes after, and isn't drift)
+  if sim and c and hold.at then hold.far = math.max(hold.far, dist(hold.at, c)) end
+  if cur and cur ~= "None" then hold.cleared = true end
+end
+local function capsule_report()
+  local h = hold
+  hold = nil
+  if h and h.at then log(string.format("capsule: drifted at most %.0f cm during the ragdoll", h.far)) end
+end
+
 local function on_start(pawn, mesh)
   log("ragdoll state at start: " .. ragdoll_state(pawn))
   -- her voice for any death: a cry as she dies, nothing after (gore.lua, tune.gore.voice)
   if gore then try(function() gore.voice_death(pawn, mesh) end) end
   ah.n, ah.armed, ah.t0 = 0, false, os.clock()
   no_snapshot(pawn)
+  hold = nil
+  hold_capsule(pawn)
   deaths = deaths + 1
   active, polls = true, 0
   saved = { meshPB = try(function() return mesh:GetCollisionResponseToChannel(CH.PhysicsBody) end) }
@@ -555,6 +613,7 @@ local function on_end(pawn, mesh)
   active, animDeath = false, nil
   after, lastRecover, respawned = 0, -100, false
   camera_unfollow()
+  capsule_report()
   dface.stop()
   try(function() mesh:SetCollisionResponseToChannel(CH.PhysicsBody, saved.meshPB or BLOCK) end)
   if valid(saved.hair) and saved.hairEnabled then try(function() saved.hair:SetCollisionEnabled(saved.hairEnabled) end) end
@@ -1372,21 +1431,22 @@ local function gore_death(pawn, mesh, h)
   end
 end
 
--- key actions wait for the next game-thread tick (see game_tick below)
+-- key actions wait for the next game-thread tick (see game_tick below); dev: a test key, dead unless tune.dev
 local pending = {}
-local function on_key(label, fn)
+local function on_key(label, fn, dev)
   return function()
+    if dev and not tune.dev then return end
     pending[#pending + 1] = function()
       local ok, err = pcall(fn)
       if not ok then log(label .. " error: " .. tostring(err)) end
     end
   end
 end
-RegisterKeyBind(Key.F7, on_key("F7", sandbox_ragdoll))
-RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face))
-RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover))
+RegisterKeyBind(Key.F7, on_key("F7", sandbox_ragdoll, true))
+RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face, true))
+RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover, true))
 RegisterKeyBind(Key.F6, on_key("F6", load_tune))
-RegisterKeyBind(Key.F9, on_key("F9", sandbox_slice))
+RegisterKeyBind(Key.F9, on_key("F9", sandbox_slice, true))
 -- F10: a living hit's mark on a part at random, on its side facing the camera (tune.gore.hitMarks)
 RegisterKeyBind(Key.F10, on_key("F10", function()
   local pawn = find_eve()
@@ -1406,22 +1466,22 @@ RegisterKeyBind(Key.F10, on_key("F10", function()
   local dir = { X = math.random() - 0.5, Y = math.random() - 0.5, Z = math.random() - 0.5 }
   log("F10: hit mark on " .. w.bone)
   gore.hit_mark(pawn, mesh, at, dir, hm.pct)
-end))
-RegisterKeyBind(Key.F11, on_key("F11", sandbox_split))
-RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, on_key("Ctrl+F5", sandbox_death))
-RegisterKeyBind(Key.F5, { ModifierKey.CONTROL, ModifierKey.SHIFT }, on_key("Ctrl+Shift+F5", sandbox_blade))
+end, true))
+RegisterKeyBind(Key.F11, on_key("F11", sandbox_split, true))
+RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, on_key("Ctrl+F5", sandbox_death, true))
+RegisterKeyBind(Key.F5, { ModifierKey.CONTROL, ModifierKey.SHIFT }, on_key("Ctrl+Shift+F5", sandbox_blade, true))
 -- the enemy spawner (enemies.lua): F5 spawns the kind picked in front of her, Shift+F5 picks the next, Shift+F6 opens
 -- the spawner window, Ctrl+F6 kills the one nearest her
 RegisterKeyBind(Key.F5, on_key("F5", function()
   if goreCtx.enemies and find_eve() then goreCtx.enemies.spawn_pick(find_eve()) end
-end))
-RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, on_key("Shift+F5", function() if goreCtx.enemies then goreCtx.enemies.next_pick() end end))
-RegisterKeyBind(Key.F6, { ModifierKey.SHIFT }, on_key("Shift+F6", function() if goreCtx.enemies then goreCtx.enemies.toggle_window() end end))
+end, true))
+RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, on_key("Shift+F5", function() if goreCtx.enemies then goreCtx.enemies.next_pick() end end, true))
+RegisterKeyBind(Key.F6, { ModifierKey.SHIFT }, on_key("Shift+F6", function() if goreCtx.enemies then goreCtx.enemies.toggle_window() end end, true))
 RegisterKeyBind(Key.F6, { ModifierKey.CONTROL }, on_key("Ctrl+F6", function()
   if goreCtx.enemies and find_eve() then goreCtx.enemies.kill_nearest(find_eve()) end
-end))
+end, true))
 -- the glass cannon mode on and off (glass.lua, tune.glassCannon)
-RegisterKeyBind(Key.F8, { ModifierKey.SHIFT }, on_key("Shift+F8", function() if goreCtx.glass then goreCtx.glass.toggle() end end))
+RegisterKeyBind(Key.F8, { ModifierKey.SHIFT }, on_key("Shift+F8", function() if goreCtx.glass then goreCtx.glass.toggle() end end, true))
 
 -- who touches the mesh around death/respawn: Blueprint-level destroys and Eve's (re)init events
 local hooked = false
@@ -1451,7 +1511,7 @@ end
 
 local usmapTried = false
 local function maybe_dump_usmap()
-  if usmapTried then return end
+  if usmapTried or not tune.dev then return end
   usmapTried = true
   local f = io.open(USMAP_DONE, "r")
   if f then f:close(); return end
@@ -1598,6 +1658,7 @@ local function tick()
     end
   end
   if active and sim then camera_follow(pawn, mesh) end
+  if active then hold_capsule(pawn, sim) end
   -- the outfit she has on, whenever she is animated (the respawn window included: an outfit put on right after a
   -- reset went unchecked, fifteenth playtest)
   if physfix and not sim and not active then physfix.check(pawn, mesh, false) end

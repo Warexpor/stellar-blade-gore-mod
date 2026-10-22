@@ -275,7 +275,7 @@ local function native_tick()
     native.state = "failed"; log("sbslice.dll refused: " .. tostring(read_file(ERR)))
   elseif native.waited > 150 then
     native.state = "failed"
-    log("sbslice.dll did not answer (is Mods/SBSlice/dlls/main.dll installed and SBSlice : 1 in mods.txt?)")
+    log("sbslice.dll did not answer (is Mods/SBSlice/dlls/main.dll installed, with Mods/SBSlice/enabled.txt or SBSlice : 1 in mods.txt?)")
   end
 end
 
@@ -1490,6 +1490,47 @@ local function detach_cut(mesh, top, limb)
   return command(string.format("c%x,0,%x,%x,0", mesh:GetAddress(), index, MODE.cut), a, n)
 end
 
+-- her jaw, in the head bone's space: the lowest vertices only the head moves (Face_Jali3) for any plane within 60
+-- degrees of the neck, and the neck's direction there. The head bone sits right under her chin (its underside 1-3 mm
+-- above a plane at the bone, at bind)
+do
+local JAW = { {0.0, -6.8, -6.6}, {0.0, -3.0, -4.0}, {2.9, -3.1, -3.1}, {-2.9, -3.1, -3.1}, {-1.2, 0.3, 8.4},
+  {-1.0, 0.6, 8.3}, {-0.8, 0.7, 8.0}, {0.0, 0.7, 5.4}, {-1.5, 0.3, 5.1}, {0.0, 0.8, 8.4}, {0.0, 0.6, 8.7},
+  {0.0, 0.4, 8.9}, {0.8, 0.7, 8.0}, {1.1, 0.5, 8.3}, {1.3, 0.3, 8.4}, {1.6, 0.3, 5.1}, {-7.7, -5.2, -1.1},
+  {-6.7, -3.5, 0.1}, {-7.5, -4.6, -0.7}, {7.7, -5.2, -1.1}, {7.5, -4.6, -0.7}, {6.8, -3.5, 0.1} }
+local JAW_AXIS = { 0.0, -0.9907, 0.136 }
+
+-- a beheading's plane kept under her jaw: a nod or a leaning blow put her chin under the plane at the head bone, and
+-- the cut took a slice of it with the neck (playtest 39). The plane goes down its normal until every JAW point is
+-- jawClear cm above it; when that's more than jawDrop cm, it leans back toward the head's own axis first (straight
+-- along it, 0.5 cm does). -> at, n, note
+function M.clear_jaw(face, bone, at, n, g) -- (on M: gore.lua is at Lua's 200 locals)
+  local q = try(function() local r = face:GetSocketTransform(FName(bone), 0).Rotation; return { r.X, r.Y, r.Z, r.W } end)
+  if not q then return at, n, "" end
+  local function rot(v)
+    local tx, ty, tz = 2 * (q[2] * v[3] - q[3] * v[2]), 2 * (q[3] * v[1] - q[1] * v[3]), 2 * (q[1] * v[2] - q[2] * v[1])
+    return vec(v[1] + q[4] * tx + q[2] * tz - q[3] * ty, v[2] + q[4] * ty + q[3] * tx - q[1] * tz, v[3] + q[4] * tz + q[1] * ty - q[2] * tx)
+  end
+  local head = bone_loc(face, bone)
+  if not head then return at, n, "" end
+  local pts = {}
+  for i, j in ipairs(JAW) do pts[i] = add(head, rot(j)) end
+  local own = rot(JAW_AXIS)
+  local clear, most = g.jawClear or 0.5, g.jawDrop or 3
+  local m, drop
+  for k = 0, 4 do
+    local nn = k == 0 and n or norm(add(scale(n, 1 - k / 4), scale(own, k / 4))) or n
+    m = math.huge
+    for _, p in ipairs(pts) do m = math.min(m, dot(sub(p, at), nn)) end
+    drop = math.max(0, clear - m)
+    if drop <= most or k == 4 then
+      if drop == 0 and k == 0 then return at, n, "" end
+      return sub(at, scale(nn, drop)), nn, string.format(", %.1f cm down for her jaw%s", drop, k > 0 and string.format(" (leaned %d%% back to her head)", k * 25) or "")
+    end
+  end
+end
+end
+
 -- blade: { t, n } where the blade's plane crosses this limb (t along it) and its normal: the cut goes there, leaning
 -- with the blade at most sliceTilt degrees off square
 local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
@@ -1499,7 +1540,10 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   if not (a and b) then log("cut skipped: no bone transform for " .. tostring(bone)); return nil end
   local axis = norm(sub(b, a))
   if not axis then return nil end
-  local t = tonumber(g.cutAt) or part.at or CUT_AT_DEFAULT
+  -- (Eve's head: higher once her face is cut with it, see below)
+  local faced = part.kind == "head" and not (enemy.cur and not face)
+  local facecut = faced and g.faceCut ~= false
+  local t = tonumber(g.cutAt) or (facecut and tonumber(g.headAt)) or part.at or CUT_AT_DEFAULT
   if blade then t = math.max(BLADE_AT_MIN, math.min(0.9, blade.t)) end
   local at = add(a, scale(sub(b, a), t))
   local n = axis
@@ -1529,16 +1573,34 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   -- tilted a little so it doesn't look machined (a blade's own angle is enough)
   local tilt = blade and 0 or (g.tilt or 0.25)
   n = norm(add(n, vec((math.random() - 0.5) * tilt, (math.random() - 0.5) * tilt, (math.random() - 0.5) * tilt))) or n
+  if facecut and valid(face) and g.jawClear ~= false then
+    local note
+    at, n, note = M.clear_jaw(face, bone, at, n, g)
+    lean = lean .. note
+  end
   local index = try(function() return mesh:GetBoneIndex(FName(bone)) end)
   if not index or index < 0 then log("cut skipped: no bone " .. bone); return nil end
-  -- a head takes the whole face along first; without that its neck would stretch from the body to the head. Cut on
-  -- the neck's plane instead (MODE_PLANE), 8300 face vertices vanished into the stump and the head flew off faceless
+  -- a head takes the face along first; without that its neck would stretch from the body to the head. Cut on the
+  -- neck's plane instead (MODE_PLANE), 8300 face vertices vanished into the stump and the head flew off faceless.
+  -- Cut like a limb (faceCut), the face's neck stays on her: its eyes, teeth and brows know only the head bone, so
+  -- the head side's seam closes on a bone no face vertex uses (Spine1, SPLIT_SINK), made to follow her head. Whole,
+  -- the head took the face's whole neck along, down to her collar
   local fr
   -- (an enemy's head is on its body mesh: the neck's plane cut alone)
-  if part.kind == "head" and not (enemy.cur and not face) then
+  if faced then
     local fi = valid(face) and try(function() return face:GetBoneIndex(FName(bone)) end)
     if not fi or fi < 0 then log("head skipped: no face mesh with " .. bone); return nil end
-    fr = cut_command(face, fi, MODE.whole, part.radius, at, n)
+    local fs = facecut and try(function() return face:GetBoneIndex(FName(SPLIT_SINK)) end)
+    local hm = facecut and try(function() return mesh:GetBoneIndex(FName(bone)) end)
+    if fs and fs > 0 and hm and hm >= 0 then
+      send_nosink(face)
+      fr = command(string.format("c%x,0,%x,%x,%x,%x,%x", face:GetAddress(), fi, MODE.cut,
+        math.floor((part.radius or 0) * 10 + 0.5), fs, hm), at, n)
+    else
+      if facecut then log("face: no " .. SPLIT_SINK .. " to close the head's side on, cut whole") end
+      facecut = false
+      fr = cut_command(face, fi, MODE.whole, part.radius, at, n)
+    end
     log(string.format("face %s: %s", name_of(face), fr))
     if not ok_cut(fr) then log("head skipped: the face can't be cut (no LOD0 CPU access on its mesh?)"); return nil end
   end
@@ -1563,8 +1625,8 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   log(string.format("cut %s (%s) at %.2f %s normal %s%s: %s", bone, why, t, v3(at), v3(n), lean, r))
   -- a body whose neck ends under the plane (a nude mod's body: its neck stops low and the face's own neck goes on up
   -- from there) has nothing to cut at the head's height: lower down the neck until it has (fifteenth playtest: the
-  -- head never came off on Eve with no Clothes on). The face goes whole anyway
-  if part.kind == "head" and r:sub(1, 2) == "ok" and (num(r, "seam") or 0) == 0 then
+  -- head never came off on Eve with no Clothes on), when the face goes whole. A cut face closes the neck itself
+  if part.kind == "head" and not facecut and r:sub(1, 2) == "ok" and (num(r, "seam") or 0) == 0 then
     for _, lower in ipairs({ 0.5, 0.3, 0.12, 0 }) do
       if lower < t then
         -- (the empty cut changed no weight: nothing to undo, and "x" would undo her earlier cuts too)
@@ -1575,7 +1637,9 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
       end
     end
   end
-  if r:sub(1, 2) ~= "ok" or (num(r, "seam") or 0) == 0 or ((part.kind ~= "head" or (enemy.cur and not fr)) and (num(r, "limb") or 0) == 0) then
+  local faceneck = facecut and (num(fr, "seam") or 0) > 0
+  if r:sub(1, 2) ~= "ok" or ((num(r, "seam") or 0) == 0 and not faceneck)
+    or ((part.kind ~= "head" or (enemy.cur and not fr)) and (num(r, "limb") or 0) == 0) then
     if fr then log("face put back: " .. command(string.format("x%x,0", face:GetAddress()))) end
     -- an enemy cut that changed weights but took nothing off (what was past the plane had nothing to close on and
     -- vanished): its weights off again when nothing else was cut on it, and kept on record, so its sinks go back
@@ -1596,7 +1660,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
       if ok_cut(dr) then detached[#detached + 1] = c end
     end
   end
-  return { at = at, n = n, result = r, face = fr and face, face_result = fr, kept = kept, detached = detached }
+  return { at = at, n = n, result = r, face = fr and face, face_result = fr, facecut = facecut, kept = kept, detached = detached }
 end
 
 -- stage 1: new weights on the GPU, caps placed (hidden); nothing visible changes yet
@@ -1625,6 +1689,17 @@ local function stage_cut(q)
   q.parent = parent_bone(q.mesh, q.bone)
   -- a head's own opening is the bottom of the face's neck
   q.ob, q.ol = opening(q.c.result, "b"), q.c.face_result and opening(q.c.face_result, "l") or opening(q.c.result, "l")
+  -- a cut face's neck closes the stump too: the face's rim, unless the body's goes all round her neck and is wider
+  -- (a high collar, CH_P_EVE_10). On CH_P_EVE_30 the body ends under the plane, on CH_P_EVE_29 its collar only
+  -- reaches round the back (10 of 16 directions)
+  local fb = q.c.facecut and opening(q.c.face_result, "b")
+  local function wide(o) return o and math.max(o.e.X, o.e.Y) or 0 end
+  local function round(r)
+    local most = 0
+    for d in (r:match(" bsec=([%d/;.]+)") or ""):gmatch("%d+/%d+/(%d+)") do most = math.max(most, tonumber(d)) end
+    return most
+  end
+  if fb and not (q.ob and round(q.c.result) >= 14 and wide(q.ob) > wide(fb)) then q.ob, q.obFace = fb, true end
   -- the caps and stubs ride the bone each opening's rim rides (the DLL's bb / lb): a thigh's stump follows the hip's
   -- twist helpers, not the pelvis, and a stub on the pelvis slid off to the stump's edge as she moved
   local function ride(key, fallback)
@@ -1633,6 +1708,11 @@ local function stage_cut(q)
     return (nm and nm ~= "None") and nm or fallback
   end
   q.rideB = ride("bb", q.parent or q.bone)
+  if q.obFace then
+    local i = num(q.c.face_result, "bb")
+    local nm = i and i >= 0 and try(function() return q.c.face:GetBoneName(i):ToString() end)
+    q.rideB = (nm and nm ~= "None") and nm or q.parent or q.bone
+  end
   q.rideL = q.c.face_result and q.bone or ride("lb", q.bone)
   q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL } } })
   q.caps, q.kinds, q.stubs = {}, {}, {}
@@ -2523,7 +2603,15 @@ local function stage_split_cut(q)
     table.concat(back, ","), tostring(q.spine), h1, h2))
   log("split body: " .. r1)
   log("split body copy: " .. r2)
-  if not (ok_cut(r1) and ok_cut(r2)) then return false end
+  -- a half that cut nothing falls back to a waist cut too: across her waist in an animated death that had just gone
+  -- ragdoll, the copy vanished 101400 vertices with no seam and none sunk, and she died whole (playtest, CH_P_EVE_29)
+  if not (ok_cut(r1) and ok_cut(r2)) then
+    if r1:sub(1, 2) == "ok" and r2:sub(1, 2) == "ok" then
+      log(string.format("split (%s) failed: the %s cut nothing: a waist cut instead", q.why, ok_cut(r1) and "copy" or "body"))
+      q.degenerate = true
+    end
+    return false
+  end
   -- each half must keep a real share of her, all sunk: a plane that grazed her left one half a sliver and the other
   -- a whole body nothing could sink (85506 vertices unsunk), standing over her as if nothing was cut
   local nv = num(r1, "verts") or 0
@@ -2868,6 +2956,8 @@ end
 function M.has_cut(mesh, bone) return already_cut(mesh, bone) end
 -- a command to sbslice.dll and its answer; quiet: no answer (one a tick, glass.lua's stats tick)
 M.command = command
+-- "init", "waiting", "ready" or "failed" (physfix.lua waits for it)
+function M.native_state() return native.state end
 function M.quiet(s)
   local cdo = load_obj(CHEAT_CDO)
   if not cdo then return false end

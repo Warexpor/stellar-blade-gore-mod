@@ -219,6 +219,8 @@ static float watch_dt[MAX_BONES], watch_dc[MAX_BONES];
 // CH_P_EVE_10, and in a ragdoll death they stood up in sheets as tall as she was (twenty-sixth playtest); a cost on
 // them wasn't enough, they were the only helpers of their bands
 static unsigned char wmoved[MAX_BONES], nsx[MAX_BONES], nsm[MAX_BONES];
+// moved only with a helper above it (see the watch below): it goes where its driver points, never a sink
+static unsigned char winh[MAX_BONES];
 // a split half's limbs, decided by Lua from where each limb is (a limb never splits lengthwise): roots of the limbs
 // that go with the other half, and of the ones that stay. For the next MODE_SIDE cut on that component
 #define MAX_LIMB_ROOTS 8
@@ -1468,6 +1470,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int nmoved = 0;
     for (int i = 0; i < nb; i++) {
         wmoved[i] = i > 0 && watch_sm == c.sm && watch_n >= CARRY_WATCH && !(watch_dt[i] < STABLE_CM && watch_dc[i] >= CARRY_ROT_COS);
+        // a helper under one that moved moves with it, still as it is against its own parent: Ab-R-Side, under the aim
+        // helper Dm-R-Side-Point the animation points at the arm, took the shoulder's seam and in an animated death
+        // chased the flying arm, a sheet from her shoulder to it (playtest, CH_P_EVE_29). Not past the bones Lua names
+        // (Bip001, ...) or a body's: those move as she does
+        int par = parent_of(&c, i);
+        winh[i] = !wmoved[i] && par > 0 && par < i && wmoved[par] && !(ns && ns[par]) && !(nosink_mesh == c.sm && hasbody[par]);
+        if (winh[i]) wmoved[i] = 1;
         nmoved += wmoved[i];
     }
     // (a limb cut whose only other choice rides a body two away takes one after all, see below)
@@ -1720,18 +1729,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             }
         }
     }
-    // a forced sink (a split's borrowed bone) for every section with seam vertices, added to its BoneMap if needed
-    int borrowed = 0;
+    // a forced sink (a borrowed bone) for every section with seam vertices, added to its BoneMap if needed: a split
+    // half's vanishing side, or a cut's limb side (the head's on her face mesh, which knows no bone past the head:
+    // made to follow the head, its seam closes there and the face's neck stays on her)
+    int borrowed = 0, fsd = mode == MODE_CUT ? 1 : 0;
     if (forced_sink > 0) {
         for (int v = 0; v < nv; v++) {
-            if (!seam[v] || vsec[v] == 0xffff) continue;
+            if (!seam[v] || vsec[v] == 0xffff || (mode == MODE_CUT && !side[v])) continue;
             int s = vsec[v];
-            if (secsink[s * 2] != -1) continue;
+            if (secsink[s * 2 + fsd] != -1) continue;
             if (!inmap[(u64)s * nb + forced_sink]) {
                 if (!borrow_bone(secs, s, forced_sink, inmap, nb)) continue; // left to find_sink
                 borrowed++;
             }
-            secsink[s * 2] = forced_sink;
+            secsink[s * 2 + fsd] = forced_sink;
         }
         // the borrowed bone is to follow the master's bone "remap" (the head) instead of its own, from "k" on: until
         // then the seam on it stays where it was, rigid on the bone's own transform
@@ -1810,7 +1821,10 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     for (int pass = 0; pass < 2 && best < 0; pass++) for (int i = 1; i < nb; i++) {
                         if (limb[i] != sd || i == b || i == parent_b || is_sink(&c, i) || is_proj_sink(&c, i)) continue;
                         int mv = sa.moved && sa.moved[i];
-                        if (pass ? !mv || curh < 2 || (!act_arr && !bactive[i]) || (nosink_mesh == c.sm && nosink[i]) : (ns && ns[i])) continue;
+                        // (not one that moves with a driver above it, nor a driver: Dm-R-Side-Point aims at the arm,
+                        // and its Ab-R-Side took the shoulder's seam off with the flying arm, CH_P_EVE_29 playtest)
+                        if (pass ? !mv || curh < 2 || (!act_arr && !bactive[i]) || (nosink_mesh == c.sm && (nosink[i] || nocarry[i])) || winh[i]
+                                 : (ns && ns[i])) continue;
                         int h = body_hops(&c, gov, gov[i], sa.refbody[sd]);
                         if (!stable[i] || h > 1 || h >= curh) continue;
                         const float *t = pose_of(&c, i);
@@ -2045,7 +2059,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 // turned off its bind pose against its parent, now or while she played: something drives it, and
                 // would drive the stub
                 float dt, dc;
-                if (!off_bind(&c, refpose, i, &dt, &dc) || dc < CARRY_ROT_COS || !watched_still(&c, i)) continue;
+                if (!off_bind(&c, refpose, i, &dt, &dc) || dc < CARRY_ROT_COS || !watched_still(&c, i) || wmoved[i]) continue;
                 float d0 = t[4] - sa.joint[0], d1 = t[5] - sa.joint[1], d2 = t[6] - sa.joint[2];
                 float score = (d0 * d0 + d1 * d1 + d2 * d2) * (haschild[i] ? 4.0f : 1.0f) * (1.0f + usage[i] / 200.0f);
                 if (score < bd) { bd = score; cbone = i; }
@@ -2232,7 +2246,8 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         // (a limb or the head: a waist cut's upper body flies off, and its seam drawn to the middle of the opening
         // took the legs' skin along)
         sinks[nsinks].at[0] = sinks[nsinks].at[1] = sinks[nsinks].at[2] = 0;
-        const float *t = pose_of(&c, bone);
+        // (a borrowed bone that will follow the master's bone "remap": its point in that bone's frame)
+        const float *t = bone == forced_sink && remap >= 0 && remap < c.nspace ? c.space + (u64)remap * 12 : pose_of(&c, bone);
         if (t && mode == MODE_CUT && sa.gov) {
             float in = (i & 1) ? SINK_IN : -SINK_IN;
             float d[3] = { p[0] + n[0] * in - t[4], p[1] + n[1] * in - t[5], p[2] + n[2] * in - t[6] }, iq[4] = { -t[0], -t[1], -t[2], t[3] }, l[3];
@@ -2921,7 +2936,7 @@ static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 //                        skin cut (mode: MODE_CUT default, WHOLE, PLANE, SIDE),
 //                        plane point LocX/Y/Z, normal
 //                        DirX/Y/Z; answer in sbslice.cut
-//   c...,<sink>,<remap>  MODE_SIDE with a borrowed sink bone that follows the master's bone <remap>
+//   c...,<sink>,<remap>  a borrowed sink bone that follows the master's bone <remap>: MODE_SIDE's vanishing side, MODE_CUT's limb side
 //   p<src>,<dst>         copy src's pose onto dst (same skeleton): a split's clone
 //   s<comp>,<lod>        where comp's skin stretches now (see skin_probe)
 //   m<comp>,<lod>,<reach cm>  where a ray meets her skin (see skin_mark): from LocX/Y/Z out along DirX/Y/Z
@@ -2969,6 +2984,200 @@ static const char *root_object(u64 obj)
     __atomic_or_fetch(flags, EIF_ROOTSET, __ATOMIC_SEQ_CST);
     return "ok rooted";
 }
+// ---- outfit physics at runtime (physfix.lua): what the data mod's outfits container does, for any outfit ----------
+// "b<skeletal mesh>,<bone>,...": each bone's bind pose in component space, composed from FinalRefBonePose (local
+// rotation and translation; scale is 1 on her skeleton, as the build's outfits.py takes it). Answer
+// "ok <bone> qx qy qz qw tx ty tz|..." in the order asked.
+static char *put_d(char *o, double f) // 6 decimals: unit quaternions and cm
+{
+    long long t = (long long)(f * 1e6 + (f < 0 ? -0.5 : 0.5));
+    if (t < 0) { *o++ = '-'; t = -t; }
+    o = put_int(o, t / 1000000); *o++ = '.';
+    long long r = t % 1000000;
+    for (long long d = 100000; d; d /= 10) { *o++ = '0' + (char)(r / d); r %= d; }
+    return o;
+}
+static int bind_pose(u64 sm, int bone, double *q, double *t)
+{
+    const unsigned char *info = *(const unsigned char **)(sm + SM_REF_BONE_INFO);
+    const float *pose = *(const float **)(sm + SM_REF_BONE_POSE);
+    int nb = *(int *)(sm + SM_REF_BONE_INFO + 8);
+    if (!info || !pose || bone < 0 || bone >= nb || *(int *)(sm + SM_REF_BONE_POSE + 8) != nb) return 0;
+    int chain[MAX_BONES], n = 0;
+    for (int b = bone; b >= 0 && n < MAX_BONES; b = *(const int *)(info + b * 0xc + 8)) {
+        if (b >= nb) return 0;
+        chain[n++] = b;
+    }
+    q[0] = q[1] = q[2] = 0; q[3] = 1; t[0] = t[1] = t[2] = 0;
+    while (n--) { // root first: R = R * r, T = T + R * t (outfits.py's world_pose)
+        const float *l = pose + chain[n] * 12;
+        double lq[4] = { l[0], l[1], l[2], l[3] }, lt[3] = { l[4], l[5], l[6] };
+        double u[3] = { q[0], q[1], q[2] }, w = q[3];
+        double c1[3] = { u[1] * lt[2] - u[2] * lt[1] + w * lt[0], u[2] * lt[0] - u[0] * lt[2] + w * lt[1], u[0] * lt[1] - u[1] * lt[0] + w * lt[2] };
+        double c2[3] = { u[1] * c1[2] - u[2] * c1[1], u[2] * c1[0] - u[0] * c1[2], u[0] * c1[1] - u[1] * c1[0] };
+        for (int k = 0; k < 3; k++) t[k] += lt[k] + 2 * c2[k];
+        double x = q[0], y = q[1], z = q[2];
+        q[0] = w * lq[0] + x * lq[3] + y * lq[2] - z * lq[1];
+        q[1] = w * lq[1] - x * lq[2] + y * lq[3] + z * lq[0];
+        q[2] = w * lq[2] + x * lq[1] - y * lq[0] + z * lq[3];
+        q[3] = w * lq[3] - x * lq[0] - y * lq[1] - z * lq[2];
+    }
+    return 1;
+}
+static void bind_cmd(const u64 *f, int k)
+{
+    static char out[64 * 1024];
+    if (k < 1 || f[0] < 0x10000) { skin_result("err bad mesh"); return; }
+    char *o = put(out, "ok");
+    for (int i = 1; i < k && o < out + sizeof out - 160; i++) {
+        double q[4], t[3];
+        *o++ = i == 1 ? ' ' : '|';
+        o = put_int(o, (long long)f[i]);
+        if (!bind_pose(f[0], (int)f[i], q, t)) { o = put(o, " -"); continue; }
+        for (int j = 0; j < 4; j++) { *o++ = ' '; o = put_d(o, q[j]); }
+        for (int j = 0; j < 3; j++) { *o++ = ' '; o = put_d(o, t[j]); }
+    }
+    *o = 0;
+    skin_result(out);
+}
+
+// "t<physics asset>,<bodies>": no body of the asset collides with another (the build's self_collision false, every
+// pair in UPhysicsAsset::CollisionDisableTable, a TMap<FRigidBodyIndexPair, bool> the engine hands the physics scene
+// by pointer when it makes her ragdoll's bodies, so a table changed before then is the one used). The map isn't
+// reflected, so it is found by its contents: a TSet (TSparseArray of 20 byte elements {a, b, bool, HashNextId,
+// HashIndex}, TBitArray with 4 words inline, FirstFreeIndex, NumFreeIndices; one inline hash bucket and its heap
+// pointer; HashSize) whose every element is a pair a < b < bodies sitting in the bucket the pair's hash puts it in,
+// every bucket's chain reaching exactly its elements. That both finds it and proves the hash and the layout; any
+// doubt and the asset is left as it is. The new arrays come from GMalloc (the engine frees them with the asset).
+#define PT_SCAN 0x400
+#define PT_ELEM 20
+static u32 pair_hash(int variant, int a, int b) { return variant ? (u32)b + (u32)a * 23 : (u32)a + (u32)b * 23; }
+static u32 hash_buckets(u32 n) // FDefaultSetAllocator::GetNumberOfHashBuckets
+{
+    if (n < 4) return 1;
+    u32 want = n / 2 + 8, r = 1;
+    while (r < want) r <<= 1;
+    return r;
+}
+// the variant whose hash every element of the TSet at s obeys, or -1
+static int pair_set(u64 s, int nbodies)
+{
+    u64 data = *(u64 *)s;
+    int num = *(int *)(s + 8), max = *(int *)(s + 12), nbits = *(int *)(s + 40), maxbits = *(int *)(s + 44);
+    int nfree = *(int *)(s + 52), hs = *(int *)(s + 72);
+    if (num < 1 || max < num || max > (1 << 20) || !data || (data & 3) || nbits != num || maxbits < nbits || nfree != 0) return -1;
+    if (hs < 1 || (hs & (hs - 1)) || hs > (1 << 20)) return -1;
+    u64 bits = *(u64 *)(s + 32) ? *(u64 *)(s + 32) : s + 16;
+    u64 hash = hs > 1 ? *(u64 *)(s + 64) : s + 56;
+    if (!mem_readable(data, (u64)num * PT_ELEM) || !mem_readable(bits, (u64)(nbits + 31) / 32 * 4) || !mem_readable(hash, (u64)hs * 4)) return -1;
+    for (int i = 0; i < num; i++) if (!(((const u32 *)bits)[i >> 5] >> (i & 31) & 1)) return -1;
+    for (int v = 0; v < 2; v++) {
+        int ok = 1;
+        for (int i = 0; i < num && ok; i++) {
+            const int *e = (const int *)(data + (u64)i * PT_ELEM);
+            ok = e[0] >= 0 && e[0] < e[1] && e[1] < nbodies && e[4] == (int)(pair_hash(v, e[0], e[1]) & (u32)(hs - 1));
+        }
+        int seen = 0;
+        for (int b = 0; b < hs && ok; b++)
+            for (int id = ((const int *)hash)[b], steps = 0; id != -1 && ok; steps++) {
+                ok = id >= 0 && id < num && steps < num && ((const int *)(data + (u64)id * PT_ELEM))[4] == b;
+                if (ok) { seen++; id = ((const int *)(data + (u64)id * PT_ELEM))[3]; }
+            }
+        if (ok && seen == num) return v;
+    }
+    return -1;
+}
+static int known_at = -1, known_variant = -1; // where the first table was, and its hash
+static void table_cmd(u64 pa, int nbodies)
+{
+    if (pa < 0x10000 || nbodies < 2 || nbodies > 4096) { skin_result("err bad asset"); return; }
+    if (!mem_readable(pa, PT_SCAN + 80)) { skin_result("err asset unreadable"); return; }
+    // the first one from the asset's start: the scan reaches past its end, where the next asset in memory may keep a
+    // table of its own (CH_P_EVE_08's, playtest 38). Once found, every asset's is at that offset (one class)
+    int at = -1, variant = -1;
+    if (known_at >= 0) {
+        if (pair_set(pa + known_at, nbodies) == known_variant) at = known_at, variant = known_variant;
+    } else {
+        for (int off = 0x28; off < PT_SCAN && at < 0; off += 8) {
+            int v = pair_set(pa + off, nbodies);
+            if (v >= 0) at = off, variant = v;
+        }
+    }
+    if (at < 0) { skin_result(known_at >= 0 ? "err no table where the others were" : "err no table"); return; }
+    known_at = at; known_variant = variant;
+    u64 s = pa + at;
+    int old = *(int *)(s + 8), m = nbodies * (nbodies - 1) / 2;
+    char msg[96], *o = put(msg, "ok table +");
+    o = put_int(o, at); o = put(o, " "); o = put_int(o, old); o = put(o, " -> "); o = put_int(o, m);
+    if (old == m) { o = put(o, " already"); *o = 0; skin_result(msg); return; }
+    u32 hs = hash_buckets((u32)m), words = ((u32)m + 31) / 32;
+    unsigned char *data = ue_malloc((u64)m * PT_ELEM);
+    u32 *bits = ue_malloc((u64)words * 4);
+    int *hash = ue_malloc((u64)hs * 4);
+    if (!data || !bits || !hash) {
+        if (data) ue_free(data);
+        if (bits) ue_free(bits);
+        if (hash) ue_free(hash);
+        skin_result("err no memory"); return;
+    }
+    for (u32 b = 0; b < hs; b++) hash[b] = -1;
+    for (u32 w = 0; w < words; w++) bits[w] = 0;
+    int i = 0;
+    for (int a = 0; a < nbodies; a++)
+        for (int b = a + 1; b < nbodies; b++, i++) {
+            int *e = (int *)(data + (u64)i * PT_ELEM);
+            int bucket = (int)(pair_hash(variant, a, b) & (hs - 1));
+            e[0] = a; e[1] = b; e[2] = 0; e[3] = hash[bucket]; e[4] = bucket;
+            hash[bucket] = i;
+            bits[i >> 5] |= 1u << (i & 31);
+        }
+    void *odata = *(void **)s, *obits = *(void **)(s + 32), *ohash = *(int *)(s + 72) > 1 ? *(void **)(s + 64) : 0;
+    // (game thread, before the physics step: nothing reads the table meanwhile)
+    *(u64 *)s = (u64)data; *(int *)(s + 8) = m; *(int *)(s + 12) = m;
+    *(u64 *)(s + 32) = (u64)bits; *(int *)(s + 40) = m; *(int *)(s + 44) = (int)(words * 32);
+    *(int *)(s + 48) = -1; *(int *)(s + 52) = 0;
+    *(u64 *)(s + 64) = (u64)hash; *(int *)(s + 72) = (int)hs;
+    if (odata) ue_free(odata);
+    if (obits) ue_free(obits);
+    if (ohash) ue_free(ohash);
+    o = put(o, variant ? " hash b+23a" : " hash a+23b"); *o = 0;
+    skin_result(msg);
+}
+
+// "j<physics asset>,<joints>,<its first joint>,<new joint>...": new UPhysicsConstraintTemplates (physfix.lua makes
+// them, the asset their outer) appended to UPhysicsAsset::ConstraintSetup, the joints the engine makes a ragdoll's
+// constraints from: a locked joint for each body no joint holds, as the build's outfits.py adds them (CH_P_EVE_29's
+// thigh twists, which carry her upper thighs' skin: a constraint component made at the ragdoll's start didn't hold
+// them, playtest 39). The array is found as the TArray of the asset whose length is <joints> and whose first element
+// is <its first joint>; the longer copy comes from GMalloc and the old one goes back to it
+static void joints_cmd(const u64 *f, int k)
+{
+    u64 pa = f[0];
+    int n = (int)f[1], add = k - 3;
+    if (pa < 0x10000 || n < 1 || f[2] < 0x10000 || add < 1) { skin_result("err want j<asset>,<joints>,<first>,<new>..."); return; }
+    if (!mem_readable(pa, 0x200)) { skin_result("err asset unreadable"); return; }
+    for (int i = 3; i < k; i++) if (f[i] < 0x10000) { skin_result("err bad joint"); return; }
+    int at = -1;
+    for (int off = 0x28; off + 16 <= 0x200; off += 8) {
+        u64 data = *(u64 *)(pa + off);
+        int num = *(int *)(pa + off + 8), max = *(int *)(pa + off + 12);
+        if (num == n && max >= num && data && !(data & 7) && mem_readable(data, (u64)num * 8) && *(u64 *)data == f[2]) {
+            if (at >= 0) { skin_result("err two joint arrays"); return; }
+            at = off;
+        }
+    }
+    if (at < 0) { skin_result("err no joint array"); return; }
+    u64 *old = *(u64 **)(pa + at), *arr = ue_malloc((u64)(n + add) * 8);
+    if (!arr) { skin_result("err no memory"); return; }
+    for (int i = 0; i < n; i++) arr[i] = old[i];
+    for (int i = 0; i < add; i++) arr[n + i] = f[3 + i];
+    *(u64 *)(pa + at) = (u64)arr; *(int *)(pa + at + 8) = n + add; *(int *)(pa + at + 12) = n + add;
+    ue_free(old);
+    char msg[64], *o = put(msg, "ok joints +");
+    o = put_int(o, at); o = put(o, " "); o = put_int(o, n); o = put(o, " -> "); o = put_int(o, n + add); *o = 0;
+    skin_result(msg);
+}
+
 static void exec_slice(void *context, unsigned char *stack, void *result)
 {
     (void)context; (void)result;
@@ -2979,6 +3188,22 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
     float *dir = (float *)(p + 0x28);
     if (!txt || len < 2) return;
     if (stats_cmd(txt, len, loc, dir)) return; // v...: actor stats (stats.c)
+    if (txt[0] == 'b') {
+        static u64 bf[257];
+        bind_cmd(bf, parse_fields(txt + 1, len - 1, bf, 257));
+        return;
+    }
+    if (txt[0] == 'j') {
+        static u64 jf[67];
+        joints_cmd(jf, parse_fields(txt + 1, len - 1, jf, 67));
+        return;
+    }
+    if (txt[0] == 't') {
+        u64 tf[2] = { 0, 0 };
+        parse_fields(txt + 1, len - 1, tf, 2);
+        table_cmd(tf[0], (int)tf[1]);
+        return;
+    }
     if (txt[0] == 'u') {
         u64 component = parse_hex(txt + 1, len - 1);
         if (component >= 0x10000) unpin(component);

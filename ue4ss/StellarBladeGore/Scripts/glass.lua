@@ -1,4 +1,5 @@
--- Realistic glass cannon mode (tune.glassCannon, off by default; Shift+F8 turns it on and off in game).
+-- Realistic glass cannon mode (tune.glassCannon, off by default; Shift+F8 turns it on and off in game). Only with
+-- settings.lua's dev on.
 -- While her shield is up a hit takes the shield, never HP. Once it is down, any hit kills her, cut where it landed
 -- (along the weapon's swing when there was one). Her blows do damageMult times the damage.
 -- The kill goes by her HUD's HP bar (ProgressBar_HP.Percent, which the game keeps live): the game's shield takes a
@@ -32,6 +33,7 @@ function M.init(c)
 end
 
 function M.enabled()
+  if not ctx.tune.dev then return false end -- a dev mode for now (settings.lua dev)
   local g = cfg()
   if st.override ~= nil then return st.override end
   return g.enabled == true

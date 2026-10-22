@@ -49,8 +49,11 @@ for d in "${OLDS[@]}" "$NEW"; do
   done
   [[ -f $d/usmap.done ]] && cp "$d/usmap.done" "$KEEP/"
 done
+# the player's settings.lua stays as they left it (main.lua makes one from settings.default.lua when there's none)
+[[ -f $NEW/Scripts/settings.lua ]] && cp "$NEW/Scripts/settings.lua" "$KEEP/settings.lua"
 rm -rf "${OLDS[@]}" "$NEW"
 cp -r "$ROOT/ue4ss/StellarBladeGore" "$MODS/"
+[[ -f $KEEP/settings.lua ]] && mv "$KEEP/settings.lua" "$NEW/Scripts/settings.lua"
 cp "$KEEP"/* "$NEW/" 2>/dev/null || true
 rm -rf "$KEEP"
 touch "$NEW/enabled.txt"
@@ -59,7 +62,9 @@ touch "$NEW/enabled.txt"
 rm -rf "$MODS/SBSlice"
 mkdir -p "$MODS/SBSlice/dlls"
 cp "$CACHE/sbslice/main.dll" "$MODS/SBSlice/dlls/main.dll"
-# mods.txt: ours on, every other mod's line kept as it is, Keybinds last (UE4SS wants it there)
+touch "$MODS/SBSlice/enabled.txt"
+# mods.txt: ours out (enabled.txt turns them on, as the release zip does), every other mod's line kept as it is,
+# Keybinds last (UE4SS wants it there)
 python3 - "$MODS/mods.txt" <<'PY'
 import os, re, sys
 p = sys.argv[1]
@@ -69,7 +74,7 @@ keep = [l for l in lines if re.split(r"\s*:", l.strip(), maxsplit=1)[0] not in o
         and not l.strip().startswith("; Built-in keybinds")]
 while keep and not keep[-1].strip():
     keep.pop()
-out = ["SBSlice : 1", "StellarBladeGore : 1"] + keep + ["", "; Built-in keybinds, do not move up!", "Keybinds : 1"]
+out = keep + ([""] if keep else []) + ["; Built-in keybinds, do not move up!", "Keybinds : 1"]
 open(p, "w").write("\n".join(out) + "\n")
 PY
 echo "installed UE4SS + StellarBladeGore into $BIN"

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Build the Stellar Blade Gore Mod's IoStore patch from the installed game.
 #   ./build.sh            build dist/ZZ_StellarBladeGore_P (core) and dist/ZZ_StellarBladeGore_Outfits_P (outfit
-#                         meshes and physics), {utoc,ucas,pak} each, and verify them
-#   ./build.sh --install  also copy them into the game's Paks/~mods
+#                         physics), {utoc,ucas,pak} each, and verify them
+#   ./build.sh --install  also copy the core into the game's Paks/~mods (the outfits pak only with SB_OUTFITS=1: the
+#                         script and sbslice.dll make its fixes in game; it stays as the reference they're tested to)
 #   ./build.sh --uninstall
 # Other mods in Paks/~mods are read as the game loads them: an outfit, face or show they replace is patched in
 # their version, not vanilla's. Rebuild after adding or removing such a mod.
-# SB_GAME: game install dir; SB_OUTFITS=0: install without the outfits container; SB_COMPRESS: IoStore block compression (zlib default, "none" to store raw)
+# SB_GAME: game install dir; SB_OUTFITS=1: install the outfits container too; SB_COMPRESS: IoStore block compression (zlib default, "none" to store raw)
+# SB_VANILLA=1: leave the other mods out (the release build, package.sh); SB_DIST: output dir (default dist/)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
@@ -18,7 +20,7 @@ NAME=ZZ_StellarBladeGore_P
 OUTFITS=ZZ_StellarBladeGore_Outfits_P
 OLD_NAMES=(ZZ_Severed_P ZZ_EveRagdollDeath_P) # earlier names; removed on install / uninstall
 SPEC=$ROOT/mod/ragdoll_spec.json
-DIST=$ROOT/dist
+DIST=${SB_DIST:-$ROOT/dist}
 
 RETOC_REV=885a8dae740cb1ce1e41ff2e74f67f9f0c118237
 UASSETAPI_REV=b4e8a012939295a6fd890ddc64e57ea78b709b95
@@ -115,7 +117,7 @@ while IFS= read -r rel; do
   if [[ $(printf '%s\n' "$rel" "$NAME.utoc" | load_order | tail -1) == "$rel" ]]; then
     log "mods: $rel loads after this mod; rename it to sort before $NAME if it replaces an outfit"
   fi
-done < <([[ -d $MODS ]] && (cd "$MODS" && find . -name '*.utoc' -printf '%P\n') | load_order)
+done < <([[ -d $MODS && ${SB_VANILLA:-0} != 1 ]] && (cd "$MODS" && find . -name '*.utoc' -printf '%P\n') | load_order)
 (( rank )) && log "mods: reading $rank other mod(s) over the game ($(wc -l < "$SRC/mods.txt") packages)"
 mod_of() { awk -v p="$1" '$2 == p { m = $1 } END { if (m) print m }' "$SRC/mods.txt"; }
 
@@ -276,5 +278,5 @@ if [[ ${1:-} == --install ]]; then
   mkdir -p "$MODS"
   for n in "$OUTFITS" "${OLD_NAMES[@]}"; do rm -fv "$MODS/$n".{utoc,ucas,pak}; done
   cp -v "$DIST/$NAME".* "$MODS/"
-  if [[ -f $DIST/$OUTFITS.utoc && ${SB_OUTFITS:-1} != 0 ]]; then cp -v "$DIST/$OUTFITS".* "$MODS/"; fi
+  if [[ -f $DIST/$OUTFITS.utoc && ${SB_OUTFITS:-0} != 0 ]]; then cp -v "$DIST/$OUTFITS".* "$MODS/"; fi
 fi

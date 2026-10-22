@@ -1,5 +1,6 @@
--- Sandbox tuning, re-read on F6 (no restart). Applies to F7 test ragdolls; the collision switches also
--- apply to real deaths.
+-- Every knob of the mod, re-read on F6 (no restart). settings.lua overrides these key by key (the player's switches,
+-- and dev: the test keys, the spawner and the glass cannon only work with it on). The top ones apply to F7 test
+-- ragdolls; the collision switches also apply to real deaths.
 return {
   push = 200,                  -- F7: cm/s the whole body is shoved (its centre of mass moves; 0 = none; 450 threw
                                --   her 5-8 m/s, far harder than any death)
@@ -16,6 +17,8 @@ return {
   hairCollision = false,       -- true = SBHair keeps PhysicsOnly collision during the ragdoll
   massScale = 1.0,             -- SetAllMassScale on every body
   recoverAfter = 9,            -- seconds of ragdoll before the script gets her up (the death screen, 8 s in, covers it)
+  capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
+                               -- after her pelvis a step a tick and the camera stuttered after her (playtest 38)
   cameraFollow = false,        -- during a ragdoll her capsule (and the camera on it) drifts after her body, loosely
                                -- (off: it fought how the death plays out, and the game died a second after it moved
                                -- the capsule of a really dead Eve, thirteenth playtest)
@@ -33,8 +36,8 @@ return {
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
                                -- F9 rolls the cuts only, F10 marks, F11 splits
       limb = 30,               --   the arm or thigh nearest the hit comes off
-      head = 30,               --   beheaded (the face goes with the head, the neck gets a stump)
-      torso = 30,              --   cut in half at the waist
+      head = 22,               --   beheaded (the face goes with the head, the neck gets a stump)
+      torso = 38,              --   cut in half at the waist
       split = 10,              --   cut in half top to bottom along the blade; only counts when the killing blow
                                --   came down from above (else the others are rolled)
     },
@@ -114,8 +117,17 @@ return {
                                -- ragdolls at once, held still while it is cut, and comes apart
     bone = "auto",             -- "auto" = the roll above, or always one of: Bip001-Head, Bip001-Spine1,
                                -- Bip001-L/R-UpperArm, Bip001-L/R-Forearm, Bip001-L/R-Thigh, Bip001-L/R-Calf
-    cutAt = "auto",            -- where along the limb, 0 = joint, 1 = next joint; "auto" = 0.4 (torso 0.5, the neck
-                               -- 0.3 of the way to the head; a blade's cut at least 0.3 down the limb)
+    cutAt = "auto",            -- where along the limb, 0 = joint, 1 = next joint; "auto" = 0.4 (torso 0.5, the head
+                               -- headAt; a blade's cut at least 0.3 down the limb)
+    headAt = 1.0,              -- a beheading's plane between the neck bone (0) and the head bone (1, under her jaw):
+                               -- 0.7 took the head off with a long neck (the face mesh's, whole). Past ~1.2 it cuts
+                               -- the jaw
+    faceCut = true,            -- the face mesh is cut at the plane too, its neck stays on her (false = it goes whole
+                               -- with the head, and headAt is 0.7: above the body's neck there's nothing to cut)
+    jawClear = 0.5,            -- with faceCut, the plane goes down until her jaw is this many cm above it (a nod or a
+                               -- leaning blow put her chin under the head bone's plane, and a slice of it stayed on
+                               -- the neck); false = the plane stays at headAt
+    jawDrop = 3,               --   at most this many cm down; past it the plane leans back toward her head's own axis
     hitMarks = {               -- a hit she lives through leaves a slash of blood on her skin (no cut): a decal
       enabled = true,          --   on the skin where it landed (the DLL finds it), along the swing, riding that skin's
                                --   bone. F10 puts one on a part at random. false = living hits leave nothing
@@ -188,11 +200,35 @@ return {
     dripEvery = 18,            --   cm between drips while it moves
     maxDecals = 60,            --   drips and pools in all
   },
-  physfix = {                  -- physfix.lua: an outfit the data mod didn't patch (an outfit mod it didn't see)
+  physfix = {                  -- physfix.lua: every outfit's ragdoll fixes, made in game (the build's outfits container
+                               -- has the same ones, and isn't shipped)
     enabled = true,            -- false = leave such an outfit's physics as it ships
     linearDamping = 0.2,       -- the main bodies' damping, as the data mod sets it (vanilla 5.0: she falls slowly)
     angularDamping = 1.0,      --   (vanilla 10: she turns as if under water)
     hardLimits = true,         -- the main joints' limits stop dead instead of giving way
+    lockBelow = 6,             --   and a motion limited to fewer degrees than this is locked (a few degrees of hard
+                               --   limit sat at the limit all the time: every joint buzzed)
+    ranges = {                 -- how far each main joint's far end (end) swings towards her front and her back from the
+                               -- bind pose, degrees: the twist is centred there from the bind pose (sbslice.dll's "b").
+                               -- The same as mod/ragdoll_spec.json's outfits.ranges (test/run.sh phys checks it)
+      ["Bip001-L-Calf"] = { e = "Bip001-L-Foot", front = 3, back = 140 },
+      ["Bip001-R-Calf"] = { e = "Bip001-R-Foot", front = 3, back = 140 },
+      ["Bip001-L-Forearm"] = { e = "Bip001-L-Hand", front = 145, back = 3 },
+      ["Bip001-R-Forearm"] = { e = "Bip001-R-Hand", front = 145, back = 3 },
+      ["Bip001-L-Thigh"] = { e = "Bip001-L-Calf", front = 110, back = 20 },
+      ["Bip001-R-Thigh"] = { e = "Bip001-R-Calf", front = 110, back = 20 },
+      ["Bip001-L-UpperArm"] = { e = "Bip001-L-Forearm", front = 120, back = 40 },
+      ["Bip001-R-UpperArm"] = { e = "Bip001-R-Forearm", front = 120, back = 40 },
+      ["Bip001-Spine1"] = { e = "Bip001-Spine2", front = 15, back = 8 },
+      ["Bip001-Spine2"] = { e = "Bip001-Neck", front = 15, back = 8 },
+      ["Bip001-Neck"] = { e = "Bip001-Head", front = 25, back = 15 },
+    },
+    swing = {                  -- cone limits set outright (Swing1 = the hip's sideways swing)
+      ["Bip001-L-Thigh"] = { Swing1LimitDegrees = 30 },
+      ["Bip001-R-Thigh"] = { Swing1LimitDegrees = 30 },
+    },
+    collisionTable = true,     -- none of her bodies collide with each other, only the world: sbslice.dll fills the
+                               -- asset's collision table (its "t"); without the DLL quietJiggle stands in
     weldKinematic = true,      -- every outfit: the joints of the bodies its asset makes kinematic (breasts, neck pieces,
                                -- arm twists, armour plates) are locked solid, so in the ragdoll they ride their bone
                                -- instead of buzzing against soft 0.1-1 deg limits
@@ -285,7 +321,7 @@ return {
       wake = 60,               -- cm/s: something moved her this fast, she settles again
     },
   },
-  enemies = {                  -- gore on generic humanoid enemies, and the enemy spawner (enemies.lua)
+  enemies = {                  -- gore on generic humanoid enemies, and the enemy spawner (enemies.lua; dev only)
     enabled = true,            -- false: no gore on them (the spawner still works)
     nativeSlice = false,       -- the game's own monster slicer on them (off: it hides parts its own way, on top of ours)
     reach = 2500,              -- cm from Eve: enemies further off are left alone (their hits aren't followed)
@@ -328,7 +364,7 @@ return {
       { alias = "N_AirborneSquad", label = "Airborne Squad angel", id = 30030, face = true, bp = "/Game/Art/Character/NPC/CH_NPC_AirborneSquad/Blueprints/CH_NPC_AirborneSquad" },
     },
   },
-  glassCannon = {              -- realistic glass cannon (glass.lua); Shift+F8 turns it on and off in game
+  glassCannon = {              -- realistic glass cannon (glass.lua); Shift+F8 turns it on and off in game (dev only)
     enabled = false,           -- off by default
     shieldGuard = true,        -- while her shield is up a hit takes the shield, never HP; with it down any hit kills
     barDrop = 0.002,           -- her HP bar dropping more than this since the last tick is a hit with the shield down: she dies

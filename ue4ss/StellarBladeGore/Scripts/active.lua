@@ -71,7 +71,7 @@ local TWIST = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2
 
 local speeds = {}       -- the capsule's last velocities while alive, newest last
 local SPEED_SAMPLES = 10 -- ~330 ms at the 33 ms tick
-local run = nil         -- the ragdoll in progress: { mesh, pac, t, masses = {bone = kg}, scales = {bone = scale} }
+local run = nil         -- the ragdoll in progress: { mesh, pac, t, masses = {bone = kg} }
 local dropped = {}      -- { comp, box, parent, socket, loc, rot }: weapons let go of
 local extra = {}        -- other ragdolls to settle with hers (a split's copy)
 local STILL = { "Bip001-Pelvis", "Bip001-Spine2", "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand", "Bip001-L-Foot", "Bip001-R-Foot" }
@@ -119,9 +119,15 @@ end
 -- keep: where the masses it changes are remembered for M.stop (nil for a split's copy, which is destroyed)
 -- Accessories hanging off one main body share a budget of accessoryShare of its mass, each at most accessoryMaxKg:
 -- the cape hangs off the upper arms (8 bodies a side) and the hair off the head (9), and at 0.8 kg a body they
--- weighed 6.4 kg on a 1.7 kg arm and 7.2 kg on a 4.5 kg head, and dragged both out of their joints
+-- weighed 6.4 kg on a 1.7 kg arm and 7.2 kg on a 4.5 kg head, and dragged both out of their joints.
+-- Every body gets an override, accessories too: the engine ignores the mass scale of a body authored with a mass
+-- override (bOverrideMass), and every outfit but CH_P_EVE_10 has some. CH_P_EVE_30's breasts stayed 100 kg each
+-- welded to a 10 kg chest and CH_P_EVE_29's skirt 1400 kg on 2 kg thighs, while the log said 3.7 kg: the ragdoll
+-- shook from the first tick, took the push slowly and never lay still (playtest). The log reads the masses back.
+local function real_mass(mesh, bone) return try(function() return mesh:GetBoneMass(FName(bone), false) end) or 0 end
 local function set_masses(mesh, g, keep)
   local before, after, acc, accBefore, n = 0, 0, 0, 0, 0
+  local readMain, readAcc = 0, 0
   local main = {}
   local cap, share, floor = g.accessoryMaxKg or 0.8, g.accessoryShare or 0.15, g.accessoryMinKg or 0.05
   local list, groups = {}, {}
@@ -145,26 +151,25 @@ local function set_masses(mesh, g, keep)
       if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then
         before, after = before + m, after + want
       end
+      readMain = readMain + real_mass(mesh, bone)
     else
       accBefore = accBefore + m
       local want = cap
       local am = MASS[e.anchor]
       if am and share > 0 then want = math.max(math.min(cap, am * (g.massScale or 1.0) * share / groups[e.anchor]), floor) end
       if want > 0 and m > want then
-        local s = try(function() return mesh:GetMassScale(FName(bone)) end) or 1.0
-        if try(function() mesh:SetMassScale(FName(bone), s * want / m); return true end) then
-          if keep then keep.scales[bone] = s end
-          m = want
-        end
+        if keep then keep.masses[bone] = m end
+        if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then m = want end
       end
       acc, n = acc + m, n + 1
+      readAcc = readAcc + real_mass(mesh, bone)
     end
   end
   local per = {}
   for a, c in pairs(groups) do per[#per + 1] = string.format("%s:%d", a:gsub("Bip001%-", ""), c) end
   table.sort(per)
-  return string.format("masses %.0f -> %.0f kg (was %s), %d other bodies %.1f -> %.1f kg (on %s)", before, after,
-    table.concat(main, " "), n, accBefore, acc, table.concat(per, " "))
+  return string.format("masses %.0f -> %.0f kg (reads %.0f, was %s), %d other bodies %.1f -> %.1f kg (reads %.1f, on %s)",
+    before, after, readMain, table.concat(main, " "), n, accBefore, acc, readAcc, table.concat(per, " "))
 end
 
 -- every body's top angular speed (spin.main for the torso, arms and legs, spin.ends for the rest); put back to the
@@ -541,7 +546,7 @@ function M.start(pawn, mesh, kind, dir)
   if g.enabled == false then return end
   if run then M.stop(pawn) end
   if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
-  run = { mesh = mesh, t = 0, masses = {}, scales = {}, still = 0 }
+  run = { mesh = mesh, t = 0, masses = {}, still = 0 }
   run.joints, run.probe = joint_lengths(mesh), 1
   run.rolls = joint_rolls(mesh, true)
   extra = {}
@@ -571,7 +576,7 @@ end
 function M.piece(pawn, mesh)
   local g = cfg()
   if g.enabled == false or run then return nil end
-  run = { mesh = mesh, t = 0, masses = {}, scales = {}, piece = true, still = 0 }
+  run = { mesh = mesh, t = 0, masses = {}, piece = true, still = 0 }
   local r = set_masses(mesh, g, run) .. cap_spin(mesh, g)
   log("piece: " .. r)
   return r
@@ -1034,7 +1039,6 @@ function M.stop(pawn)
   local n = 0
   if valid(mesh) then
     for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FName(bone), m, true); return true end) then n = n + 1 end end
-    for bone, s in pairs(run.scales) do if try(function() mesh:SetMassScale(FName(bone), s); return true end) then n = n + 1 end end
     cap_spin(mesh, cfg(), SPIN_DEFAULT)
   end
   run = nil

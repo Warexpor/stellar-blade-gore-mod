@@ -570,7 +570,10 @@ int main(int argc, char **argv)
         for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
         set_nosink(); other_limbs_nosink(head);
         limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0;
-        skin_cut((u64)comp_a, 0, head, at2, nn, MODE_CUT, 0, 0, -1);
+        // FACESINK=1: Eve's face mesh, as gore.lua cuts it: its eyes, teeth and brows know only the head bone, so the
+        // head side's seam closes on a borrowed bone no face vertex uses (Bip001-Spine1), made to follow the head
+        int fsink = env_on("FACESINK") ? bone("Bip001-Spine1") : 0;
+        skin_cut((u64)comp_a, 0, head, at2, nn, MODE_CUT, 0, fsink > 0 ? fsink : 0, fsink > 0 ? head : -1);
         printf("head: %.300s\n", lastres);
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
         unsigned char *hb = calloc(NB, 1), *nb2 = calloc(NB, 1);
@@ -583,17 +586,40 @@ int main(int argc, char **argv)
             skin_info vo; orig_info(v, &vo);
             int wh = 0, wn = 0, on = 0;
             for (int i = 0; i < 8; i++) if (vo.weights[i]) { if (hb[vo.bones[i]]) wh += vo.weights[i]; if (nb2[vo.bones[i]]) wn += vo.weights[i]; }
-            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && hb[ov_a[v].bones[i]]) on = 1;
+            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && (hb[ov_a[v].bones[i]] || (fsink > 0 && ov_a[v].bones[i] == fsink))) on = 1;
             // (one under the plane stays on the neck, as any cut leaves what is behind it)
             float x[3]; skin_v(&vo, v, x);
             float hd = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
             if (wh > 200 && hd > 1) { nh++; hleft += !on; }
             taken += !wn && on;
         }
+        // the borrowed bone follows the head (the master's, in game)
+        if (fsink > 0) memcpy(space + fsink * 12, space + head * 12, 48);
         skin_collapse();
         skin_probe((u64)comp_a, 0);
         printf("head probe: %.200s\n", lastres);
+        int st = 0, sth = 0;
+        sscanf(lastres, "ok stretched=%d", &st);
+        { char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &sth); }
+        // and flung: the head (with the bone that follows it) turned 60 degrees and 40 cm off; nothing may stretch
+        // from the neck to it, nor any of the face's neck go with it
+        int fl = 0, flh = 0;
+        {
+            float *saved = malloc(48 * NB); memcpy(saved, space, 48 * NB);
+            float q[4] = { 0.5f, 0, 0, 0.8660254f };
+            for (int i = 0; i < NB; i++) if (hb[i] || (fsink > 0 && i == fsink)) {
+                float *t = space + i * 12, nq[4], r[3]; qmul(q, t, nq); memcpy(t, nq, 16);
+                quat_rot(q, t + 4, r); t[4] = r[0] + 40; t[5] = r[1]; t[6] = r[2] - 20;
+            }
+            skin_probe((u64)comp_a, 0);
+            printf("head probe flung: %.300s\n", lastres);
+            sscanf(lastres, "ok stretched=%d", &fl);
+            char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &flh);
+            memcpy(space, saved, 48 * NB); free(saved);
+        }
         int bad = hleft > nh / 50 || taken > 0;
+        // (more than with the head still: an enemy's bind pose stretches a few already)
+        if (fl - flh > st - sth) { printf("FAIL: %d more triangles stretch, visible, with the head flung off\n", fl - flh - (st - sth)); bad = 1; }
         printf("head: %d head vertices over the plane, %d stayed on the body; %d vertices off the neck went with it\n%s\n", nh, hleft, taken, bad ? "FAIL" : "PASS");
         return bad;
     }
@@ -637,6 +663,16 @@ int main(int argc, char **argv)
         float armat = getenv("ARMAT") ? (float)atof(getenv("ARMAT")) : 0.4f; // ARMAT: where down the upper arm (gore.lua PARTS at)
         for (int k = 0; k < 3; k++) { at2[k] = a[k] + (b2[k] - a[k]) * armat; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
         for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+        // ARMTILT=<deg>: the plane leans that far off square to the arm (a blade's cut along its swing, 52 degrees in
+        // the playtest), ARMTILTDIR=0..7 which way round the arm, 45 degrees apart
+        if (getenv("ARMTILT")) {
+            float tilt = (float)atof(getenv("ARMTILT")) * 3.14159f / 180, way = (getenv("ARMTILTDIR") ? atoi(getenv("ARMTILTDIR")) : 0) * 0.7854f;
+            float e1[3] = { __builtin_fabsf(nn[2]) < 0.9f ? 0.0f : 1.0f, 0, __builtin_fabsf(nn[2]) < 0.9f ? 1.0f : 0.0f }, t = e1[0] * nn[0] + e1[1] * nn[1] + e1[2] * nn[2], el = 0;
+            for (int k = 0; k < 3; k++) { e1[k] -= t * nn[k]; el += e1[k] * e1[k]; }
+            for (int k = 0; k < 3; k++) e1[k] /= __builtin_sqrtf(el);
+            float e2[3] = { nn[1] * e1[2] - nn[2] * e1[1], nn[2] * e1[0] - nn[0] * e1[2], nn[0] * e1[1] - nn[1] * e1[0] };
+            for (int k = 0; k < 3; k++) nn[k] = nn[k] * __builtin_cosf(tilt) + (e1[k] * __builtin_cosf(way) + e2[k] * __builtin_sinf(way)) * __builtin_sinf(tilt);
+        }
         // ELBOWHIP=1 (a thigh cut, ARMBONE=Bip001-L-Thigh): her left arm moved so its elbow helper lies on the hip
         // joint, the hand resting by the hip in a fall. In game the hip's own helpers had moved off it (driven by the
         // bent thigh) and that helper was the best sink: the hip's seam went off with the flailing arm, a sheet from
@@ -658,11 +694,21 @@ int main(int argc, char **argv)
         int driven = env_on("DRIVEN") || env_on("UNWATCHED");
         if (env_on("DRIVEN")) {
             float q[4] = { 0, __builtin_sinf(0.1745f), 0, __builtin_cosf(0.1745f) };
+            // (with the helpers under it, as the animation turns them: Ab-R-Side under the aim helper Dm-R-Side-Point
+            // held still against it)
             for (int i = 0; i < NB; i++) if (bparent[i] == bparent[ua] && strncmp(bname[i], "Bip001", 6)) {
-                float *t = space + i * 12, o[4], keep[4];
-                memcpy(keep, t, 16); qmul(t, q, o); memcpy(t, o, 16);
+                float *keep = malloc(48 * NB), *o0 = space + i * 12 + 4, org[3] = { o0[0], o0[1], o0[2] };
+                memcpy(keep, space, 48 * NB);
+                for (int j = 0; j < NB; j++) {
+                    int under = 0;
+                    for (int a2 = j; a2 >= 0 && !under; a2 = bparent[a2]) under = a2 == i;
+                    if (!under) continue;
+                    float *t = space + j * 12, o[4], d[3] = { t[4] - org[0], t[5] - org[1], t[6] - org[2] }, r[3];
+                    qmul(q, t, o); memcpy(t, o, 16);
+                    quat_rot(q, d, r); t[4] = org[0] + r[0]; t[5] = org[1] + r[1]; t[6] = org[2] + r[2];
+                }
                 skin_watch((u64)comp_a);
-                memcpy(t, keep, 16);
+                memcpy(space, keep, 48 * NB); free(keep);
             }
         }
         // LEGFIRST=<thigh>: that thigh came off first (0.4 down it, square to it, collapsed), as a killing swing through
@@ -727,6 +773,22 @@ int main(int argc, char **argv)
         }
         if (driven) {
             if (strstr(lastres, " carried=")) { printf("FAIL: a helper that swung while she played (or was never watched) carries the stub\n"); return 1; }
+            // nor may a sink hang under one: Ab-R-Side, still against Dm-R-Side-Point (the aim helper the animation
+            // points at the arm), took the shoulder's seam, and in an animated death it chased the flying arm, a sheet
+            // from the shoulder to it (playtest, CH_P_EVE_29)
+            if (env_on("DRIVEN")) {
+                const char *q = strstr(lastres, " sinks=");
+                int under = 0;
+                for (q = q ? q + 7 : 0; q && *q && *q != ' ';) {
+                    int i = atoi(q);
+                    // (one that swung itself may take it, the sink of last resort: it moves the point a few cm)
+                    for (int a2 = bparent[i]; a2 >= 0 && strncmp(bname[a2], "Bip001", 6); a2 = bparent[a2])
+                        if (bparent[a2] == bparent[ua]) { printf("arm: sink %s hangs under %s, which swung\n", bname[i], bname[a2]); under++; break; }
+                    while (*q && *q != ',' && *q != ' ') q++;
+                    if (*q == ',') q++;
+                }
+                if (under) { printf("FAIL: %d sinks under a helper that swung while she played\n", under); return 1; }
+            }
             printf("arm: no carrier, as wanted\nPASS\n");
             return 0;
         }
@@ -878,6 +940,30 @@ int main(int argc, char **argv)
         // triangle stretched from the body to the dropped arm is the outfit hanging off the shoulder (sixteenth playtest)
         int still = -1, flung = -1, hid = 0, still_hid = 0;
         skin_collapse(); // "k", as in game a few frames after the cut
+        // HEADAFTER=1: the killing swing's head cut right after the arm's (gore.lua's "one swing, then head"): MODE_PLANE
+        // on Bip001-Head HEADAT (1.0) of the way from the neck, square to it, as for Eve (her head goes on the face mesh), then
+        // collapsed. The arm must still come off clean (a sheet from the shoulder to the dropped arm, playtest)
+        if (env_on("HEADAFTER")) {
+            int neck = bone("Bip001-Neck");
+            float *a = space + neck * 12 + 4, *b2 = space + head * 12 + 4, hat[3], hn[3], hl = 0;
+            float hat_t = getenv("HEADAT") ? (float)atof(getenv("HEADAT")) : 1.0f; // tune.gore.headAt
+            for (int k = 0; k < 3; k++) { hat[k] = a[k] + (b2[k] - a[k]) * hat_t; hn[k] = b2[k] - a[k]; hl += hn[k] * hn[k]; }
+            for (int k = 0; k < 3; k++) hn[k] /= __builtin_sqrtf(hl);
+            set_nosink(); other_limbs_nosink(head);
+            limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0;
+            skin_cut((u64)comp_a, 0, head, hat, hn, MODE_PLANE, 0, 0, -1);
+            printf("head after: %.300s\n", lastres);
+            skin_collapse();
+            int gone_arm = 0, nfa = 0;
+            for (int v = 0; v < NV; v++) {
+                skin_info vo; orig_info(v, &vo);
+                int wf = 0, onarm = 0;
+                for (int i = 0; i < 8; i++) if (vo.weights[i] && fore[vo.bones[i]]) wf += vo.weights[i];
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) onarm = 1;
+                if (wf > 127) { nfa++; gone_arm += !onarm; }
+            }
+            printf("head after: %d of %d forearm vertices fell off the arm\n", gone_arm, nfa);
+        }
         {
             float *saved = malloc(48 * NB);
             memcpy(saved, space, 48 * NB);
@@ -923,7 +1009,9 @@ int main(int argc, char **argv)
             // the game's aim helpers chase the arm (the anim graph points them at it): Dm-L-Side-Point off the
             // clavicle and Dm-L-Trape-Cnt off Spine2 turn, with everything under them, from where the elbow was to
             // where it is now
-            const char *aims[2] = { "Dm-L-Side-Point", "Dm-L-Trape-Cnt" };
+            // (the cut arm's side: the right arm's were never turned)
+            int right = strstr(bname[ua], "-R-") != 0;
+            const char *aims[2] = { right ? "Dm-R-Side-Point" : "Dm-L-Side-Point", right ? "Dm-R-Trape-Cnt" : "Dm-L-Trape-Cnt" };
             for (int k = 0; k < 2; k++) {
                 int h = bone(aims[k]);
                 if (h < 0) continue;

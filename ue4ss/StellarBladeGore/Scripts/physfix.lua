@@ -1,20 +1,21 @@
--- physfix.lua: what the script can do for an outfit the data mod didn't patch (tune.physfix).
+-- physfix.lua: the ragdoll fixes of every outfit's physics asset, made in game (tune.physfix).
 --
--- The data mod's outfits container patches every outfit mesh it found at build time: LOD0 CPU access (the cut reads
--- her skin from it) and the ragdoll fixes in its physics asset (assetkit/outfits.py). An outfit mod installed after
--- the build, one that loads after this mod, or a build without the outfits container leaves her in a mesh with
--- neither. This tells the log which, and fixes what can be fixed from here:
+-- The release ships no outfits pak: every outfit she puts on, vanilla or any mod's, on Linux or Windows, gets the
+-- fixes the build's outfits container makes (assetkit/outfits.py, built only for dev and as the reference these are
+-- tested to: test/run.sh phys). An asset that pak did patch is left alone. This tells the log which, and fixes:
 --   * damping: vanilla bodies fall at ~2 m/s (linear 5.0) and turn as if under water (angular 10). The main
 --     bodies get the data mod's values in the physics asset's defaults, and the mesh re-creates its bodies from it
 --     while she is animated (they are kinematic then, so nothing shows).
---   * joint limits: the main joints' soft limits give way under a push; they're made hard. The data mod also
---     re-centres the ranges on her bind pose, which needs the reference skeleton's rotations: not from here.
---   * jiggle bodies: the torso's (breasts, belly and hip correctives) sit inside her and shove her arms and torso
---     every frame; they collide with nothing (the data mod keeps every accessory off her bodies, by the collision
---     table, which can't be reached from here).
+--   * joint limits: the main joints' soft limits give way under a push; they're made hard, and a motion limited to a
+--     few degrees is locked (at its limit all the time, it buzzed).
 --   * loose bodies: twist and helper bones that carry a cape or skirt chain, with a body but no joint to anything
---     (in a ragdoll they fly off and drag the arm's skin with them), get a locked constraint to the nearest body
---     above them while she is ragdolled.
+--     (in a ragdoll they fly off and drag the arm's or thigh's skin with them), get a locked joint to the nearest
+--     body above them, the data mod's, added to the asset with sbslice.dll ("j"); without it, a locked constraint
+--     component while she is ragdolled.
+--   * joint ranges: the main joints' twist re-centred on her bind pose, read from the mesh by sbslice.dll ("b"), and
+--     the hips' sideways swing, as the data mod's (outfits.py joint_limits, the same numbers: test/run.sh phys)
+--   * collision: none of her bodies collide with each other, only the world, by the asset's collision table, which
+--     sbslice.dll fills ("t"); without the DLL the torso's jiggle bodies are left colliding with nothing instead
 --   * no physics asset at all: an outfit mod's mesh exported without one (Eve with no Clothes on) has no bodies,
 --     so she can't ragdoll. It gets the asset next to it by the game's naming (<mesh>_Physics, which the data mod
 --     ships patched), else tune.physfix.fallback (Eve's base body's).
@@ -37,13 +38,15 @@ local MAIN = {
   ["Bip001-L-Hand"] = true, ["Bip001-R-Hand"] = true, ["Bip001-L-Thigh"] = true, ["Bip001-R-Thigh"] = true,
   ["Bip001-L-Calf"] = true, ["Bip001-R-Calf"] = true, ["Bip001-L-Foot"] = true, ["Bip001-R-Foot"] = true,
 }
-local ACM_LOCKED = 2
+local ACM_LIMITED, ACM_LOCKED = 1, 2
 local LCM_LOCKED = 2
 
 local seenMesh = nil   -- address of the SkeletalMesh last checked
 local fixed = {}       -- physics asset address -> true once its defaults are changed (the asset stays loaded)
 local state = nil      -- { patched, cpu, pa } for the current mesh
 local locks = {}       -- constraint components made for this ragdoll
+local waiting = false  -- logged that an outfit waits for sbslice.dll
+local filledTable = {} -- physics asset address -> true once sbslice.dll filled its collision table
 
 function M.init(c)
   ctx = c
@@ -112,6 +115,192 @@ local function borrow_physics(sk)
   end
   local fb = cfg().fallback or "/Game/Art/Character/PC/CH_P_EVE_01/CH_P_EVE_01_Physics.CH_P_EVE_01_Physics"
   return load(fb), fb
+end
+
+-- ---- joint ranges from the bind pose: assetkit/outfits.py's joint_limits, step for step (test/run.sh phys holds the
+-- two to the same numbers on every vanilla outfit) ----
+local function vsub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
+local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
+local function unit(a) local l = math.sqrt(dot(a, a)); return { a[1] / l, a[2] / l, a[3] / l } end
+local function qrot(q, v) -- q {x, y, z, w}
+  local u, w = { q[1], q[2], q[3] }, q[4]
+  local c0 = cross(u, v)
+  local m = cross(u, { c0[1] + v[1] * w, c0[2] + v[2] * w, c0[3] + v[3] * w })
+  return { v[1] + 2 * m[1], v[2] + 2 * m[2], v[3] + 2 * m[3] }
+end
+local function frame(q, pri, sec) local x, y = qrot(q, pri), qrot(q, sec); return { x, y, cross(x, y) } end
+local function round2(x) return tonumber(string.format("%.2f", x)) end
+local atan2 = math.atan2 or math.atan
+
+-- cons: { child, parent, pri1, sec1, pri2, sec2 } per joint (axes {x, y, z}); bind: bone -> { q = {x, y, z, w},
+-- t = {x, y, z} } in component space; ranges: tune.physfix.ranges. -> child -> { twist, turn }, notes. The twist is
+-- the joint's bend (PhAT framed them as hinges about X), limited the same both ways round the asset's zero: twist is
+-- half the range, turn how far frame 2 turns about X to centre it on the bind pose. Her front: her left foot to toe
+function M.joint_ranges(cons, bind, ranges)
+  local out, notes = {}, {}
+  local toe, foot = bind["Bip001-L-Toe0"], bind["Bip001-L-Foot"]
+  if not (toe and foot) then return out, { "no Bip001-L-Toe0 (no front)" } end
+  local f = vsub(toe.t, foot.t)
+  local fwd = unit({ f[1], f[2], 0 })
+  for _, c in ipairs(cons) do
+    local r, bc, ba = ranges[c.child], bind[c.child], bind[c.parent]
+    if r and bc and ba then
+      local be = bind[r.e]
+      if not be then
+        notes[#notes + 1] = c.child .. ": no " .. r.e
+      else
+        local f1, f2 = frame(bc.q, c.pri1, c.sec1), frame(ba.q, c.pri2, c.sec2)
+        local rel = {}
+        for i = 1, 3 do rel[i] = {}; for j = 1, 3 do rel[i][j] = dot(f2[i], f1[j]) end end
+        local w = math.sqrt(math.max(0, 1 + rel[1][1] + rel[2][2] + rel[3][3])) / 2
+        local x = w > 1e-6 and (rel[3][2] - rel[2][3]) / (4 * w) or 1.0
+        local atBind = math.deg(2 * atan2(x, w))
+        local ahead = dot(cross(f1[1], unit(vsub(be.t, bc.t))), fwd)
+        if math.abs(ahead) < 0.5 then
+          notes[#notes + 1] = string.format("%s: its twist doesn't bend it front to back (%+.2f)", c.child, ahead)
+        else
+          local lo, hi
+          if ahead > 0 then lo, hi = -r.back, r.front else lo, hi = -r.front, r.back end
+          lo, hi = lo + atBind, hi + atBind
+          out[c.child] = { twist = round2((hi - lo) / 2), turn = round2((hi + lo) / 2) }
+          notes[#notes + 1] = string.format("%s %+.0f at bind, twist %s turned %+g", c.child, atBind, out[c.child].twist, out[c.child].turn)
+        end
+      end
+    end
+  end
+  return out, notes
+end
+
+-- frame 2's secondary axis turned by deg about its primary one (the twist then reads deg less: the range moves by it)
+function M.turned(pri, sec, deg)
+  local c, t = cross(pri, sec), math.rad(deg)
+  return { sec[1] * math.cos(t) + c[1] * math.sin(t), sec[2] * math.cos(t) + c[2] * math.sin(t), sec[3] * math.cos(t) + c[3] * math.sin(t) }
+end
+
+local function vec_of(s) return { s.X, s.Y, s.Z } end
+
+-- the main joints of an asset, for joint_ranges
+local function main_joints(pa)
+  local out = {}
+  for _, t in ipairs(constraints_of(pa)) do
+    local j = try(function()
+      local d = t.DefaultInstance
+      return { child = d.ConstraintBone1:ToString(), parent = d.ConstraintBone2:ToString(), pri1 = vec_of(d.PriAxis1),
+        sec1 = vec_of(d.SecAxis1), pri2 = vec_of(d.PriAxis2), sec2 = vec_of(d.SecAxis2), t = t }
+    end)
+    if j and MAIN[j.child] then out[#out + 1] = j end
+  end
+  return out
+end
+
+-- the main joints as the data mod leaves them: hard limits, a motion limited under lockBelow degrees locked, the cone
+-- overrides (swing) and the twist ranges (lims, from joint_ranges). The joints' own defaults, so bodies made after it
+-- have them. -> how many joints, how many got a range
+function M.fix_joints(joints, lims, g)
+  local hard, below, swing = g.hardLimits ~= false, g.lockBelow or 6, g.swing or {}
+  local n, nr = 0, 0
+  for _, j in ipairs(joints) do
+    if try(function()
+      local d = j.t.DefaultInstance
+      local p = d.ProfileInstance
+      local cone, tw = p.ConeLimit, p.TwistLimit
+      if hard then cone.bSoftConstraint = false; tw.bSoftConstraint = false end
+      local function lock(lim, m, deg)
+        if hard and lim[m] == ACM_LIMITED and (lim[deg] == 0 or lim[deg] < below) then lim[m] = ACM_LOCKED end
+      end
+      lock(cone, "Swing1Motion", "Swing1LimitDegrees")
+      lock(cone, "Swing2Motion", "Swing2LimitDegrees")
+      if not lims[j.child] then lock(tw, "TwistMotion", "TwistLimitDegrees") end
+      for k, v in pairs(swing[j.child] or {}) do cone[k] = v end
+      local l = lims[j.child]
+      if l then
+        tw.TwistLimitDegrees = l.twist
+        local s = M.turned(j.pri2, j.sec2, l.turn)
+        d.SecAxis2.X, d.SecAxis2.Y, d.SecAxis2.Z = s[1], s[2], s[3]
+        nr = nr + 1
+      end
+      return true
+    end) then n = n + 1 end
+  end
+  return n, nr
+end
+
+-- the bind pose of the bones named (a set), from sbslice.dll: bone -> { q, t }, or nil and why
+local function bind_pose(mesh, sk, names)
+  local list, byIdx = {}, {}
+  for b in pairs(names) do
+    local i = try(function() return mesh:GetBoneIndex(FName(b)) end)
+    if i and i >= 0 then list[#list + 1] = string.format("%x", i); byIdx[i] = b end
+  end
+  local r = ctx.gore.command(string.format("b%x,%s", sk:GetAddress(), table.concat(list, ",")))
+  if r:sub(1, 3) ~= "ok " then return nil, r end
+  local out = {}
+  for item in r:sub(4):gmatch("[^|]+") do
+    local f = {}
+    for x in item:gmatch("%S+") do f[#f + 1] = x end
+    local b = byIdx[tonumber(f[1])]
+    if b and #f == 8 then
+      out[b] = { q = { tonumber(f[2]), tonumber(f[3]), tonumber(f[4]), tonumber(f[5]) }, t = { tonumber(f[6]), tonumber(f[7]), tonumber(f[8]) } }
+    end
+  end
+  return out
+end
+
+local function qmul(a, b)
+  return { a[4] * b[1] + a[1] * b[4] + a[2] * b[3] - a[3] * b[2], a[4] * b[2] - a[1] * b[3] + a[2] * b[4] + a[3] * b[1],
+    a[4] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[4], a[4] * b[4] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3] }
+end
+
+-- a locked joint for each loose body (M.loose_bodies) to the body above it, as the data mod adds them (outfits.py
+-- orphan_joints, patch_shows.py add_joints): a new PhysicsConstraintTemplate, frame 1 the child bone, frame 2 the
+-- child at its bind pose in the parent's space, every motion locked, no collision between the two, appended to the
+-- asset's ConstraintSetup by sbslice.dll ("j"). Real joints, made with her bodies whenever the mesh makes them: a
+-- constraint component added at the ragdoll's start didn't hold CH_P_EVE_29's thigh twists, which carry her upper
+-- thighs' skin, and the skin hung off the thigh (playtest 39). -> how many, or nil and why
+function M.add_joints(pa, loose, bind)
+  local cls = try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintTemplate") end)
+  if not valid(cls) then return nil, "no PhysicsConstraintTemplate class" end
+  local have = constraints_of(pa)
+  local first = have[1] and try(function() return have[1]:GetAddress() end)
+  if not first then return nil, "the asset has no joint to find the array by" end
+  local made, names = {}, {}
+  for _, l in ipairs(loose) do
+    local b, up = l[1], l[2]
+    local c, a = bind[b], bind[up]
+    if c and a then
+      local ia = { -a.q[1], -a.q[2], -a.q[3], a.q[4] }
+      local q = qmul(ia, c.q)
+      local pos, pri, sec = qrot(ia, vsub(c.t, a.t)), qrot(q, { 1, 0, 0 }), qrot(q, { 0, 1, 0 })
+      local t = try(function() return StaticConstructObject(cls, pa) end)
+      if not valid(t) then t = try(function() return StaticConstructObject(cls, pa, FName("None"), 0) end) end
+      if valid(t) and try(function()
+        local d = t.DefaultInstance
+        d.JointName, d.ConstraintBone1, d.ConstraintBone2 = FName(b), FName(b), FName(up)
+        d.Pos2.X, d.Pos2.Y, d.Pos2.Z = pos[1], pos[2], pos[3]
+        d.PriAxis2.X, d.PriAxis2.Y, d.PriAxis2.Z = pri[1], pri[2], pri[3]
+        d.SecAxis2.X, d.SecAxis2.Y, d.SecAxis2.Z = sec[1], sec[2], sec[3]
+        local p = d.ProfileInstance
+        p.LinearLimit.XMotion, p.LinearLimit.YMotion, p.LinearLimit.ZMotion = LCM_LOCKED, LCM_LOCKED, LCM_LOCKED
+        p.ConeLimit.Swing1Motion, p.ConeLimit.Swing2Motion, p.TwistLimit.TwistMotion = ACM_LOCKED, ACM_LOCKED, ACM_LOCKED
+        p.bDisableCollision = true
+        return true
+      end) then
+        made[#made + 1] = string.format("%x", t:GetAddress())
+        names[#names + 1] = b .. ">" .. up
+      end
+    end
+  end
+  if #made == 0 then return nil, "no joint made" end
+  local r = ctx.gore.command(string.format("j%x,%x,%x,%s", pa:GetAddress(), #have, first, table.concat(made, ",")))
+  if r:sub(1, 3) ~= "ok " then return nil, r end
+  return #made, table.concat(names, ", ")
+end
+
+-- sbslice.dll: "ready", "failed" (or no gore: as failed), else still starting
+local function dll()
+  local g = ctx.gore
+  return g and g.native_state and g.native_state() or "failed"
 end
 
 -- the torso's jiggle bodies (breasts, belly and hip correctives): a leaf body whose nearest body above is one of these
@@ -220,10 +409,10 @@ local function weld_kinematic(pa, mesh)
   return done
 end
 
-local function fix_defaults(pa, mesh)
+local function fix_defaults(pa, mesh, sk)
   local g = cfg()
   local lin, ang = g.linearDamping or 0.2, g.angularDamping or 1.0
-  local nb, nc = 0, 0
+  local nb = 0
   for _, bs in ipairs(bodies_of(pa)) do
     if MAIN[try(function() return bs.BoneName:ToString() end) or ""] then
       if try(function() bs.DefaultInstance.LinearDamping = lin; bs.DefaultInstance.AngularDamping = ang; return true end) then
@@ -231,26 +420,54 @@ local function fix_defaults(pa, mesh)
       end
     end
   end
-  if g.hardLimits ~= false then
-    for _, t in ipairs(constraints_of(pa)) do
-      local child = try(function() return t.DefaultInstance.ConstraintBone1:ToString() end)
-      if MAIN[child or ""] and try(function()
-        local p = t.DefaultInstance.ProfileInstance
-        p.ConeLimit.bSoftConstraint = false
-        p.TwistLimit.bSoftConstraint = false
-        return true
-      end) then nc = nc + 1 end
-    end
-  end
   local back = try(function()
     for _, bs in ipairs(bodies_of(pa)) do
       if bs.BoneName:ToString() == "Bip001-Pelvis" then return bs.DefaultInstance.LinearDamping end
     end
   end)
-  local q = g.quietJiggle ~= false and (", " .. quiet_jiggle(pa, mesh)) or ""
-  return string.format("damping %.1f/%.1f on %d main bodies (pelvis reads back %s), hard limits on %d joints%s",
-    lin, ang, nb, back and string.format("%.2f", back) or "?", nc, q)
+  -- the joints: ranges and the loose bodies' joints from the bind pose (read before fix_joints turns any frame)
+  local joints, lims, why = main_joints(pa), {}, ""
+  local loose = g.lockLoose ~= false and M.loose_bodies(pa, mesh) or {}
+  local bind
+  if (g.ranges or #loose > 0) and dll() == "ready" then
+    local names = { ["Bip001-L-Toe0"] = true, ["Bip001-L-Foot"] = true }
+    for _, j in ipairs(joints) do
+      local r = (g.ranges or {})[j.child]
+      if r then names[j.child], names[j.parent], names[r.e] = true, true, true end
+    end
+    for _, l in ipairs(loose) do names[l[1]], names[l[2]] = true, true end
+    local err
+    bind, err = bind_pose(mesh, sk, names)
+    if bind and g.ranges then
+      local notes
+      lims, notes = M.joint_ranges(joints, bind, g.ranges)
+      for _, n in ipairs(notes) do if not n:find(" at bind,", 1, true) then why = why .. "; " .. n end end
+    elseif not bind then
+      why = "; no bind pose: " .. tostring(err)
+    end
+  elseif g.ranges or #loose > 0 then
+    why = "; no sbslice.dll, so no ranges and no joints for loose bodies"
+  end
+  local nj, nr = M.fix_joints(joints, lims, g)
+  if bind and #loose > 0 then
+    local n, what = M.add_joints(pa, loose, bind)
+    why = why .. (n and ("; loose bodies jointed: " .. what) or ("; loose bodies NOT jointed (" .. tostring(what) .. "): locked at the ragdoll's start instead"))
+  end
+  -- collision: none between her bodies (the DLL's table), else the jiggle bodies with nothing
+  local coll = ""
+  local filled = false
+  if g.collisionTable ~= false and dll() == "ready" then
+    local r = ctx.gore.command(string.format("t%x,%x", pa:GetAddress(), #bodies_of(pa)))
+    filled = r:sub(1, 3) == "ok "
+    filledTable[pa:GetAddress()] = filled or nil
+    coll = filled and (", her bodies collide with nothing of hers (" .. r .. ")") or (", collision table NOT filled: " .. r)
+  end
+  if not filled and g.quietJiggle ~= false then coll = coll .. ", " .. quiet_jiggle(pa, mesh) end
+  return string.format("damping %.1f/%.1f on %d main bodies (pelvis reads back %s), %d main joints fixed, %d ranged from the bind pose%s%s",
+    lin, ang, nb, back and string.format("%.2f", back) or "?", nj, nr, why, coll)
 end
+
+M.fix_asset = fix_defaults -- (test/run.sh phys runs it on the vanilla outfits)
 
 -- her mesh's physics asset: the component's, else the mesh's, else the one given to this mesh here. A null
 -- UObject comes back from UE4SS as an invalid wrapper, which is truthy, so `a() or b()` never reached b().
@@ -361,8 +578,17 @@ function M.check(pawn, mesh, live)
   if cpu == false and not forced then note = note .. "; cuts may not read this mesh (a failed cut logs 'no CPU copy')" end
   if not valid(pa) or state.patched then log(what .. note); return end
   if paddr and not fixed[paddr] then
+    -- the ranges and the collision table need sbslice.dll: it answers within a few seconds of the game starting
+    local d = dll()
+    if d ~= "ready" and d ~= "failed" then
+      if not waiting then log("outfit " .. name(sk) .. ": waiting for sbslice.dll to fix its physics"); waiting = true end
+      seenMesh = nil
+      return
+    end
     fixed[paddr] = true
-    what = what .. "; " .. fix_defaults(pa, mesh)
+    what = what .. "; " .. fix_defaults(pa, mesh, sk)
+    -- (the ends' turn damping again: fix_defaults set every main body's to angularDamping)
+    if steadied[paddr] then steady(pa) end
   end
   if not live then
     local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
@@ -371,10 +597,30 @@ function M.check(pawn, mesh, live)
   log(what .. note)
 end
 
--- main.lua's selfCollision "auto" goes by the damping too: an asset fixed here still has vanilla's collision pairs
+-- main.lua's selfCollision "auto" goes by the damping too: an asset fixed here without sbslice.dll's collision table
+-- still has vanilla's collision pairs
 function M.runtime_fixed(pa)
   local a = valid(pa) and try(function() return pa:GetAddress() end)
-  return a and fixed[a] == true or false
+  return a and fixed[a] == true and not filledTable[a] or false
+end
+
+-- the bodies no joint holds, outside the main skeleton (twist and helper bones carrying a cape or skirt chain), each
+-- with the nearest bone above it that has a body: { { body, above }, ... } (outfits.py's orphan_joints picks the same)
+function M.loose_bodies(pa, mesh)
+  local has, held, out = {}, {}, {}
+  for _, bs in ipairs(bodies_of(pa)) do has[try(function() return bs.BoneName:ToString() end) or ""] = true end
+  for _, t in ipairs(constraints_of(pa)) do
+    held[try(function() return t.DefaultInstance.ConstraintBone1:ToString() end) or ""] = true
+  end
+  for b in pairs(has) do
+    if b ~= "" and not MAIN[b] and not held[b] then
+      local up = try(function() return mesh:GetParentBone(FName(b)):ToString() end)
+      while up and up ~= "None" and not has[up] do up = try(function() return mesh:GetParentBone(FName(up)):ToString() end) end
+      if up and up ~= "None" then out[#out + 1] = { b, up } end
+    end
+  end
+  table.sort(out, function(x, y) return x[1] < y[1] end)
+  return out
 end
 
 -- ragdoll start: lock the loose bodies of an unpatched asset to the body above them
@@ -383,33 +629,25 @@ function M.start(pawn, mesh)
   if cfg().enabled == false or cfg().lockLoose == false or not state or state.patched or not valid(state.pa) then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintComponent") end)
   if not valid(cls) then return "no PhysicsConstraintComponent class" end
-  local has, held = {}, {}
-  for _, bs in ipairs(bodies_of(state.pa)) do has[try(function() return bs.BoneName:ToString() end) or ""] = true end
-  for _, t in ipairs(constraints_of(state.pa)) do
-    held[try(function() return t.DefaultInstance.ConstraintBone1:ToString() end) or ""] = true
-  end
   local done = {}
-  for b in pairs(has) do
-    if b ~= "" and not MAIN[b] and not held[b] then
-      local up = try(function() return mesh:GetParentBone(FName(b)):ToString() end)
-      while up and up ~= "None" and not has[up] do up = try(function() return mesh:GetParentBone(FName(up)):ToString() end) end
-      local at = up and up ~= "None" and try(function() return mesh:GetSocketLocation(FName(b)) end)
-      local pc = at and try(function()
-        return pawn:AddComponentByClass(cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 },
-          Translation = { X = 0, Y = 0, Z = 0 }, Scale3D = { X = 1, Y = 1, Z = 1 } }, false)
-      end)
-      if valid(pc) then
-        locks[#locks + 1] = pc
-        try(function() pc:K2_SetWorldLocation(at, false, {}, true) end)
-        try(function() pc:SetLinearXLimit(LCM_LOCKED, 0) end)
-        try(function() pc:SetLinearYLimit(LCM_LOCKED, 0) end)
-        try(function() pc:SetLinearZLimit(LCM_LOCKED, 0) end)
-        try(function() pc:SetAngularSwing1Limit(ACM_LOCKED, 0) end)
-        try(function() pc:SetAngularSwing2Limit(ACM_LOCKED, 0) end)
-        try(function() pc:SetAngularTwistLimit(ACM_LOCKED, 0) end)
-        if try(function() pc:SetConstrainedComponents(mesh, FName(up), mesh, FName(b)); return true end) then
-          done[#done + 1] = b .. ">" .. up
-        end
+  for _, l in ipairs(M.loose_bodies(state.pa, mesh)) do
+    local b, up = l[1], l[2]
+    local at = try(function() return mesh:GetSocketLocation(FName(b)) end)
+    local pc = at and try(function()
+      return pawn:AddComponentByClass(cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 },
+        Translation = { X = 0, Y = 0, Z = 0 }, Scale3D = { X = 1, Y = 1, Z = 1 } }, false)
+    end)
+    if valid(pc) then
+      locks[#locks + 1] = pc
+      try(function() pc:K2_SetWorldLocation(at, false, {}, true) end)
+      try(function() pc:SetLinearXLimit(LCM_LOCKED, 0) end)
+      try(function() pc:SetLinearYLimit(LCM_LOCKED, 0) end)
+      try(function() pc:SetLinearZLimit(LCM_LOCKED, 0) end)
+      try(function() pc:SetAngularSwing1Limit(ACM_LOCKED, 0) end)
+      try(function() pc:SetAngularSwing2Limit(ACM_LOCKED, 0) end)
+      try(function() pc:SetAngularTwistLimit(ACM_LOCKED, 0) end)
+      if try(function() pc:SetConstrainedComponents(mesh, FName(up), mesh, FName(b)); return true end) then
+        done[#done + 1] = b .. ">" .. up
       end
     end
   end

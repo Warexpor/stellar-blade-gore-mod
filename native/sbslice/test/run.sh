@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Build and run the skin cut harness natively (clang, ASan/UBSan), then the cuts on real outfit and enemy meshes when
 # the build cache has them (test/real/run.sh). The real-mesh runs go in parallel (JOBS, default the CPU count).
-#   test/run.sh [group...]   groups: unit (test_cut.c), stats (test_stats.c), split, waist, arm, mark, enemy; default all
+#   test/run.sh [group...]   groups: unit (test_cut.c), stats (test_stats.c), phys (test_phys.c and the outfit physics
+#                            parity, phys/parity.py), split, waist, arm, head, mark, enemy; default all
 # What to run for a change:
 #   stats.c / glass.lua            stats
-#   sbslice.c, a limb or neck cut  unit arm enemy
+#   physfix.lua, its tune, b/t/j   phys
+#   sbslice.c, a limb or neck cut  unit arm head enemy
 #   sbslice.c, the split (SIDE)    unit split waist
 #   sbslice.c, anything shared     everything (no group)
-#   Lua alone                      nothing here (the harness doesn't run Lua)
+#   other Lua                      nothing here (the harness doesn't run it)
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
-[[ $# -eq 0 ]] && SEL=" unit stats split waist arm mark enemy "
+[[ $# -eq 0 ]] && SEL=" unit stats phys split waist arm head mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
 fail=0
 if on unit; then
@@ -26,6 +28,23 @@ if on stats; then
   r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-stats" | tail -1)
   echo "stats: $r"
   [[ $r == PASS ]] || fail=1
+fi
+# the outfit physics commands on made-up data, then physfix.lua against the build's patched physics assets (needs a
+# build's cache and lua)
+if on phys; then
+  clang -O1 -g -fsanitize=address,undefined -w -o "$OUT-phys" test_phys.c
+  r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-phys" | tail -1)
+  echo "phys: $r"
+  [[ $r == PASS ]] || fail=1
+  if [[ -f ../../../.cache/work/spec.json && -d ../../../.cache/work/json_out ]]; then
+    if r=$(python3 phys/parity.py ../../../.cache/work ../../../ue4ss/StellarBladeGore/Scripts "$OUT-parity" 2>&1); then
+      echo "$r" | tail -1
+    else
+      echo "$r" | grep -v '^ok '; fail=1
+    fi
+  else
+    echo "phys: no build cache, parity skipped"
+  fi
 fi
 # the real-mesh runs: one line each, "label|env...|mesh[|vanilla cache]" (the cache's path may have spaces)
 jobs=()
@@ -58,6 +77,10 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       # a stub carrier must have held still while she played: helpers that swung, or none watched yet, carry nothing
       if on arm && [[ -z $posed ]]; then
         jobs+=("real arm cut $m, its parent's helpers driven|ARM=1 DRIVEN=1|$m" "real arm cut $m, never watched|ARM=1 UNWATCHED=1|$m")
+        # and the right arm: its shoulder's aim helper (Dm-R-Side-Point) swings with its helpers, none of which may
+        # take the seam (they chase the flying arm: a sheet from her shoulder to it, CH_P_EVE_29 playtest)
+        jobs+=("real right arm cut $m, its parent's helpers driven|ARM=1 DRIVEN=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3|$m")
+        jobs+=("real thigh cut $m, its parent's helpers driven|ARM=1 DRIVEN=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.4|$m")
       fi
     done
   done
@@ -76,6 +99,18 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # whole with the legs to stand up off her hips (thirty-seventh playtest)
   on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29.uasset ]] &&
     jobs+=("real waist cut CH_P_EVE_29|WAIST=1|CH_P_EVE_29" "real waist cut CH_P_EVE_29 (posed)|WAIST=1 POSED=1|CH_P_EVE_29")
+  # the playtest's death: the right arm along a 52-degree blade, its shoulder helpers swinging while she played, then
+  # the head (one swing, then head), on CH_P_EVE_29_TypeB
+  # her face cut with the head (tune.gore.faceCut): the head side's seam on the borrowed Spine1 that follows the head,
+  # at the lowest the jaw clearance takes it (tune.gore.jawDrop), the old plane, the head bone (headAt) and past it;
+  # the head flung off stretches nothing
+  FACE="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3"
+  on head && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3.uasset ]] &&
+    for at in 0.5 0.7 1.0 1.2; do jobs+=("real face cut with the head at $at|HEAD=1 FACESINK=1 HEADAT=$at $FACE|CH_P_EVE_Face_Jali3"); done
+  E29B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB"
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB.uasset ]] &&
+    jobs+=("real right arm cut CH_P_EVE_29_TypeB, shoulder helpers driven|ARM=1 DRIVEN=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3 $E29B|CH_P_EVE_29_TypeB"
+           "real right arm cut CH_P_EVE_29_TypeB along a blade, then the head|ARM=1 HEADAFTER=1 ARMTILT=52 ARMTILTDIR=6 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3 $E29B|CH_P_EVE_29_TypeB")
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real thigh cut CH_P_EVE_10, her elbow by the hip|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47 ELBOWHIP=1|CH_P_EVE_10"
            "real calf cut CH_P_EVE_10|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|CH_P_EVE_10"
