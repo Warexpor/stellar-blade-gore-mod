@@ -70,7 +70,7 @@ return {
     bladeSplit = 0.2,          --   share of those blades through her body that split her in two (else the odds above
                                --   are rolled): a blade made up for a death the game reported no hit for always
                                --   crossed the spine, so every real death was a split
-    bodyBias = 0.5,            -- share of killing blades that would take an arm or leg that take the head or cut her
+    bodyBias = 0.25,           -- share of killing blades that would take an arm or leg that take the head or cut her
                                --   across the waist instead (by the head : torso odds above); enemy swings mostly
                                --   cross a limb, so beheadings and waist cuts were rare (0 = the blade decides)
     sliceTilt = 50,            -- a limb cut along a blade leans with it at most this many degrees off square
