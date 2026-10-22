@@ -40,7 +40,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 |---|---|---|
 | `gore.enabled` | `true` | All cuts and blood. |
 <!-- | `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. | -->
-| `gore.death` | 40 / 28 / 20 / 12 | Odds of a limb, a beheading, a waist cut or a split down the middle, when the blow doesn't decide. |
+| `gore.death` | 50 / 30 / 12 / 8 | Odds of a limb, a beheading, a waist cut or a split down the middle, when the blow doesn't decide. |
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
 | `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster. It slides smoothly after her body till you fly it, and stops short of walls. |

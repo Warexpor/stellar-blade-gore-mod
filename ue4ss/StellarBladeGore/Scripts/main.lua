@@ -639,20 +639,31 @@ local function time_speed(pawn, k)
   local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
   return valid(gs) and valid(pawn) and try(function() gs:SetGlobalTimeDilation(pawn, k); return true end) == true
 end
--- the death screen's widget, found once and kept (FindFirstOf scans every object: 17 ms, twice a second, was a
--- stutter of its own, playtest), looked for at most every 2 s while it isn't found
+-- the death screen's widget, found once and kept (a scan of every object: 17 ms, twice a second, was a stutter of
+-- its own, playtest), looked for at most every 2 s in a death while it isn't found. Never its class default
+-- (FindFirstOf gave that, kept for good: no death screen was ever seen), and it lives inside the main HUD, so it is
+-- never in the viewport itself: shown when it and its CanvasPanel_Dead are visible
 local dead_hud = { next = 0 }
 local function death_screen()
   local w = dead_hud.w
   if not valid(w) then
+    dead_hud.w = nil
     if os.clock() < dead_hud.next then return false end
     dead_hud.next = os.clock() + 2
-    w = try(function() return FindFirstOf("WB_MainHUD_Dead_C") end)
+    for _, x in ipairs(try(function() return FindAllOf("WB_MainHUD_Dead_C") end) or {}) do
+      if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then w = x end
+    end
+    if not w then return false end
     dead_hud.w = w
-    if not valid(w) then return false end
   end
-  local vis = try(function() return w:GetVisibility() end) or 0 -- 1 collapsed, 2 hidden
-  return try(function() return w:IsInViewport() end) == true and vis ~= 1 and vis ~= 2
+  local function shown(x)
+    local vis = try(function() return x:GetVisibility() end) or 0 -- 1 collapsed, 2 hidden
+    return vis ~= 1 and vis ~= 2 and try(function() return x:IsVisible() end) ~= false
+      and (try(function() return x:GetRenderOpacity() end) or 1) > 0.01
+  end
+  if not shown(w) then return false end
+  local cp = try(function() return w:GetWidgetFromName(FName("CanvasPanel_Dead")) end)
+  return not valid(cp) or shown(cp)
 end
 local function skip_stop(why)
   local sk = skip
@@ -686,18 +697,33 @@ end
 -- got up at recoverAfter under the screen she would stand up whole behind it. seen / gone: the screen came up / went
 -- away in this death; press: one of its buttons (or its press animation) fired
 local screen = { n = 0 }
-local SCREEN_FNS = { "WB_Common_btn_1_Event_0", "WB_Common_btn_2_Event_0", "FinishPressAnimation" }
-function screen.reset() screen.seen, screen.gone, screen.press, screen.last = false, false, false, nil end
+-- its buttons (the custom events their clicks call, under either spelling of the name's number) and its animations:
+-- the death animation finishing shows it, the press animation a button pressed. Hooked as soon as its class is
+-- loaded (tried once a second in a death till then); none had ever been hooked, as the screen was never seen
+local SCREEN_FNS = { WB_Common_btn_1_Event_0 = "press", WB_Common_btn_2_Event_0 = "press", WB_Common_btn_1_Event = "press",
+  WB_Common_btn_2_Event = "press", FinishPressAnimation = "press", FinishYouDieAnimation = "shown" }
+function screen.reset() screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.last = false, false, false, false, false, nil end
 function screen.hook()
-  if screen.hooked then return end
+  if screen.hooked or os.clock() < (screen.retry or 0) then return end
+  screen.retry = os.clock() + 1
+  if not valid(try(function() return StaticFindObject("/Game/Art/UI/Widget/HUD/WB_MainHUD_Dead.WB_MainHUD_Dead_C") end)) then return end
   screen.hooked = true
-  for _, f in ipairs(SCREEN_FNS) do
-    local ok, err = pcall(RegisterHook, "/Game/Art/UI/Widget/HUD/WB_MainHUD_Dead.WB_MainHUD_Dead_C:" .. f, function()
-      if not screen.press then log("death screen: " .. f) end
-      screen.press = true
+  local got = {}
+  for f, what in pairs(SCREEN_FNS) do
+    local ok = pcall(RegisterHook, "/Game/Art/UI/Widget/HUD/WB_MainHUD_Dead.WB_MainHUD_Dead_C:" .. f, function()
+      if not active then return end
+      if what == "shown" then
+        if not screen.seen then log("death screen: " .. f) end
+        screen.seen = true
+      else
+        if not screen.press then log("death screen: " .. f) end
+        screen.press = true
+      end
     end)
-    log(string.format("hook death screen %s: %s", f, ok and "ok" or tostring(err)))
+    if ok then got[#got + 1] = f end
   end
+  table.sort(got)
+  log("hook death screen: " .. (#got > 0 and table.concat(got, ", ") or "none"))
 end
 -- may she be got up now (her ragdoll has run recoverAfter): a button pressed, the screen gone, or no screen at all
 -- recoverAfter + screenWait s in (a death without one: F5's)
@@ -707,19 +733,27 @@ function screen.ready(t)
 end
 function screen.probe(pawn)
   screen.n = screen.n + 1
+  if active and not saved.manual then screen.hook() end
   -- only in a death, from 5 s in (the screen fades in at 7)
   if screen.n % 15 ~= 0 or not active or saved.manual or polls * POLL_MS / 1000 + ahead < 5 then return end
-  if not death_screen() then
-    if screen.last then log("death screen: gone"); screen.last = nil end
-    if screen.seen then screen.gone = true end
-    return
+  -- gone only once this probe saw it up (the hook saying it came up while the visibility read no screen got her up
+  -- the moment it showed, playtest); while the hook says it is up, what the widget reads is logged
+  local on = death_screen()
+  if not on then
+    if screen.vis then
+      if screen.last then log("death screen: gone"); screen.last = nil end
+      screen.gone = true
+    end
+    if not (screen.seen and valid(dead_hud.w)) then return end
+  else
+    screen.vis, screen.seen = true, true
   end
-  screen.seen = true
-  screen.hook()
   local w = dead_hud.w
   local function f(x) return x and string.format("%.2f", x) or "?" end
-  local parts = { "widget opacity " .. f(try(function() return w:GetRenderOpacity() end)) }
-  for _, name in ipairs({ "black", "FadeOut", "BackgroundBlur_116", "Root" }) do
+  local parts = { string.format("%s: widget vis %s visible %s in viewport %s opacity %s", on and "up" or "hooked up, reads hidden",
+    tostring(try(function() return w:GetVisibility() end)), tostring(try(function() return w:IsVisible() end)),
+    tostring(try(function() return w:IsInViewport() end)), f(try(function() return w:GetRenderOpacity() end))) }
+  for _, name in ipairs({ "CanvasPanel_Dead", "black", "FadeOut", "BackgroundBlur_116", "Root" }) do
     local c = try(function() return w:GetWidgetFromName(FName(name)) end)
     if valid(c) then
       local vis = try(function() return c:GetVisibility() end)
@@ -1234,6 +1268,8 @@ local function attacker(pawn, mesh, within)
   local push = { X = at.X - best.loc.X, Y = at.Y - best.loc.Y, Z = 0 }
   if len(push) < 1 and fl then push = { X = fl.X, Y = fl.Y, Z = 0 } end
   best.push = push
+  -- how fast it comes down (a stomp, a leap onto her)
+  best.vz = try(function() return best.actor:GetVelocity().Z end)
   return best
 end
 
@@ -1472,10 +1508,15 @@ local function death_hit(pawn, mesh)
   if ws then
     -- where the swept plane crosses her: the mesh's hit, else the part of her nearest it and the weapon
     local loc, bone, off = m and m.loc, m and m.bone, nil
+    -- a blow from above (a stomp, a slam, an overhead chop) lands on her body or her neck and cuts down through it,
+    -- the plane moved onto the part: a stomp 17 cm off her calf took the shin alone, and one 59 cm off her spine
+    -- took a thigh, the plane was never moved (playtest). Which part is rolled, the near ones likelier: a stomp's
+    -- weapon is its feet, the plane says little about where they landed
+    local down = ws.dir and ws.dir.Z < -(g.splitDown or 0.6)
     if not loc then
-      local bd
+      local bd, pool, sum = nil, {}, 0
       for _, e in ipairs(SWING_AT) do
-        local l = try(function()
+        local l = (not down or not e[3]) and try(function()
           local x = mesh:GetSocketLocation(FName(e[1]))
           if not e[3] then return vof(x) end
           local y = mesh:GetSocketLocation(FName(e[3]))
@@ -1486,10 +1527,23 @@ local function death_hit(pawn, mesh)
           -- near the plane first, then near the weapon, a little toward the parts a blow most likely lands on
           local sc = d + 0.3 * dist(l, ws.at) - e[2]
           if not bd or sc < bd then bd, loc, bone, off = sc, l, e[1], d end
+          if down then
+            local w = e[2] / (1 + d / 30)
+            pool[#pool + 1] = { l = l, bone = e[1], d = d, w = w }
+            sum = sum + w
+          end
         end
       end
-      -- on the plane when it passes that close; else the plane is moved onto her, keeping its angle
-      if loc and off <= (g.swingSnap or 30) then
+      if down and sum > 0 then
+        local r = math.random() * sum
+        for _, x in ipairs(pool) do
+          r = r - x.w
+          if r <= 0 then loc, bone, off = x.l, x.bone, x.d; break end
+        end
+      end
+      -- on the plane when it passes that close (the point put on it); else the plane is moved onto her, keeping its
+      -- angle (the point stays on her part, the plane goes through it)
+      if loc and not down and off <= (g.swingSnap or 30) then
         local k = dot(sub(loc, ws.at), ws.n)
         loc = { X = loc.X - k * ws.n.X, Y = loc.Y - k * ws.n.Y, Z = loc.Z - k * ws.n.Z }
       end
@@ -1498,7 +1552,8 @@ local function death_hit(pawn, mesh)
       log(string.format("death: swing of %s's %s at %.0f cm/s %.2f s before, %s %s, %.0f deg down, at %s (%s%s)",
         tostring(swing.who), ws.bone, ws.speed, ws.ago, ws.how, v3({ X = ws.n.X * 100, Y = ws.n.Y * 100, Z = ws.n.Z * 100 }),
         math.deg(math.asin(math.max(-1, math.min(1, -ws.dir.Z)))), v3(loc), m and "where the mesh was hit" or tostring(bone),
-        off and string.format(", plane %.0f cm off it%s", off, off > (g.swingSnap or 30) and ", moved onto her" or "") or ""))
+        off and string.format(", plane %.0f cm off it%s", off, down and ", from above: moved onto it"
+          or off > (g.swingSnap or 30) and ", moved onto her" or "") or ""))
       return { t = os.clock(), loc = loc, dir = ws.dir, fwd = ws.fwd or ws.dir, n = ws.n, how = ws.how,
         push = push or ws.dir, attack_dir = 0, src = "weapon", group = h and h.group, show = h and h.show, bone = bone,
         attacker = swing.who }
@@ -1510,16 +1565,22 @@ local function death_hit(pawn, mesh)
   local fwd = { X = push.X / fl, Y = push.Y / fl, Z = 0 }
   local side = math.random() < 0.5 and -1 or 1
   local ang = math.rad(({ 0, 20, 45, 45, 70, 90 })[math.random(6)])
+  -- came down on her (her mesh's hit pointing down, or the attacker dropping onto her: a stomp): straight down, never
+  -- a level cut (playtest)
+  local mp = m and m.push
+  local above = (mp and len(mp) > 1e-3 and mp.Z / len(mp) < -(g.splitDown or 0.6) and "her mesh's hit points down")
+    or (a and a.vz and a.vz < -(g.stompSpeed or 250) and string.format("%s coming down at %.0f cm/s", a.name, -a.vz))
+  if above then ang = math.rad(90) end
   local dir = { X = -fwd.Y * side * math.cos(ang), Y = fwd.X * side * math.cos(ang), Z = -math.sin(ang) }
   local loc = m and m.loc
   local bone = m and m.bone
   if not loc then bone, loc = swing_at(mesh) end
   if not loc then return h end
   local from = (m and m.push and "her mesh's hit") or "the nearest enemy"
-  log(string.format("death: blow from %s%s, %d deg down, at %s (%s)", from,
-    a and string.format(" (nearest enemy %s, %.0f cm off)", a.name, a.d) or "",
-    math.floor(math.deg(ang) + 0.5), v3(loc), m and "where the mesh was hit" or ("made up: " .. tostring(bone))))
-  return { t = os.clock(), loc = loc, dir = dir, fwd = fwd, push = push, attack_dir = 0, src = from,
+  log(string.format("death: blow from %s%s, %d deg down%s, at %s (%s)", from,
+    a and string.format(" (nearest enemy %s, %.0f cm off, %.0f cm/s up)", a.name, a.d, a.vz or 0) or "",
+    math.floor(math.deg(ang) + 0.5), above and (": " .. above) or "", v3(loc), m and "where the mesh was hit" or ("made up: " .. tostring(bone))))
+  return { t = os.clock(), loc = loc, dir = dir, fwd = fwd, push = push, attack_dir = 0, src = from, made = true,
     group = h and h.group, show = h and h.show, bone = bone, attacker = a and a.name }
 end
 
@@ -1832,8 +1893,12 @@ local function gore_cut(pawn, mesh, h, hit)
     end
   end
   if g.sliceOnDeath ~= false and math.random() <= (g.sliceChance or 1.0) then
-    -- a killing blow the game told us about cuts along the blade (gore.blow), else the roll below
-    if h and math.random() <= (g.bladeChance or 0.85) then
+    -- a killing blow the game told us about cuts along the blade (gore.blow), else the roll below. A made-up one (no
+    -- skill hit, no weapon swing seen: a guessed plane through a guessed part of her, most of the time her spine) is
+    -- rolled: cut along, it took her body at most deaths, the legs almost never (playtest)
+    if h and h.made then
+      log(string.format("death: no blade seen (blow from %s), rolling the odds", tostring(h.src)))
+    elseif h then
       log(string.format("death: last hit %.2f s ago (hook called %d times, %d on Eve), cutting along the blade",
         os.clock() - h.t, hitCalls, hitsOnEve))
       if gore.blow(pawn, mesh, h, "death") then return end
@@ -1841,6 +1906,11 @@ local function gore_cut(pawn, mesh, h, hit)
     local normal = split_normal(h)
     -- a death always takes something off
     local kind = pick_kind(normal ~= nil)
+    -- from above, the body is cut down through her, not across the waist (a stomp's level cut, playtest)
+    if normal and kind == "torso" then
+      log("death: rolled torso on a blow from above, split down her instead")
+      kind = "split"
+    end
     log(string.format("death: last hit %s (hook called %d times, %d on Eve), from above %s, rolled %s",
       h and string.format("%.2f s ago", os.clock() - h.t) or "none", hitCalls, hitsOnEve, tostring(normal ~= nil), kind))
     if kind == "split" then
@@ -1928,6 +1998,9 @@ local function hook_once()
       local o = try(function() return ctx:get() end)
       log(string.format("HOOK %s on %s", label, name(o)))
       if label == "NotifyBP_ReInitActor" and after >= 0 then respawned, after, lastRecover = true, 0, -100 end
+      -- the game respawning her while she is still down (its death screen's button never seen): got up at once, not
+      -- broken and with her weapon on the floor for the 1-2 s till the fallback timer (playtest)
+      if active and label == "NotifyBP_ReInitActor" then screen.respawn = true end
     end)
     log(string.format("hook %s: %s", label, ok and "ok" or tostring(err)))
   end
@@ -2068,13 +2141,13 @@ local function tick()
 
   tp.mark("find")
   try(function() screen.probe(pawn) end)
-  if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh) end
+  if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh, tp.mark) end
   tp.mark("enemies")
   if gore then
     gore.tick(pawn, tp.mark)
     tp.mark("gore")
-    -- gore can switch an animated death to the ragdoll (a split after its splitAnim): read it again, or this tick
-    -- saw a death with no fall and no ragdoll and ended it (she was put back whole mid death)
+    -- a split after its splitAnim switches an animated death to the ragdoll (read again before the death's own
+    -- steps below too)
     if not sim and animDeath == nil and active then sim = simulating() end
   end
   if f7_push then
@@ -2124,6 +2197,10 @@ local function tick()
     faceCheck = nil
     if valid(f.mesh) then log("Shift+F7 0.8 s later: " .. face_curves(f.mesh, gore and gore.face_of and gore.face_of(f.pawn, f.mesh))) end
   end
+  -- gore (a split after its splitAnim) or a hit after death (a leg off) can switch an animated death to the ragdoll
+  -- this tick: read it again, or the death looked like it had no fall and no ragdoll and ended (she was put back
+  -- whole 0.9 s into a beheading, a leg cut after it)
+  if not sim and animDeath == nil and active then sim = simulating() end
   if f5_at and not sim and not active and os.clock() - f5_at >= ((tune.gore or {}).f5Delay or 0.5) then
     -- the show's ragdoll key does nothing while she is alive (F5 played the fall, then nothing): the death starts
     -- here, on her animated fall, as if the key had fired
@@ -2147,8 +2224,15 @@ local function tick()
     tp.mark("death hit")
     if not animated_death(pawn, mesh, h and h.push) and rag then rag.start(pawn, mesh, "death", h and h.push) end
     tp.mark("fall")
-    gore_death(pawn, mesh, h)
-    tp.mark("death cut")
+    -- the cut is chosen the next frame: with the death's own setup it was one 30-80 ms frame (playtest)
+    pending[#pending + 1] = function()
+      if not (active and valid(mesh)) then return end
+      local t0 = os.clock()
+      local ok, err = pcall(gore_death, pawn, mesh, h)
+      if not ok then log("death cut failed: " .. tostring(err)) end
+      local ms = (os.clock() - t0) * 1000
+      if ms >= ((tune.gore or {}).slowMs or 15) then log(string.format("death cut: %.0f ms (a frame of its own)", ms)) end
+    end
   elseif not sim and active and animDeath and polls <= 45 and (try(function() return pawn.CharacterMovement:IsFalling() end)
     or (animDeath.z0 or -1e9) - (try(function() return mesh:K2_GetComponentLocation().Z end) or -1e9) > 25) then
     -- her fall plays on in the air (the game didn't say falling when she died, or she went off a ledge in it): her
@@ -2189,13 +2273,14 @@ local function tick()
   end
 
   if active then skip_tick() end
-  if active and not saved.manual and polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10)
-    and screen.ready(polls * POLL_MS / 1000 + ahead) then
+  if active and not saved.manual and (screen.respawn or polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10)
+    and screen.ready(polls * POLL_MS / 1000 + ahead)) then
     -- get her up ourselves before the game respawns her (the sandbox (F8) recovery always worked, the one after the
     -- game's respawn never did), once a death screen button is pressed (tune.recoverOn)
     log(string.format("recovering after %.1f s of ragdoll (%.1f of the game's), before the game respawns her (%s)",
-      polls * POLL_MS / 1000, polls * POLL_MS / 1000 + ahead, tune.recoverOn ~= "button" and "recoverAfter"
-      or screen.press and "a death screen button" or screen.gone and "the death screen went away" or "no death screen"))
+      polls * POLL_MS / 1000, polls * POLL_MS / 1000 + ahead, screen.respawn and "the game is respawning her"
+      or tune.recoverOn ~= "button" and "recoverAfter" or screen.press and "a death screen button"
+      or screen.gone and "the death screen went away" or screen.seen and "?" or "no death screen"))
     try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
     try(function() mesh:SetSimulatePhysics(false) end)
     on_end(pawn, mesh)
@@ -2266,19 +2351,25 @@ local nextTick = 0
 -- a frame that took long (a stutter): told with what the mod did just before, so a stutter at a cut shows whether
 -- the mod's own work or the engine's (render state, physics) held it; longer gaps are menus and loading
 local HITCH_MS, HITCH_MAX_MS = 70, 1500
-local lastFrame, lastTick = nil, nil
+local lastFrame, lastTick, lastDil = nil, nil, nil
 local lastTickErr, tickErrRepeats = nil, 0
 local function game_tick(ctx)
   if not adopt(ctx) then return end
   local now = os.clock()
   local gap = lastFrame and (now - lastFrame) * 1000
   lastFrame = now
+  -- her own time dilation: the game's hit-stop slows her (and her tick) on a hit, which reads as a gap here without
+  -- any frame taking long. Told with the gap, so a hitch in a fight can be told from a hit-stop
+  local dil = try(function() return cachedPawn.CustomTimeDilation end)
   if gap and gap >= HITCH_MS and gap < HITCH_MAX_MS then
     local st = gore and gore.last_stage
-    log(string.format("frame hitch: %.0f ms%s%s", gap,
+    local slow = math.min(dil or 1, lastDil or 1)
+    log(string.format("frame hitch: %.0f ms%s%s%s", gap,
       lastTick and now - lastTick.t < 0.5 and string.format(", the mod's last tick %.0f ms", lastTick.ms) or "",
-      st and now - st.t < 0.5 and ", after " .. st.what or ""))
+      st and now - st.t < 0.5 and ", after " .. st.what or "",
+      slow < 0.99 and string.format(", her time x%.2f (the game's hit-stop)", slow) or ""))
   end
+  lastDil = dil
   for _, fn in ipairs(pending) do fn() end
   pending = {}
   if camHeld then camera_orbit() end

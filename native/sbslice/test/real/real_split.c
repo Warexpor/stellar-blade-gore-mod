@@ -1124,8 +1124,24 @@ int main(int argc, char **argv)
     if (env_on("WAIST")) {
         int spine2 = bone("Bip001-Spine2");
         float *a = space + spine1 * 12 + 4, *b2 = space + spine2 * 12 + 4, at2[3], nn[3], l = 0;
-        for (int k = 0; k < 3; k++) { at2[k] = (a[k] + b2[k]) * 0.5f; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
+        // WAISTAT=<0-1>: where between Spine1 and Spine2 (default half way); WAISTTILT=<deg> WAISTTILTDIR=<0-7>: the
+        // plane tilted off square to the spine, about an axis turned DIR x 45 degrees around it (a blade's cut, gore.lua
+        // body_blade)
+        float wat = getenv("WAISTAT") ? (float)atof(getenv("WAISTAT")) : 0.5f;
+        for (int k = 0; k < 3; k++) { at2[k] = a[k] + (b2[k] - a[k]) * wat; nn[k] = b2[k] - a[k]; l += nn[k] * nn[k]; }
         for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+        if (getenv("WAISTTILT")) {
+            float tl = (float)atof(getenv("WAISTTILT")) * 3.14159265f / 180, dr = (getenv("WAISTTILTDIR") ? atoi(getenv("WAISTTILTDIR")) : 0) * 3.14159265f / 4;
+            float ref[3] = { 0, 0, 1 };
+            if (__builtin_fabsf(nn[2]) > 0.9f) { ref[0] = 1; ref[2] = 0; }
+            float u[3] = { nn[1] * ref[2] - nn[2] * ref[1], nn[2] * ref[0] - nn[0] * ref[2], nn[0] * ref[1] - nn[1] * ref[0] }, ul = 0;
+            for (int k = 0; k < 3; k++) ul += u[k] * u[k];
+            for (int k = 0; k < 3; k++) u[k] /= __builtin_sqrtf(ul);
+            float w[3] = { nn[1] * u[2] - nn[2] * u[1], nn[2] * u[0] - nn[0] * u[2], nn[0] * u[1] - nn[1] * u[0] }, ax[3], c[3];
+            for (int k = 0; k < 3; k++) ax[k] = u[k] * __builtin_cosf(dr) + w[k] * __builtin_sinf(dr);
+            c[0] = ax[1] * nn[2] - ax[2] * nn[1]; c[1] = ax[2] * nn[0] - ax[0] * nn[2]; c[2] = ax[0] * nn[1] - ax[1] * nn[0];
+            for (int k = 0; k < 3; k++) nn[k] = nn[k] * __builtin_cosf(tl) + c[k] * __builtin_sinf(tl);
+        }
         // ARMFIRST=1: the left upper arm came off first, as a killing swing through her raised arm that goes on into
         // her body (multiCut's body follow-through): the arm cut and its collapse, then the waist cut as usual
         int ua = -1;
@@ -1292,6 +1308,8 @@ int main(int argc, char **argv)
             for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && upper[ov_a[v].bones[i]]) onlegs[v] = 0;
             if (onlegs[v]) skin_v(&ov_a[v], v, legx + 3 * (size_t)v);
         }
+        float *xstill = malloc(12 * (size_t)NV);
+        for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, xstill + 3 * (size_t)v);
         skin_probe((u64)comp_a, 0);
         sscanf(lastres, "ok stretched=%d", &still);
         char *hh = strstr(lastres, "hidden="); if (hh) sscanf(hh, "hidden=%d", &hs);
@@ -1333,6 +1351,47 @@ int main(int argc, char **argv)
         sscanf(lastres, "ok stretched=%d", &flung);
         hh = strstr(lastres, "hidden="); if (hh) sscanf(hh, "hidden=%d", &hf);
         printf("waist probe flung: %.400s\n", lastres);
+        // skin torn between the halves: a triangle whose longest edge grows more than 5 cm when the upper body falls
+        // off, and still has area (the stretch probe counts it once, when the cut has already stretched it in place)
+        int torn = 0;
+        {
+            float *xfl = malloc(12 * (size_t)NV);
+            for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, xfl + 3 * (size_t)v);
+            int shownt = 0;
+            for (int t = 0; t + 2 < NIDX; t += 3) {
+                float l0 = 0, l1 = 0;
+                for (int e = 0; e < 3; e++) {
+                    u32 i = idx[t + e], j = idx[t + (e + 1) % 3];
+                    float *p0 = xstill + 3 * (size_t)i, *q0 = xstill + 3 * (size_t)j, *p1 = xfl + 3 * (size_t)i, *q1 = xfl + 3 * (size_t)j;
+                    float d0 = __builtin_sqrtf((p0[0]-q0[0])*(p0[0]-q0[0]) + (p0[1]-q0[1])*(p0[1]-q0[1]) + (p0[2]-q0[2])*(p0[2]-q0[2]));
+                    float d1 = __builtin_sqrtf((p1[0]-q1[0])*(p1[0]-q1[0]) + (p1[1]-q1[1])*(p1[1]-q1[1]) + (p1[2]-q1[2])*(p1[2]-q1[2]));
+                    if (d0 > l0) l0 = d0;
+                    if (d1 > l1) l1 = d1;
+                }
+                if (l1 <= l0 + 5) continue;
+                float *a0 = xfl + 3 * (size_t)idx[t], *a1 = xfl + 3 * (size_t)idx[t + 1], *a2 = xfl + 3 * (size_t)idx[t + 2];
+                float e1[3] = { a1[0]-a0[0], a1[1]-a0[1], a1[2]-a0[2] }, e2[3] = { a2[0]-a0[0], a2[1]-a0[1], a2[2]-a0[2] };
+                float cr[3] = { e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0] };
+                if (cr[0]*cr[0] + cr[1]*cr[1] + cr[2]*cr[2] <= 4.0f) continue;
+                torn++;
+                if (env_on("TORN") && shownt++ < 12) {
+                    printf("torn t%d %.1f -> %.1f cm:", t / 3, l0, l1);
+                    for (int e = 0; e < 3; e++) {
+                        u32 v = idx[t + e];
+                        skin_info vo; orig_info(v, &vo);
+                        printf(" | v%u", v);
+                        for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]);
+                        printf(" ->");
+                        for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s=%d", bname[ov_a[v].bones[i]], ov_a[v].weights[i]);
+                    }
+                    printf("\n");
+                }
+            }
+            free(xfl);
+        }
+        free(xstill);
+        printf("waist: %d triangles torn between the halves\n", torn);
+        if (torn) printf("FAIL: the upper body fallen off tears %d triangles that keep their area\n", torn);
         int legmoved = 0;
         for (int v = 0; v < NV; v++) {
             if (!onlegs[v]) continue;
@@ -1345,7 +1404,7 @@ int main(int argc, char **argv)
         memcpy(space, saved, 48 * NB); free(saved);
         int shown = (flung - hf) - (still - hs);
         if (shown > 0) printf("FAIL: the upper body fallen off stretches %d more triangles that stay visible\n", shown);
-        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0 || armmoved > 0;
+        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0 || armmoved > 0 || torn > 0;
         printf("%s\n", bad ? "FAIL" : "PASS");
         return bad;
     }

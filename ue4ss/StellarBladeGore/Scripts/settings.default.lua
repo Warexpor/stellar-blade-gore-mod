@@ -9,10 +9,10 @@ return {
     --   enabled = true,          -- a hit she lives through leaves a slash of blood on her skin (healing fades it)
     -- },
     death = {                  -- relative odds of what her death does when the blow doesn't decide it
-      limb = 40,               --   an arm or leg off
-      head = 28,               --   beheaded
-      torso = 20,              --   cut in half at the waist
-      split = 12,              --   cut in half top to bottom (only on a blow from above)
+      limb = 50,               --   an arm or leg off
+      head = 30,               --   beheaded
+      torso = 12,              --   cut in half at the waist
+      split = 8,               --   cut in half top to bottom (only on a blow from above)
     },
     afterHits = {
       enabled = true,          -- enemies swinging at her body after she died cut it again

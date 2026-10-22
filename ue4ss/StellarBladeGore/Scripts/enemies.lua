@@ -547,14 +547,19 @@ local function down_tick()
 end
 
 -- every tick of hers (main.lua), pawn and mesh hers
-function M.tick(pawn, mesh)
+-- tm: main.lua's slow tick marker (the enemies' step was 47-174 ms now and then, playtest)
+function M.tick(pawn, mesh, tm)
+  tm = tm or function() end
   n = n + 1
   down_tick()
+  tm("enemies attack-down")
   if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end
+  tm("enemies dev reads")
   local g = cfg()
   local gore = ctx.gore
   if g.enabled == false or not gore or ((ctx.tune.gore or {}).enabled == false) then return end
   track_hand(pawn, mesh)
+  tm("enemies hand")
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
   local seen = {}
   for _, c in ipairs(ctx.live_chars()) do

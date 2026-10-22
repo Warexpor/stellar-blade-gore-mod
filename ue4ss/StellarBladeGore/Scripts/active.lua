@@ -89,23 +89,35 @@ function M.track(pawn)
   if #speeds > SPEED_SAMPLES then table.remove(speeds, 1) end
 end
 
-local function bodies(mesh)
-  local out = {}
+-- by physics asset address: its bodies' bones, and each accessory's anchor (anchor_of), read once. Read again for
+-- every death, cut piece and split copy (a name per body and a parent per bone up the chain), the copy's masses took
+-- 36 ms of the split's opening frame (playtest)
+local layouts = {}
+local function layout(mesh)
   local pa = ctx.physics_of(mesh)
-  if not valid(pa) then return out end
+  if not valid(pa) then return nil end
+  local a = try(function() return pa:GetAddress() end)
+  local l = a and layouts[a]
+  if l and valid(l.pa) then return l end
+  l = { pa = pa, bones = {}, anchor = {} }
   try(function()
     pa.SkeletalBodySetups:ForEach(function(_, elem)
       local bs = elem:get()
-      if valid(bs) then out[#out + 1] = bs.BoneName:ToString() end
+      if valid(bs) then l.bones[#l.bones + 1] = bs.BoneName:ToString() end
     end)
   end)
-  return out
+  if a then layouts[a] = l end
+  return l
+end
+local function bodies(mesh)
+  local l = layout(mesh)
+  return l and l.bones or {}
 end
 
 local function mass(mesh, bone) return try(function() return mesh:GetBoneMass(FName(bone), true) end) end
 
 -- the main body an accessory hangs from (its nearest ancestor in MASS), or nil
-local function anchor_of(mesh, bone)
+local function anchor_walk(mesh, bone)
   local b = bone
   for _ = 1, 64 do
     local p = try(function() return mesh:GetParentBone(FName(b)):ToString() end)
@@ -114,6 +126,13 @@ local function anchor_of(mesh, bone)
     b = p
   end
   return nil
+end
+local function anchor_of(mesh, bone)
+  local l = layout(mesh)
+  if not l then return anchor_walk(mesh, bone) end
+  local a = l.anchor[bone]
+  if a == nil then a = anchor_walk(mesh, bone) or false; l.anchor[bone] = a end
+  return a or nil
 end
 
 -- keep: where the masses it changes are remembered for M.stop (nil for a split's copy, which is destroyed)
@@ -124,7 +143,11 @@ end
 -- override (bOverrideMass), and every outfit but CH_P_EVE_10 has some. CH_P_EVE_30's breasts stayed 100 kg each
 -- welded to a 10 kg chest and CH_P_EVE_29's skirt 1400 kg on 2 kg thighs, while the log said 3.7 kg: the ragdoll
 -- shook from the first tick, took the push slowly and never lay still (playtest). The log reads the masses back.
-local function real_mass(mesh, bone) return try(function() return mesh:GetBoneMass(FName(bone), false) end) or 0 end
+-- (read back with tune.gore.probes only: 35 more engine calls in the frame of a death or a cut)
+local function real_mass(mesh, bone)
+  if not (ctx.tune.gore or {}).probes then return 0 end
+  return try(function() return mesh:GetBoneMass(FName(bone), false) end) or 0
+end
 local function set_masses(mesh, g, keep)
   local before, after, acc, accBefore, n = 0, 0, 0, 0, 0
   local readMain, readAcc = 0, 0
@@ -168,8 +191,10 @@ local function set_masses(mesh, g, keep)
   local per = {}
   for a, c in pairs(groups) do per[#per + 1] = string.format("%s:%d", a:gsub("Bip001%-", ""), c) end
   table.sort(per)
-  return string.format("masses %.0f -> %.0f kg (reads %.0f, was %s), %d other bodies %.1f -> %.1f kg (reads %.1f, on %s)",
-    before, after, readMain, table.concat(main, " "), n, accBefore, acc, readAcc, table.concat(per, " "))
+  local dev = (ctx.tune.gore or {}).probes
+  return string.format("masses %.0f -> %.0f kg (%swas %s), %d other bodies %.1f -> %.1f kg (%son %s)",
+    before, after, dev and string.format("reads %.0f, ", readMain) or "", table.concat(main, " "), n, accBefore, acc,
+    dev and string.format("reads %.1f, ", readAcc) or "", table.concat(per, " "))
 end
 
 -- every body's top angular speed (spin.main for the torso, arms and legs, spin.ends for the rest); put back to the
@@ -1048,6 +1073,7 @@ end
 
 -- a new Eve (the level reloaded): drop what was held from the old one without touching it
 function M.forget()
+  layouts = {}
   run, speeds, dropped, extra = nil, {}, {}, {}
   severed, severedOn = {}, nil
   freed = {}

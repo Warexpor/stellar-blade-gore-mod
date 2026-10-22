@@ -54,15 +54,19 @@ return {
                                --   does nothing while she is alive, so the script starts it)
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
                                -- F9 rolls the cuts only, F10 marks, F11 splits
-      limb = 40,               --   the arm or thigh nearest the hit comes off
-      head = 28,               --   beheaded (the face goes with the head, the neck gets a stump)
-      torso = 20,              --   cut in half at the waist
-      split = 12,              --   cut in half top to bottom along the blade; only counts when the killing blow
+      limb = 50,               --   the arm or thigh nearest the hit comes off
+      head = 30,               --   beheaded (the face goes with the head, the neck gets a stump)
+      torso = 12,              --   cut in half at the waist
+      split = 8,               --   cut in half top to bottom along the blade; only counts when the killing blow
                                --   came down from above (else the others are rolled)
     },
-    bladeChance = 0.85,        -- a death whose killing hit the game reported cuts along that blade: the neck
-                               -- (beheading), the body in two along the blade's plane, or the limb it crosses;
-                               -- otherwise (and without a reported hit) the odds above are rolled
+                               -- A death whose killing hit the game reported, or whose enemy's weapon swing was
+                               -- seen, is decided by that blade alone, nothing rolled: what its plane goes through
+                               -- comes off (the neck, her body along it or in two down her length, the arms and
+                               -- legs it crosses); the odds above are rolled only without either
+    bladeJitter = 15,          -- for variety, each blade is turned up to this many degrees at random
+    bladeShift = 10,           --   and moved up to this many cm along its normal
+    bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
     deathSplit = true,         -- a blade down her length at death splits her (false: the limbs it crosses come off
                                --   instead, else the odds above; F11 and F5 still split)
     multiCut = {               -- one killing swing cuts every arm and leg (and the neck) its plane crosses within
@@ -73,16 +77,13 @@ return {
       bodyReach = 60,          --   through her spine within bodyReach cm of the hit, her body is cut too
       bodyGraze = 10,          --   (and a plane passing this close beside her spine goes through her flank: cut on it)
     },
-    bladeSplit = 0.2,          --   share of those blades through her body that split her in two (else the odds above
-                               --   are rolled): a blade made up for a death the game reported no hit for always
-                               --   crossed the spine, so every real death was a split
-    bodyBias = 0.25,           -- share of killing blades that would take an arm or leg that take the head or cut her
-                               --   across the waist instead (by the head : torso odds above); enemy swings mostly
-                               --   cross a limb, so beheadings and waist cuts were rare (0 = the blade decides)
     sliceTilt = 50,            -- a limb cut along a blade leans with it at most this many degrees off square
     limbReach = 12,            -- a blade meeting an arm or leg this close to the hit, with the hit
     spineReach = 15,           --   further than this from the spine, takes that limb (else the plane decides)
-    splitDown = 0.6,           -- how steeply a swing must come down to split (share of its direction pointing down)
+    splitDown = 0.6,           -- how steeply a swing must come down to split (share of its direction pointing down);
+                               --   a blow this steep never cuts her across the waist, it cuts down through her
+    stompSpeed = 250,          -- an enemy coming down this fast (cm/s) as she dies, with no blade seen: the blow
+                               --   came straight down (a stomp)
     weaponSwing = true,        -- the killing blade follows the nearest enemy's weapon (its weapon meshes' blade line,
                                --   else its weapon bones by name, else its hands), sampled every tick while she
                                --   lives; false: a made-up swing
@@ -130,8 +131,9 @@ return {
     splitLidSkin = true,       -- the lid in one piece that bends with her spine (false: a rigid piece per spine bone,
                                --   which cracked into shards as she bent)
     splitLidFollow = 12,       -- seconds the bending lid follows her (then it stays as it lies)
-    probes = false,            -- (on with dev too) diagnostics after a split or limb cut: the stretch probe (skins every vertex on the
-                               --   CPU at 0.5 and 2 s, a stutter of its own) and the helper drift
+    probes = false,            -- diagnostics after a split or limb cut: the stretch probe (skins every vertex on the
+                               --   CPU at 0.5 and 2 s, a stutter of its own), the helper drift and the masses read
+                               --   back (dev turned them on too, and stuttered every playtest)
     slowMs = 15,               -- a split stage or sbslice command taking this long is logged (stutter hunt)
     splitAnim = 0,             -- a split on her death fall (tune.active.animated): both halves play on with the fall for
                                -- this many seconds, then come apart by physics at the speed it had. 0 = no fall: she
@@ -183,12 +185,14 @@ return {
     legThrow = 1.4,            -- a cut-off leg gets this many times the throw when it just drops off (it dropped at
                                --   her feet); not on a killing blow's
     legLift = 0.35,            --   and leans this much more upward
+    throwUp = 0.25,            -- steepest a thrown piece climbs (the sine of its angle: 0.25 = 14 deg; they flew up
+                               --   at 45 and arced over her)
     pieceGravity = 0.55,       -- share of gravity a cut-off arm or leg falls with, for its first pieceFloat s (1 = full:
     pieceFloat = 3,            --   it dropped like a stone)
     throwTicks = 3,           -- ticks after a cut the piece is kept at least as fast as its throw (the throw went in
                                --   the tick its bodies started simulating and was mostly lost)
     splitFly = 200,            -- cm/s both halves of a death split fly with, the way the blow went
-    splitFlyUpper = 450,       --   and the upper body of one across the waist (at 200 it dropped at her feet)
+    splitFlyUpper = 300,       --   and the upper body of one across the waist (at 200 it dropped at her feet)
     caps = true,               -- flesh caps over both openings
     capScale = 1.05,           -- cap size relative to the opening's outline (1 = ends exactly on the skin)
     boneStubs = true,          -- a snapped bone (the game's GM_Brokenbone) in each limb and neck stump
@@ -298,11 +302,11 @@ return {
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s
     momentum = 1.0,            -- share of her speed before death carried into the fall (0 = drops on the spot)
     momentumMax = 1500,        -- cm/s
-    impact = 200,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
+    impact = 120,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
                                -- from the attacker when the game gives no direction)
     impactUp = 0.15,           -- upward share of that push
-    launch = 400,              -- cm/s her whole body is launched along the killing blow on top (deaths only): the
-    launchUp = 0.3,            --   upper body's push alone toppled her on the spot, feet stuck to the floor; upward
+    launch = 200,              -- cm/s her whole body is launched along the killing blow on top (deaths only): the
+    launchUp = 0.2,            --   upper body's push alone toppled her on the spot, feet stuck to the floor; upward
                                --   share lifts her feet off it so she flies (0 = no launch; never on a split)
     launchTicks = 4,           --   ticks after the push every body on her is kept at least that fast along it
     twist = 35,                -- deg/s random turn about the vertical as she goes down (0 = none)
@@ -333,7 +337,7 @@ return {
       linearOver = 1200,       --   faster than linearFloor) is slowed to that every tick (a hand shot off at 15000
       linearFloor = 1500,      --   cm/s, nineteenth playtest)
       launchTime = 0.5,        -- s: over the start every main body, torso too, is held to her momentum + impact +
-      launchOver = 400,        --   launchOver cm/s (+ the fall since): a leg cut mid-fall shot her off at 16 m/s
+      launchOver = 250,        --   launchOver cm/s (+ the fall since): a leg cut mid-fall shot her off at 16 m/s
     },
     fall = {                   -- a death in the air fell at a steady 2 m/s: from when her pelvis drops faster than
       enabled = true,          --   start cm/s until it slows under land cm/s, the bodies still on her are kept at

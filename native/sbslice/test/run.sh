@@ -129,6 +129,11 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # does, mid-thigh and high up: its laces down the leg (14% of their vertices past the plane, on the leg's bones) are
   # cut like the body, none of the knee left on her spine (playtest screenshot: a sheet from the severed leg to her)
   E14="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1"
+  # its body cut along a blade (gore.lua body_blade: the chest or the waist between Spine1 and Spine2, tilted off square),
+  # after the left arm too: no skin torn between the halves (playtest: a forearm, then her body on a 32-degree blade)
+  on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
+    jobs+=("real waist cut CH_P_EVE_14_1 high, along a blade|WAIST=1 WAISTAT=0.9 WAISTTILT=2 $E14|CH_P_EVE_14_1"
+           "real waist cut CH_P_EVE_14_1 low, along a 32-degree blade, after the left arm|WAIST=1 ARMFIRST=1 WAISTAT=0.3 WAISTTILT=32 WAISTTILTDIR=2 $E14|CH_P_EVE_14_1")
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
     for at in 0.4 0.2; do
       jobs+=("real thigh cut CH_P_EVE_14_1 at $at, leg straps kept on the body|ARM=1 KEEPCAPE=1 CAPE=Ab_LLA01,Ab_LLB01 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=$at $E14|CH_P_EVE_14_1")
