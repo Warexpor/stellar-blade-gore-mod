@@ -44,6 +44,8 @@ return {
   cameraRange = 1500,          --   no further than this many cm from where it started
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
                                -- holds it (no death screen, she stays down), again lets it go (false: none)
+  uvClean = true,              -- with Ultra Violence on, its blood comes off her at a respawn (it keeps it through one
+                               -- on its own): she reads as swimming for 1.2 s as she gets up, its water clear
   deathSkip = true,            -- Esc on her death fast forwards the game to its death screen instead of the wait
                                -- (parked for now: its key is commented out in main.lua)
   deathSkipSpeed = 6,          --   this many times as fast till the screen shows

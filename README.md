@@ -71,7 +71,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Face mods** for Eve work: the pak carries no face or body mesh of hers or the enemies' (older versions carried her face, and a face replacer stopped the game at launch).
 - **Voice mods** that replace Eve's death cries (`vo_eve_die_*`, e.g. Violent Death Mod) work as they are: her death cry plays their recordings. A mod that adds new sounds instead can be pointed at with `gore.voice.sounds` in `settings.lua`.
 - **Proper Death Expression** by blabmice is built in, credited below. Don't install it alongside.
-- **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her. Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs).
+- **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs).
 - **Mods that replace her death shows or the death table** (`CharacterDeadTable`) conflict. Whichever loads last wins.
 <!-- /install -->
 

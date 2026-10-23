@@ -575,6 +575,30 @@ local screen = { n = 0, photo = false }
 -- revived where she lay, her movement left off is put back to walking within WINDOW polls (~20 s) after she got up,
 -- once it has been off POLLS (~1.5 s) with her capsule still; at = { since = after, at = capsule }: off since then, there
 screen.stuck = { WINDOW = 600, POLLS = 45, at = nil }
+-- Ultra Violence (screen.uv: on) keeps its blood on her through a respawn: it clears only at a load, a camp rest or
+-- in water, and the game's respawn is none of these (reported: its splatters stayed on her after the death). So as
+-- we get her up for a respawn her movement mode reads swimming (MOVE_Swimming, written as a property, no mode change
+-- events) for UV_POLLS, her movement's tick off so it isn't put back, long enough for its 0.5 s check to see water
+-- and clear her ("swim clear" in UE4SS.log); then walking again. uvClean = { pawn, n }
+screen.UV_POLLS = 36
+function screen.uv_tick()
+  local u = screen.uvClean
+  if not u then return end
+  local cm = valid(u.pawn) and try(function() return u.pawn.CharacterMovement end)
+  if not valid(cm) then screen.uvClean = nil; return end
+  if u.n == 0 then try(function() cm:SetComponentTickEnabled(false) end) end
+  u.n = u.n + 1
+  -- (the game's respawn came meanwhile: its movement is left to it)
+  if u.n > screen.UV_POLLS or respawned then
+    screen.uvClean = nil
+    if not respawned then try(function() cm:SetMovementMode(1, 0) end) end
+    try(function() cm:SetComponentTickEnabled(true) end)
+    log(string.format("Ultra Violence's blood: she read as swimming for %.1f s, then %s", (u.n - 1) * POLL_MS / 1000,
+      respawned and "the game's respawn" or "walking"))
+    return
+  end
+  try(function() cm.MovementMode = 4 end)
+end
 function screen.allow_photo(on, why)
   if on == screen.photo or not gore or (on and tune.deathPhoto == false) then return end
   local r = gore.photo(on)
@@ -2584,6 +2608,7 @@ local function test_key(key, label, fn)
   if uv_on then RegisterKeyBind(key, { ModifierKey.ALT }, on_key("Alt+" .. label, fn, true))
   else RegisterKeyBind(key, on_key(label, fn, true)) end
 end
+screen.uv = uv_on
 if uv_on then log("Ultra Violence is on: the test keys F9, F10 and F11 are Alt+F9, Alt+F10 and Alt+F11 (its menu, outfit blood and blood stages are on F9-F11)") end
 test_key(Key.F9, "F9", sandbox_slice)
 -- F10: a living hit's mark on a part at random, on its side facing the camera (tune.gore.hitMarks)
@@ -3327,7 +3352,9 @@ local function tick()
     try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
     try(function() mesh:SetSimulatePhysics(false) end)
     on_end(pawn, mesh)
+    if screen.uv and not screen.revived and tune.uvClean ~= false then screen.uvClean = { pawn = pawn, n = 0 } end
   end
+  screen.uv_tick()
 
   -- a piece cut off her while she is alive (F9) settles on its own clock
   tp.mark("recover")
@@ -3370,7 +3397,7 @@ local function forget_world()
   camHeld, camWatch, hold = nil, nil, nil
   screen.allow_photo(false, "level reloaded")
   screen.photoOn, screen.frozenMesh, screen.frozenHair, screen.watchFreeze, screen.photoW = false, nil, nil, false, nil
-  screen.clock, screen.stopped = nil, nil
+  screen.clock, screen.stopped, screen.uvClean = nil, nil, nil
   -- the photo watch's async loop read the old pawn's parts (freed with the level)
   screen.unhide, screen.unhideSig = nil, nil
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
@@ -3429,6 +3456,7 @@ local function game_tick(ctx)
   if tune.dev and cachedPawn and (not screen.watch or screen.watch.pawn ~= cachedPawn) then
     screen.watch = { pawn = cachedPawn, pc = try(function() return cachedPawn.Controller end) }
   end
+  if tune.dev then screen.vis_watch() end
   local keep = tune.photoUnhide ~= false
   if gore and gore.photo_close and screen.closeSet ~= keep then
     local r = gore.photo_close(keep)
@@ -3478,16 +3506,17 @@ local function game_tick(ctx)
   end
 end
 
--- photo mode pauses the game and her tick with it, so what hides her up close was never seen (playtest), and photo
--- mode opened from its key was paused before the tick saw it. So with dev on this async loop watches her from the
--- start, every 0.25 s: sbslice's f9 (her bHidden, SBCharacter's hide flags, photo mode's manager state, read without
--- calling anything), her parts' hide flags (listed as photo mode opens, if the tick saw it) and, while photo mode is
--- on, the camera's distance; logged as they change. Only with dev on as the game starts, and it stops once dev is
--- off: off the game thread, nothing of the mod's should run in play (the Nexus report of an endless loading screen)
-if tune.dev then LoopAsync(250, function()
-  if not tune.dev then return true end
+-- with dev on, every 0.25 s from her tick: sbslice's f9 (her bHidden, SBCharacter's hide flags, photo mode's manager
+-- state, read without calling anything), her parts' hide flags (listed as photo mode opens) and, while photo mode is
+-- on, the camera's distance; logged as they change. It ran off the game thread (an async loop, to see through photo
+-- mode's pause) and crashed the game at a death screen: finding the command channel and reading a pawn the respawn
+-- was remaking, while the level loaded (playtest; the Nexus report of an endless loading screen likely the same)
+function screen.vis_watch()
+  local now = os.clock()
+  if now < (screen.visNext or 0) then return end
+  screen.visNext = now + 0.25
   local w = screen.watch
-  if not w or not gore or not gore.vis then return false end
+  if not w or not gore or not gore.vis then return end
   pcall(function()
     local p = w.pawn
     local v = gore.vis(p)
@@ -3512,8 +3541,7 @@ if tune.dev then LoopAsync(250, function()
       log(string.format("vis watch: %s%s", d and string.format("camera %.0f cm from her middle; ", d) or "", sig))
     end
   end)
-  return false
-end) end
+end
 
 local TICK_FN = "/Game/Art/Character/PC/CH_P_EVE_01/Blueprints/CH_P_EVE_01_Blueprint.CH_P_EVE_01_Blueprint_C:ReceiveTick"
 -- hooked once, then the loop stops: her Blueprint stays loaded for the whole game (one hook a session in 163 logged
