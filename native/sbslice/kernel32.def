@@ -10,11 +10,14 @@ DeleteFileW
 GetModuleHandleW
 GetModuleHandleExW
 DisableThreadLibraryCalls
-VirtualAlloc
-VirtualFree
+GetProcessHeap
+HeapAlloc
+HeapFree
 MultiByteToWideChar
 WideCharToMultiByte
 VirtualQuery
 VirtualProtect
 FlushInstructionCache
 GetCurrentProcess
+GetTickCount64
+AddVectoredExceptionHandler

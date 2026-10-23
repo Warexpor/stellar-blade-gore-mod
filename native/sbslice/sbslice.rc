@@ -1,0 +1,27 @@
+// Version info: names the DLL and its source in Explorer's Properties and for antivirus scanners.
+// SB_VER / SB_VER_STR come from build.sh (main.lua's VERSION).
+1 VERSIONINFO
+FILEVERSION SB_VER
+PRODUCTVERSION SB_VER
+FILEOS 0x40004
+FILETYPE 0x2
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Warexpor"
+      VALUE "FileDescription", "Stellar Blade Gore mod: mesh slicer (UE4SS C++ mod)"
+      VALUE "FileVersion", SB_VER_STR
+      VALUE "InternalName", "sbslice"
+      VALUE "LegalCopyright", "GPL-3.0, github.com/Warexpor/stellar-blade-gore-mod"
+      VALUE "OriginalFilename", "main.dll"
+      VALUE "ProductName", "Stellar Blade Gore Mod"
+      VALUE "ProductVersion", SB_VER_STR
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

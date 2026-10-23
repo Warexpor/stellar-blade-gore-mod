@@ -1,26 +1,34 @@
 #!/usr/bin/env bash
 # Build and run the skin cut harness natively (clang, ASan/UBSan), then the cuts on real outfit and enemy meshes when
 # the build cache has them (test/real/run.sh). The real-mesh runs go in parallel (JOBS, default the CPU count).
-#   test/run.sh [group...]   groups: unit (test_cut.c), stats (test_stats.c), phys (test_phys.c and the outfit physics
+#   test/run.sh [group...]   groups: unit (test_cut.c), weapon (test_weapon.c), stats (test_stats.c), phys (test_phys.c and the outfit physics
 #                            parity, phys/parity.py), split, waist, arm, head, mark, enemy; default all
 # What to run for a change:
 #   stats.c / glass.lua            stats
 #   physfix.lua, its tune, b/t/j   phys
 #   sbslice.c, a limb or neck cut  unit arm head enemy
 #   sbslice.c, the split (SIDE)    unit split waist
+#   sbslice.c, the weapon split    weapon
 #   sbslice.c, anything shared     everything (no group)
 #   other Lua                      nothing here (the harness doesn't run it)
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
-[[ $# -eq 0 ]] && SEL=" unit stats phys split waist arm head mark enemy "
+[[ $# -eq 0 ]] && SEL=" unit weapon stats phys split waist arm head mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
 fail=0
 if on unit; then
   clang -O1 -g -fsanitize=address,undefined -w -o "$OUT" test_cut.c
   ASAN_OPTIONS=detect_leaks=0 "$OUT" | tee "$OUT.log" | grep -v '^PASS$' || true
   grep -qx PASS "$OUT.log" || fail=1
+fi
+# her sword split in two (weapon_split, "e") on a made-up sword
+if on weapon; then
+  clang -O1 -g -fsanitize=address,undefined -w -o "$OUT-weapon" test_weapon.c
+  r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-weapon" | tail -1)
+  echo "weapon: $r"
+  [[ $r == PASS ]] || fail=1
 fi
 # the actor stats (stats.c, the glass cannon mode) on made-up actors
 if on stats; then
@@ -55,7 +63,9 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       if on split; then
         jobs+=("real split $m$p|POSED=$posed|$m" "real split $m across the waist$p|ACROSS=1 POSED=$posed|$m"
                "real split $m beside the neck$p|BESIDE=2 POSED=$posed|$m"
-               "real split $m across the waist just over the pelvis$p|ACROSS=1 LOW=9 POSED=$posed|$m")
+               "real split $m across the waist just over the pelvis$p|ACROSS=1 LOW=9 POSED=$posed|$m"
+               "real split $m beside the neck after the left arm (blocking)$p|ARMSPLIT=L BESIDE=2 POSED=$posed|$m"
+               "real split $m beside the neck after the right arm (blocking)$p|ARMSPLIT=R BESIDE=2 POSED=$posed|$m")
       fi
       on waist && jobs+=("real waist cut $m$p|WAIST=1 POSED=$posed|$m")
       on waist && [[ -z $posed ]] && jobs+=("real waist cut $m after the left arm|WAIST=1 ARMFIRST=1|$m")
@@ -125,6 +135,9 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   FACE="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3"
   on head && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3.uasset ]] &&
     for at in 0.5 0.7 1.0 1.2; do jobs+=("real face cut with the head at $at|HEAD=1 FACESINK=1 HEADAT=$at $FACE|CH_P_EVE_Face_Jali3"); done
+  # and her body under it, cut as gore.lua cuts it with the face (MODE_PLANE, the head's radius)
+  on head && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
+    jobs+=("real head cut CH_P_EVE_09 body, plane under the face|HEAD=1 HEADPLANE=1 HEADAT=0.85|CH_P_EVE_09")
   E29B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB"
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB.uasset ]] &&
     jobs+=("real right arm cut CH_P_EVE_29_TypeB, shoulder helpers driven|ARM=1 DRIVEN=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3 $E29B|CH_P_EVE_29_TypeB"
@@ -141,15 +154,24 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # does, mid-thigh and high up: its laces down the leg (14% of their vertices past the plane, on the leg's bones) are
   # cut like the body, none of the knee left on her spine (playtest screenshot: a sheet from the severed leg to her)
   E14="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1"
-  # its body cut along a blade (gore.lua body_blade: the chest or the waist between Spine1 and Spine2, tilted off square),
-  # after the left arm too: no skin torn between the halves (playtest: a forearm, then her body on a 32-degree blade)
+  # its body cut along a blade (gore.lua body_blade: under her bust, 0.3 from Spine1 to Spine2, leaned at most bodyTilt
+  # 15 degrees off square), after the left arm too: no skin torn between the halves (playtest: a forearm, then her body
+  # on a 32-degree blade)
   on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
-    jobs+=("real waist cut CH_P_EVE_14_1 high, along a blade|WAIST=1 WAISTAT=0.9 WAISTTILT=2 $E14|CH_P_EVE_14_1"
-           "real waist cut CH_P_EVE_14_1 low, along a 32-degree blade, after the left arm|WAIST=1 ARMFIRST=1 WAISTAT=0.3 WAISTTILT=32 WAISTTILTDIR=2 $E14|CH_P_EVE_14_1")
+    jobs+=("real waist cut CH_P_EVE_14_1 under the bust, along a 15-degree blade|WAIST=1 WAISTAT=0.3 WAISTTILT=15 $E14|CH_P_EVE_14_1"
+           "real waist cut CH_P_EVE_14_1 under the bust, along a 15-degree blade, after the left arm|WAIST=1 ARMFIRST=1 WAISTAT=0.3 WAISTTILT=15 WAISTTILTDIR=2 $E14|CH_P_EVE_14_1")
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
     for at in 0.4 0.2; do
       jobs+=("real thigh cut CH_P_EVE_14_1 at $at, leg straps kept on the body|ARM=1 KEEPCAPE=1 CAPE=Ab_LLA01,Ab_LLB01 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=$at $E14|CH_P_EVE_14_1")
     done
+  # her sword broken at the blow (weapon_split) on the real mesh, along its length and through the guard, where it has
+  # more crossed parts than free bones for their sinks (the playtest's cut face stretched at 0.23)
+  SW=Art/Character/Weapon/Sword/CH_W_Sword_01/CH_W_Sword_01
+  if on weapon && [[ -f ../../../.cache/work/vanilla/SB/Content/$SW.uasset ]]; then
+    for w in 0.1 0.23 0.3 0.5 0.9; do
+      for t in 0 60; do jobs+=("real sword split at $w, $t degrees off square|WEAPON=1 WAT=$w WTILT=$t PKG=vanilla/SB/Content/$SW|CH_W_Sword_01"); done
+    done
+  fi
   on mark && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real hit mark CH_P_EVE_10|MARK=1|CH_P_EVE_10" "real hit mark CH_P_EVE_10 (posed)|MARK=1 POSED=1|CH_P_EVE_10")
 fi

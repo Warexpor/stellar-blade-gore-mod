@@ -92,7 +92,8 @@ end
 
 local function load(path)
   local o = try(function() return StaticFindObject(path) end)
-  if not valid(o) and LoadAsset then o = try(function() return LoadAsset(path) end) end
+  -- not from the pak around a respawn (main.lua's may_load)
+  if not valid(o) and LoadAsset and ctx.may_load() then o = try(function() return LoadAsset(path) end) end
   return valid(o) and o or nil
 end
 

@@ -13,3 +13,4 @@ __pycache__/
 bin/
 obj/
 /release/
+/native/sbslice/build/

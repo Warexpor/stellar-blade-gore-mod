@@ -1,6 +1,7 @@
 // meshtool: read Stellar Blade skeletal meshes from legacy files (retoc to-legacy output).
 //   dump <legacy_root> <usmap> <package> <out.json>   raw render LODs: sections, indices, positions, skin weights, bones
 //   gltf <legacy_root> <usmap> <package> <out_dir>    glTF 2.0 (binary) for Blender
+//   morphs <legacy_root> <usmap> <package> <out.json>  morph target deltas (LOD0)
 //   bones <legacy_root> <usmap> - <out_dir>           reference skeletons only, package paths on stdin, <out_dir>/<package>.json
 // <package> is the path under <legacy_root> without extension, e.g. SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30
 using System.Text.Json;
@@ -57,6 +58,19 @@ if (cmd == "anims")
 }
 
 var mesh = provider.LoadPackageObject<USkeletalMesh>($"{pkg}.{Path.GetFileName(pkg)}");
+if (cmd == "morphs")
+{
+    // morphs: per morph target, its LOD0 deltas as [vertex, dx, dy, dz] (vertex: the render LOD0 index of dump)
+    var morphs = new Dictionary<string, float[][]>();
+    foreach (var mi in mesh.MorphTargets)
+    {
+        if (!mi.TryLoad<CUE4Parse.UE4.Assets.Exports.Animation.UMorphTarget>(out var mt) || mt.MorphLODModels.Length == 0) continue;
+        morphs[mt.Name] = mt.MorphLODModels[0].Vertices.Select(v => new[] { (float)v.SourceIdx, v.PositionDelta.X, v.PositionDelta.Y, v.PositionDelta.Z }).ToArray();
+    }
+    await File.WriteAllTextAsync(outp, JsonSerializer.Serialize(morphs));
+    Console.WriteLine($"{pkg}: {morphs.Count} morph targets -> {outp}");
+    return 0;
+}
 if (cmd == "gltf")
 {
     var session = new ExportSession();

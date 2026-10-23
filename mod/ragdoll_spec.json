@@ -297,6 +297,10 @@
     "Art/Character/Monster/CH_M_NA_17/CH_M_NA_17": {
       "mode": "extract"
     },
+    "Art/Character/Weapon/Sword/CH_W_Sword_01/CH_W_Sword_01": {
+      "_comment": "Eve's sword, extracted for the weapon split tests (native/sbslice/test/run.sh weapon). Not shipped",
+      "mode": "extract"
+    },
     "Art/Character/Monster/CH_M_NA_17/CH_M_NA_17_1": {
       "mode": "extract"
     },

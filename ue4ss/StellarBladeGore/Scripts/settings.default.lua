@@ -22,6 +22,22 @@ return {
       -- sounds = { "vo_eve_die_01", "vo_eve_die_fall_01" },  -- which recordings (default: vo_eve_die_01-05); names
       --   under Sound/Dialogue/ActionVoice/Eve, or full paths of another mod's SoundWaves / SoundCues
     },
+    deathFace = {
+      enabled = true,          -- a dead face on her as she dies, eyes closing (false: the game's own, gone 1 s in)
+    },
+  },
+  convulse = {
+    enabled = true,            -- after her death her face winces, gasps and twitches for a while, fading out (beheaded
+                               -- or split down her length: none of it)
+    face = true,               --   her face moving (false: it stays as the death face left it)
+    voice = {
+      enabled = true,          --   quiet breaths and moans along (false: silent)
+      volume = 1.0,            --   how loud, times the default (0.5: half)
+    },
+    neck = {
+      enabled = true,          --   her neck straining and twitching: her head trying to lift or turn, shaking, and
+                               --   dropping back, sharp jerks after (false: her head lies still)
+    },
   },
   cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, and fly it with
                                -- WASD, Q/E (down/up), Shift (faster) or the left stick and triggers, till the death
@@ -31,6 +47,13 @@ return {
   cameraTrack = 2.5,           --   how closely it slides after her body, on the level, till you fly it (0: it stays put)
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
+  active = {
+    stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
+                               -- she falls and lies (a stiffer, more held-together body)
+  },
+  holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death holds
+                               -- it (no death screen, she stays down), again lets it go; key names as UE's Gamepad_*
+                               -- (false: none)
   holdDown = true,             -- knocked down, she stays down till you dodge or jump (false: she gets up on her own)
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill

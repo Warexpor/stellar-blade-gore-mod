@@ -23,13 +23,21 @@ __declspec(dllimport) int WINAPI DeleteFileW(const u16 *);
 __declspec(dllimport) void *WINAPI GetModuleHandleW(const u16 *);
 __declspec(dllimport) int WINAPI GetModuleHandleExW(u32, const void *, void **);
 __declspec(dllimport) int WINAPI DisableThreadLibraryCalls(void *);
-__declspec(dllimport) void *WINAPI VirtualAlloc(void *, u64, u32, u32);
-__declspec(dllimport) int WINAPI VirtualFree(void *, u64, u32);
+__declspec(dllimport) HANDLE WINAPI GetProcessHeap(void);
+__declspec(dllimport) void *WINAPI HeapAlloc(HANDLE, u32, u64);
+__declspec(dllimport) int WINAPI HeapFree(HANDLE, u32, void *);
 __declspec(dllimport) int WINAPI VirtualProtect(void *, u64, u32, u32 *);
 __declspec(dllimport) int WINAPI FlushInstructionCache(HANDLE, const void *, u64);
 __declspec(dllimport) HANDLE WINAPI GetCurrentProcess(void);
+__declspec(dllimport) u64 WINAPI GetTickCount64(void);
+__declspec(dllimport) void *WINAPI AddVectoredExceptionHandler(u32, long(WINAPI *)(void *));
 
 int _fltused = 0;
+
+// zeroed memory off the process heap (VirtualAlloc next to VirtualProtect and CreateThread reads as a loader to
+// antivirus machine learning)
+static void *mem_alloc(u64 n) { return HeapAlloc(GetProcessHeap(), 0x8 /*HEAP_ZERO_MEMORY*/, n); }
+static void mem_free(void *p) { HeapFree(GetProcessHeap(), 0, p); }
 #ifndef SBSLICE_HOSTED
 // no CRT: clang still calls these for struct copies (the sink records)
 void *memcpy(void *d, const void *s, u64 n)
@@ -195,9 +203,9 @@ static const u32 *ib_indices(u64 ib, int ni, index_get_fn get)
         if (same) return ib_slots[k].ix;
     }
     int k = ib_next; ib_next ^= 1;
-    if (ib_slots[k].ix) VirtualFree(ib_slots[k].ix, 0, 0x8000);
+    if (ib_slots[k].ix) mem_free(ib_slots[k].ix);
     ib_slots[k].ib = 0; ib_slots[k].ni = 0;
-    ib_slots[k].ix = VirtualAlloc(0, (u64)ni * 4, 0x3000, 0x04);
+    ib_slots[k].ix = mem_alloc((u64)ni * 4);
     if (!ib_slots[k].ix) return 0;
     for (int i = 0; i < ni; i++) ib_slots[k].ix[i] = get(ib, (u32)i);
     ib_slots[k].ib = ib; ib_slots[k].ni = ni;
@@ -213,7 +221,9 @@ static const u32 *ib_indices(u64 ib, int ni, index_get_fn get)
 // anchor: the bone a stump seam must stay on (the rim's, -1 if this sink's own transform is the point: a cape's
 // seam, a split's). ap: that point in the anchor's frame. The weights stay on `bone` (collapsing the anchor would
 // take the whole limb or the torso with them); each frame `at` is rewritten so the point still rides the anchor
-static struct { u64 mesh, comp; int bone, down, proj, carry, anchor; float m[16], at[3], ap[3], pm[16]; } sinks[MAX_SINKS];
+// also: components that took comp's weights with this sink in them ("y": a split's copy of a body cut before), whose
+// cuts count it as their own too
+static struct { u64 mesh, comp, also[2]; int bone, down, proj, carry, anchor; float m[16], at[3], ap[3], pm[16]; } sinks[MAX_SINKS];
 #define SINK_IN 2.0f // cm a sink's collapse point sits inside its own side of the cut
 #define SINK_REUSE_CM 8.0f // an earlier cut's sink serves a seam whose joint is this close to where it collapses
 static int nsinks;
@@ -516,7 +526,9 @@ static int is_carrier(const cut_ctx *c, int bone)
 // a sink an earlier cut on this very component made (its seam vertices are already on it)
 static int own_sink(const cut_ctx *c, int bone)
 {
-    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == c->sm && sinks[i].comp == c->comp && sinks[i].bone == bone) return 1;
+    for (int i = 0; i < nsinks; i++)
+        if (sinks[i].mesh == c->sm && sinks[i].bone == bone
+            && (sinks[i].comp == c->comp || sinks[i].also[0] == c->comp || sinks[i].also[1] == c->comp)) return 1;
     return 0;
 }
 
@@ -1183,7 +1195,7 @@ static void proj_matrix(const float *base, const float *t, const float *pp, cons
 #define BONEMAP_ROOM 512   // entries in an array of ours swapped in for the engine's (tarray_push16)
 int mem_readable(u64 p, u64 n); // stats.c
 // the engine's own allocator: an array swapped into the engine's hands must be one it can free. Ours came from
-// VirtualAlloc, and when she was quit with a cut on (the stub carrier is borrowed into sections on every limb cut),
+// the process heap, and when she was quit with a cut on (the stub carrier is borrowed into sections on every limb cut),
 // the engine freed it on the way out: "MallocBinned2 Corruption Canary was 0x3941, should be 0x17ea", a fatal error
 // on every Alt+F4 since stub carriers came in
 typedef void *(*gmalloc_fn)(u64 self, u64 n, u32 align);
@@ -1454,11 +1466,11 @@ static unsigned char *cut_scratch(int k, u64 bytes)
         for (u64 i = 0, n = (bytes + 7) / 8; i < n; i++) q[i] = 0;
         return scratch_mem[k];
     }
-    if (scratch_mem[k]) VirtualFree(scratch_mem[k], 0, 0x8000);
+    if (scratch_mem[k]) mem_free(scratch_mem[k]);
     scratch_len[k] = 0;
     // (room to grow: the next mesh may be a little bigger)
     u64 len = bytes + bytes / 4;
-    scratch_mem[k] = VirtualAlloc(0, len, 0x3000 /*COMMIT|RESERVE*/, 0x04 /*READWRITE*/);
+    scratch_mem[k] = mem_alloc(len);
     if (scratch_mem[k]) scratch_len[k] = len;
     return scratch_mem[k];
 }
@@ -1737,7 +1749,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int variable = *(unsigned char *)(sw + SW_VARIABLE) && lookup;
     u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
     int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
-    int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0;
+    int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0, unbanded = 0;
     for (int s = 0; s < c.nsec; s++) {
         u64 sec = secs + (u64)s * 0xe8;
         int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
@@ -2189,6 +2201,19 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     *slot = side_sink(&sa, s, target, 2 + r, sa.band >= 0 ? ANY_BAND : 0);
                 }
             }
+        // a section none of whose bands found a flattening sink (no free helper riding any of them): one with no band
+        // to ride, else the whole half stayed (a split's copy vanished 54000 vertices, none sunk, and the split fell
+        // back to a waist cut, playtest)
+        for (int s = 0; s < c.nsec; s++) {
+            int has = 0, v0 = -1;
+            for (int k = 0; k < nbands && !has; k++) has = secband[(u64)s * SPLIT_BANDS + k] >= 0;
+            if (has) continue;
+            for (int v = 0; v < nv && v0 < 0; v++) if (vsec[v] == s && vkind[v] == 1) v0 = v;
+            if (v0 < 0) continue;
+            sa.band = -1;
+            int k = vband[v0], got = side_sink(&sa, s, bandc[k], 1, 0);
+            if (got >= 0) { secband[(u64)s * SPLIT_BANDS + k] = got; unbanded++; }
+        }
         // each vanishing vertex's sink: its own, else the nearest band of its section that flattens (a limb or deep
         // torso with no point of its own flattens rather than stays), else none (it stays: unsunk)
         for (int v = 0; v < nv; v++) {
@@ -2448,7 +2473,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         }
         if (nsinks >= MAX_SINKS) { full = 1; continue; }
         float *m = c.refinv + (u64)bone * 16;
-        sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = bone; sinks[nsinks].down = 0; sinks[nsinks].proj = 0; sinks[nsinks].carry = 0; sinks[nsinks].anchor = -1;
+        sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = bone; sinks[nsinks].down = 0; sinks[nsinks].proj = 0; sinks[nsinks].carry = 0; sinks[nsinks].anchor = -1; sinks[nsinks].also[0] = sinks[nsinks].also[1] = 0;
         for (int k = 0; k < 16; k++) sinks[nsinks].m[k] = m[k];
         if (mode == MODE_SIDE) {
             // a borrowed bone (the face) flattens in the frame it will follow from "k" on (the master's head),
@@ -2498,7 +2523,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         const float *t = pose_of(&c, i);
         if (!t) continue;
         float *m = c.refinv + (u64)i * 16;
-        sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = i; sinks[nsinks].down = 0; sinks[nsinks].carry = 0; sinks[nsinks].anchor = -1;
+        sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = i; sinks[nsinks].down = 0; sinks[nsinks].carry = 0; sinks[nsinks].anchor = -1; sinks[nsinks].also[0] = sinks[nsinks].also[1] = 0;
         for (int k = 0; k < 16; k++) sinks[nsinks].m[k] = m[k];
         if (btype[i] == 1) {
             proj_matrix(m, t, pin, n, sinks[nsinks].pm);
@@ -2528,7 +2553,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         if (!tb || !tc) continue;
         float *m = c.refinv + (u64)i * 16, f[4][3];
         sinks[nsinks].mesh = c.sm; sinks[nsinks].comp = comp; sinks[nsinks].bone = i; sinks[nsinks].down = 0;
-        sinks[nsinks].proj = 1; sinks[nsinks].carry = 1; sinks[nsinks].anchor = -1;
+        sinks[nsinks].proj = 1; sinks[nsinks].carry = 1; sinks[nsinks].anchor = -1; sinks[nsinks].also[0] = sinks[nsinks].also[1] = 0;
         for (int k = 0; k < 16; k++) sinks[nsinks].m[k] = m[k];
         for (int e = 0; e < 4; e++) {
             float vp[3] = { e == 0, e == 1, e == 2 }, r[3], x[3];
@@ -2544,7 +2569,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         nsinks++; nnew++;
     }
 
-    char *msg = VirtualAlloc(0, 16384, 0x3000, 0x04);
+    char *msg = mem_alloc(16384);
     if (!msg) { skin_result("err out of memory"); return; }
     char *o = msg;
     o = put(o, "ok verts="); o = put_int(o, nv);
@@ -2553,6 +2578,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     o = put(o, " seam="); o = put_int(o, nseam);
     o = put(o, " vanished="); o = put_int(o, vanished);
     o = put(o, " unsunk="); o = put_int(o, unsunk);
+    if (unbanded) { o = put(o, " unbanded="); o = put_int(o, unbanded); }
     o = put(o, " reweighted="); o = put_int(o, moved);
     o = put(o, " stuck="); o = put_int(o, stuck);
     if (ncarry) { o = put(o, " carried="); o = put_int(o, carried); o = put(o, " carrier="); o = put_int(o, cbone); }
@@ -2672,7 +2698,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         }
         *o = 0;
         skin_result(msg);
-        VirtualFree(msg, 0, 0x8000);
+        mem_free(msg);
         return;
     }
     // a cut's body opening faces the limb and the limb's the body
@@ -2690,7 +2716,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     o = put_fit(o, "l", rimpos + (u64)nrim[0] * 3, nl_core, pp, nl_dir, tm, 1); // limb opening
     *o = 0;
     skin_result(msg);
-    VirtualFree(msg, 0, 0x8000);
+    mem_free(msg);
 }
 
 // put back every collapsed inverse bind matrix (of one mesh, or all with mesh 0)
@@ -2900,6 +2926,214 @@ static int skin_collapse(void)
     return n;
 }
 
+// a component's weights as the GPU skins it (its override, else the mesh's), into out (nv of them; 0: the count only)
+static const char *read_weights(u64 src, int lod, skin_info *out, int *pnv)
+{
+    u64 sm = *(u64 *)(src + SC_SKELETAL_MESH);
+    if (!sm) return "err no mesh";
+    u64 rd = *(u64 *)(src + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(src + SC_MESH_OBJECT) + 0x40) : *(u64 *)(sm + SM_RENDER_DATA);
+    if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) return "err no render data for lod";
+    u64 ld = ((u64 *)*(u64 *)rd)[lod];
+    u64 sw = ((get_buffer_fn)(exe + RVA_GET_SKIN_WEIGHT_BUFFER))(src, lod);
+    int nv = *(int *)(ld + LOD_NUM_VERTICES);
+    if (!sw || !*(u64 *)(sw + SW_DATA) || *(int *)(sw + SW_NUM_VERTICES) != nv) return "err no CPU copy of skin weights";
+    *pnv = nv;
+    if (!out) return 0;
+    {
+        unsigned char *data = *(unsigned char **)(sw + SW_DATA);
+        u32 *lookup = *(u32 **)(sw + SW_LOOKUP);
+        int variable = *(unsigned char *)(sw + SW_VARIABLE) && lookup;
+        u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
+        int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
+        u64 secs = *(u64 *)(ld + LOD_SECTIONS);
+        int nsec = *(int *)(ld + LOD_SECTIONS + 8);
+        for (int s = 0; s < nsec; s++) {
+            u64 sec = secs + (u64)s * 0xe8;
+            int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
+            unsigned short *bmap = *(unsigned short **)(sec + SEC_BONE_MAP);
+            int nbmap = *(int *)(sec + SEC_BONE_MAP + 8);
+            for (int v = base; v < base + cnt && v < nv; v++) {
+                u32 off, cn;
+                if (variable) { off = lookup[v] >> 8; cn = lookup[v] & 0xff; }
+                else { off = (wide ? 3 : 2) * maxinf * (u32)v; cn = maxinf; }
+                if (cn > MAX_INF) cn = MAX_INF;
+                for (u32 i = 0; i < cn; i++) {
+                    u32 li = wide ? ((unsigned short *)(data + off))[i] : data[off + i];
+                    out[v].bones[i] = li < (u32)nbmap ? bmap[li] : 0;
+                    out[v].weights[i] = data[off + (wide ? 2 : 1) * cn + i];
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// "y<src>,<lod>,<dst>,...": src's weights now on copies of its mesh asset on src's pose (another mod's overlay: Ultra
+// Violence draws her outfit blood on a see-through copy of her mesh). They kept her whole skin and stretched from the
+// stump to the flying limb. The sinks are the asset's, shared; with no override on src, theirs go too
+static void skin_copy(u64 src, int lod, const u64 *dst, int nd)
+{
+    char msg[48] = "ok copied ", *o = msg + 10;
+    u64 sm = *(u64 *)(src + SC_SKELETAL_MESH);
+    if (!sm) { skin_result("err no mesh"); return; }
+    int has = lod >= 0 && lod < *(int *)(src + SC_LOD_INFO + 8) && *(u64 *)(*(u64 *)(src + SC_LOD_INFO) + (u64)lod * 0x48 + 0x18);
+    tarray arr = { 0, 0, 0 };
+    if (has) {
+        int nv = 0;
+        const char *e = read_weights(src, lod, 0, &nv);
+        if (e) { skin_result(e); return; }
+        skin_info *out = (skin_info *)cut_scratch(0, (u64)nv * sizeof(skin_info));
+        if (!out) { skin_result("err out of memory"); return; }
+        if ((e = read_weights(src, lod, out, &nv)) != 0) { skin_result(e); return; }
+        arr.data = out; arr.num = arr.max = nv;
+    }
+    int n = 0;
+    for (int i = 0; i < nd; i++) {
+        u64 d = dst[i];
+        if (d < 0x10000 || d == src || *(u64 *)(d + SC_SKELETAL_MESH) != sm) continue;
+        if (has) {
+            ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(d, lod, &arr);
+            // src's borrowed bones followed its master's bone (the face's seam on her head): a copy on the same master
+            // (Ultra Violence's face blood follows her body, the face's own master) gets the same entries, or that seam
+            // stays on the borrowed bone's own transform and its blood stretched from her neck to the flying head
+            int *dm = *(int **)(d + SC_MASTER_BONE_MAP), dn = *(int *)(d + SC_MASTER_BONE_MAP + 8);
+            for (int r = 0, nr = nremaps; r < nr && dm; r++) {
+                if (remaps[r].comp != src || remaps[r].index >= dn || dm[remaps[r].index] != remaps[r].old) continue;
+                int dup = 0;
+                for (int j = 0; j < nremaps; j++) if (remaps[j].comp == d && remaps[j].index == remaps[r].index) dup = 1;
+                if (dup || nremaps >= MAX_REMAPS) continue;
+                remaps[nremaps] = remaps[r];
+                remaps[nremaps].comp = d;
+                if (remaps[r].applied) dm[remaps[r].index] = remaps[r].to;
+                nremaps++;
+            }
+            // its seams are on src's sinks now: d's own cuts must leave them there (a split's copy of a body with an
+            // arm cut off put the stump's seam back on the arm, stretched out to where the arm flew)
+            for (int k = 0; k < nsinks; k++)
+                if (sinks[k].mesh == sm && sinks[k].comp == src && sinks[k].also[0] != d && sinks[k].also[1] != d) {
+                    if (!sinks[k].also[0]) sinks[k].also[0] = d; else sinks[k].also[1] = d;
+                }
+        }
+        else if (lod < *(int *)(d + SC_LOD_INFO + 8) && *(u64 *)(*(u64 *)(d + SC_LOD_INFO) + (u64)lod * 0x48 + 0x18)) {
+            ((lodinfo_fn)(exe + RVA_RELEASE_OVERRIDE_SKIN_WEIGHTS))(*(u64 *)(d + SC_LOD_INFO) + (u64)lod * 0x48);
+            unremap(d);
+            ((comp_fn)(exe + RVA_MARK_RENDER_STATE_DIRTY))(d);
+        } else continue;
+        n++;
+    }
+    o = put_int(o, n);
+    for (const char *t = has ? " weights" : " cleared"; *t; t++) *o++ = *t;
+    *o = 0;
+    skin_result(msg);
+}
+
+// "S<comp>,<lod>" / "R<comp>,<lod>[,<other>...]": a cut that may still fail on a body cut before (a split after her
+// arm came off, gore.lua's blow) saves her weights and the sinks first; R puts the weights back (or lets go of the
+// override when she had none), drops what the cuts since recorded for her and the others named (the split's copy:
+// sinks, borrowed BoneMap entries), puts back any of those sinks already collapsed, and the co-owners as they were.
+// "x" there (on either half: the sinks are the asset's) wiped the arm cut with them (the arm grew back on its stump).
+// "S<comp>,<lod>,1" forgets the save (the cut held); "r" forgets them all
+#define MAX_SAVES 4
+// the sinks and borrowed BoneMap entries at the save, by what they are (an enemy's "r<asset>" or another component's
+// "x" meanwhile compacts the lists)
+typedef struct { u64 mesh, comp, also[2]; int bone; } sink_id;
+static struct { u64 comp; int lod, has, nv, nsinks, nremaps; skin_info *w; sink_id ids[MAX_SINKS]; u64 rcomp[MAX_REMAPS]; int rindex[MAX_REMAPS]; } saves[MAX_SAVES];
+
+static void forget_saves(u64 comp)
+{
+    for (int i = 0; i < MAX_SAVES; i++) if (saves[i].comp && (!comp || saves[i].comp == comp)) {
+        if (saves[i].w) mem_free(saves[i].w);
+        saves[i].w = 0; saves[i].comp = 0;
+    }
+}
+
+static int has_override(u64 comp, int lod)
+{
+    return lod >= 0 && lod < *(int *)(comp + SC_LOD_INFO + 8) && *(u64 *)(*(u64 *)(comp + SC_LOD_INFO) + (u64)lod * 0x48 + 0x18);
+}
+
+static void skin_save(u64 comp, int lod)
+{
+    int k = -1;
+    for (int i = 0; i < MAX_SAVES && k < 0; i++) if (saves[i].comp == comp) k = i;
+    for (int i = 0; i < MAX_SAVES && k < 0; i++) if (!saves[i].comp) k = i;
+    if (k < 0) { skin_result("err no save slot"); return; }
+    if (saves[k].w) { mem_free(saves[k].w); saves[k].w = 0; }
+    saves[k].comp = comp; saves[k].lod = lod; saves[k].nv = 0;
+    saves[k].has = has_override(comp, lod);
+    if (saves[k].has) {
+        int nv = 0;
+        const char *e = read_weights(comp, lod, 0, &nv);
+        if (!e && !(saves[k].w = (skin_info *)mem_alloc((u64)nv * sizeof(skin_info)))) e = "err out of memory";
+        if (!e) e = read_weights(comp, lod, saves[k].w, &nv);
+        if (e) { if (saves[k].w) mem_free(saves[k].w); saves[k].w = 0; saves[k].comp = 0; skin_result(e); return; }
+        saves[k].nv = nv;
+    }
+    saves[k].nsinks = nsinks; saves[k].nremaps = nremaps;
+    for (int i = 0; i < nsinks; i++) {
+        sink_id *d = &saves[k].ids[i];
+        d->mesh = sinks[i].mesh; d->comp = sinks[i].comp; d->bone = sinks[i].bone; d->also[0] = sinks[i].also[0]; d->also[1] = sinks[i].also[1];
+    }
+    for (int i = 0; i < nremaps; i++) { saves[k].rcomp[i] = remaps[i].comp; saves[k].rindex[i] = remaps[i].index; }
+    char msg[48] = "ok saved ", *o = msg + 9;
+    if (saves[k].has) o = put_int(o, saves[k].nv); else for (const char *t = "none"; *t; t++) *o++ = *t;
+    *o = 0;
+    skin_result(msg);
+}
+
+static int named(u64 c, u64 comp, const u64 *more, int nm)
+{
+    if (c == comp) return 1;
+    for (int i = 0; i < nm; i++) if (more[i] == c) return 1;
+    return 0;
+}
+
+static void skin_back(u64 comp, int lod, const u64 *more, int nm)
+{
+    int k = -1;
+    for (int i = 0; i < MAX_SAVES; i++) if (saves[i].comp == comp && saves[i].lod == lod) k = i;
+    if (k < 0) { skin_result("err nothing saved"); return; }
+    if (saves[k].has) {
+        tarray arr = { saves[k].w, saves[k].nv, saves[k].nv };
+        ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(comp, lod, &arr);
+    } else if (has_override(comp, lod))
+        ((lodinfo_fn)(exe + RVA_RELEASE_OVERRIDE_SKIN_WEIGHTS))(*(u64 *)(comp + SC_LOD_INFO) + (u64)lod * 0x48);
+    // the sinks since, hers and the others named, go (a collapsed one's matrix back first); the rest stay, and the
+    // ones from before get their co-owners back
+    int n = 0, dropped = 0;
+    for (int i = 0; i < nsinks; i++) {
+        const sink_id *was = 0;
+        for (int j = 0; j < saves[k].nsinks && !was; j++) {
+            const sink_id *d = &saves[k].ids[j];
+            if (d->mesh == sinks[i].mesh && d->comp == sinks[i].comp && d->bone == sinks[i].bone) was = d;
+        }
+        if (was) { sinks[i].also[0] = was->also[0]; sinks[i].also[1] = was->also[1]; }
+        if (was || !named(sinks[i].comp, comp, more, nm)) { sinks[n++] = sinks[i]; continue; }
+        if (sinks[i].down) {
+            float *ri = *(float **)(sinks[i].mesh + SM_REF_BASES_INV);
+            int num = *(int *)(sinks[i].mesh + SM_REF_BASES_INV + 8);
+            if (ri && sinks[i].bone < num) for (int j = 0; j < 16; j++) ri[(u64)sinks[i].bone * 16 + j] = sinks[i].m[j];
+        }
+        dropped++;
+    }
+    nsinks = n;
+    n = 0;
+    for (int i = 0; i < nremaps; i++) {
+        int was = 0;
+        for (int j = 0; j < saves[k].nremaps && !was; j++) was = saves[k].rcomp[j] == remaps[i].comp && saves[k].rindex[j] == remaps[i].index;
+        if (was || !named(remaps[i].comp, comp, more, nm)) { remaps[n++] = remaps[i]; continue; }
+        int *map = *(int **)(remaps[i].comp + SC_MASTER_BONE_MAP);
+        if (remaps[i].applied && map && remaps[i].index < *(int *)(remaps[i].comp + SC_MASTER_BONE_MAP + 8)) map[remaps[i].index] = remaps[i].old;
+    }
+    nremaps = n;
+    ((comp_fn)(exe + RVA_MARK_RENDER_STATE_DIRTY))(comp);
+    forget_saves(comp);
+    char msg[48] = "ok back, dropped ", *o = msg + 17;
+    o = put_int(o, dropped);
+    *o = 0;
+    skin_result(msg);
+}
+
 // keep: the asset's sinks stay collapsed (another cut component on the same asset, an enemy's, still rides them)
 static void skin_clear(u64 comp, int lod, int keep)
 {
@@ -2919,7 +3153,38 @@ static void skin_clear(u64 comp, int lod, int keep)
 // triangle stretches when an edge is over 3x and 15 cm longer than at bind. Reports how many, the longest edge, and
 // the bones (each vertex's strongest) most of them hang on, with how far that bone's vertices got from the bone.
 // hidden= counts the stretched triangles wholly on sinks (the flattened other side, meant to sit behind the lids)
-static void skin_probe(u64 comp, int lod)
+// the skin as the probe posed it, to ue4ss\Mods\StellarBladeGore\probe<dump>.obj (component space, cm): every vertex,
+// "vb <bone>" its strongest mesh bone after it, every triangle. To look at what a half shows in game
+static void probe_obj(int dump, const float *xs, int nv, const int *top, const u32 *ix, int ni)
+{
+    u16 path[64];
+    const char *base = "ue4ss\\Mods\\StellarBladeGore\\probe";
+    int k = 0;
+    while (base[k]) { path[k] = (u16)base[k]; k++; }
+    path[k++] = (u16)"0123456789abcdef"[dump & 0xf];
+    path[k++] = '.'; path[k++] = 'o'; path[k++] = 'b'; path[k++] = 'j'; path[k] = 0;
+    HANDLE h = CreateFileW(path, 0x40000000 /*GENERIC_WRITE*/, 1, 0, 2 /*CREATE_ALWAYS*/, 0x80, 0);
+    if (h == INVALID_HANDLE) return;
+    static char buf[1 << 16];
+    char *o = buf;
+    u32 w;
+    for (int i = 0; i < nv + ni / 3; i++) {
+        if (o - buf > (long)sizeof buf - 128) { WriteFile(h, buf, (u32)(o - buf), &w, 0); o = buf; }
+        if (i < nv) {
+            const float *x = xs + (u64)i * 3;
+            o = put(o, "v "); o = put_f(o, x[0]); o = put(o, " "); o = put_f(o, x[1]); o = put(o, " "); o = put_f(o, x[2]);
+            o = put(o, "\nvb "); o = put_int(o, top[i]); o = put(o, "\n");
+        } else {
+            int t = (i - nv) * 3;
+            o = put(o, "f "); o = put_int(o, ix[t] + 1); o = put(o, " "); o = put_int(o, ix[t + 1] + 1); o = put(o, " ");
+            o = put_int(o, ix[t + 2] + 1); o = put(o, "\n");
+        }
+    }
+    WriteFile(h, buf, (u32)(o - buf), &w, 0);
+    CloseHandle(h);
+}
+
+static void skin_probe(u64 comp, int lod, int dump)
 {
     cut_ctx c = { 0 };
     c.comp = comp;
@@ -2957,6 +3222,11 @@ static void skin_probe(u64 comp, int lod)
             namemap[i] = -1;
             for (int j = 0; j < mnb; j++) if (*(const u64 *)(mbi + (u64)j * 0xc) == nm) { namemap[i] = j; break; }
         }
+        // the engine's own map where it has one: a borrowed sink remapped onto the master's head ("k") is skinned
+        // where the head is, not where its name says (the face's Spine1)
+        const int *mbm = *(const int **)(comp + SC_MASTER_BONE_MAP);
+        if (mbm && *(int *)(comp + SC_MASTER_BONE_MAP + 8) == c.nb)
+            for (int i = 0; i < c.nb; i++) namemap[i] = mbm[i] < mnb ? mbm[i] : -1;
         c.mmap = namemap;
     }
     c.space = *(float **)(src + SC_SPACE_BASES + (u64)*(int *)(src + SC_SPACE_READ) * 0x10);
@@ -2964,7 +3234,7 @@ static void skin_probe(u64 comp, int lod)
     if (!c.space) { skin_result("err no bone transforms"); return; }
     u64 secs = *(u64 *)(ld + LOD_SECTIONS);
     int nsec = *(int *)(ld + LOD_SECTIONS + 8), nv = c.nv, nb = c.nb;
-    unsigned char *mem = VirtualAlloc(0, (u64)nv * 17 + (u64)nb * 16 + 64, 0x3000, 0x04);
+    unsigned char *mem = mem_alloc((u64)nv * 17 + (u64)nb * 16 + 64);
     if (!mem) { skin_result("err out of memory"); return; }
     float *xs = (float *)mem;
     int *top = (int *)(xs + (u64)nv * 3);
@@ -3002,6 +3272,7 @@ static void skin_probe(u64 comp, int lod)
             skin_point(&c, &o, (const float *)(pos + (u64)v * pstride), xs + (u64)v * 3);
         }
     }
+    if (dump) probe_obj(dump, xs, nv, top, ix, ni);
     int bad = 0, hidden = 0;
     float longest = 0;
     for (int t = 0; t + 2 < ni; t += 3) {
@@ -3068,7 +3339,7 @@ static void skin_probe(u64 comp, int lod)
         vcount[best] = 0;
     }
     *o = 0;
-    VirtualFree(mem, 0, 0x8000);
+    mem_free(mem);
     skin_result(msg);
 }
 
@@ -3130,7 +3401,7 @@ static void skin_mark(u64 comp, int lod, const float *pw, const float *nw, float
     float sc = tm[8] != 0 ? tm[8] : 1, rch = reach / sc;
     u64 secs = *(u64 *)(ld + LOD_SECTIONS);
     int nsec = *(int *)(ld + LOD_SECTIONS + 8), nv = c.nv, nb = c.nb;
-    unsigned char *mem = VirtualAlloc(0, (u64)nv * 17 + 64, 0x3000, 0x04);
+    unsigned char *mem = mem_alloc((u64)nv * 17 + 64);
     if (!mem) { skin_result("err out of memory"); return; }
     float *xs = (float *)mem;
     int *top = (int *)(xs + (u64)nv * 3);
@@ -3179,7 +3450,7 @@ static void skin_mark(u64 comp, int lod, const float *pw, const float *nw, float
                 else if (h <= first + MARK_LAYER_CM / sc && h > best) { best = h; hv = v; }
             }
     }
-    if (hv < 0) { VirtualFree(mem, 0, 0x8000); skin_result("err the ray misses the skin"); return; }
+    if (hv < 0) { mem_free(mem); skin_result("err the ray misses the skin"); return; }
     const float *hc = xs + (u64)hv * 3;
     float nm[3] = { 0, 0, 0 }, r2 = 4.0f / (sc * sc);
     for (int t = 0; t + 2 < ni; t += 3) {
@@ -3205,11 +3476,263 @@ static void skin_mark(u64 comp, int lod, const float *pw, const float *nw, float
     o = put(o, " bone="); o = put_int(o, top[hv]);
     o = put(o, " out="); o = put_f(o, best * sc);
     *o = 0;
-    VirtualFree(mem, 0, 0x8000);
+    mem_free(mem);
     skin_result(msg);
 }
 
 // "c<comp>,<lod>,<bone>[,<mode>,<radius>]" / "x<comp>,<lod>" / "r", fields in hex
+// ---- a weapon split ("e<compA>,<compB>,<lod>", the plane in the cheat's location and direction, world) ----------
+// Her sword cut in two by the killing blade (active.lua): compB is a second component of the same mesh asset on
+// compA's pose (its master pose component), each on its own physics box. A keeps what is in front of the plane, B
+// what is behind, each through its own skin weight override; what one gives up goes onto a sink bone of the asset:
+// a part the plane crosses (a bone with vertices on both sides) is flattened onto the plane there, so the cut face
+// is that part's own surface pressed flat, and a part wholly on the far side collapses to a point on the plane,
+// out of sight. The sword is rigid on its box, so a sink fixed at the cut's pose stays right. Sinks are bones no
+// vertex uses (helpers and markers: the sword has 90 bones), borrowed into the sections that need them; a bone the
+// plane crosses is pressed flat through one sink per half, shared by the parts moved off their bind pose alike
+// (WEAPON_PARTS sinks at most, the rest collapse). Undone by "x" on each component (the asset's sinks with it) and "r"
+// (the borrowed BoneMap entries)
+#define WEAPON_PARTS 12   // most flat sinks per half (groups of crossed parts)
+#define WEAPON_CROSSED 64 // most crossed parts
+// row-vector 4x4 of a component-space transform (scale, rotate, translate), and its inverse
+static void tm_mat(const float *t, float *m)
+{
+    for (int r = 0; r < 3; r++) {
+        float e[3] = { r == 0, r == 1, r == 2 }, o[3];
+        quat_rot(t, e, o);
+        for (int k = 0; k < 3; k++) m[r * 4 + k] = o[k] * t[8 + r];
+        m[r * 4 + 3] = 0;
+    }
+    m[12] = t[4]; m[13] = t[5]; m[14] = t[6]; m[15] = 1;
+}
+static void tm_inv_mat(const float *t, float *m)
+{
+    float iq[4] = { -t[0], -t[1], -t[2], t[3] }, mt[3] = { -t[4], -t[5], -t[6] }, l[3];
+    quat_rot(iq, mt, l);
+    for (int r = 0; r < 3; r++) {
+        float e[3] = { r == 0, r == 1, r == 2 }, o[3];
+        quat_rot(iq, e, o);
+        for (int k = 0; k < 3; k++) m[r * 4 + k] = o[k] / (t[8 + k] != 0 ? t[8 + k] : 1);
+        m[r * 4 + 3] = 0;
+    }
+    for (int k = 0; k < 3; k++) m[12 + k] = l[k] / (t[8 + k] != 0 ? t[8 + k] : 1);
+    m[15] = 1;
+}
+static void mat_mul(const float *a, const float *b, float *o)
+{
+    for (int r = 0; r < 4; r++)
+        for (int k = 0; k < 4; k++) {
+            float acc = 0;
+            for (int j = 0; j < 4; j++) acc += a[r * 4 + j] * b[j * 4 + k];
+            o[r * 4 + k] = acc;
+        }
+}
+static void weapon_split(u64 ca, u64 cb, int lod, const float *pw, const float *nw)
+{
+    cut_ctx c = { 0 };
+    c.comp = ca;
+    c.sm = *(u64 *)(ca + SC_SKELETAL_MESH);
+    if (!c.sm || *(u64 *)(cb + SC_SKELETAL_MESH) != c.sm) { skin_result("err the two components want one mesh"); return; }
+    u64 rd = *(u64 *)(ca + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(ca + SC_MESH_OBJECT) + 0x40) : *(u64 *)(c.sm + SM_RENDER_DATA);
+    if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
+    u64 ld = ((u64 *)*(u64 *)rd)[lod];
+    u64 sw = ((get_buffer_fn)(exe + RVA_GET_SKIN_WEIGHT_BUFFER))(ca, lod);
+    c.nv = *(int *)(ld + LOD_NUM_VERTICES);
+    unsigned char *pos = *(unsigned char **)(ld + LOD_POSITIONS + 0x28);
+    u32 pstride = *(u32 *)(ld + LOD_POSITIONS + 0x30);
+    if (!sw || !*(u64 *)(sw + SW_DATA) || !pos || *(int *)(sw + SW_NUM_VERTICES) != c.nv) {
+        skin_result("err no CPU copy of positions / skin weights"); return;
+    }
+    c.nb = *(int *)(c.sm + SM_REF_BONE_INFO + 8);
+    c.binfo = *(unsigned char **)(c.sm + SM_REF_BONE_INFO);
+    c.refinv = *(float **)(c.sm + SM_REF_BASES_INV);
+    int nb = c.nb, nv = c.nv;
+    if (nb <= 1 || nb > MAX_BONES || !c.refinv || *(int *)(c.sm + SM_REF_BASES_INV + 8) != nb) { skin_result("err bad skeleton"); return; }
+    c.space = *(float **)(ca + SC_SPACE_BASES + (u64)*(int *)(ca + SC_SPACE_READ) * 0x10);
+    c.nspace = *(int *)(ca + SC_SPACE_BASES + (u64)*(int *)(ca + SC_SPACE_READ) * 0x10 + 8);
+    if (!c.space || c.nspace < nb) { skin_result("err no bone transforms"); return; }
+    u64 secs = *(u64 *)(ld + LOD_SECTIONS);
+    c.nsec = *(int *)(ld + LOD_SECTIONS + 8);
+    if (c.nsec <= 0 || c.nsec > 0xfffe) { skin_result("err no sections"); return; }
+    const float *tm = (float *)(ca + SC_TO_WORLD);
+    float p[3], n[3];
+    world_to_comp(tm, pw, p, 0);
+    world_to_comp(tm, nw, n, 1);
+    float nl = __builtin_sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (nl < 1e-6f) { skin_result("err no plane normal"); return; }
+    for (int k = 0; k < 3; k++) n[k] /= nl;
+
+    u64 nbsec = (u64)c.nsec * nb;
+    u64 bytes = (u64)nv * (3 * sizeof(skin_info) + 2 + 1 + 4) + nbsec + (u64)nb * (4 * 4 + 1) + 64;
+    unsigned char *mem = cut_scratch(0, bytes);
+    if (!mem) { skin_result("err out of memory"); return; }
+    skin_info *orig = (skin_info *)mem, *oa = orig + nv, *ob = oa + nv;
+    int *usage = (int *)(ob + nv), *npos = usage + nb, *nneg = npos + nb, *strong = nneg + nb;
+    u16 *vsec = (u16 *)(strong + nv);
+    unsigned char *side = (unsigned char *)(vsec + nv), *inmap = side + nv, *issink = inmap + nbsec;
+    c.inmap = inmap; c.vsec = vsec;
+
+    // the weights as the mesh has them, in mesh bones
+    unsigned char *data = *(unsigned char **)(sw + SW_DATA);
+    u32 *lookup = *(u32 **)(sw + SW_LOOKUP);
+    int variable = *(unsigned char *)(sw + SW_VARIABLE) && lookup;
+    u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
+    int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
+    for (int v = 0; v < nv; v++) vsec[v] = 0xffff;
+    for (int s = 0; s < c.nsec; s++) {
+        u64 sec = secs + (u64)s * 0xe8;
+        int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
+        unsigned short *bmap = *(unsigned short **)(sec + SEC_BONE_MAP);
+        int nbmap = *(int *)(sec + SEC_BONE_MAP + 8);
+        for (int k = 0; k < nbmap; k++) if (bmap[k] < nb) inmap[(u64)s * nb + bmap[k]] = 1;
+        for (int v = base; v < base + cnt && v < nv; v++) {
+            u32 off, cn;
+            if (variable) { off = lookup[v] >> 8; cn = lookup[v] & 0xff; }
+            else { off = (wide ? 3 : 2) * maxinf * (u32)v; cn = maxinf; }
+            if (cn > MAX_INF) cn = MAX_INF;
+            for (int i = 0; i < MAX_INF; i++) orig[v].bones[i] = 0;
+            for (u32 i = 0; i < cn; i++) {
+                u32 li = wide ? ((unsigned short *)(data + off))[i] : data[off + i];
+                orig[v].bones[i] = li < (u32)nbmap ? bmap[li] : 0;
+                orig[v].weights[i] = data[off + (wide ? 2 : 1) * cn + i];
+            }
+            vsec[v] = (u16)s;
+        }
+    }
+    // each vertex where it is now, its side and its strongest bone; per bone how many of its own lie each side
+    for (int v = 0; v < nv; v++) {
+        int best = -1, bw = 0;
+        for (int i = 0; i < MAX_INF; i++) {
+            int b = orig[v].bones[i];
+            if (!orig[v].weights[i] || b < 0 || b >= nb) continue;
+            usage[b]++;
+            if (orig[v].weights[i] > bw) { bw = orig[v].weights[i]; best = b; }
+        }
+        strong[v] = best;
+        float x[3];
+        skin_point(&c, &orig[v], (float *)(pos + (u64)v * pstride), x);
+        side[v] = (x[0] - p[0]) * n[0] + (x[1] - p[1]) * n[1] + (x[2] - p[2]) * n[2] >= 0;
+        if (best >= 0) { if (side[v]) npos[best]++; else nneg[best]++; }
+    }
+    // the parts the plane crosses (most vertices first), each pressed flat through a sink per half. Parts moved off
+    // their bind pose alike (the sword is rigid) share one: CH_W_Sword_01 has 12 free bones for 8 crossed parts near
+    // its guard, and the parts past the fifth collapsed to the plane point, their faces stretched over the cut (playtest)
+    int parts[WEAPON_CROSSED], pgroup[WEAPON_CROSSED], grep_[WEAPON_PARTS], np = 0, ng = 0, any[2] = { 0, 0 };
+    for (int v = 0; v < nv; v++) any[side[v]] = 1;
+    if (!any[0] || !any[1]) { skin_result("err the plane misses it"); return; }
+    for (;;) {
+        int pick = -1;
+        for (int b = 0; b < nb; b++) {
+            if (!npos[b] || !nneg[b]) continue;
+            int taken = 0;
+            for (int k = 0; k < np; k++) taken |= parts[k] == b;
+            if (!taken && (pick < 0 || npos[b] + nneg[b] > npos[pick] + nneg[pick])) pick = b;
+        }
+        if (pick < 0 || np == WEAPON_CROSSED) break;
+        parts[np++] = pick;
+    }
+    // sinks: bones no vertex uses, not the root, not already a sink of an earlier cut on this asset. Roles: 0 A's
+    // point, 1 B's point, then A's and B's flat sink of each group of crossed parts
+    int sink[2 + 2 * WEAPON_PARTS], ns = 0;
+    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == c.sm && sinks[i].bone < nb) issink[sinks[i].bone] = 1;
+    for (int b = nb - 1; b >= 1 && ns < 2 + 2 * WEAPON_PARTS; b--) if (!usage[b] && !issink[b] && c.space && pose_of(&c, b)) sink[ns++] = b;
+    if (ns < 2) { skin_result("err no free bone for a sink"); return; }
+    // each part's move off its bind pose (bind -> now), grouped where it matches a group's first part's
+    for (int k = 0; k < np; k++) {
+        const float *tq = pose_of(&c, parts[k]);
+        float wq[16], dk[16];
+        pgroup[k] = -1;
+        if (!tq) continue;
+        tm_mat(tq, wq);
+        mat_mul(c.refinv + (u64)parts[k] * 16, wq, dk);
+        for (int g = 0; g < ng && pgroup[k] < 0; g++) {
+            const float *tg = pose_of(&c, grep_[g]);
+            float wg[16], dg[16], diff = 0;
+            tm_mat(tg, wg);
+            mat_mul(c.refinv + (u64)grep_[g] * 16, wg, dg);
+            for (int j = 0; j < 16; j++) { float e = dk[j] - dg[j]; if (j >= 12) e *= 0.05f; diff += e * e; } // (1 cm off counts as 0.05)
+            if (diff < 1e-4f) pgroup[k] = g;
+        }
+        if (pgroup[k] < 0 && ng < WEAPON_PARTS && 2 + 2 * (ng + 1) <= ns) { grep_[ng] = parts[k]; pgroup[k] = ng++; }
+    }
+    int ngparts = 0;
+    for (int k = 0; k < np; k++) ngparts += pgroup[k] >= 0;
+    if (nsinks + 2 + 2 * ng > MAX_SINKS) { skin_result("err too many sinks"); return; }
+    // the active bones as the mesh had them, for borrowing
+    for (int i = 0; i < MAX_BONES; i++) bactive[i] = 0;
+    for (int s = 0; s < c.nsec; s++) {
+        u64 arr = secs + (u64)s * 0xe8 + SEC_BONE_MAP;
+        unsigned short *bmap = *(unsigned short **)arr;
+        int n0 = *(int *)(arr + 8);
+        for (int i = 0; i < nbmfix; i++) if (bmfix[i].arr == arr && bmfix[i].num < n0) n0 = bmfix[i].num;
+        for (int k = 0; k < n0; k++) for (int j = bmap[k]; j >= 0 && j < nb && !bactive[j]; j = parent_of(&c, j)) bactive[j] = 1;
+    }
+    int nact = 0;
+    for (int i = 0; i < nb; i++) nact += bactive[i];
+    find_active(ld, nb, nact);
+    // each half's weights: kept as they are on its side, onto a sink past it
+    int borrowfail = 0, flat[2] = { 0, 0 }, gone[2] = { 0, 0 };
+    for (int v = 0; v < nv; v++) {
+        oa[v] = orig[v]; ob[v] = orig[v];
+        int s = vsec[v];
+        if (s == 0xffff) continue;
+        for (int half = 0; half < 2; half++) {
+            // A (half 0) keeps the front (side 1), B the back
+            if ((half == 0) == (side[v] != 0)) continue;
+            int role = half, part = -1;
+            for (int k = 0; k < np; k++) if (parts[k] == strong[v]) part = pgroup[k];
+            if (part >= 0) role = 2 + 2 * part + half;
+            int b = sink[role];
+            if (!inmap[(u64)s * nb + b] && !borrow_bone(secs, s, b, inmap, nb)) {
+                // no room in the section's map: its point sink, else the vertex stays
+                b = sink[half];
+                if (!inmap[(u64)s * nb + b] && !borrow_bone(secs, s, b, inmap, nb)) { borrowfail++; continue; }
+                role = half;
+            }
+            skin_info *o = half ? &ob[v] : &oa[v];
+            for (int i = 0; i < MAX_INF; i++) { o->bones[i] = 0; o->weights[i] = 0; }
+            o->bones[0] = b; o->weights[0] = 255;
+            if (role >= 2) flat[half]++; else gone[half]++;
+        }
+    }
+    // the sinks' matrices, collapsed on "k" (the new weights first)
+    for (int r = 0; r < 2 + 2 * ng; r++) {
+        int b = sink[r];
+        const float *ts = pose_of(&c, b);
+        if (!ts) continue;
+        int i = nsinks++;
+        sinks[i].mesh = c.sm; sinks[i].comp = r & 1 ? cb : ca; sinks[i].bone = b;
+        sinks[i].down = 0; sinks[i].carry = 0; sinks[i].anchor = -1; sinks[i].also[0] = sinks[i].also[1] = 0;
+        for (int k = 0; k < 16; k++) sinks[i].m[k] = c.refinv[(u64)b * 16 + k];
+        if (r < 2) {
+            sinks[i].proj = 0;
+            local_of_cs(ts, p, sinks[i].at);
+        } else {
+            // the crossed part's bind position to where it is now, into the sink's frame, pressed onto the plane
+            int q = grep_[(r - 2) / 2];
+            const float *tq = pose_of(&c, q);
+            float wq[16], is[16], t1[16], base[16];
+            tm_mat(tq ? tq : ts, wq);
+            tm_inv_mat(ts, is);
+            mat_mul(c.refinv + (u64)q * 16, wq, t1);
+            mat_mul(t1, is, base);
+            sinks[i].proj = 1;
+            proj_matrix(base, ts, p, n, sinks[i].pm);
+        }
+    }
+    tarray arr = { oa, nv, nv };
+    ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(ca, lod, &arr);
+    arr.data = ob;
+    ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(cb, lod, &arr);
+    char msg[160], *o = put(msg, "ok split parts=");
+    o = put_int(o, np); o = put(o, " flat="); o = put_int(o, ngparts); o = put(o, " sinks="); o = put_int(o, 2 + 2 * ng);
+    o = put(o, " a_flat="); o = put_int(o, flat[0]); o = put(o, " a_gone="); o = put_int(o, gone[0]);
+    o = put(o, " b_flat="); o = put_int(o, flat[1]); o = put(o, " b_gone="); o = put_int(o, gone[1]);
+    o = put(o, " nomap="); o = put_int(o, borrowfail); o = put(o, " active="); o = put_int(o, act_arr != 0);
+    *o = 0;
+    skin_result(msg);
+}
+
 static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 {
     int k = 0;
@@ -3238,6 +3761,7 @@ static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 //   m<comp>,<lod>,<reach cm>  where a ray meets her skin (see skin_mark): from LocX/Y/Z out along DirX/Y/Z
 //   k                    collapse the sinks the last cuts recorded (call once their weights are in use)
 //   x<comp>,<lod>        undo the cut on that component
+//   y<src>,<lod>,<dst>,...  src's weights on copies of its mesh on its pose (another mod's overlay), none when src has none
 //   x<comp>,<lod>,1      only its weights: the asset's sinks stay for another cut component on it (an enemy's kind)
 //   r                    put back every collapsed sink (a mesh asset outlives the component)
 //   r<mesh asset>        put back that asset's sinks only (an enemy corpse's, whose component may be going)
@@ -3534,7 +4058,7 @@ static void photo_cmd(int on)
 // then calls 0x1422a98b0(): the enter itself (no arguments: it takes the manager, a singleton made at 0x141adc360,
 // checks 0x14236b800, sets +0x84 to 1 and registers photo mode's tick). So "f2" calls that enter, the gate skipped,
 // when the manager is idle (+0x38 0, +0x84 0); "f3" only reports.
-// Answer "ok photo open|state: mgr 38=<b> 84=<i> 4c=<i> gate=<0|1|-> ui=<+184>/<+17c> blocked=<n>[ mesh shielded -> entered <0|1> 84=<i>]".
+// Answer "ok photo open|state: mgr 38=<b> 84=<i> 4c=<i> gate=<0|1|-> ui=<+184>/<+17c> blocked=<n> 48=<i>[ mesh shielded -> entered <0|1> 84=<i>]".
 #define RVA_PHOTO_MGR 0x7032598
 #define RVA_PHOTO_ENTER 0x22a98b0
 #define RVA_PHOTO_GATE 0x231c400
@@ -3600,6 +4124,73 @@ static int photo_unshield(void)
     shield_obj = 0;
     return was;
 }
+// Photo mode's camera up close hides her whole actor (playtest: AActor::bHidden set at ~80 cm, the virtual
+// SetActorHiddenInGame never called). Photo mode's subject visibility (0x14239c410) hides a subject while any of its
+// reasons is set: +0x220 (hidden as photo mode opened), +0x231, +0x228 (a count), +0x22d, +0x22f (the close-range
+// one, 0x14239b2c0: the camera within SBPhotoMode_CloseRange_BoneToCamDistanceThreshold of her bone). Keeping
+// +0x22f alone from being set wasn't enough (playtest), so "f6<0|1>" NOPs the jumps of all but +0x220 (1: a subject
+// hidden before photo mode stays hidden) or puts them back (0), each one's bytes checked first. Photo mode's own
+// hide-a-subject option goes with them. Answer "ok photo close <0|1> (was <0|1>)".
+static const struct { u32 rva; unsigned char len, code[6]; } photo_jumps[] = {
+    { 0x239c45b, 6, { 0x0f, 0x85, 0x89, 0x00, 0x00, 0x00 } }, // +0x231
+    { 0x239c46b, 2, { 0x7f, 0x7d } },                         // +0x228
+    { 0x239c478, 2, { 0x75, 0x70 } },                         // +0x22d
+    { 0x239c485, 2, { 0x75, 0x63 } },                         // +0x22f
+};
+#define PHOTO_JUMPS (int)(sizeof photo_jumps / sizeof photo_jumps[0])
+static void photo_close_cmd(int keep)
+{
+    int was = 1;
+    for (int i = 0; i < PHOTO_JUMPS; i++) {
+        unsigned char *p = (unsigned char *)(exe + photo_jumps[i].rva);
+        int orig = 1, nops = 1;
+        for (int k = 0; k < photo_jumps[i].len; k++) {
+            if (p[k] != photo_jumps[i].code[k]) orig = 0;
+            if (p[k] != 0x90) nops = 0;
+        }
+        if (!orig && !nops) { skin_result("err photo close: not the expected code"); return; }
+        if (orig) was = 0;
+    }
+    for (int i = 0; i < PHOTO_JUMPS; i++) {
+        unsigned char *p = (unsigned char *)(exe + photo_jumps[i].rva);
+        u32 old;
+        if (!VirtualProtect(p, photo_jumps[i].len, 0x40 /*PAGE_EXECUTE_READWRITE*/, &old)) { skin_result("err photo close: VirtualProtect"); return; }
+        for (int k = 0; k < photo_jumps[i].len; k++) p[k] = keep ? 0x90 : photo_jumps[i].code[k];
+        VirtualProtect(p, photo_jumps[i].len, old, &old);
+    }
+    char msg[40];
+    char *o = put(msg, "ok photo close ");
+    o = put_int(o, keep);
+    o = put(o, " (was "); o = put_int(o, was);
+    *put(o, ")") = 0;
+    skin_result(msg);
+}
+// What hides her, read without calling anything ("f9<actor>", from the script's async watcher while photo mode's
+// pause stops its tick): AActor::bHidden and the flags SBCharacter's own hidden state is made from (0x14203f660:
+// +0x3040 forced hidden, +0x31bb / +0x8e9 forced shown, else hidden unless +0x2988 or +0x2997 is set with +0x14f8,
+// +0x1508, +0x3043 and +0x3044 clear), with photo mode's manager state. Answer "ok vis hidden=<0|1> <offset>=<b> ... 84=<i> 48=<i>".
+static void vis_cmd(u64 a)
+{
+    static const u32 offs[] = { 0x3040, 0x3041, 0x3042, 0x3043, 0x3044, 0x8e9, 0x31bb, 0x1508, 0x14f8, 0x2988, 0x2997 };
+    if (!mem_readable(a, 0x31c0)) { skin_result("err vis: actor unreadable"); return; }
+    char msg[300];
+    char *o = put(msg, "ok vis hidden=");
+    o = put_int(o, (*(unsigned char *)(a + 0x58) >> 5) & 1);
+    for (unsigned i = 0; i < sizeof offs / sizeof offs[0]; i++) {
+        static const char hx[] = "0123456789abcdef";
+        o = put(o, " ");
+        for (int sh = 12; sh >= 0; sh -= 4) if (offs[i] >> sh || sh == 0) *o++ = hx[(offs[i] >> sh) & 15];
+        o = put(o, "=");
+        o = put_int(o, *(unsigned char *)(a + offs[i]));
+    }
+    u64 mgr = *(u64 *)(exe + RVA_PHOTO_MGR);
+    if (mem_readable(mgr, 0x88)) {
+        o = put(o, " 84="); o = put_int(o, *(int *)(mgr + 0x84));
+        o = put(o, " 48="); o = put_int(o, *(int *)(mgr + 0x48));
+    }
+    *o = 0;
+    skin_result(msg);
+}
 static void photo_open(int go, u64 mesh)
 {
     u64 mgr = *(u64 *)(exe + RVA_PHOTO_MGR);
@@ -3619,6 +4210,7 @@ static void photo_open(int go, u64 mesh)
         o = put_int(o, (long long)(*(float *)(ui + 0x17c) * 1000));
     } else o = put(o, "-");
     o = put(o, " blocked="); o = put_int(o, shield_blocked);
+    o = put(o, " 48="); o = put_int(o, *(int *)(mgr + 0x48));
     if (go && !*(unsigned char *)(mgr + 0x38) && !*(int *)(mgr + 0x84)) {
         o = put(o, mesh ? (photo_shield(mesh) ? " mesh shielded" : " mesh NOT shielded") : " no mesh");
         unsigned char in = ((photo_enter_fn)(exe + RVA_PHOTO_ENTER))();
@@ -3667,7 +4259,35 @@ static void row_cmd(const u64 *f, int k)
     skin_result("err no such row");
 }
 
+// the command running on the game thread now (its first letters), and since when (ms): the worker thread tells a
+// command that never ends (sbslice.stuck) and the crash handler which one a crash came in (sbslice.crash). Gore.lua
+// logs both on the next start (the Nexus report of an endless loading screen: the log ended in a death's cut, with
+// nothing to say where the game stopped)
+static volatile u64 cmd_since;
+static char cmd_now[48];
+static void exec_slice_cmd(void *context, unsigned char *stack, void *result);
 static void exec_slice(void *context, unsigned char *stack, void *result)
+{
+    unsigned char *p = *(unsigned char **)(stack + 0x28);
+    u16 *txt = *(u16 **)(p + 0x18);
+    int len = *(int *)(p + 0x20);
+#ifndef SBSLICE_HOSTED
+    // ("H" and "v" come every frame: cheap, never what hangs, and not worth the stamp)
+    int stamp = txt && len >= 2 && txt[0] != 'H' && txt[0] != 'v';
+    if (stamp) {
+        int n = 0;
+        for (; n < (int)sizeof cmd_now - 1 && n < len - 1 && txt[n]; n++) cmd_now[n] = txt[n] < 128 ? (char)txt[n] : '?';
+        cmd_now[n] = 0;
+        cmd_since = GetTickCount64();
+    }
+    exec_slice_cmd(context, stack, result);
+    if (stamp) cmd_since = 0;
+#else
+    (void)txt; (void)len;
+    exec_slice_cmd(context, stack, result);
+#endif
+}
+static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
 {
     (void)context; (void)result;
     unsigned char *p = *(unsigned char **)(stack + 0x28);
@@ -3712,6 +4332,8 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         if (txt[1] == '2' || txt[1] == '3') photo_open(txt[1] == '2', len > 2 ? parse_hex(txt + 2, len - 2) : 0);
         else if (txt[1] == '4') skin_result(len > 2 && photo_shield(parse_hex(txt + 2, len - 2)) ? "ok photo shield 1" : "ok photo shield 0");
         else if (txt[1] == '5') skin_result(photo_unshield() ? "ok photo unshield 1" : "ok photo unshield 0");
+        else if (txt[1] == '6') photo_close_cmd(len > 2 && txt[2] == '1');
+        else if (txt[1] == '9') { if (len > 2) vis_cmd(parse_hex(txt + 2, len - 2)); else skin_result("err vis: no actor"); }
         else photo_cmd(txt[1] == '1');
         return;
     }
@@ -3742,6 +4364,7 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         if (len > 1) parse_fields(txt + 1, len - 1, rf, 1);
         char msg[32] = "ok restored ";
         *put_int(msg + 12, skin_restore(rf[0] >= 0x10000 ? rf[0] : 0)) = 0;
+        if (rf[0] < 0x10000) forget_saves(0);
         skin_result(msg);
         return;
     }
@@ -3818,10 +4441,33 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         return;
     }
     if (txt[0] == 's') {
-        u64 sf[2] = { 0, 0 };
-        parse_fields(txt + 1, len - 1, sf, 2);
+        u64 sf[3] = { 0, 0, 0 };
+        parse_fields(txt + 1, len - 1, sf, 3);
         if (sf[0] < 0x10000) { skin_result("err bad component"); return; }
-        skin_probe(sf[0], (int)sf[1]);
+        skin_probe(sf[0], (int)sf[1], (int)(sf[2] & 0xf));
+        return;
+    }
+    if (txt[0] == 'e') {
+        u64 ef[3] = { 0, 0, 0 };
+        parse_fields(txt + 1, len - 1, ef, 3);
+        if (ef[0] < 0x10000 || ef[1] < 0x10000 || ef[0] == ef[1]) { skin_result("err bad component"); return; }
+        weapon_split(ef[0], ef[1], (int)ef[2], loc, dir);
+        return;
+    }
+    if (txt[0] == 'S' || txt[0] == 'R') {
+        u64 sf[2 + 4] = { 0, 0, 0, 0, 0, 0 };
+        int k = parse_fields(txt + 1, len - 1, sf, 6);
+        if (sf[0] < 0x10000) { skin_result("err bad component"); return; }
+        if (txt[0] == 'S' && k > 2 && sf[2]) { forget_saves(sf[0]); skin_result("ok forgotten"); }
+        else if (txt[0] == 'S') skin_save(sf[0], (int)sf[1]); else skin_back(sf[0], (int)sf[1], sf + 2, k > 2 ? k - 2 : 0);
+        return;
+    }
+    if (txt[0] == 'y') {
+        u64 yf[2 + 16];
+        for (int i = 0; i < 18; i++) yf[i] = 0;
+        int k = parse_fields(txt + 1, len - 1, yf, 18);
+        if (k < 2 || yf[0] < 0x10000) { skin_result("err bad component"); return; }
+        skin_copy(yf[0], (int)yf[1], yf + 2, k - 2);
         return;
     }
     if (txt[0] != 'c' && txt[0] != 'x') { skin_result("err unknown command"); return; }
@@ -3863,12 +4509,59 @@ static void patch_cpu_access(void)
     cpu_state = "cpu copy LOD0 on";
 }
 
+static const u16 STUCK[] = u"ue4ss\\Mods\\StellarBladeGore\\sbslice.stuck";
+static const u16 CRASH[] = u"ue4ss\\Mods\\StellarBladeGore\\sbslice.crash";
+static u64 self_lo, self_hi; // this DLL's image
+static char *put_hex(char *o, u64 v) { char h[17]; hex64(h, v); int i = 0; while (i < 15 && h[i] == '0') i++; return put(o, h + i); }
+// a crash on any thread in this DLL's code, or on the game thread inside a mod command: where (the DLL's own offset,
+// or the game's), the code, the command. Looked at, never handled (the engine's crash handling goes on as before)
+static volatile long crash_seen;
+static long WINAPI crash_note(void *info)
+{
+    u32 *rec = *(u32 **)info;  // EXCEPTION_POINTERS.ExceptionRecord
+    u32 code = rec[0];
+    u64 at = *(u64 *)((char *)rec + 16);
+    // access violation, illegal instruction, stack overflow, divide by zero, privileged instruction
+    if (code != 0xc0000005 && code != 0xc000001d && code != 0xc00000fd && code != 0xc0000094 && code != 0xc0000096) return 0;
+    int mine = at >= self_lo && at < self_hi;
+    if ((!mine && !cmd_since) || crash_seen) return 0;
+    crash_seen = 1;
+    static char msg[256];
+    char *o = put(msg, "crash ");
+    o = put_hex(o, code);
+    o = put(o, mine ? " in sbslice.dll +" : " in the game +");
+    o = put_hex(o, mine ? at - self_lo : at - exe);
+    if (code == 0xc0000005) { o = put(o, " at address "); o = put_hex(o, *(u64 *)((char *)rec + 40)); }
+    if (cmd_since) { o = put(o, " in command "); o = put(o, cmd_now); }
+    *o = 0;
+    write_file(CRASH, msg);
+    return 0; // EXCEPTION_CONTINUE_SEARCH
+}
+
 static u32 WINAPI worker(void *arg)
 {
     (void)arg;
     const u64 thunk = exe + RVA_EXEC_REWARD_DROP_FORMATION_PATH_LOCATION;
+    u64 stuck_since = 0;
+    static char stuck_cmd[48];
     for (;;) {
         Sleep(250);
+        // a mod command running 3 s and more: told once (and again when it ends, if it does)
+        u64 since = cmd_since, now = GetTickCount64();
+        if (since && since != stuck_since && now - since > 3000) {
+            stuck_since = since;
+            int n = 0;
+            for (; n < (int)sizeof stuck_cmd - 1 && cmd_now[n]; n++) stuck_cmd[n] = cmd_now[n];
+            stuck_cmd[n] = 0;
+            char msg[96], *o = put(msg, "stuck over 3 s in command ");
+            o = put(o, stuck_cmd); *o = 0;
+            write_file(STUCK, msg);
+        } else if (stuck_since && since != stuck_since) {
+            char msg[112], *o = put(msg, "a command ran over 3 s (it ended): ");
+            o = put(o, stuck_cmd); *o = 0;
+            write_file(STUCK, msg);
+            stuck_since = 0;
+        }
         HANDLE h = CreateFileW(REQ, 0x80000000 /*GENERIC_READ*/, 1, 0, 3 /*OPEN_EXISTING*/, 0x80, 0);
         if (h == INVALID_HANDLE) continue;
         char buf[64];
@@ -3917,6 +4610,9 @@ int WINAPI DllMain(void *inst, u32 reason, void *reserved)
         DisableThreadLibraryCalls(inst);
         GetModuleHandleExW(0x4 /*FROM_ADDRESS*/ | 0x1 /*PIN*/, (const void *)DllMain, &self);
         exe = (u64)GetModuleHandleW(0);
+        self_lo = (u64)inst;
+        self_hi = self_lo + *(u32 *)(self_lo + *(u32 *)(self_lo + 0x3c) + 0x50); // SizeOfImage
+        AddVectoredExceptionHandler(0, crash_note);
         patch_cpu_access();
         CreateThread(0, 0, worker, 0, 0, 0);
         spawner_start();

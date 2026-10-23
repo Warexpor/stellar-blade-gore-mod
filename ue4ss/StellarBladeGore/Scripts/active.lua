@@ -35,6 +35,7 @@ local try, valid = nil, nil
 
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local function len(v) return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) end
+local function addr(o) return try(function() return o:GetAddress() end) end
 
 -- kg per main body, ~60 kg in all (Dempster-style segment shares for a light adult)
 local MASS = {
@@ -73,6 +74,7 @@ local speeds = {}       -- the capsule's last velocities while alive, newest las
 local SPEED_SAMPLES = 10 -- ~330 ms at the 33 ms tick
 local run = nil         -- the ragdoll in progress: { mesh, pac, t, masses = {bone = kg} }
 local dropped = {}      -- { comp, box, parent, socket, loc, rot }: weapons let go of
+local gripped = {}      -- address -> { comp, parent, socket, loc, rot }: weapons still in her hand in a ragdoll death
 local extra = {}        -- other ragdolls to settle with hers (a split's copy)
 local STILL = { "Bip001-Pelvis", "Bip001-Spine2", "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand", "Bip001-L-Foot", "Bip001-R-Foot" }
 
@@ -288,8 +290,11 @@ local function impact(mesh, g, dir, boost, whole)
   return out
 end
 
+-- how stiff her ragdoll is (tune.active.stiffness, settings.lua's active.stiffness): times the tone's strength and its
+-- resting share. 0: limp from the start, 1: as tuned, 2-3: she keeps her shape, stiff as she falls and lies
+local function stiff() return math.max(tonumber(cfg().stiffness) or 1, 0) end
 local function drive(pac, bone, k, t)
-  local s = t.strength or 800
+  local s = (t.strength or 800) * stiff()
   local data = { bIsLocalSimulation = true, OrientationStrength = s * k, AngularVelocityStrength = s * k * (t.damping or 0.1),
     PositionStrength = 0, VelocityStrength = 0, MaxLinearForce = 0, MaxAngularForce = 0 }
   return try(function() pac:ApplyPhysicalAnimationSettings(FName(bone), data); return true end)
@@ -297,7 +302,7 @@ end
 
 local function tone_start(pawn, mesh, g)
   local t = g.tone or {}
-  if t.enabled == false then return ", no tone" end
+  if t.enabled == false or stiff() <= 0 then return ", no tone" end
   local cls = try(function() return StaticFindObject("/Script/Engine.PhysicalAnimationComponent") end)
   if not valid(cls) then return ", tone: no PhysicalAnimationComponent class" end
   local pac = try(function()
@@ -309,7 +314,8 @@ local function tone_start(pawn, mesh, g)
   local n = 0
   for bone, k in pairs(TONE) do if drive(pac, bone, k, t) then n = n + 1 end end
   try(function() pac:SetStrengthMultiplyer(1.0) end)
-  return string.format(", tone on %d joints (%.0f, hold %.2f s, fade %.2f s)", n, t.strength or 800, t.hold or 0.25, t.fade or 1.4)
+  return string.format(", tone on %d joints (%.0f, hold %.2f s, fade %.2f s, stiffness %.2f)", n, (t.strength or 800) * stiff(),
+    t.hold or 0.25, t.fade or 1.4, stiff())
 end
 
 local function tone_stop()
@@ -355,11 +361,13 @@ end
 
 -- each weapon rides an invisible box of its mesh's size, simulated, starting with her hand's speed plus a toss.
 -- only: drop just the weapons it says yes to (a cut arm's); one already dropped stays on its box
-local function drop_weapons(pawn, mesh, g, only)
+-- extra: components to drop besides her own weapons (a split sword's second half); bound(w): the box for w (its
+-- component-space origin and extent: a half's), else its mesh's bounds; push: cm/s more along it (the halves apart)
+local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
   if g.dropWeapon == false then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.BoxComponent") end)
   if not valid(cls) then return ", weapons: no BoxComponent class" end
-  local hv = try(function() local v = mesh:GetPhysicsLinearVelocity(FName("Bip001-R-Hand")); return vec(v.X, v.Y, v.Z) end)
+  local hv = try(function() local v = mesh:GetPhysicsLinearVelocity(FName(soft and soft.hand or "Bip001-R-Hand")); return vec(v.X, v.Y, v.Z) end)
     or speeds[#speeds] or vec(0, 0, 0)
   local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
   local names = {}
@@ -370,8 +378,9 @@ local function drop_weapons(pawn, mesh, g, only)
     local a = try(function() return d.comp:GetAddress() end)
     if a then held[a] = true end
   end
-  local list = {}
-  for _, w in ipairs(weapons(pawn)) do
+  local list, cand = {}, weapons(pawn)
+  for _, w in ipairs(extra or {}) do cand[#cand + 1] = w end
+  for _, w in ipairs(cand) do
     local a = try(function() return w:GetAddress() end)
     if not (a and held[a]) and (not only or only(w)) then list[#list + 1] = w end
   end
@@ -380,7 +389,8 @@ local function drop_weapons(pawn, mesh, g, only)
     -- the imported bounds (GetBounds adds the asset's bounds extension: 217 cm for her sword), capped at weaponMaxCm
     local function bnd(fn) return try(function() local x = fn(); return { o = vec(x.Origin.X, x.Origin.Y, x.Origin.Z),
       e = vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z) } end) end
-    local b = bnd(function() return w.SkeletalMesh:GetImportedBounds() end) or bnd(function() return w.SkeletalMesh:GetBounds() end)
+    local b = bound and bound(w)
+    b = b or bnd(function() return w.SkeletalMesh:GetImportedBounds() end) or bnd(function() return w.SkeletalMesh:GetBounds() end)
     if b then
       local half = (g.weaponMaxCm or 120) / 2
       b.e = vec(math.min(b.e.X, half), math.min(b.e.Y, half), math.min(b.e.Z, half))
@@ -391,6 +401,10 @@ local function drop_weapons(pawn, mesh, g, only)
         socket = try(function() return w:GetAttachSocketName() end),
         loc = try(function() local v = w.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
         rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end) }
+      -- (one her grip held: back onto its prop bone on recovery, not her hand)
+      local ga = addr(w)
+      local o = ga and gripped[ga]
+      if o then d.parent, d.socket, d.loc, d.rot, gripped[ga] = o.parent, o.socket, o.loc, o.rot, nil end
       dropped[#dropped + 1] = d
       local ok = try(function()
         local wl, f, r, u = w:K2_GetComponentLocation(), w:GetForwardVector(), w:GetRightVector(), w:GetUpVector()
@@ -408,11 +422,15 @@ local function drop_weapons(pawn, mesh, g, only)
         box:SetSimulatePhysics(true)
         box:SetMassOverrideInKg(FName("None"), g.weaponKg or 1.5, true)
         w:K2_AttachToComponent(box, FName("None"), 1, 1, 1, false)
-        local toss = g.weaponToss or 150
+        -- (soft: slipping out of her loosening grip, with her hand's own speed: barely tossed or turned)
+        local toss = soft and soft.toss or g.weaponToss or 150
+        local spin = soft and soft.spin or 1
         local a = math.random() * math.pi * 2
-        box:SetPhysicsLinearVelocity(vec(hv.X + math.cos(a) * toss, hv.Y + math.sin(a) * toss, hv.Z + toss * 0.6), false, FName("None"))
-        box:SetPhysicsAngularVelocityInDegrees(vec((math.random() - 0.5) * 720, (math.random() - 0.5) * 720,
-          (math.random() - 0.5) * 360), false, FName("None"))
+        local pv = push and push(w) or vec(0, 0, 0)
+        box:SetPhysicsLinearVelocity(vec(hv.X + math.cos(a) * toss + pv.X, hv.Y + math.sin(a) * toss + pv.Y,
+          hv.Z + toss * 0.6 + pv.Z), false, FName("None"))
+        box:SetPhysicsAngularVelocityInDegrees(vec((math.random() - 0.5) * 720 * spin, (math.random() - 0.5) * 720 * spin,
+          (math.random() - 0.5) * 360 * spin), false, FName("None"))
         return true
       end)
       names[#names + 1] = string.format("%s %.0fx%.0fx%.0f%s", tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)),
@@ -423,10 +441,225 @@ local function drop_weapons(pawn, mesh, g, only)
   return ", dropped " .. table.concat(names, ", ")
 end
 
+-- her grip in a ragdoll death (tune.active.grip): a weapon in her hand (Bip001-Prop1/2 hang off Bip001, the
+-- animation puts them in the hand; a ragdoll leaves them in the air, so it was thrown off at once) is put on her hand
+-- bone where it is and rides with it, then slips out as her grip eases (grip.hold s), with her hand's speed
+local function grip_start(mesh, g)
+  local gp = g.grip or {}
+  if g.dropWeapon == false or gp.enabled == false then return "" end
+  local pawn = try(function() return mesh:GetOwner() end)
+  if not valid(pawn) then return "" end
+  local names = {}
+  for _, w in ipairs(weapons(pawn)) do
+    local at = try(function() local v = w:K2_GetComponentLocation(); return vec(v.X, v.Y, v.Z) end)
+    local hand, best
+    for _, sd in ipairs({ "R", "L" }) do
+      local b = "Bip001-" .. sd .. "-Hand"
+      local h = try(function() local v = mesh:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end)
+      local d = h and at and len(vec(at.X - h.X, at.Y - h.Y, at.Z - h.Z))
+      if d and d < 30 and (not best or d < best) and not severed[b] then hand, best = b, d end
+    end
+    local a = addr(w)
+    if hand and a and not gripped[a] then
+      local o = { comp = w, hand = hand, parent = try(function() return w:GetAttachParent() end),
+        socket = try(function() return w:GetAttachSocketName() end),
+        loc = try(function() local v = w.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
+        rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end) }
+      -- (KeepWorld: where the animation had it, in her fingers)
+      if try(function() w:K2_AttachToComponent(mesh, FName(hand), 1, 1, 1, false); return true end) then
+        gripped[a] = o
+        names[#names + 1] = string.format("%s in %s", tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)),
+          hand:gsub("Bip001%-", ""))
+      end
+    end
+  end
+  if #names == 0 then return "" end
+  local lo, hi = gp.holdMin or 0.35, gp.holdMax or 0.9
+  run.gripAt = lo + math.random() * math.max(hi - lo, 0)
+  return string.format(", grip on %s (eases at %.2f s)", table.concat(names, ", "), run.gripAt)
+end
+-- her grip eases: what it held slips out (gone already: a cut arm let go of it, on_cut)
+local function grip_release(pawn, mesh, g)
+  run.gripAt = nil
+  local gp = g.grip or {}
+  local out = {}
+  for a, o in pairs(gripped) do
+    if valid(o.comp) and valid(pawn) then
+      local r = drop_weapons(pawn, mesh, g, function(w) return addr(w) == a end,
+        { toss = gp.toss or 30, spin = gp.spin or 0.2, hand = o.hand })
+      if r ~= "" then out[#out + 1] = r:gsub("^, dropped ", "") end
+    end
+    gripped[a] = nil
+  end
+  return table.concat(out, ", ")
+end
+-- the grip never eased (she got up, or the death ended first): back on the prop bones
+local function grip_back()
+  local n = 0
+  for _, o in pairs(gripped) do
+    if valid(o.comp) and valid(o.parent) and try(function()
+      o.comp:K2_AttachToComponent(o.parent, o.socket or FName("None"), 2, 2, 2, false)
+      if o.loc and o.rot then o.comp:K2_SetRelativeLocationAndRotation(o.loc, o.rot, false, {}, true) end
+      return true
+    end) then n = n + 1 end
+  end
+  gripped = {}
+  return n
+end
+
+-- her sword cut by the killing blade (tune.active.weaponCut, gore.blow at death): where the blade's plane crosses a
+-- weapon of hers within reach cm of the hit, a second component of its mesh on its pose takes the far half
+-- (sbslice's "e": each keeps one side through its own skin weights, the cut face is the crossed part pressed flat)
+-- and each half falls on a box of its own, pushed apart. Put back whole when she gets up
+-- blocked: she had her guard up at the blow (main.lua: the guard key, a guard montage or stance): the sword breaks whatever the plane did, where
+-- the blade's plane crosses it, else across its middle nearest the hit, tilted as the blade came (judged by the
+-- plane alone, a blow she blocked mostly missed the sword or crossed it far off: "the blade misses it", playtest)
+local splits = {} -- { w, b }: the sword and its other half
+-- a component's mesh bounds: its long axis's two ends in the world, and the bounds (component space)
+local function weapon_axis(w)
+  local x = try(function() return w.SkeletalMesh:GetImportedBounds() end)
+  if not x then return nil end
+  local o, e = vec(x.Origin.X, x.Origin.Y, x.Origin.Z), vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z)
+  local k = e.X >= e.Y and e.X >= e.Z and "X" or e.Y >= e.Z and "Y" or "Z"
+  local function at(sg)
+    local p = vec(o.X, o.Y, o.Z)
+    p[k] = p[k] + sg * e[k]
+    return try(function()
+      local wl, f, r, u = w:K2_GetComponentLocation(), w:GetForwardVector(), w:GetRightVector(), w:GetUpVector()
+      return vec(wl.X + f.X * p.X + r.X * p.Y + u.X * p.Z, wl.Y + f.Y * p.X + r.Y * p.Y + u.Y * p.Z, wl.Z + f.Z * p.X + r.Z * p.Y + u.Z * p.Z)
+    end)
+  end
+  local a, b = at(-1), at(1)
+  return a and b and { a = a, b = b, o = o, e = e, k = k }
+end
+function M.weapon_cut(mesh, at, n, blocked)
+  local g = cfg()
+  local wc = g.weaponCut or {}
+  if wc.enabled == false or g.dropWeapon == false then return nil end
+  local gore = ctx.gore
+  local pawn = try(function() return mesh:GetOwner() end)
+  if not (gore and gore.command and valid(pawn) and at and n) then return nil end
+  local cls = try(function() return StaticFindObject("/Script/Engine.SkeletalMeshComponent") end)
+  if not valid(cls) then return nil end
+  local out = {}
+  local function dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+  local function sub(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
+  for _, w in ipairs(weapons(pawn)) do
+    local ax = weapon_axis(w)
+    local pa, pn = at, n -- the plane this sword is cut on
+    local ha, hb, t, x, reach, forced
+    local function cross_at()
+      ha = ax and dot(sub(ax.a, pa), pn)
+      hb = ax and dot(sub(ax.b, pa), pn)
+      t = ha and hb and (ha < 0) ~= (hb < 0) and ha / (ha - hb)
+      x = t and vec(ax.a.X + (ax.b.X - ax.a.X) * t, ax.a.Y + (ax.b.Y - ax.a.Y) * t, ax.a.Z + (ax.b.Z - ax.a.Z) * t)
+      reach = x and len(sub(x, at))
+    end
+    cross_at()
+    local ends = wc.ends or 0.08
+    if blocked and ax and not (reach and reach <= (wc.reach or 80) and t >= ends and t <= 1 - ends) then
+      local d = sub(ax.b, ax.a)
+      local l = len(d)
+      if l > 1 then
+        local u = vec(d.X / l, d.Y / l, d.Z / l)
+        local tt = math.max(0.3, math.min(0.7, dot(sub(at, ax.a), u) / l))
+        -- mostly along the sword (a clean break across it), leaning the way the blade's plane lies
+        local k = dot(n, u)
+        local p = vec(n.X - u.X * k, n.Y - u.Y * k, n.Z - u.Z * k)
+        local m = vec(u.X + p.X * 0.5, u.Y + p.Y * 0.5, u.Z + p.Z * 0.5)
+        local ml = len(m)
+        pa = vec(ax.a.X + d.X * tt, ax.a.Y + d.Y * tt, ax.a.Z + d.Z * tt)
+        pn = vec(m.X / ml, m.Y / ml, m.Z / ml)
+        cross_at()
+        forced = true
+      end
+    end
+    local nm = tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end))
+    local split_already = false
+    for _, sp in ipairs(splits) do if sp.w == w or sp.b == w then split_already = true end end
+    if split_already then
+      out[#out + 1] = nm .. ": in two already"
+    elseif not reach then
+      out[#out + 1] = nm .. ": the blade misses it"
+    elseif reach > (wc.reach or 80) then
+      out[#out + 1] = string.format("%s: crossed %.0f cm from the hit (over %d)", nm, reach, wc.reach or 80)
+    elseif t < ends or t > 1 - ends then
+      out[#out + 1] = string.format("%s: crossed at its very end (%.2f)", nm, t)
+    else
+      local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
+      local b = try(function() return pawn:AddComponentByClass(cls, true, id, false) end)
+      if valid(b) then
+        try(function() b:SetCollisionEnabled(0) end)
+        try(function() b:SetSkeletalMesh(w.SkeletalMesh, true) end)
+        local nmat = try(function() return w:GetNumMaterials() end) or 0
+        for i = 0, nmat - 1 do
+          local mt = try(function() return w:GetMaterial(i) end)
+          if mt then try(function() b:SetMaterial(i, mt) end) end
+        end
+        local tm = try(function() return w:K2_GetComponentToWorld() end)
+        if tm then try(function() b:K2_SetWorldTransform(tm, false, {}, true) end) end
+        try(function() b:SetMasterPoseComponent(w, true) end)
+        try(function() w:SetForcedLOD(1) end)
+        try(function() b:SetForcedLOD(1) end)
+        local r = gore.command(string.format("e%x,%x,0", w:GetAddress(), b:GetAddress()), pa, pn)
+        if r:sub(1, 2) ~= "ok" then
+          try(function() w:SetForcedLOD(0) end)
+          try(function() b:K2_DestroyComponent(b) end)
+          out[#out + 1] = nm .. ": " .. r
+        else
+          gore.command("k")
+          local aw, ab = addr(w), addr(b)
+          splits[#splits + 1] = { w = w, b = b }
+          -- each half's box: its stretch of the long axis, from the crossing to its end (w keeps the front)
+          local front = ha >= 0 and -1 or 1 -- the end (-1 a, 1 b) in front of the plane
+          local k = ax.k
+          local cx = ax.o[k] + (2 * t - 1) * ax.e[k]
+          local function half(sg)
+            local lo, hi = cx, ax.o[k] + sg * ax.e[k]
+            local o, e = vec(ax.o.X, ax.o.Y, ax.o.Z), vec(ax.e.X, ax.e.Y, ax.e.Z)
+            o[k], e[k] = (lo + hi) / 2, math.max(math.abs(hi - lo) / 2, 1.5)
+            local cap = (g.weaponMaxCm or 120) / 2
+            return { o = o, e = vec(math.min(e.X, cap), math.min(e.Y, cap), math.min(e.Z, cap)) }
+          end
+          local hw, hbx = half(front), half(-front)
+          local apart = wc.apart or 120
+          local gp = g.grip or {}
+          local soft = { toss = gp.toss or 30, spin = wc.spin or 0.5, hand = gripped[aw or 0] and gripped[aw].hand or nil }
+          local d = drop_weapons(pawn, mesh, g, function(c) local a2 = addr(c); return a2 == aw or a2 == ab end, soft, { b },
+            function(c) return addr(c) == ab and hbx or hw end,
+            function(c) local sg = addr(c) == ab and -1 or 1; return vec(pn.X * apart * sg, pn.Y * apart * sg, pn.Z * apart * sg) end)
+          -- (the half on no prop bone has nothing to go back onto)
+          for _, dd in ipairs(dropped) do if addr(dd.comp) == ab then dd.parent = nil end end
+          out[#out + 1] = string.format("%s split at %.2f along it, %.0f cm from the hit%s: %s%s", nm, t, reach,
+            forced and " (she blocked: broken across its middle)" or blocked and " (she blocked)" or "", r, d)
+        end
+      end
+    end
+  end
+  if #out > 0 then log("weapon cut: " .. table.concat(out, "; ")) end
+end
+-- a sword of hers already in two (this death)
+function M.sword_split() return #splits > 0 end
+-- she got up: each split sword whole again, its other half gone (the asset's sinks with the weights)
+local function splits_back()
+  local gore = ctx.gore
+  local n = 0
+  for _, sp in ipairs(splits) do
+    if gore and gore.command then
+      if valid(sp.w) then gore.command(string.format("x%x,0", sp.w:GetAddress())) end
+      if valid(sp.b) then gore.command(string.format("x%x,0", sp.b:GetAddress())) end
+    end
+    if valid(sp.w) then try(function() sp.w:SetForcedLOD(0) end) end
+    if valid(sp.b) then try(function() sp.b:K2_DestroyComponent(sp.b) end) end
+    n = n + 1
+  end
+  splits = {}
+  return n
+end
+
 -- stretch probe: every main joint's length (bone to the main bone above it) at the start, and how far it is off later
 -- (logged at STRETCH_AT seconds, the worst three). A joint the solver can't hold shows as centimetres here
 local STRETCH_AT = { 0.5, 1.0, 2.0, 3.0 }
-local function addr(o) return try(function() return o:GetAddress() end) end
 local function crosses_cut(mesh, bone, up)
   for s in pairs(severed) do
     if s == bone then return true end
@@ -616,8 +849,13 @@ local function hang_capes(pawn, mesh, g)
   end
   local cls
   local done = {}
+  -- (a cape gore took off with its arm or cut off it is a piece of its own, or hung off the shoulder already: hung
+  -- again off the clavicle from where it lay, 140 cm away, it whipped about her on a rigid 1.4 m lever, playtest)
+  local function cut(b) return addr(mesh) == severedOn and severed[b] == true end
+  local skipped = {}
   for _, root in ipairs(list) do
     local arm = not MASS[root] and arm_of(root)
+    if arm and (cut(arm) or cut(root)) then skipped[#skipped + 1] = root; arm = nil end
     if arm then
       -- the chain under it, and its next link for the way it runs
       local chain, n, nxt = { [root] = true }, 1, nil
@@ -658,13 +896,16 @@ local function hang_capes(pawn, mesh, g)
       end
     end
   end
-  return #done > 0 and (", cape hung off the shoulder: " .. table.concat(done, ", ")) or ""
+  return (#done > 0 and (", cape hung off the shoulder: " .. table.concat(done, ", ")) or "")
+    .. (#skipped > 0 and (", cape left as the cut left it: " .. table.concat(skipped, ", ")) or "")
 end
 
 function M.start(pawn, mesh, kind, dir)
   local g = cfg()
   if g.enabled == false then return end
-  if run then M.stop(pawn) end
+  -- a restart in the same death (an animated fall turning ragdoll for a split) keeps her broken and dropped weapons:
+  -- the full stop mended the sword the blow had just broken and put it back in her hand (playtest)
+  if run then M.stop(pawn, true) end
   if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
   run = { mesh = mesh, t = 0, masses = {}, still = 0, hung = {} }
   run.joints, run.capes, run.probe = joint_lengths(mesh), cape_lengths(mesh), 1
@@ -687,7 +928,12 @@ function M.start(pawn, mesh, kind, dir)
     parts[#parts + 1] = impact(mesh, g, dir)
   end
   if not plain then parts[#parts + 1] = tone_start(pawn, mesh, g) end
-  parts[#parts + 1] = drop_weapons(pawn, mesh, g)
+  if kind == "death" and not plain then
+    parts[#parts + 1] = grip_start(mesh, g)
+    parts[#parts + 1] = drop_weapons(pawn, mesh, g, function(w) return not gripped[addr(w) or 0] end)
+  else
+    parts[#parts + 1] = drop_weapons(pawn, mesh, g)
+  end
   speeds = {}
   log(kind .. ": " .. table.concat(parts, ""))
 end
@@ -831,7 +1077,15 @@ end
 function M.add_body(comp)
   if not valid(comp) then return end
   local g = variant_cfg(cfg(), run and run.variant)
-  if not (run and run.variant == 2) then log("split copy: " .. set_masses(comp, g) .. cap_spin(comp, g, nil, true)) end
+  -- its cape hung off the shoulder as hers is: on the asset's joint to the upper arm it whipped about and stretched
+  -- (playtest, CH_P_EVE_09). The joints go with the others in M.stop
+  local masses = not (run and run.variant == 2) and (set_masses(comp, g) .. cap_spin(comp, g, nil, true))
+  local hung = ""
+  if masses and run and run.hung then
+    local pawn = try(function() return comp:GetOwner() end)
+    if valid(pawn) then hung = hang_capes(pawn, comp, g) end
+  end
+  if masses then log("split copy: " .. masses .. hung) end
   if not run then return end
   extra[#extra + 1] = comp
   run.split = true
@@ -928,6 +1182,8 @@ local function settle(dt)
   table.insert(run.trail, { t = run.t, at = now })
   while #run.trail > 1 and run.trail[2].t <= run.t - win do table.remove(run.trail, 1) end
   if st.enabled == false or run.t < (st.after or 1.5) then return end
+  -- a twitch moving her (convulse.lua): she isn't lying still while it runs, however slow
+  if run.twitchTill and run.t < run.twitchTill then run.still = 0; return end
   local top, which, wc = 0, nil, nil
   for i, c in ipairs(comps) do
     if valid(c) then
@@ -989,6 +1245,9 @@ local function settle(dt)
   tone_stop()
   local n = 0
   for _, c in ipairs(comps) do if valid(c) then n = n + sleep(c) end end
+  -- settling again after a twitch: once is enough in the log
+  if run.settled then return end
+  run.settled = true
   log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies asleep, %d spins slowed to the cap, %d flung bodies slowed, %d launched", run.t, top,
     drift == math.huge and -1 or drift, n, run.clamped or 0, run.flung or 0, run.launched or 0))
   if run.rolls then log("rolled about the bone since the start (deg): " .. roll_report(run.mesh, run.rolls)) end
@@ -1035,6 +1294,10 @@ function M.tick(dt)
     return
   end
   run.t = run.t + dt
+  if run.gripAt and run.t >= run.gripAt then
+    local r = grip_release(run.pawn or try(function() return run.mesh:GetOwner() end), run.mesh, cfg())
+    log(string.format("her grip eased at %.2f s%s", run.t, r ~= "" and (": " .. r .. " slipped out") or ", nothing left in it"))
+  end
   if run.probe and STRETCH_AT[run.probe] and run.t >= STRETCH_AT[run.probe] then
     log(string.format("stretch at %.1f s (cm off the start): %s%s", run.t, stretch_report(run.mesh, run.joints),
       run.capes and ("; cape " .. stretch_report(run.mesh, run.capes)) or ""))
@@ -1079,13 +1342,20 @@ function M.tick(dt)
   end
   if not run.pac or run.toneDone then return end
   local t = cfg().tone or {}
-  local hold, fade, rest = t.hold or 0.35, t.fade or 2.5, math.max(t.rest or 0.1, 0)
+  local hold, fade, rest = t.hold or 0.35, t.fade or 2.5, math.min(math.max((t.rest or 0.1) * stiff(), 0), 1)
   -- landing ends the tone: pulled towards a standing pose with the floor and her own body in the way, every joint
   -- jittered until each part found the ground and the fade ran out (eighteenth playtest)
   local vz = try(function() return run.mesh:GetPhysicsLinearVelocity(FName("Bip001-Pelvis")).Z end)
   if vz then
     run.fall = math.min(run.fall or 0, vz)
     if t.landOff ~= false and run.fall < -(t.fallSpeed or 150) and vz > -(t.landSpeed or 40) then
+      -- (stiffer than tuned: down to her resting tone instead, else she went limp the moment she landed)
+      if stiff() > 1 and rest > 0 then
+        run.toneNow, run.toneDone = rest, true
+        if not run.toneHeld then tone_set(rest) end
+        log(string.format("tone down to %.2f on landing at %.2f s (fell at %.0f cm/s)", rest, run.t, -run.fall))
+        return
+      end
       tone_stop()
       run.toneDone = true
       log(string.format("tone off on landing at %.2f s (fell at %.0f cm/s)", run.t, -run.fall))
@@ -1116,6 +1386,11 @@ function M.broken(mesh, bone)
   local a = addr(mesh)
   if a ~= severedOn then severed, severedOn = {}, a end
   if bone then severed[tostring(bone)] = true end
+end
+
+-- every cut on her undone (gore's cleanup remade her physics): nothing of her is cut off any more
+function M.mended(mesh)
+  if addr(mesh) == severedOn then severed = {} end
 end
 
 -- a split half let go of a body (a limb that went with the other half): the settle check leaves it out
@@ -1150,11 +1425,18 @@ function M.on_cut(mesh, bone)
   drive(run.pac, bone, 0, cfg().tone or {})
 end
 
-function M.stop(pawn)
+-- restart: the ragdoll starts again in the same death, her weapons stay as the blow left them
+function M.stop(pawn, restart)
   if run and run.held and valid(run.mesh) then gravity(run.mesh, true) end
   if run then run.held = nil end
-  local nw = #dropped > 0 and weapons_back() or nil
-  if nw then log(string.format("%d weapons back on their sockets", nw)) end
+  if not restart then
+    local ns = #splits > 0 and splits_back() or 0
+    if ns > 0 then log(string.format("%d split weapons whole again", ns)) end
+    local ng = next(gripped) and grip_back() or 0
+    if ng > 0 then log(string.format("%d weapons back from her grip onto their sockets", ng)) end
+    local nw = #dropped > 0 and weapons_back() or nil
+    if nw then log(string.format("%d weapons back on their sockets", nw)) end
+  end
   if not run then return end
   tone_stop()
   local mesh = run.mesh
@@ -1171,10 +1453,30 @@ function M.stop(pawn)
   log(string.format("stopped, %d masses put back", n))
 end
 
+-- convulse.lua's view of the ragdoll: the components to move (hers and a split's copy), how long it has run and
+-- whether she has lain still yet; nil for a piece cut off her alive or a split holding her
+function M.view()
+  if not run or run.piece or run.held then return nil end
+  local comps = { run.mesh }
+  for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  return { mesh = run.mesh, comps = comps, t = run.t, settled = run.settled }
+end
+M.MASS = MASS
+-- a bone a cut took off (the root of the piece): nothing left to turn it against
+function M.severed(mesh, bone) return addr(mesh) == severedOn and severed[bone] == true end
+-- a body that simulates and that the half still shows
+function M.live(comp, bone) return live(comp, bone) end
+-- a twitch (convulse.lua) moves her for s seconds: she isn't settled meanwhile, and wakes without a "woken" line
+function M.twitch(s)
+  if not run then return end
+  run.twitchTill = math.max(run.twitchTill or 0, run.t + s)
+  if run.asleep then run.asleep, run.still = false, 0 end
+end
+
 -- a new Eve (the level reloaded): drop what was held from the old one without touching it
 function M.forget()
   layouts = {}
-  run, speeds, dropped, extra = nil, {}, {}, {}
+  run, speeds, dropped, extra, gripped, splits = nil, {}, {}, {}, {}, {}
   severed, severedOn = {}, nil
   freed = {}
 end
