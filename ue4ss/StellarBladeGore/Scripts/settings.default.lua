@@ -19,6 +19,8 @@ return {
     },
     voice = {
       enabled = true,          -- her own death cry (false: the game's death voice only)
+      -- sounds = { "vo_eve_die_01", "vo_eve_die_fall_01" },  -- which recordings (default: vo_eve_die_01-05); names
+      --   under Sound/Dialogue/ActionVoice/Eve, or full paths of another mod's SoundWaves / SoundCues
     },
   },
   cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, and fly it with

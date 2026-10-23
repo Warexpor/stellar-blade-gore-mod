@@ -17,6 +17,7 @@ The spec lists, per asset (relative path under SB/Content, no extension):
              data after the tagged properties) and per-body damping
   "cpuaccess": keep a skeletal mesh's LOD0 vertex data on the CPU (bAllowCPUAccess), which the game's
                runtime mesh slicer needs; sliceable monsters ship with it, Eve's outfits don't
+  "extract": nothing shipped; build.sh only extracts the package into its cache (native/sbslice/test reads it)
   "vendor": ship a third-party asset as is ("file": legacy package under the repo, dumped by build.sh into
             $SB_VENDOR_JSON)
   "voice":  add a voice to a CharacterSoundSet's VoiceSounds map, as a copy of the entry "like" with "set"
@@ -778,6 +779,8 @@ def main():
         if mode == "cpuaccess" and len(sys.argv) > 4:
             outputs[rel] = imports.get(rel, {})
             continue
+        if mode == "extract":
+            continue  # not shipped: build.sh only extracts it for the tests
         if mode == "vendor":
             d = json.load(open(os.path.join(os.environ["SB_VENDOR_JSON"], rel + ".json")))
         else:

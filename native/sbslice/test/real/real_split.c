@@ -339,7 +339,7 @@ static void set_ride(int copy, int brk)
 static void base_nosink(void)
 {
     nosink_mesh = (u64)sm_buf;
-    for (int i = 0; i < MAX_BONES; i++) nosink[i] = 0;
+    for (int i = 0; i < MAX_BONES; i++) nosink[i] = drivenb[i] = 0;
     for (int i = 0; i < NB; i++) {
         int bad = !strcmp(bname[i], "Root");
         // ENEMY=1: gore.lua's list for an enemy: its Ab_ bones are its own deform helpers (the skulls' and the
@@ -382,12 +382,61 @@ static void set_nosink(void)
     if (env_on("ALLMOVED")) for (int i = 0; i < NB; i++) if (strncmp(bname[i], "Bip001", 6)) watch_dt[i] = 1e30f;
 }
 
-// gore.lua's limb roots: a limb or head cut keeps its sinks off every other limb (OLDNOSINK=1: as before, any)
+// gore.lua's limb roots: a limb or head cut keeps its sinks off every other limb (OLDNOSINK=1: as before, any). As
+// gore.lua's M.limb_of, a helper of a root's name counts as that root (CH_M_NA_40's arm helpers hang off Ab-L-Clavicle)
 static const char *LIMB_ROOT_NAMES[] = { "Bip001-L-Clavicle", "Bip001-R-Clavicle", "Bip001-L-Thigh", "Bip001-R-Thigh" };
+// gore.lua's driven_list for a cut through the spine: a Dm- driver, or a helper under one before the main skeleton.
+// The animation points them across the cut (CH_P_EVE_30's Ab-L-AX2 under Dm-L-AX2 took the waist cut's lower seam,
+// and that half's opening stretched 3.5 m after the flying upper body, playtest)
+static int under_driver(int i)
+{
+    for (int j = i; j >= 0 && strncmp(bname[j], "Bip001", 6); j = bparent[j])
+        if (!strncmp(bname[j], "Dm-", 3) || !strncmp(bname[j], "Dm_", 3)) return 1;
+    return 0;
+}
+// gore.lua's driver_limb / side_drivers: the limb a Dm- driver follows, read off its name (bits: 1 L arm, 2 R arm, 4 L
+// leg, 8 R leg; 0 none: central, a breast's or a cloth's, which follow her chest)
+static int driver_limb(const char *nm)
+{
+    static const char *ARM[] = { "Trape", "Shoulder", "Side", "Pectro", "Arm", "Deltoid", "Tricep", "Elbow", "Forearm", "Brochi", "Clavicle" };
+    static const char *LEG[] = { "Thigh", "Hip", "Knee", "Venter", "Calf", "Ankle", "AX2" };
+    if (strstr(nm, "Breast") || strstr(nm, "Cloth")) return 0;
+    int side = 0;
+    for (const char *l = nm; *l && !side; l++) if ((*l == '-' || *l == '_') && (l[1] == 'L' || l[1] == 'R') && (l[2] == '-' || l[2] == '_')) side = l[1] == 'L' ? 1 : 2;
+    if (!side) return 0;
+    for (unsigned k = 0; k < sizeof ARM / sizeof *ARM; k++) if (strstr(nm, ARM[k])) return side;
+    for (unsigned k = 0; k < sizeof LEG / sizeof *LEG; k++) if (strstr(nm, LEG[k])) return side << 2;
+    return 0;
+}
+// a bone a driver of one of those limbs moves (the topmost Dm- bone over it names the limb)
+static int side_driver(int i, int limbs)
+{
+    const char *top = 0;
+    for (int j = i; j >= 0 && strncmp(bname[j], "Bip001", 6); j = bparent[j])
+        if (!strncmp(bname[j], "Dm-", 3) || !strncmp(bname[j], "Dm_", 3)) top = bname[j];
+    return top && (driver_limb(top) & limbs);
+}
+static int gone_sides(const int *g, int ng)
+{
+    int limbs = 0;
+    for (int r = 0; r < ng; r++) {
+        const char *nm = bname[g[r]];
+        if (strncmp(nm, "Bip001-", 7) || (nm[7] != 'L' && nm[7] != 'R')) continue;
+        int leg = strstr(nm, "Thigh") || strstr(nm, "Calf");
+        limbs |= (nm[7] == 'L' ? 1 : 2) << (leg ? 2 : 0);
+    }
+    return limbs;
+}
 static int limb_of(int i)
 {
-    for (int j = i; j >= 0; j = bparent[j])
-        for (int k = 0; k < 4; k++) if (!strcmp(bname[j], LIMB_ROOT_NAMES[k])) return j;
+    for (int j = i; j >= 0; j = bparent[j]) {
+        size_t n = strlen(bname[j]);
+        for (int k = 0; k < 4; k++) {
+            const char *tail = LIMB_ROOT_NAMES[k] + 6; // "-L-Clavicle"
+            size_t m = strlen(tail);
+            if (n >= m && (bname[j][n - m] == '-' || bname[j][n - m] == '_') && !strcmp(bname[j] + n - m + 1, tail + 1)) return bone(LIMB_ROOT_NAMES[k]);
+        }
+    }
     return -1;
 }
 static void other_limbs_nosink(int b)
@@ -1122,6 +1171,7 @@ int main(int argc, char **argv)
     // hang below it (the bind pose's arms reach down to the hips): every vertex the vanilla skin puts mostly on an
     // arm (the clavicles' subtrees) must go with the upper body, not stay floating on the legs
     if (env_on("WAIST")) {
+        float *wrefinv0 = malloc(64 * NB); memcpy(wrefinv0, refinv, 64 * NB); // the vanilla skin, for the tear check
         int spine2 = bone("Bip001-Spine2");
         float *a = space + spine1 * 12 + 4, *b2 = space + spine2 * 12 + 4, at2[3], nn[3], l = 0;
         // WAISTAT=<0-1>: where between Spine1 and Spine2 (default half way); WAISTTILT=<deg> WAISTTILTDIR=<0-7>: the
@@ -1216,12 +1266,26 @@ int main(int argc, char **argv)
         // as gore.lua for a cut through the spine: nothing on an arm or a leg is a sink (it swings on its own, and
         // the bind pose's arms hang down at the waist: a strap's seam collapsed onto a triceps helper), no bodies
         nbodies = 0; memset(hasbody, 0, sizeof hasbody);
-        for (int i = 0; i < NB; i++) for (int j = i; j >= 0; j = bparent[j])
-            if (!strcmp(bname[j], "Bip001-L-Clavicle") || !strcmp(bname[j], "Bip001-R-Clavicle") || !strcmp(bname[j], "Bip001-L-Thigh") || !strcmp(bname[j], "Bip001-R-Thigh")) nosink[i] = 1;
+        for (int i = 0; i < NB; i++) if (limb_of(i) >= 0) nosink[i] = 1;
+        // and what a Dm- driver moves only as a last resort (gore.lua's driven_list after fffd; OLDDM=1: as before)
+        if (!env_on("OLDDM") && !env_on("ENEMY")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)under_driver(i);
         if (armsub && !env_on("NODROP")) { limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0; drop_roots[ndrop++] = ua; }
         skin_cut((u64)comp_a, 0, spine1, at2, nn, MODE_CUT, 0, 0, -1);
         printf("waist: %.300s\n", lastres);
         if (!strstr(lastres, " unsunk=0 ")) { printf("FAIL: seam vertices left with no sink\n"); return 1; }
+        if (!env_on("OLDDM") && !env_on("ENEMY")) {
+            // (the list holds the earlier cuts' sinks too, this one's "new=" last)
+            const char *q = strstr(lastres, " sinks="), *nw = strstr(lastres, " new=");
+            int all = 0, fresh = nw ? atoi(nw + 5) : 0, k = 0;
+            for (const char *r = q ? q + 7 : 0; r && *r && *r != ' '; r++) if (*r == ',') all++;
+            all += q != 0;
+            for (q = q ? q + 7 : 0; q && *q && *q != ' '; k++) {
+                int i = atoi(q);
+                if (k >= all - fresh && i >= 0 && i < NB && under_driver(i)) { printf("FAIL: the waist's seam on %s, which a Dm- driver moves\n", bname[i]); return 1; }
+                while (*q && *q != ',' && *q != ' ') q++;
+                if (*q == ',') q++;
+            }
+        }
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
         unsigned char *arm = calloc(NB, 1), *upper = calloc(NB, 1);
         for (int i = 0; i < NB; i++) {
@@ -1281,6 +1345,42 @@ int main(int argc, char **argv)
         // its arms swung): a cut strap must not stretch from the hips to it, nor its edge after an arm
         int still = -1, flung = -1, hs = 0, hf = 0;
         skin_collapse();
+        // ARMSAFTER=1: both upper arms cut off the upper body after the waist (the playtest's death on CH_P_EVE_30:
+        // Spine1 at 0.88 along a 10-degree blade, then the right upper arm at 0.44 and the left at 0.83): their seams
+        // stay on the upper body, none of the legs' skin goes to a sink up there
+        if (env_on("ARMSAFTER")) {
+            unsigned char *legs0 = calloc(NV, 1);
+            for (int v = 0; v < NV; v++) {
+                legs0[v] = 1;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && upper[ov_a[v].bones[i]]) legs0[v] = 0;
+            }
+            const char *ab[2][2] = { { "Bip001-R-UpperArm", "Bip001-R-Forearm" }, { "Bip001-L-UpperArm", "Bip001-L-Forearm" } };
+            const float aat2[2] = { 0.44f, 0.83f };
+            for (int k = 0; k < 2; k++) {
+                int u = bone(ab[k][0]), f = bone(ab[k][1]);
+                if (u < 0 || f < 0) { printf("FAIL: no %s\n", ab[k][0]); return 1; }
+                float *ap = space + u * 12 + 4, *bp = space + f * 12 + 4, aat[3], an[3], al = 0;
+                for (int j = 0; j < 3; j++) { aat[j] = ap[j] + (bp[j] - ap[j]) * aat2[k]; an[j] = bp[j] - ap[j]; al += an[j] * an[j]; }
+                for (int j = 0; j < 3; j++) an[j] /= __builtin_sqrtf(al);
+                set_nosink(); other_limbs_nosink(u);
+                limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0;
+                skin_cut((u64)comp_a, 0, u, aat, an, MODE_CUT, 0, 0, -1);
+                printf("%s after the waist: %.200s\n", ab[k][0], lastres);
+                if (strncmp(lastres, "ok", 2)) { printf("FAIL: the arm cut failed\n"); return 1; }
+                skin_collapse();
+            }
+            // the legs' skin as the waist cut left it may not take any weight up there
+            int took = 0, tv = -1;
+            for (int v = 0; v < NV; v++) {
+                if (!legs0[v]) continue;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && upper[ov_a[v].bones[i]]) { took++; tv = v; break; }
+            }
+            printf("arms after the waist: %d of the legs' vertices took weight on the upper body", took);
+            if (tv >= 0) for (int i = 0; i < MAX_INF; i++) if (ov_a[tv].weights[i]) printf(" %s=%d", bname[ov_a[tv].bones[i]], ov_a[tv].weights[i]);
+            printf("\n");
+            if (took) { printf("FAIL: an arm cut after the waist pulled the legs' skin onto the upper body\n"); return 1; }
+            free(legs0);
+        }
         int armmoved = 0;
         if (armx) {
             for (int v = 0; v < NV; v++) {
@@ -1310,6 +1410,12 @@ int main(int argc, char **argv)
         }
         float *xstill = malloc(12 * (size_t)NV);
         for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, xstill + 3 * (size_t)v);
+        // the uncut skin in the same poses: the flail turns the arm without the elbow helpers that hang elsewhere
+        // (an enemy's Ab-L-Elbow, Ab_ArmAX*), which stretches the vanilla skin too, and that is no tear of the cut's
+        float *ustill = malloc(12 * (size_t)NV);
+        float *cur = refinv; refinv = wrefinv0;
+        for (int v = 0; v < NV; v++) { skin_info vo; orig_info(v, &vo); skin_v(&vo, v, ustill + 3 * (size_t)v); }
+        refinv = cur;
         skin_probe((u64)comp_a, 0);
         sscanf(lastres, "ok stretched=%d", &still);
         char *hh = strstr(lastres, "hidden="); if (hh) sscanf(hh, "hidden=%d", &hs);
@@ -1352,23 +1458,28 @@ int main(int argc, char **argv)
         hh = strstr(lastres, "hidden="); if (hh) sscanf(hh, "hidden=%d", &hf);
         printf("waist probe flung: %.400s\n", lastres);
         // skin torn between the halves: a triangle whose longest edge grows more than 5 cm when the upper body falls
-        // off, and still has area (the stretch probe counts it once, when the cut has already stretched it in place)
+        // off, more than 5 cm past what the uncut skin's grows in the same poses, and still has area (the stretch
+        // probe counts it once, when the cut has already stretched it in place)
         int torn = 0;
         {
-            float *xfl = malloc(12 * (size_t)NV);
+            float *xfl = malloc(12 * (size_t)NV), *ufl = malloc(12 * (size_t)NV);
             for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, xfl + 3 * (size_t)v);
+            float *cur = refinv; refinv = wrefinv0;
+            for (int v = 0; v < NV; v++) { skin_info vo; orig_info(v, &vo); skin_v(&vo, v, ufl + 3 * (size_t)v); }
+            refinv = cur;
             int shownt = 0;
             for (int t = 0; t + 2 < NIDX; t += 3) {
-                float l0 = 0, l1 = 0;
+                float l0 = 0, l1 = 0, u0 = 0, u1 = 0;
                 for (int e = 0; e < 3; e++) {
                     u32 i = idx[t + e], j = idx[t + (e + 1) % 3];
-                    float *p0 = xstill + 3 * (size_t)i, *q0 = xstill + 3 * (size_t)j, *p1 = xfl + 3 * (size_t)i, *q1 = xfl + 3 * (size_t)j;
-                    float d0 = __builtin_sqrtf((p0[0]-q0[0])*(p0[0]-q0[0]) + (p0[1]-q0[1])*(p0[1]-q0[1]) + (p0[2]-q0[2])*(p0[2]-q0[2]));
-                    float d1 = __builtin_sqrtf((p1[0]-q1[0])*(p1[0]-q1[0]) + (p1[1]-q1[1])*(p1[1]-q1[1]) + (p1[2]-q1[2])*(p1[2]-q1[2]));
+                    float d0 = dist3(xstill + 3 * (size_t)i, xstill + 3 * (size_t)j), d1 = dist3(xfl + 3 * (size_t)i, xfl + 3 * (size_t)j);
+                    float e0 = dist3(ustill + 3 * (size_t)i, ustill + 3 * (size_t)j), e1 = dist3(ufl + 3 * (size_t)i, ufl + 3 * (size_t)j);
                     if (d0 > l0) l0 = d0;
                     if (d1 > l1) l1 = d1;
+                    if (e0 > u0) u0 = e0;
+                    if (e1 > u1) u1 = e1;
                 }
-                if (l1 <= l0 + 5) continue;
+                if (l1 <= l0 + 5 || l1 - l0 <= u1 - u0 + 5) continue;
                 float *a0 = xfl + 3 * (size_t)idx[t], *a1 = xfl + 3 * (size_t)idx[t + 1], *a2 = xfl + 3 * (size_t)idx[t + 2];
                 float e1[3] = { a1[0]-a0[0], a1[1]-a0[1], a1[2]-a0[2] }, e2[3] = { a2[0]-a0[0], a2[1]-a0[1], a2[2]-a0[2] };
                 float cr[3] = { e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0] };
@@ -1387,9 +1498,9 @@ int main(int argc, char **argv)
                     printf("\n");
                 }
             }
-            free(xfl);
+            free(xfl); free(ufl);
         }
-        free(xstill);
+        free(xstill); free(ustill); free(wrefinv0);
         printf("waist: %d triangles torn between the halves\n", torn);
         if (torn) printf("FAIL: the upper body fallen off tears %d triangles that keep their area\n", torn);
         int legmoved = 0;
@@ -1545,6 +1656,10 @@ int main(int argc, char **argv)
     limbs_comp = (u64)comp_a; ngone = ng1; nkeep = ng2; memcpy(gone_roots, gone1, 4 * ng1); memcpy(keep_roots, gone2, 4 * ng2); set_ride(0, brk);
     free_spine = env_on("NOFREE") ? -1 : brk; free_upper = 1; // NOFREE=1: the DLL not told (the bug, for a check)
     if (!env_on("NOCHAINS")) { memcpy(keep_roots + nkeep, chf, 4 * nchf); nkeep += nchf; memcpy(drop_roots, chb, 4 * nchb); ndrop = nchb; }
+    // gore.lua's side_cut sends the bones a Dm- driver moves (OLDDM=1: it didn't): a point sink on them followed the
+    // limbs the half lets go, cones out of both halves (playtest, CH_P_EVE_30)
+    // and the drivers of a side whose limbs the half lets go, which its kept skin lets go of too (fffc; OLDDRV=1: not)
+    if (!env_on("OLDDM") && !env_on("ENEMY")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(!env_on("OLDDRV") && side_driver(i, gone_sides(gone1, ng1)) ? 2 : under_driver(i));
     if (heads) { head_comp = (u64)comp_a; head_mode = HEAD_KEEP; head_bone = head; memcpy(head_pw, p2, 12); memcpy(head_nw, n2, 12); }
     skin_cut((u64)comp_a, 0, spine1, at, n, MODE_SIDE, 0, 0, -1);
     strcpy(res_a, lastres);
@@ -1554,12 +1669,37 @@ int main(int argc, char **argv)
     free_spine = env_on("NOFREE") ? -1 : brk2; free_upper = 0;
     ndrop = 0;
     if (!env_on("NOCHAINS")) { memcpy(keep_roots + nkeep, chb, 4 * nchb); nkeep += nchb; memcpy(drop_roots, chf, 4 * nchf); ndrop = nchf; }
+    if (!env_on("OLDDM") && !env_on("ENEMY")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(!env_on("OLDDRV") && side_driver(i, gone_sides(gone2, ng2)) ? 2 : under_driver(i));
     if (heads) { head_comp = (u64)comp_b; head_mode = HEAD_DROP; head_bone = head; memcpy(head_pw, p2, 12); memcpy(head_nw, n2, 12); }
     skin_cut((u64)comp_b, 0, spine1, at, neg, MODE_SIDE, 0, 0, -1);
     strcpy(res_b, lastres);
     printf("B: %.300s\n", lastres);
+    for (int r = 0; r < ng1; r++) printf("half A lets go of %s\n", bname[gone1[r]]);
+    for (int r = 0; r < ng2; r++) printf("half B lets go of %s\n", bname[gone2[r]]);
     if (!ov_a || !ov_b) { printf("FAIL: no override\n"); return 1; }
     int fail = 0;
+    // the sinks a driver moves (a last resort: a split half keeps too few other helpers, each one point; OLDDM=1 for
+    // as many as before, 11 to 15 a split here, against 7 to 9), never one of a side whose limbs the half lets go: the
+    // animation moves it after them, as they fall free (cones, playtest)
+    {
+        int nd = 0, ns = 0;
+        for (int h = 0; h < 2; h++) {
+            // (the list holds A's sinks too on B's, this cut's "new=" last)
+            const char *res = h ? res_b : res_a, *sk = strstr(res, " sinks="), *nw = strstr(res, " new=");
+            int all = sk != 0, fresh = nw ? atoi(nw + 5) : 0, k = 0;
+            for (const char *r = sk ? sk + 7 : 0; r && *r && *r != ' '; r++) if (*r == ',') all++;
+            for (const char *q = sk ? sk + 7 : 0; q && *q && *q != ' '; k++) {
+                int b = (int)strtol(q, (char **)&q, 10);
+                if (k >= all - fresh && b >= 0 && b < NB && under_driver(b)) { printf("half %c: sink %s, which a Dm- driver moves (", h ? 'B' : 'A', bname[b]);
+                    for (int j = bparent[b]; j >= 0; j = bparent[j]) { printf(" < %s", bname[j]); if (!strncmp(bname[j], "Bip001", 6)) break; }
+                    printf(")%s\n", side_driver(b, h ? gone_sides(gone2, ng2) : gone_sides(gone1, ng1)) ? ", on the side it lets go" : "");
+                    nd++; ns += side_driver(b, h ? gone_sides(gone2, ng2) : gone_sides(gone1, ng1)); }
+                if (*q == ',') q++;
+            }
+        }
+        printf("split: %d sinks a driver moves, %d of a side let go\n", nd, ns);
+        if (ns && !env_on("OLDDM")) { printf("FAIL: a sink a let-go limb's driver moves\n"); fail = 1; }
+    }
     if (env_on("DRIVEN")) {
         int bad = 0, any = 0;
         for (int h = 0; h < 2; h++) {
@@ -1884,6 +2024,8 @@ int main(int argc, char **argv)
         for (int i = 0; i < NB; i++) {
             for (int r = 0; r < ng; r++) if (gr[r] == i) sub[i] = 1;
             if (h && i == bone("Bip001-Head")) sub[i] = 1;
+            // and the drivers of their side, which the animation moves after them (cones, playtest)
+            if (side_driver(i, gone_sides(gr, ng))) sub[i] = 1;
             if (!sub[i] && bparent[i] >= 0 && sub[bparent[i]]) sub[i] = 1;
         }
         // and with the spine broken, the other side of the break: A lets go of all but the break bone's subtree (the

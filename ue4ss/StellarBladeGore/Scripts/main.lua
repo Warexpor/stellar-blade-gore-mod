@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.2.2"
+local VERSION = "0.2.3"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -460,11 +460,22 @@ local function capsule_report()
   if h and h.at then log(string.format("capsule: drifted at most %.0f cm during the ragdoll", h.far)) end
 end
 
+-- photo mode in a held death (tune.deathPhoto): the game turns it down while she is dead, so sbslice.dll sets the
+-- game's SBPhotoMode_Bypass_ActivationConditionChecks while the death is held, and clears it when it is let go or ends
+-- (screen: the death screen's state, below; made here for the camera's sake)
+local screen = { n = 0, photo = false }
+function screen.allow_photo(on, why)
+  if on == screen.photo or not gore or (on and tune.deathPhoto == false) then return end
+  local r = gore.photo(on)
+  if r:match("^ok") then screen.photo = on end
+  log(string.format("photo mode %s (%s): %s", on and "allowed in the held death" or "back to the game's checks", why, r))
+end
+
 -- Playtest 41: the camera followed her body after an animated death went ragdoll (a split, a beheading, a leg): the
 -- game moves her pawn after the ragdoll and the view rides the pawn. Nothing needs following: at a death a still
 -- camera is put where the view is and made the view target, back to her at recovery (tune.cameraStill). The log says
 -- where the view is against her capsule and head for 3 s
-local camHeld = nil -- { pc, cam, pawn, mesh, d, pitch, yaw, t, pivot, home, from, turned, free, placed }
+local camHeld = nil -- { pc, cam, pawn, mesh, d, pitch, yaw, t, pivot, home, from, turned, free, placed, photo, vt }
 local function fwd(r)
   local p, y = math.rad(r.Pitch), math.rad(r.Yaw)
   return { X = math.cos(p) * math.cos(y), Y = math.cos(p) * math.sin(y), Z = math.sin(p) }
@@ -553,6 +564,26 @@ local function camera_orbit()
   local dt = math.min(now - h.t, 0.1)
   h.t = now
   local pc = h.pc
+  -- photo mode (a held death) looks through its own pawn and takes the mouse and WASD; once it closes the view goes
+  -- back to this camera, where it was left
+  if screen.photo or h.photo then
+    local vt = try(function() return pc.PlayerCameraManager.ViewTarget.Target end)
+    local at = valid(vt) and vt:GetAddress() or 0
+    if at ~= h.vt then
+      h.vt = at
+      local cls = at ~= 0 and try(function() return vt:GetClass():GetFName():ToString() end) or "nothing"
+      if cls:find("PhotoMode") then
+        h.photo = true
+        log("camera: photo mode open (" .. cls .. ")")
+      elseif h.photo then
+        h.photo = false
+        if at ~= h.cam:GetAddress() then try(function() pc:SetViewTargetWithBlend(h.cam, 0, 0, 0, false) end) end
+        h.vt = nil
+        log("camera: photo mode closed (the view was on " .. cls .. "), back on the held camera")
+      end
+    end
+    if h.photo then return end
+  end
   local mx, my, sx, sy = axis(pc, KEYS.mx), axis(pc, KEYS.my), dead(axis(pc, KEYS.sx)), dead(axis(pc, KEYS.sy))
   local km, kst = tune.cameraMouse or 3, tune.cameraStick or 150
   local dy = mx * km + sx * kst * dt
@@ -712,8 +743,7 @@ end
 -- changes (`death screen: ...`)
 -- She is got up when a button on it is pressed (tune.recoverOn "button"): the game respawns her only after that, and
 -- got up at recoverAfter under the screen she would stand up whole behind it. seen / gone: the screen came up / went
--- away in this death; press: one of its buttons (or its press animation) fired
-local screen = { n = 0 }
+-- away in this death; press: one of its buttons (or its press animation) fired (screen is made above the camera)
 -- its buttons (the custom events their clicks call, under either spelling of the name's number) and its animations:
 -- the death animation finishing shows it, the press animation a button pressed. Hooked as soon as its class is
 -- loaded (tried once a second in a death till then); none had ever been hooked, as the screen was never seen
@@ -1066,6 +1096,8 @@ local function on_end(pawn, mesh)
   after, lastRecover, respawned = 0, -100, false
   camera_unfollow()
   capsule_report()
+  screen.allow_photo(false, "she got up")
+  screen.photoOn = false
   camera_release(pawn)
   skip_stop("she got up")
   dface.stop()
@@ -1494,6 +1526,9 @@ local function track_swing(pawn, mesh)
       if a and b then s.w[i] = { a = a, b = b } end
     end
   end
+  -- her pose with it, while she is alive: a killing blow is judged on her body as the weapon met it (gore.blow), not
+  -- as the death show has moved it by the time the death starts (an arm raised to block had swung away)
+  if not active and gore and g.blowPose ~= false then s.pose = gore.pose(mesh) end
   local h = swing.hist
   h[#h + 1] = s
   local keep = g.swingWindow or 0.6
@@ -1502,14 +1537,45 @@ local function track_swing(pawn, mesh)
   if ms >= (g.slowMs or 15) then log(string.format("swing: following %s took %.0f ms", tostring(swing.who), ms)) end
 end
 -- the swing that killed her, if the weapon moved fast enough: { dir, n, at (the weapon there), speed, bone, fwd }
-local function weapon_swing()
+local function weapon_swing(mesh)
   local g = tune.gore or {}
   local h = swing.hist
   -- an old trail (the enemy gone, or a death that started without it) is no swing
   if #h < 3 or os.clock() - h[#h].t > (g.swingWindow or 0.6) then return nil end
   local fwd = try(function() return vof(swing.actor:GetActorForwardVector()) end)
-  -- a weapon mesh's blade: its fastest step (by the faster end), the plane through the blade line along its motion
-  local bw
+  -- a weapon mesh's blade: the step (fast enough) whose sweep went through her, the plane through the blade line along
+  -- its motion. The fastest step alone was the pull-back after a blocked blow: its plane passed 52 cm beside her, was
+  -- moved onto her calf and took a leg, the arms raised in front and the body untouched (playtest). Each step's blade
+  -- is swept over three spots of its motion against her parts (SWING_AT, where they were with that sample: s.pose);
+  -- the nearest wins, a fast one a little ahead (up to swingSpeedPull cm), one moving away from that part well behind
+  -- the nearest point of segment a-b to p, and how far
+  local function seg_near(p, a, b)
+    local ab = sub(b, a)
+    local t = math.max(0, math.min(1, dot(sub(p, a), ab) / math.max(dot(ab, ab), 1e-4)))
+    local x = { X = a.X + ab.X * t, Y = a.Y + ab.Y * t, Z = a.Z + ab.Z * t }
+    return x, dist(p, x)
+  end
+  local parts_now
+  local function parts(s)
+    local P = s.pose
+    if not P and not parts_now then
+      parts_now = {}
+      for _, x in ipairs(SWING_AT) do
+        parts_now[x[1]] = try(function() return vof(mesh:GetSocketLocation(FName(x[1]))) end)
+        if x[3] then parts_now[x[3]] = try(function() return vof(mesh:GetSocketLocation(FName(x[3]))) end) end
+      end
+    end
+    local function at(b) local p = P and P[b]; return p and p.t or (parts_now and parts_now[b]) end
+    local out = {}
+    for _, x in ipairs(SWING_AT) do
+      local a = at(x[1])
+      local b = x[3] and at(x[3])
+      if a then out[#out + 1] = { b and { X = a.X + 0.4 * (b.X - a.X), Y = a.Y + 0.4 * (b.Y - a.Y), Z = a.Z + 0.4 * (b.Z - a.Z) } or a, x[1] } end
+    end
+    return out
+  end
+  local bw, fastest, steps = nil, nil, 0
+  local minv, pull = g.swingMinSpeed or 300, g.swingSpeedPull or 25
   for i = 2, #h do
     local dt = h[i].t - h[i - 1].t
     if dt > 1e-3 and h[i].w and h[i - 1].w then
@@ -1517,14 +1583,39 @@ local function weapon_swing()
         local o = h[i - 1].w[k]
         if o then
           local v = math.max(dist(o.a, e.a), dist(o.b, e.b)) / dt
-          if not bw or v > bw.speed then bw = { speed = v, i = i, k = k } end
+          if not fastest or v > fastest then fastest = v end
+          if v >= minv and mesh then
+            steps = steps + 1
+            local near, nd, np, part
+            for _, pt in ipairs(parts(h[i])) do
+              for _, f in ipairs({ 0, 0.5, 1 }) do
+                local a = { X = o.a.X + (e.a.X - o.a.X) * f, Y = o.a.Y + (e.a.Y - o.a.Y) * f, Z = o.a.Z + (e.a.Z - o.a.Z) * f }
+                local b = { X = o.b.X + (e.b.X - o.b.X) * f, Y = o.b.Y + (e.b.Y - o.b.Y) * f, Z = o.b.Z + (e.b.Z - o.b.Z) * f }
+                local x, d = seg_near(pt[1], a, b)
+                if not nd or d < nd then near, nd, np, part = x, d, pt[1], pt[2] end
+              end
+            end
+            if nd then
+              -- (from where the blade started the step: one that went through the part had it ahead)
+              local s0 = seg_near(np, o.a, o.b)
+              local away = dot(sub((seg_near(np, e.a, e.b)), s0), sub(np, s0)) < 0
+              local sc = nd - pull * math.min(1, v / 3000) + (away and (g.swingAwayCost or 60) or 0)
+              if not bw or sc < bw.sc then bw = { speed = v, i = i, k = k, sc = sc, d = nd, at = near, part = part, away = away } end
+            end
+          elseif v >= minv and (not bw or v > bw.speed) then
+            bw = { speed = v, i = i, k = k }
+          end
         end
       end
     end
   end
-  if bw and bw.speed >= (g.swingMinSpeed or 300) then
+  if bw and bw.speed >= minv then
     local e, o = h[bw.i].w[bw.k], h[bw.i - 1].w[bw.k]
-    local m1 = { X = (e.a.X + e.b.X) / 2, Y = (e.a.Y + e.b.Y) / 2, Z = (e.a.Z + e.b.Z) / 2 }
+    local m1 = bw.at or { X = (e.a.X + e.b.X) / 2, Y = (e.a.Y + e.b.Y) / 2, Z = (e.a.Z + e.b.Z) / 2 }
+    if bw.d then
+      log(string.format("swing: step %.2f s before of %d fast ones, its blade %.0f cm from her %s%s at %.0f cm/s (fastest %.0f)",
+        os.clock() - h[bw.i].t, steps, bw.d, tostring(bw.part), bw.away and ", moving away from it" or "", bw.speed, fastest or 0))
+    end
     -- the faster end's motion (a blade turning about its grip: the tip's), the midpoint's when it barely moved
     local ta, tb = sub(e.a, o.a), sub(e.b, o.b)
     local dir = unit(len(tb) >= len(ta) and tb or ta)
@@ -1534,7 +1625,7 @@ local function weapon_swing()
     if c and len(c) > 0.3 then
       local w = swing.weapons[bw.k]
       return { dir = dir, n = unit(c), how = "blade " .. (w and w.name or "weapon"), at = m1, speed = bw.speed,
-        bone = w and (w.name .. " on " .. w.socket) or "weapon", fwd = fwd, ago = os.clock() - h[bw.i].t }
+        bone = w and (w.name .. " on " .. w.socket) or "weapon", fwd = fwd, ago = os.clock() - h[bw.i].t, pose = h[bw.i].pose }
     end
   end
   if not swing.bones or #swing.bones == 0 then return nil end
@@ -1575,7 +1666,7 @@ local function weapon_swing()
   end
   if not (n and dir) then return nil end
   return { dir = dir, n = n, how = how, at = p1, speed = best.speed, bone = swing.bones[b], fwd = fwd,
-    ago = os.clock() - h[i].t }
+    ago = os.clock() - h[i].t, pose = h[i].pose }
 end
 
 -- the killing blow: the game's skill hit when it came (swing and forward), else a blade made up around where it came
@@ -1583,15 +1674,24 @@ end
 -- through where the mesh says she was hit or a part of her (swing_at)
 local function death_hit(pawn, mesh)
   local g = tune.gore or {}
+  -- her pose noted with the swing sample nearest time t (within 0.1 s), and how long ago that was
+  local function pose_at(t)
+    local best
+    for _, x in ipairs(swing.hist) do
+      if x.pose and (not best or math.abs(x.t - t) < math.abs(best.t - t)) then best = x end
+    end
+    if best and math.abs(best.t - t) < 0.1 then return best.pose, os.clock() - best.t end
+  end
   local h = last_hit(g.hitWindow or 0.6)
   if h and h.dir and h.fwd then
     h.push = h.push or h.fwd
+    h.pose, h.pose_ago = pose_at(h.t)
     return h
   end
   local m = meshHit and os.clock() - meshHit.t <= (g.meshHitWindow or 1.0) and meshHit or nil
   local a = attacker(pawn, mesh)
   local push = (m and m.push) or (a and a.push)
-  local ws = weapon_swing()
+  local ws = weapon_swing(mesh)
   if ws then
     -- where the swept plane crosses her: the mesh's hit, else the part of her nearest it and the weapon
     local loc, bone, off = m and m.loc, m and m.bone, nil
@@ -1604,9 +1704,11 @@ local function death_hit(pawn, mesh)
       local bd, pool, sum = nil, {}, 0
       for _, e in ipairs(SWING_AT) do
         local l = (not down or not e[3]) and try(function()
-          local x = mesh:GetSocketLocation(FName(e[1]))
+          -- (where the part was as the weapon swept, ws.pose)
+          local function at(b) local p = ws.pose and ws.pose[b]; return p and p.t or mesh:GetSocketLocation(FName(b)) end
+          local x = at(e[1])
           if not e[3] then return vof(x) end
-          local y = mesh:GetSocketLocation(FName(e[3]))
+          local y = at(e[3])
           return { X = x.X + 0.4 * (y.X - x.X), Y = x.Y + 0.4 * (y.Y - x.Y), Z = x.Z + 0.4 * (y.Z - x.Z) }
         end)
         if l then
@@ -1643,7 +1745,7 @@ local function death_hit(pawn, mesh)
           or off > (g.swingSnap or 30) and ", moved onto her" or "") or ""))
       return { t = os.clock(), loc = loc, dir = ws.dir, fwd = ws.fwd or ws.dir, n = ws.n, how = ws.how,
         push = push or ws.dir, attack_dir = 0, src = "weapon", group = h and h.group, show = h and h.show, bone = bone,
-        attacker = swing.who }
+        attacker = swing.who, pose = ws.pose, pose_ago = ws.ago }
     end
   end
   if not push then return h end
@@ -1667,8 +1769,10 @@ local function death_hit(pawn, mesh)
   log(string.format("death: blow from %s%s, %d deg down%s, at %s (%s)", from,
     a and string.format(" (nearest enemy %s, %.0f cm off, %.0f cm/s up)", a.name, a.d, a.vz or 0) or "",
     math.floor(math.deg(ang) + 0.5), above and (": " .. above) or "", v3(loc), m and "where the mesh was hit" or ("made up: " .. tostring(bone))))
+  local pose, pose_ago
+  if m then pose, pose_ago = pose_at(m.t) end
   return { t = os.clock(), loc = loc, dir = dir, fwd = fwd, push = push, attack_dir = 0, src = from, made = true,
-    group = h and h.group, show = h and h.show, bone = bone, attacker = a and a.name }
+    group = h and h.group, show = h and h.show, bone = bone, attacker = a and a.name, pose = pose, pose_ago = pose_ago }
 end
 
 -- ---- hits after death ----
@@ -2036,13 +2140,32 @@ RegisterKeyBind(Key.F7, on_key("F7", sandbox_ragdoll, true))
 RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face, true))
 RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover, true))
 RegisterKeyBind(Key.F6, on_key("F6", load_tune))
+-- P in a death: the death keeps the key from photo mode, so sbslice.dll enters photo mode itself (its answer: the
+-- manager and the gates the key's path checks, read before). A death not held yet is held first, as Shift+F4 does:
+-- the death screen and getting up would come on over photo mode
+RegisterKeyBind(Key.P, on_key("P", function()
+  if not active or saved.manual or (camHeld and camHeld.photo) or not gore then return end
+  if not screen.frozen then screen.hold("P") end
+  local pawn = find_eve()
+  local mesh = pawn and try(function() return pawn.Mesh end)
+  local r = gore.photo_open(mesh)
+  log("P in the held death, opening photo mode: " .. r)
+  if r:find("entered 1", 1, true) then
+    screen.photoOn, screen.photoNext, screen.photoSeen = true, 0, nil
+    screen.photoHead = valid(mesh) and try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
+  end
+end))
 -- Shift+F4 in a death: hold it, no death screen and no getting up till pressed again (the screen then comes back);
 -- the game respawning her on its own still ends it
+function screen.hold(why)
+  screen.frozen = not screen.frozen
+  screen.allow_photo(screen.frozen, why)
+  log(string.format("%s: death %s %.1f s in", why, screen.frozen and "held, no death screen or getting up till Shift+F4 again" or "let go",
+    polls * POLL_MS / 1000 + ahead))
+end
 RegisterKeyBind(Key.F4, { ModifierKey.SHIFT }, on_key("Shift+F4", function()
   if not active or saved.manual then log("Shift+F4: no death to hold"); return end
-  screen.frozen = not screen.frozen
-  log(string.format("Shift+F4: death %s %.1f s in", screen.frozen and "held, no death screen or getting up till Shift+F4 again" or "let go",
-    polls * POLL_MS / 1000 + ahead))
+  screen.hold("Shift+F4")
 end))
 -- Esc on her death: fast forward to the death screen (tune.deathSkip; parked for now, untested)
 -- RegisterKeyBind(Key.ESCAPE, on_key("Esc", function() if active then skip_start(find_eve()) end end))
@@ -2219,6 +2342,101 @@ function tp.mark(what)
   if ms >= 1 then tp[#tp + 1] = string.format("%s %.0f", what, ms) end
   tp.t = t
 end
+-- while photo mode is on (entered with P, or the game's key with a piece off her): it pauses the game but not this
+-- script, whose gore and hits after death went on in wall-clock time; a hit cut her arm as it closed, on a mesh photo
+-- mode had posed, and left 284 stretched triangles (playtest). So the tick stops here, but for this watch: every
+-- 0.5 s photo mode's state (sbslice f3), and her ragdoll's (photo mode put a cut-off head back on her neck: the game's
+-- lockup and pose snapshot, which freeze a mesh in its animated pose, are undone whenever they show up), logged when
+-- it changes. Once it closes the enemy's weapon trail starts over (its jump over the pause read as a swing) and hits
+-- after death wait photoGrace s
+function screen.photo_watch(pawn, mesh)
+  local now = os.clock()
+  if now < screen.photoNext then return true end
+  screen.photoNext = now + 0.5
+  local st = gore.photo_state()
+  local on = tonumber(st:match(" 84=(%-?%d+)"))
+  local head = try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
+  local h0 = screen.photoHead
+  local function b(f) local ok, r = pcall(f); return ok and tostring(r) or "?" end
+  local seen = string.format("%s; mesh lockup %s, head sim %s, pelvis sim %s, collision %s", ragdoll_state(pawn),
+    b(function() return mesh.bLockupSimulatePhysics end), b(function() return mesh:IsSimulatingPhysics(FName("Bip001-Head")) end),
+    b(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end), b(function() return mesh:GetCollisionEnabled() end))
+  if seen ~= screen.photoSeen then
+    screen.photoSeen = seen
+    log(string.format("photo mode %s: %s, head %s off where it was before; %s", on and on ~= 0 and "on" or "off", st,
+      head and h0 and string.format("%.0f cm", dist(head, h0)) or "?", seen))
+  end
+  if on and on ~= 0 then
+    local ri = try(function() return pawn.RagdollInfo end)
+    if try(function() return mesh.bLockupSimulatePhysics end) or try(function() return pawn.bLockupSimulatePhysics end)
+      or (ri and (try(function() return ri.bPoseSnapshot end) or try(function() return ri.bRegisterPoseSnapshot end))) then
+      local was = unlock(pawn, mesh)
+      no_snapshot(pawn)
+      log("photo mode: her lockup / pose snapshot undone (" .. was .. ")")
+    end
+    return true
+  end
+  if not on then return true end -- (no answer: try again)
+  screen.photoOn = false
+  screen.photoAfter = now + ((tune.gore or {}).photoGrace or 0.5)
+  swing_drop()
+  log("photo mode closed: the enemy's weapon trail starts over")
+  return false
+end
+
+-- A piece simulating on her while she lives (F9's head) went back on her neck as photo mode opened, 213 cm in under
+-- 0.5 s, its body still simulating (playtest): photo mode pauses the game but keeps her ticking, so her animation goes
+-- on while the step that lays the physics pose over it (after physics, which a pause skips) doesn't. A whole ragdoll
+-- (a death) kept its pose. So while the game is paused with a piece on her and her pelvis animated, her mesh stops
+-- ticking: her own tick runs before her mesh's, and checks every frame for that (a cheap engine call; sbslice's state
+-- is a file round trip). It ticks again once the pause ends
+function screen.photo_freeze(pawn, mesh)
+  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local paused = valid(gs) and try(function() return gs:IsGamePaused(pawn) end)
+  local fz = screen.frozenMesh
+  if paused and not fz and not try(function() return mesh:IsSimulatingPhysics(PELVIS) end) then
+    try(function() mesh:SetComponentTickEnabled(false) end)
+    screen.frozenMesh = mesh:GetAddress()
+    log("game paused with a piece simulating on her alive: her mesh stops ticking (its animation would pull the piece back)")
+  elseif not paused and fz then
+    screen.frozenMesh = nil
+    if fz == mesh:GetAddress() then try(function() mesh:SetComponentTickEnabled(true) end) end
+    log("pause over: her mesh ticks again")
+  end
+end
+
+-- once a piece is off her, photo mode may open from the game's own key too: F9's head on her alive went back on her
+-- neck as it opened (playtest). So her mesh is shielded as soon as she has a cut (sbslice f4, f5 once none is left),
+-- and photo mode's state read every 0.5 s while she has one, her head's place kept from before: the watch above takes
+-- over however photo mode opened
+function screen.photo_guard(pawn, mesh)
+  screen.watchFreeze = screen.frozenMesh ~= nil or (gore.cuts_on(mesh)) > 0
+  if screen.photoOn then return screen.photo_watch(pawn, mesh) end
+  local a = mesh:GetAddress()
+  if (gore.cuts_on(mesh)) == 0 then
+    if screen.shielded == a then
+      screen.shielded = nil
+      log("no piece off her: her mesh unshielded: " .. gore.photo_unshield())
+    end
+    return false
+  end
+  if screen.shielded ~= a then
+    screen.shielded = a
+    log("a piece is off her: her mesh shielded from photo mode's collision switch: " .. gore.photo_shield(mesh))
+  end
+  local now = os.clock()
+  if now < (screen.photoPoll or 0) then return false end
+  screen.photoPoll = now + 0.5
+  local on = tonumber(gore.photo_state():match(" 84=(%-?%d+)"))
+  if on and on ~= 0 then
+    screen.photoOn, screen.photoNext, screen.photoSeen = true, 0, nil
+    log("photo mode opened by the game's own key")
+    return screen.photo_watch(pawn, mesh)
+  end
+  screen.photoHead = try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
+  return false
+end
+
 local function tick()
   for i = #tp, 1, -1 do tp[i] = nil end
   tp.t = os.clock()
@@ -2231,6 +2449,7 @@ local function tick()
   hook_once()
   local mesh = try(function() return pawn.Mesh end)
   if not valid(mesh) then return end
+  if gore and screen.photo_guard(pawn, mesh) then return end
   local function simulating() return try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true end
   local sim = simulating()
 
@@ -2281,7 +2500,8 @@ local function tick()
     tp.mark("glass")
     hit_marks(pawn, mesh)
     tp.mark("hit marks")
-  elseif active and ((tune.gore or {}).afterHits or {}).enabled ~= false and (tune.gore or {}).enabled ~= false then
+  elseif active and ((tune.gore or {}).afterHits or {}).enabled ~= false and (tune.gore or {}).enabled ~= false
+    and os.clock() >= (screen.photoAfter or 0) then
     track_swing(pawn, mesh)
     hits_after(pawn, mesh)
     tp.mark("hits after")
@@ -2430,6 +2650,8 @@ local function forget_world()
   followed = nil
   -- (the still camera went with the old level; the new controller looks through its own pawn)
   camHeld, camWatch, hold = nil, nil, nil
+  screen.allow_photo(false, "level reloaded")
+  screen.photoOn, screen.frozenMesh, screen.watchFreeze = false, nil, false
   skip, ahead = nil, 0
   -- the old face may be gone: dropped without touching it
   dface.on, dface.known, faceCheck = nil, {}, nil
@@ -2478,6 +2700,11 @@ local function game_tick(ctx)
   for _, fn in ipairs(pending) do fn() end
   pending = {}
   if camHeld then camera_orbit() end
+  -- (every frame: the tick below skips frames, and one is enough for her animation to pull a piece back)
+  if screen.watchFreeze then
+    local mesh = try(function() return cachedPawn.Mesh end)
+    if valid(mesh) then pcall(screen.photo_freeze, cachedPawn, mesh) end
+  end
   if now < nextTick then return end
   nextTick = now + POLL_MS / 1000
   local ok, err = xpcall(tick, debug and debug.traceback or tostring)

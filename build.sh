@@ -192,16 +192,19 @@ if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("
   SPEC=$W/spec.json
 fi
 
-# json: patched through JSON (shows, tables, physics, blueprint); mesh: cpuaccess, patched by sbtool
-mapfile -t JSON_ASSETS < <(python3 -c 'import json,sys; print("\n".join(r for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] != "cpuaccess"))' "$SPEC")
-mapfile -t MESH_ASSETS < <(python3 -c 'import json,sys; print("\n".join(r for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] == "cpuaccess"))' "$SPEC")
+# json: patched through JSON (shows, tables, physics, blueprint); mesh: cpuaccess, patched by sbtool; extract: only
+# extracted into the cache, for native/sbslice/test (meshes the DLL reads in game without a copy in the pak)
+mapfile -t JSON_ASSETS < <(python3 -c 'import json,sys; print("\n".join(r for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] not in ("cpuaccess", "extract")))' "$SPEC")
+mapfile -t EXTRACT_ASSETS < <(python3 -c 'import json,sys; sys.stdout.write("".join(r + "\n" for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] == "extract"))' "$SPEC")
+mapfile -t MESH_ASSETS < <(python3 -c 'import json,sys; sys.stdout.write("".join(r + "\n" for r, j in json.load(open(sys.argv[1]))["assets"].items() if j["mode"] == "cpuaccess"))' "$SPEC")
 MESH_LODS=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(",".join(str(l) for l in sorted({l for j in s["assets"].values() if j["mode"] == "cpuaccess" for l in j.get("lods", [0])})) or "0")' "$SPEC")
-mapfile -t SOURCES < <(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print("\n".join(sorted({j.get("from", r) for r, j in s["assets"].items() if j["mode"] not in ("cpuaccess", "vendor")} | {s["donor"]})))' "$SPEC")
+mapfile -t SOURCES < <(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print("\n".join(sorted({j.get("from", r) for r, j in s["assets"].items() if j["mode"] not in ("cpuaccess", "vendor", "extract")} | {s["donor"]})))' "$SPEC")
 lines() { (( $# )) && printf '%s\n' "$@"; return 0; }
 
 log "extracting ${#SOURCES[@]} assets"
 lines "${SOURCES[@]}" | legacy
 lines "${MESH_ASSETS[@]}" | legacy
+lines "${EXTRACT_ASSETS[@]}" | legacy
 for rel in "${SOURCES[@]}"; do
   [[ -f $W/vanilla/SB/Content/$rel.uasset ]] || { echo "missing in game: $rel"; exit 1; }
 done

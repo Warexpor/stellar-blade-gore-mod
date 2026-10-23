@@ -234,11 +234,8 @@
       }
     },
     "Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3": {
-      "_comment": "Eve's face (CH_P_EVE_01_Blueprint's face slot): LOD0 CPU access, so a beheading can move all of it onto the head bone (its neck is weighted to the neck, which stays)",
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "_comment": "Eve's face (CH_P_EVE_01_Blueprint's face slot), extracted for the face cut tests. Not shipped: sbslice.dll keeps its LOD0 CPU copy at load (a beheading moves all of it onto the head bone), and a vanilla copy in the pak overrode face mods and stopped the game at launch",
+      "mode": "extract"
     },
     "Art/Character/PC/CH_P_EVE_01/Animation/Facial/EVE_Facial_ActionVoice_DIE1": {
       "_comment": "Eve's death face from Proper Death Expression by blabmice (third_party/proper-death-expression, credits there): the vanilla one is a blank stare",
@@ -284,72 +281,39 @@
       "at": 0.0813
     },
     "Art/Character/Monster/CH_M_NA_16/CH_M_NA_16": {
-      "_comment": "Generic humanoid enemies' bodies (enemies.lua, tune.enemies.kinds: the skulls, the lab mutant, the statues, the lurkers): LOD0 CPU access, so their corpses can be cut as Eve is",
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "_comment": "Generic humanoid enemies' bodies (enemies.lua, tune.enemies.kinds), extracted for the enemy cut tests. Not shipped: sbslice.dll keeps their LOD0 CPU copy at load, and copies in the pak would override enemy mods",
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_17/CH_M_NA_17": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_17/CH_M_NA_17_1": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_19/CH_M_NA_19": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_35/CH_M_NA_35": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_40/CH_M_NA_40": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_40/CH_M_NA_40_B": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_40/CH_M_NA_40_C": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/Monster/CH_M_NA_45/CH_M_NA_45": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     },
     "Art/Character/NPC/CH_NPC_AirborneSquad/CH_NPC_AirborneSquad_Body": {
-      "_comment": "The Airborne Squad angels (tune.enemies.kinds N_AirborneSquad) wear CH_P_EVE_01_Body (the outfits job covers it) and CH_P_EVE_Face_003; their own body mesh (ST_AirborneSquad_MeshState may swap it in) and that face get LOD0 CPU access for their cuts",
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "_comment": "The Airborne Squad angels (tune.enemies.kinds N_AirborneSquad) wear CH_P_EVE_01_Body and CH_P_EVE_Face_003; their own body mesh (ST_AirborneSquad_MeshState may swap it in) and that face, extracted only, as above",
+      "mode": "extract"
     },
     "Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_003": {
-      "mode": "cpuaccess",
-      "lods": [
-        0
-      ]
+      "mode": "extract"
     }
   },
   "_comment_ui_delay": "Seconds before the death/respawn UI appears, so the ragdoll is visible. Vanilla is 0 for these (desert hole uses 2.5).",

@@ -23,6 +23,8 @@ return {
                                -- recoverAfter, under the screen
   screenWait = 4,              --   seconds past recoverAfter a death with no death screen at all (F5's) waits for one
   reviveAt = 7,                -- the revive item's screen (she carries one) is held hidden this many seconds into the death
+  deathPhoto = true,           -- while a death is held (Shift+F4) the game's photo mode opens (P, or D-pad left + R1),
+                               -- which the game turns down while she is dead
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
                                -- after her pelvis a step a tick and the camera stuttered after her (playtest 38)
   cameraStill = true,          -- at a death the view holds still where it is till she gets up: the game moves her pawn
@@ -89,11 +91,17 @@ return {
                                --   else its weapon bones by name, else its hands), sampled every tick while she
                                --   lives; false: a made-up swing
     swingReach = 500,          --   cm: the enemy followed is the nearest this close
-    swingWindow = 0.6,         --   seconds of its weapon kept; the fastest step in them is the killing swing
+    swingWindow = 0.6,         --   seconds of its weapon kept; the step in them whose blade swept nearest her is the killing swing
     swingMinSpeed = 300,       --   cm/s it must reach to count (slower: the made-up swing)
+    swingSpeedPull = 25,       --   cm nearer a step counts at 3000 cm/s and up (the fast strike over a slow brush)
+    photoGrace = 0.5,          --   seconds after photo mode closes before hits after death count again
+    swingAwayCost = 60,        --   cm farther a step counts when its blade moved away from her part (the pull-back after the blow)
     swingSnap = 30,            --   cm: a plane passing her this close stays where the weapon put it (further: moved
                                --   onto the part of her nearest it, at the same angle)
     swingBones = 8,            --   most weapon bones followed per enemy
+    blowPose = true,           --   her pose is noted with each sample, and the killing blade is judged on her body as
+                               --   the weapon met it (false: as it is when the death starts, the death show's first
+                               --   moves on: an arm raised to block had swung away and only her body was cut)
     attackerIgnore = { "Drone", "CH_P_", "AirborneSquad" }, -- class names (parts) never taken for her killer: her drone, playable characters, the passive angels
     legRagdoll = true,         -- a leg cut on her own death fall switches to the ragdoll first (she can't fall on it)
     deathFace = {              -- a dead face held on her face mesh's morph targets from `at` s into a death, faded in
@@ -172,6 +180,10 @@ return {
       enabled = true,          --   false: the game's own death voice only
       volume = 1.0,
       rest = 8,                --   s a recording rests before it can play again
+      sounds = nil,            --   recordings to pick from (nil: vo_eve_die_01-05): names under
+                               --   Sound/Dialogue/ActionVoice/Eve ("vo_eve_die_fall_01") or full paths of any
+                               --   SoundWave / SoundCue ("/Game/Mods/MyVoice/scream_01"). A voice mod that replaces
+                               --   vo_eve_die_* in place needs nothing here
     },
     sounds = true,             -- the game's own gore sounds on cuts and splits
     soundVolume = 1.0,

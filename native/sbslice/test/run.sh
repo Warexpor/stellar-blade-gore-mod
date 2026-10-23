@@ -59,6 +59,10 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       fi
       on waist && jobs+=("real waist cut $m$p|WAIST=1 POSED=$posed|$m")
       on waist && [[ -z $posed ]] && jobs+=("real waist cut $m after the left arm|WAIST=1 ARMFIRST=1|$m")
+      # the playtest's death on CH_P_EVE_30: high along a 10-degree blade, then both upper arms off the flying torso; no
+      # seam on a helper a Dm- driver moves (Ab-L-AX2, Dm-Spine-bland with the hip's helpers moved: torn after it)
+      on waist && [[ -z $posed ]] && jobs+=("real waist cut $m high along a blade, then both arms|WAIST=1 WAISTAT=0.88 WAISTTILT=10 ARMSAFTER=1|$m"
+                                           "real waist cut $m high along a blade, then both arms, hip helpers moving|WAIST=1 WAISTAT=0.88 WAISTTILT=10 ARMSAFTER=1 HIPMOVED=1|$m")
       # the arm and its cape (cut off on their own, as gore.lua does) flown across the plane or under it when the body
       # is cut after them (playtest 41: an arm, then the chest): none of their skin may move
       on waist && [[ -z $posed && $m == CH_P_EVE_09 ]] && for up in 15 -30; do
@@ -141,7 +145,7 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   on mark && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real hit mark CH_P_EVE_10|MARK=1|CH_P_EVE_10" "real hit mark CH_P_EVE_10 (posed)|MARK=1 POSED=1|CH_P_EVE_10")
 fi
-# the enemies' bodies (tune.enemies.kinds; ./build.sh extracts them for their CPU access): an arm, the head, across
+# the enemies' bodies (tune.enemies.kinds; ./build.sh extracts them for this, `extract` jobs): an arm, the head, across
 # the waist, with the nosink list gore.lua sends for an enemy (ENEMY=1). ENEMY_VANILLA=<legacy cache> points elsewhere
 EV=${ENEMY_VANILLA:-../../../.cache/work/vanilla}
 if on enemy; then

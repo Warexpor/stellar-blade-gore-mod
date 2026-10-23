@@ -29,7 +29,7 @@ def props(e):
 
 
 for rel, job in spec["assets"].items():
-    if no_meshes and job["mode"] == "cpuaccess":
+    if no_meshes and job["mode"] == "cpuaccess" or job["mode"] == "extract":
         continue
     v = load(os.environ["SB_VENDOR_JSON"], rel) if job["mode"] == "vendor" else load(van_dir, job.get("from", rel))
     o = load(out_dir, rel)

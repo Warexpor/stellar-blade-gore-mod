@@ -57,6 +57,8 @@ void *memset(void *d, int c, u64 n)
 #define RVA_GUOBJECTARRAY 0x6dd7230                          // FUObjectArray GUObjectArray (UE4SS logs it)
 #define RVA_GMALLOC 0x706b500                                // FMalloc *GMalloc (UE4SS logs it); vtable Malloc +0x10, Free +0x30
 #define RVA_NEED_CPU_DATA 0x4529a30                          // USkeletalMesh::NeedCPUData(LOD): LODInfo[LOD].bAllowCPUAccess
+#define RVA_SB_CONFIG 0x7032540                              // the game's named constants (0x698 bytes, made at 0x1a977b0)
+#define RVA_STRIHASH 0x117c180                               // FCrc::Strihash_DEPRECATED(const TCHAR *): their keys
 #define INVALID_HANDLE ((HANDLE)(long long)-1)
 
 static u64 exe;
@@ -202,6 +204,14 @@ static unsigned char nocarry[MAX_BONES];
 // stump rides, or one next to it. Bones without one follow their nearest ancestor's body in a ragdoll
 static unsigned char hasbody[MAX_BONES];
 static int nbodies;
+// bones a driver moves ("n" after fffd, a cut through the spine: the rig's Dm- drivers and the helpers under them), on
+// nosink_mesh: the animation points them across the cut, so they count as moved while she played (below), a sink only
+// when a section has nothing else. CH_P_EVE_30's Ab-L-AX2, under Dm-L-AX2 on the pelvis, took a waist cut's lower seam
+// and went with the flying upper body: that half's opening stretched 3.5 m after it (playtest)
+// 2 (after fffc, a split half): a driver of a side whose limbs the half lets go (Dm-R-Trape, the hips' Dm-R-Thigh-point,
+// the helpers under them): the animation moves it after them as they fall free, so the half's kept skin lets go of it
+// as of the limbs. Kept skin near her middle hung partly on them, cones out of the half (playtest)
+static unsigned char drivenb[MAX_BONES];
 #define CARRY_ROT_COS 0.99863f // cos(3 deg), half the angle: a carrier turned over 6 degrees off its bind pose is driven
 #define CARRY_SECTIONS 256
 static int seccarry[CARRY_SECTIONS];
@@ -218,8 +228,9 @@ static float watch_dt[MAX_BONES], watch_dc[MAX_BONES];
 // had named them in "n". The split's seam (26000 vertices) collapsed onto the spine's Ab-AX3 family of correctives on
 // CH_P_EVE_10, and in a ragdoll death they stood up in sheets as tall as she was (twenty-sixth playtest); a cost on
 // them wasn't enough, they were the only helpers of their bands
-static unsigned char wmoved[MAX_BONES], nsx[MAX_BONES], nsm[MAX_BONES];
+static unsigned char wmoved[MAX_BONES], nsx[MAX_BONES], nsm[MAX_BONES], nsd[MAX_BONES];
 // moved only with a helper above it (see the watch below): it goes where its driver points, never a sink
+// (nsd: nsm with the driven bones, for a seam the watch's moved ones are left for)
 static unsigned char winh[MAX_BONES];
 // a split half's limbs, decided by Lua from where each limb is (a limb never splits lengthwise): roots of the limbs
 // that go with the other half, and of the ones that stay. For the next MODE_SIDE cut on that component
@@ -1209,7 +1220,9 @@ static int borrow_bone(u64 secs, int s, int bone, unsigned char *inmap, int nb)
 // band: the ride bone's band a sink must ride, -1 any bone, ANY_BAND any band but one (not a bone riding a clavicle
 // or a breast on its own: the AX correctives the animation turns)
 #define ANY_BAND -2
-static int side_sink(const sink_args *a, int s, const float *target, int want)
+// (driven_ok 0: none a driver moves, see drivenb: the split's point sinks on them followed the limbs it lets go, cones
+// sticking out of both halves, playtest)
+static int side_sink_pass(const sink_args *a, int s, const float *target, int want, int driven_ok)
 {
     const cut_ctx *c = a->c;
     int nb = c->nb, best = -2;
@@ -1217,6 +1230,7 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
     for (int i = 1; i < nb; i++) {
         if (!c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || (a->limb[i] && !(a->onplane && a->onplane[i])) || a->gone[i] || a->keep[i]) continue;
         if (i == a->b || i == a->parent_b || (a->headused && a->headused[i])) continue;
+        if (!driven_ok && nosink_mesh == c->sm && drivenb[i]) continue;
         if (a->rideof && (a->band >= 0 ? a->rideof[i] != a->band : a->band == ANY_BAND && a->rideof[i] < 0)) continue;
         if (a->btype[i] ? a->btype[i] != want : is_sink(c, i)) continue;
         const float *t = pose_of(c, i);
@@ -1232,7 +1246,7 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
         for (int i = 1; i < nb; i++) {
             if (c->inmap[(u64)s * nb + i] || (a->nosink && a->nosink[i]) || (a->limb[i] && !(a->onplane && a->onplane[i]))
                 || a->gone[i] || a->keep[i] || i == a->b || i == a->parent_b) continue;
-            if (a->headused && a->headused[i]) continue;
+            if ((a->headused && a->headused[i]) || (!driven_ok && nosink_mesh == c->sm && drivenb[i])) continue;
             if (a->rideof && (a->band >= 0 ? a->rideof[i] != a->band : a->band == ANY_BAND && a->rideof[i] < 0)) continue;
             if (a->btype[i] ? a->btype[i] != want : is_sink(c, i)) continue;
             const float *t = pose_of(c, i);
@@ -1244,6 +1258,18 @@ static int side_sink(const sink_args *a, int s, const float *target, int want)
         if (best >= 0 && !borrow_bone(a->secs, s, best, (unsigned char *)c->inmap, nb)) best = -2;
     }
     if (best >= 0) a->btype[best] = (unsigned char)want;
+    return best;
+}
+// in its band, else (wider: ANY_BAND or -1, 0 none) any, with none a driver moves first, then with them
+static int side_sink(sink_args *a, int s, const float *target, int want, int wider)
+{
+    int band = a->band, best = -2;
+    for (int dr = 0; dr < 2 && best < 0; dr++) {
+        a->band = band;
+        best = side_sink_pass(a, s, target, want, dr);
+        if (best < 0 && wider) { a->band = wider; best = side_sink_pass(a, s, target, want, dr); }
+    }
+    a->band = band;
     return best;
 }
 
@@ -1489,6 +1515,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         // (Bip001, ...) or a body's: those move as she does
         int par = parent_of(&c, i);
         winh[i] = !wmoved[i] && par > 0 && par < i && wmoved[par] && !(ns && ns[par]) && !(nosink_mesh == c.sm && hasbody[par]);
+        if (mode != MODE_SIDE && nosink_mesh == c.sm && drivenb[i]) winh[i] = 1; // (a split's: side_sink)
         if (winh[i]) wmoved[i] = 1;
         nmoved += wmoved[i];
     }
@@ -1497,6 +1524,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // (nsm: the same without the watch, for a seam that finds nothing else)
     for (int i = 0; i < nb; i++) {
         nsm[i] = (ns && ns[i]) || (!act_arr && !bactive[i]);
+        nsd[i] = nsm[i] || (nosink_mesh == c.sm && drivenb[i]);
         nsx[i] = nsm[i] || wmoved[i];
     }
     ns = nsx;
@@ -1525,7 +1553,8 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             // sink on the plane is safe only if both halves let go of it
             int helper = i > 0 && !(ns && ns[i]) && !keepbone[i];
             onplane[i] = helper && !gonebone[i] && h >= -SIDE_TOL / tm[8] && h <= SIDE_TOL / tm[8];
-            limb[i] = gonebone[i] || (helper && h < -SIDE_TOL / tm[8]) || onplane[i];
+            if (lim && nosink_mesh == c.sm && drivenb[i] == 2 && !keepbone[i]) onplane[i] = 0, limb[i] = 1;
+            else limb[i] = gonebone[i] || (helper && h < -SIDE_TOL / tm[8]) || onplane[i];
             // the other side of a broken spine: free, so kept skin lets go of it (a chain the half keeps stays)
             spsub[i] = i == brk || (par >= 0 && par < i && spsub[par]);
             if (brk > 0 && i > 0 && !keepbone[i] && (free_upper ? !spsub[i] : spsub[i])) {
@@ -1816,11 +1845,23 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 // on the hips; a skull's body section knows only the head bone past a beheading's plane): the nearest
                 // helper of that side is borrowed into it, or its seam stays on Spine and stretches to the upper
                 // body's sink as it falls, or that side of the section vanishes (the skull's whole face did)
-                if (secsink[s * 2 + sd] < 0 && mode == MODE_CUT) {
+                // (still none: every helper of that side moved while she played, a long watch saw them all, or a driver
+                // moves it. A moving sink drags its seam's point a little; with none the seam kept its old weights and
+                // stretched between the halves of a waist cut, playtest 30, after an arm or the head had come off, or
+                // the limb side vanished whole. So again with those the watch saw allowed, then the driven ones too:
+                // one in its BoneMap, else one borrowed)
+                for (int pass = 0; pass < 3 && secsink[s * 2 + sd] < 0 && mode == MODE_CUT; pass++) {
+                    const unsigned char *bns = pass == 2 ? nsm : pass ? nsd : ns;
+                    if (pass && !nmoved) break;
+                    if (pass) {
+                        sink_args sm = sa;
+                        sm.nosink = bns;
+                        if ((secsink[s * 2 + sd] = find_sink(&sm, s, sd)) >= 0) break;
+                    }
                     int best = -1;
                     float bd = 1e30f;
                     for (int i = 1; i < nb; i++) {
-                        if (inmap[(u64)s * nb + i] || limb[i] != sd || i == b || i == parent_b || (ns && ns[i]) || is_sink(&c, i)) continue;
+                        if (inmap[(u64)s * nb + i] || limb[i] != sd || i == b || i == parent_b || (bns && bns[i]) || is_sink(&c, i)) continue;
                         const float *t = pose_of(&c, i);
                         if (!t) continue;
                         float d0 = t[4] - sa.joint[0], d1 = t[5] - sa.joint[1], d2 = t[6] - sa.joint[2];
@@ -1830,15 +1871,6 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                         if (score < bd) { bd = score; best = i; }
                     }
                     if (best > 0 && borrow_bone(secs, s, best, inmap, nb)) secsink[s * 2 + sd] = best;
-                }
-                // still none: every helper of that side moved while she played (a long watch saw them all). A moving
-                // sink drags its seam's point a little; with none the seam kept its old weights and stretched between
-                // the halves of a waist cut (playtest 30, after an arm or the head had come off), or the limb side
-                // vanished whole
-                if (secsink[s * 2 + sd] < 0 && mode == MODE_CUT && nmoved) {
-                    sink_args sm = sa;
-                    sm.nosink = nsm;
-                    secsink[s * 2 + sd] = find_sink(&sm, s, sd);
                 }
                 // the one it has rides another body than its side's stump, or the animation moves it: the seam's point
                 // would move against the opening and stretch it. A helper that held still on the stump's own body is
@@ -1990,16 +2022,15 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 const float *x = xs + (u64)v * 3;
                 if (vkind[v] == 4) {
                     sa.band = -1;
-                    if (secneck[s] == -1) secneck[s] = side_sink(&sa, s, neckc, NECK_SINK);
+                    if (secneck[s] == -1) secneck[s] = side_sink(&sa, s, neckc, NECK_SINK, 0);
                 } else if (vkind[v] != 2) {
                     int k = vband[v];
                     int *slot = &(vkind[v] == 1 ? secband : secfar)[(u64)s * SPLIT_BANDS + k];
                     sa.band = k;
-                    if (*slot == -1) *slot = side_sink(&sa, s, bandc[k], vkind[v] == 1 ? 1 : 10 + k);
                     // deep torso or a dropped chain with no point riding its band: a point riding any band. A point
                     // shows nothing, whatever it rides; flattened, CH_P_EVE_09's neck lace stood on the copy where
                     // her neck had been, and the dropped hair chains lay pressed on the plane past the lid
-                    if (*slot < 0 && vkind[v] == 3) { sa.band = ANY_BAND; *slot = side_sink(&sa, s, bandc[k], 10 + k); }
+                    if (*slot == -1) *slot = side_sink(&sa, s, bandc[k], vkind[v] == 1 ? 1 : 10 + k, vkind[v] == 3 ? ANY_BAND : 0);
                 } else {
                     int r = vroot[v] < MAX_LIMB_ROOTS ? vroot[v] : 0;
                     int *slot = &secroot[(u64)s * MAX_LIMB_ROOTS + r];
@@ -2020,10 +2051,9 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                             if (d < bd) { bd = d; sa.band = k; }
                         }
                     }
-                    *slot = side_sink(&sa, s, target, 2 + r);
                     // none riding that bone (the arms' nearest is the neck, the kept head's): any point will do, it
                     // shows nothing. Flattened instead, the dropped arm lay pressed on the plane, a flat hand
-                    if (*slot < 0 && sa.band >= 0) { sa.band = ANY_BAND; *slot = side_sink(&sa, s, target, 2 + r); }
+                    *slot = side_sink(&sa, s, target, 2 + r, sa.band >= 0 ? ANY_BAND : 0);
                 }
             }
         // each vanishing vertex's sink: its own, else the nearest band of its section that flattens (a limb or deep
@@ -2980,7 +3010,9 @@ static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 //   r                    put back every collapsed sink (a mesh asset outlives the component)
 //   r<mesh asset>        put back that asset's sinks only (an enemy corpse's, whose component may be going)
 //   n<comp>,<bone>,...[,ffff,<bone>,...]   bones of comp's mesh asset that may never be a sink (until the next "n"),
-//                        and after ffff the ones that may never carry a stub
+//                        and after ffff the ones that may never carry a stub, after fffe the ones with a physics body,
+//                        after fffd the ones a driver moves (a sink only when nothing else is left), after fffc
+//                        the ones a driver moves after a limb the next split half lets go (its kept skin lets go too)
 //   g<comp>,<gone root>,...,0,<kept root>,...[,0,<ride bone>,...]
 //                        a split half's limbs for the next MODE_SIDE cut on comp (0 = Root, never a limb root), and
 //                        the spine bones its lid rides (its flattening sinks band by them). Before a MODE_CUT: no
@@ -3227,6 +3259,144 @@ static void joints_cmd(const u64 *f, int k)
     skin_result(msg);
 }
 
+// ---- photo mode in a held death (main.lua, Shift+F4) -----------------------------------------------------------------
+// The game's named constants: a singleton (RVA_SB_CONFIG) whose part at +0x378 is filled at 0x25d3ad0 with defaults,
+// its bools a TMap<u32, bool> at +0xf0 (TSet elements of 16 bytes: key, value, hash links), keyed by
+// FCrc::Strihash_DEPRECATED of the name (RVA_STRIHASH, called for the keys). The shipping cheat that overrides one (SBConfigOverrideBool) is a
+// stub, so "f<0|1>" writes SBPhotoMode_Bypass_ActivationConditionChecks (default 0) itself: photo mode's checks
+// (her being dead among them) skipped while it is 1. SBPhotoMode_Trim_LetterBox (default 1, added right after it)
+// is looked for too, as a check that this is the table. Answer "ok photo <0|1> (was <0|1>)".
+#define CFG_BOOLS (0x378 + 0xf0)
+typedef u32 (*strihash_fn)(const u16 *);
+static void photo_cmd(int on)
+{
+    const strihash_fn strihash = (strihash_fn)(exe + RVA_STRIHASH);
+    const u32 bypass = strihash(u"SBPhotoMode_Bypass_ActivationConditionChecks");
+    const u32 letterbox_key = strihash(u"SBPhotoMode_Trim_LetterBox");
+    u64 cfg = *(u64 *)(exe + RVA_SB_CONFIG);
+    if (!mem_readable(cfg, CFG_BOOLS + 0x10)) { skin_result("err no constants object"); return; }
+    u64 data = *(u64 *)(cfg + CFG_BOOLS);
+    int num = *(int *)(cfg + CFG_BOOLS + 8);
+    if (num <= 0 || num > 100000 || !mem_readable(data, (u64)num * 16)) { skin_result("err bad bool table"); return; }
+    unsigned char *at = 0;
+    int letterbox = 0;
+    for (int i = 0; i < num; i++) {
+        u32 key = *(u32 *)(data + (u64)i * 16);
+        if (key == bypass) at = (unsigned char *)(data + (u64)i * 16 + 4);
+        else if (key == letterbox_key) letterbox = 1;
+    }
+    if (!at || !letterbox) { skin_result(at ? "err no letterbox key (not the table?)" : "err no bypass key"); return; }
+    char msg[40] = "ok photo ";
+    char *o = put_int(msg + 9, on);
+    o = put(o, " (was ");
+    o = put_int(o, *at);
+    *put(o, ")") = 0;
+    *at = (unsigned char)(on != 0);
+    skin_result(msg);
+}
+
+// Opening it without the key: the death keeps P from ever reaching photo mode's key handler (0x142362d00). Both key
+// handlers call 0x142361aa0(manager), which queues a PhotoModeActive event; its handler (0x141abe100) asks
+// 0x141cd3b10 whether photo mode may open (her state at +0x2600, the open UI list SBPhotoMode_CheckUITypeList, ...;
+// SBPhotoMode_Bypass_ActivationConditionChecks is never read there in the shipping build) and, for the free camera,
+// then calls 0x1422a98b0(): the enter itself (no arguments: it takes the manager, a singleton made at 0x141adc360,
+// checks 0x14236b800, sets +0x84 to 1 and registers photo mode's tick). So "f2" calls that enter, the gate skipped,
+// when the manager is idle (+0x38 0, +0x84 0); "f3" only reports.
+// Answer "ok photo open|state: mgr 38=<b> 84=<i> 4c=<i> gate=<0|1|-> ui=<+184>/<+17c> blocked=<n>[ mesh shielded -> entered <0|1> 84=<i>]".
+#define RVA_PHOTO_MGR 0x7032598
+#define RVA_PHOTO_ENTER 0x22a98b0
+#define RVA_PHOTO_GATE 0x231c400
+#define RVA_UI_STACK 0x212f940
+typedef u64 (*getter_fn)(void);
+typedef unsigned char (*photo_enter_fn)(void);
+// Photo mode, once in, sets every character mesh's collision to query only and its Pawn channel to overlap
+// (0x1423a33e0: the MeshInfoList slots, virtuals +0x668 SetCollisionEnabled(1) and +0x860
+// SetCollisionResponseToChannel(2, 1)), and puts them back on leaving. On her ragdoll that ended the physics: the mesh
+// went back to its animated pose, a cut-off head back on her neck, and was flung from there as photo mode closed
+// (playtest). So her mesh ("f2<mesh>", or "f4<mesh>" alone once a piece is off her: the game's own key opens photo
+// mode too) gets its own copy of its vtable with those two slots stubbed out while photo mode is on (the manager's
+// +0x84 not 0), passed on otherwise. The copy stays: an object that may be gone is only written back to when it
+// still holds our copy.
+#define VT_COPY 0x1400
+#define VT_SET_COLLISION 0x668
+#define VT_SET_RESPONSE 0x860
+typedef void (*vcall4_fn)(u64, u64, u64, u64);
+static u64 shield_buf[1 + VT_COPY / 8]; // [0]: the slot before the vtable (MSVC's RTTI locator), kept
+#define shield_vt (shield_buf + 1)
+static u64 shield_obj, shield_old_vt;
+static int shield_blocked; // calls stubbed out, reported by f2 / f3
+static int photo_on(void)
+{
+    u64 mgr = *(u64 *)(exe + RVA_PHOTO_MGR);
+    return mem_readable(mgr, 0x88) && *(int *)(mgr + 0x84) != 0;
+}
+static void shield_set_collision(u64 self, u64 a, u64 b, u64 c)
+{
+    if (photo_on()) { shield_blocked++; return; }
+    ((vcall4_fn)(*(u64 *)(shield_old_vt + VT_SET_COLLISION)))(self, a, b, c);
+}
+static void shield_set_response(u64 self, u64 a, u64 b, u64 c)
+{
+    if (photo_on()) { shield_blocked++; return; }
+    ((vcall4_fn)(*(u64 *)(shield_old_vt + VT_SET_RESPONSE)))(self, a, b, c);
+}
+// 1 shielded now, 0 not (no object, its vtable unreadable or another class's than the first one's)
+static int photo_shield(u64 obj)
+{
+    if (!mem_readable(obj, 8)) return 0;
+    u64 vt = *(u64 *)obj;
+    if (vt == (u64)shield_vt) return 1;
+    if (shield_old_vt && vt != shield_old_vt) return 0; // (one copy: a mesh of another class is left alone)
+    if (!mem_readable(vt - 8, VT_COPY + 8)) return 0;
+    if (!shield_old_vt) {
+        for (int i = 0; i < 1 + VT_COPY / 8; i++) shield_buf[i] = ((u64 *)vt)[i - 1];
+        shield_vt[VT_SET_COLLISION / 8] = (u64)shield_set_collision;
+        shield_vt[VT_SET_RESPONSE / 8] = (u64)shield_set_response;
+        shield_old_vt = vt;
+    }
+    if (shield_obj && shield_obj != obj && mem_readable(shield_obj, 8) && *(u64 *)shield_obj == (u64)shield_vt)
+        *(u64 *)shield_obj = shield_old_vt;
+    *(u64 *)obj = (u64)shield_vt;
+    shield_obj = obj;
+    return 1;
+}
+// her mesh back on its own vtable ("f5": no piece off her any more)
+static int photo_unshield(void)
+{
+    int was = shield_obj && mem_readable(shield_obj, 8) && *(u64 *)shield_obj == (u64)shield_vt;
+    if (was) *(u64 *)shield_obj = shield_old_vt;
+    shield_obj = 0;
+    return was;
+}
+static void photo_open(int go, u64 mesh)
+{
+    u64 mgr = *(u64 *)(exe + RVA_PHOTO_MGR);
+    if (!mem_readable(mgr, 0x600)) { skin_result("err no photo mode manager"); return; }
+    u64 gate = ((getter_fn)(exe + RVA_PHOTO_GATE))();
+    u64 ui = ((getter_fn)(exe + RVA_UI_STACK))();
+    char msg[200];
+    char *o = put(msg, go ? "ok photo open: mgr 38=" : "ok photo state: mgr 38=");
+    o = put_int(o, *(unsigned char *)(mgr + 0x38));
+    o = put(o, " 84="); o = put_int(o, *(int *)(mgr + 0x84));
+    o = put(o, " 4c="); o = put_int(o, *(int *)(mgr + 0x4c));
+    o = put(o, " gate=");
+    o = mem_readable(gate, 0x78) ? put_int(o, (*(unsigned char *)(gate + 0x74) & 8) != 0) : put(o, "-");
+    o = put(o, " ui=");
+    if (mem_readable(ui, 0x188)) {
+        o = put_int(o, (long long)(*(float *)(ui + 0x184) * 1000)); o = put(o, "/");
+        o = put_int(o, (long long)(*(float *)(ui + 0x17c) * 1000));
+    } else o = put(o, "-");
+    o = put(o, " blocked="); o = put_int(o, shield_blocked);
+    if (go && !*(unsigned char *)(mgr + 0x38) && !*(int *)(mgr + 0x84)) {
+        o = put(o, mesh ? (photo_shield(mesh) ? " mesh shielded" : " mesh NOT shielded") : " no mesh");
+        unsigned char in = ((photo_enter_fn)(exe + RVA_PHOTO_ENTER))();
+        o = put(o, " -> entered "); o = put_int(o, in);
+        o = put(o, " 84="); o = put_int(o, *(int *)(mgr + 0x84));
+    } else if (go) o = put(o, " -> busy, not entered");
+    *o = 0;
+    skin_result(msg);
+}
+
 static void exec_slice(void *context, unsigned char *stack, void *result)
 {
     (void)context; (void)result;
@@ -3252,6 +3422,13 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         for (int i = 0; i < 2 + 2 * PT_KEEP; i++) tf[i] = 0;
         int k = parse_fields(txt + 1, len - 1, tf, 2 + 2 * PT_KEEP);
         table_cmd(tf[0], (int)tf[1], tf + 2, k > 2 ? (k - 2) / 2 : 0);
+        return;
+    }
+    if (txt[0] == 'f') {
+        if (txt[1] == '2' || txt[1] == '3') photo_open(txt[1] == '2', len > 2 ? parse_hex(txt + 2, len - 2) : 0);
+        else if (txt[1] == '4') skin_result(len > 2 && photo_shield(parse_hex(txt + 2, len - 2)) ? "ok photo shield 1" : "ok photo shield 0");
+        else if (txt[1] == '5') skin_result(photo_unshield() ? "ok photo unshield 1" : "ok photo unshield 0");
+        else photo_cmd(txt[1] == '1');
         return;
     }
     if (txt[0] == 'u') {
@@ -3285,20 +3462,24 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
         return;
     }
     if (txt[0] == 'n' || txt[0] == 'g') {
-        static u64 lf[3 * MAX_BONES + 4]; // the nosink list, ffff, the nocarry list, fffe, the bones with bodies
-        int k = parse_fields(txt + 1, len - 1, lf, 3 * MAX_BONES + 4);
+        // the nosink list, ffff, the nocarry list, fffe, the bones with bodies, fffd, driven, fffc, driven after a let-go limb
+        static u64 lf[5 * MAX_BONES + 5];
+        int k = parse_fields(txt + 1, len - 1, lf, 5 * MAX_BONES + 5);
         if (k < 1 || lf[0] < 0x10000) { skin_result("err bad component"); return; }
         int cnt = 0;
         if (txt[0] == 'n') {
-            for (int i = 0; i < MAX_BONES; i++) nosink[i] = nocarry[i] = hasbody[i] = 0;
+            for (int i = 0; i < MAX_BONES; i++) nosink[i] = nocarry[i] = hasbody[i] = drivenb[i] = 0;
             nosink_mesh = *(u64 *)(lf[0] + SC_SKELETAL_MESH);
             int nc = 0;
             nbodies = 0;
             for (int i = 1; i < k; i++) {
                 if (lf[i] == 0xffff) { nc = 1; continue; }
                 if (lf[i] == 0xfffe) { nc = 2; continue; }
+                if (lf[i] == 0xfffd) { nc = 3; continue; }
+                if (lf[i] == 0xfffc) { nc = 4; continue; }
                 if (lf[i] < MAX_BONES) {
-                    if (nc == 2) { hasbody[lf[i]] = 1; nbodies++; }
+                    if (nc >= 3) drivenb[lf[i]] = (unsigned char)(nc - 2);
+                    else if (nc == 2) { hasbody[lf[i]] = 1; nbodies++; }
                     else if (nc) nocarry[lf[i]] = 1; else { nosink[lf[i]] = 1; cnt++; }
                 }
             }
