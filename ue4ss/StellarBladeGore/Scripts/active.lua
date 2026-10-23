@@ -446,6 +446,22 @@ local function joint_lengths(mesh)
   end
   return out
 end
+-- and the cape's links (accessory bodies named *Cape*), each to the link above it: the cape on CH_P_EVE_09 hangs off
+-- the upper arms' twist bones as two 7-link chains and stretched in deaths (playtest); this shows whether its joints
+-- come apart or the chain only swings
+local function cape_lengths(mesh)
+  local out = {}
+  for _, bone in ipairs(bodies(mesh)) do
+    if not MASS[bone] and bone:find("Cape") then
+      local up = try(function() return mesh:GetParentBone(FName(bone)):ToString() end)
+      -- (link to link: the top one hangs off the shoulder in a ragdoll, away from its arm bone by design)
+      local a = up and up:find("Cape") and try(function() local v = mesh:GetSocketLocation(FName(bone)); return vec(v.X, v.Y, v.Z) end)
+      local b = a and try(function() local v = mesh:GetSocketLocation(FName(up)); return vec(v.X, v.Y, v.Z) end)
+      if b then out[bone] = { up = up, l = len(vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z)) } end
+    end
+  end
+  return next(out) and out or nil
+end
 local function stretch_report(mesh, base)
   local now = joint_lengths(mesh)
   local list = {}
@@ -566,13 +582,92 @@ end
 
 -- kind: "death" or "sandbox"; dir: the blow's direction for the impact (sandbox), or where it came from when the
 -- game's death key gives no impulse (death)
+-- A cape hung off the upper arms (CH_P_EVE_09: Ab_CapeL/R01-07 jointed to the arm's twist bone, 10 degrees a link)
+-- whipped about with the arm in a ragdoll and tore at its top, which is skinned to her torso too (playtest). Each
+-- such chain (an accessory body jointed to an upper arm, 3 or more bodies down from it) lets go of the arm and hangs
+-- off the arm's parent body (the clavicle) by a joint of our own: a cone of capeSwing degrees about the way the chain
+-- runs now, capeTwist about itself. Its links weigh capeKg each. The asset's joint comes back when her physics is
+-- remade on recovery (gore's cleanup); ours are destroyed in M.stop
+local ARMS = { ["Bip001-L-UpperArm"] = true, ["Bip001-R-UpperArm"] = true }
+local function hang_capes(pawn, mesh, g)
+  if g.capeHang == false then return "" end
+  local list = bodies(mesh)
+  local has, up = {}, {}
+  for _, b in ipairs(list) do has[b] = true end
+  -- each body's parent body
+  for _, b in ipairs(list) do
+    local p = b
+    for _ = 1, 64 do
+      p = try(function() return mesh:GetParentBone(FName(p)):ToString() end)
+      if not p or p == "None" or has[p] then break end
+    end
+    if p and has[p] then up[b] = p end
+  end
+  -- the arm a chain hangs off: its parent body, or the arm's twist body between (CH_P_EVE_09's capes hang off
+  -- Ab-*-UpperArm-Tw1, which has a body of its own: the twist body itself was hung off the shoulder, playtest). A twist
+  -- body is never a cape's root
+  local function twist(b) return b and (b:find("%-Tw%d") or b:find("[Tt]wist")) ~= nil end
+  local function arm_of(b)
+    if twist(b) then return nil end
+    local p = up[b]
+    if ARMS[p] then return p end
+    if twist(p) and ARMS[up[p]] then return up[p] end
+    return nil
+  end
+  local cls
+  local done = {}
+  for _, root in ipairs(list) do
+    local arm = not MASS[root] and arm_of(root)
+    if arm then
+      -- the chain under it, and its next link for the way it runs
+      local chain, n, nxt = { [root] = true }, 1, nil
+      for _ = 1, 16 do
+        local grew = false
+        for _, b in ipairs(list) do
+          if not chain[b] and up[b] and chain[up[b]] then
+            chain[b], n, grew = true, n + 1, true
+            if up[b] == root and not nxt then nxt = b end
+          end
+        end
+        if not grew then break end
+      end
+      local anchor = n >= 3 and anchor_of(mesh, arm)
+      local at = anchor and try(function() local v = mesh:GetSocketLocation(FName(root)); return vec(v.X, v.Y, v.Z) end)
+      local to = at and nxt and try(function() local v = mesh:GetSocketLocation(FName(nxt)); return vec(v.X, v.Y, v.Z) end)
+      cls = cls or (at and try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintComponent") end))
+      local pc = to and valid(cls) and try(function()
+        return pawn:AddComponentByClass(cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }, false)
+      end)
+      if valid(pc) then
+        run.hung[#run.hung + 1] = pc
+        -- the joint's frame is the component's when it is made: X (the twist axis) along the chain
+        local d = vec(to.X - at.X, to.Y - at.Y, to.Z - at.Z)
+        local rot = { Pitch = math.deg(math.atan(d.Z, math.sqrt(d.X * d.X + d.Y * d.Y))), Yaw = math.deg(math.atan(d.Y, d.X)), Roll = 0 }
+        try(function() pc:K2_SetWorldLocationAndRotation(at, rot, false, {}, true) end)
+        try(function() pc:SetAngularSwing1Limit(1, g.capeSwing or 45) end)
+        try(function() pc:SetAngularSwing2Limit(1, g.capeSwing or 45) end)
+        try(function() pc:SetAngularTwistLimit(1, g.capeTwist or 20) end)
+        try(function() mesh:BreakConstraint(vec(0, 0, 0), at, FName(root)) end)
+        if try(function() pc:SetConstrainedComponents(mesh, FName(anchor), mesh, FName(root)); return true end) then
+          for b in pairs(chain) do
+            run.masses[b] = run.masses[b] or mass(mesh, b)
+            try(function() mesh:SetMassOverrideInKg(FName(b), g.capeKg or 0.12, true) end)
+          end
+          done[#done + 1] = string.format("%s (%d links) on %s", root, n, anchor:gsub("Bip001%-", ""))
+        end
+      end
+    end
+  end
+  return #done > 0 and (", cape hung off the shoulder: " .. table.concat(done, ", ")) or ""
+end
+
 function M.start(pawn, mesh, kind, dir)
   local g = cfg()
   if g.enabled == false then return end
   if run then M.stop(pawn) end
   if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
-  run = { mesh = mesh, t = 0, masses = {}, still = 0 }
-  run.joints, run.probe = joint_lengths(mesh), 1
+  run = { mesh = mesh, t = 0, masses = {}, still = 0, hung = {} }
+  run.joints, run.capes, run.probe = joint_lengths(mesh), cape_lengths(mesh), 1
   run.rolls = joint_rolls(mesh, true)
   extra = {}
   if g.bisect and kind == "sandbox" then
@@ -583,6 +678,7 @@ function M.start(pawn, mesh, kind, dir)
   end
   local plain = run.variant == 2
   local parts = plain and {} or { set_masses(mesh, g, run), cap_spin(mesh, g) }
+  if not plain then parts[#parts + 1] = hang_capes(pawn, mesh, g) end
   if kind == "death" then
     parts[#parts + 1] = momentum(mesh, g)
     -- the death key pushes after ImpulseDelayTime (0.01 s), so its direction is read a couple of ticks later
@@ -940,7 +1036,8 @@ function M.tick(dt)
   end
   run.t = run.t + dt
   if run.probe and STRETCH_AT[run.probe] and run.t >= STRETCH_AT[run.probe] then
-    log(string.format("stretch at %.1f s (cm off the start): %s", run.t, stretch_report(run.mesh, run.joints)))
+    log(string.format("stretch at %.1f s (cm off the start): %s%s", run.t, stretch_report(run.mesh, run.joints),
+      run.capes and ("; cape " .. stretch_report(run.mesh, run.capes)) or ""))
     run.probe = run.probe + 1
   end
   -- a piece cut off a living Eve settles too: lying on the floor it shook and spun like her ragdoll did before the
@@ -1061,6 +1158,9 @@ function M.stop(pawn)
   if not run then return end
   tone_stop()
   local mesh = run.mesh
+  for _, pc in ipairs(run.hung or {}) do
+    if valid(pc) then try(function() pc:BreakConstraint() end); try(function() pc:K2_DestroyComponent(pc) end) end
+  end
   local n = 0
   if valid(mesh) then
     for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FName(bone), m, true); return true end) then n = n + 1 end end

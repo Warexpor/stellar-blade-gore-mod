@@ -233,6 +233,16 @@
         }
       }
     },
+    "Local/Data/EffectTable": {
+      "_comment": "Knocked down, she stays down till the player gets her up (dodge or jump: the game's fast getup, which the Down state allows). Her tumbling knockdowns chain into Down_Eve, a copy of the shared Down (1 s on the floor, then Getup) lasting 100000 s; main.lua writes its LifeTime back to 1 in game when holdDown is off (sbslice.dll's d command). The monsters keep Down",
+      "mode": "table",
+      "rows": {
+        "Down_Eve": { "_copy": "Down", "ID": 3009001, "LifeTime": 100000.0 },
+        "KnockDownForwardTumbling_Eve": { "ChainEffectAliasArray": ["Down_Eve"] },
+        "KnockDownBackwardTumbling_Eve": { "ChainEffectAliasArray": ["Down_Eve"] },
+        "KnockDownTumbling_Eve_EffectArea": { "ChainEffectAliasArray": ["Down_Eve"] }
+      }
+    },
     "Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3": {
       "_comment": "Eve's face (CH_P_EVE_01_Blueprint's face slot), extracted for the face cut tests. Not shipped: sbslice.dll keeps its LOD0 CPU copy at load (a beheading moves all of it onto the head bone), and a vanilla copy in the pak overrode face mods and stopped the game at launch",
       "mode": "extract"

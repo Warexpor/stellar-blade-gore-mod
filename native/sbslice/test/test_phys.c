@@ -223,6 +223,43 @@ static void test_joints(void)
     CHECK(!strncmp(lastres, "err no joint array", 18) && *(int *)(asset + 0x70) == 5, "joints, wrong count: %s", lastres);
 }
 
+// ---- a data table row's field ("d"): a made-up UDataTable, its RowMap's third slot free ----
+static void test_rows(void)
+{
+    static u64 dt[0x80 / 8], rowstruct[4];
+    static unsigned char rows[3][0x200];
+    static u32 elems[4][6]; // FName (index, number), row pointer, hash links
+    static u32 flags[1] = { 0xb }; // slots 0, 1, 3 in use
+    u32 names[4][2] = { { 11, 0 }, { 22, 0 }, { 99, 0 }, { 22, 3 } };
+    for (int i = 0; i < 4; i++) {
+        elems[i][0] = names[i][0]; elems[i][1] = names[i][1];
+        *(u64 *)&elems[i][2] = i == 2 ? 0 : (u64)rows[i == 3 ? 2 : i];
+    }
+    for (int i = 0; i < 3; i++) *(float *)(rows[i] + 0x10c) = 1.0f + i;
+    dt[0x28 / 8] = (u64)rowstruct;
+    unsigned char *s = (unsigned char *)dt + 0x30;
+    *(u64 *)s = (u64)elems; *(int *)(s + 8) = 4; *(int *)(s + 12) = 4;
+    *(u32 *)(s + 16) = flags[0]; *(int *)(s + 40) = 4; *(int *)(s + 44) = 128;
+    readable_add(dt, sizeof dt); readable_add(elems, sizeof elems); readable_add(rows, sizeof rows);
+    char c[128];
+    float v = 100000.0f; u32 bits; memcpy(&bits, &v, 4);
+    snprintf(c, sizeof c, "d%llx,%llx,16,3,10c,%x", (unsigned long long)(u64)dt, (unsigned long long)(u64)rowstruct, bits);
+    cmd(c);
+    CHECK(!strncmp(lastres, "ok row ", 7) && *(float *)(rows[2] + 0x10c) == 100000.0f && *(float *)(rows[1] + 0x10c) == 2.0f,
+          "rows: write: %s", lastres);
+    printf("rows: %s\n", lastres);
+    snprintf(c, sizeof c, "d%llx,%llx,16,0,10c", (unsigned long long)(u64)dt, (unsigned long long)(u64)rowstruct); // read only
+    cmd(c);
+    CHECK(!strncmp(lastres, "ok row ", 7) && *(float *)(rows[1] + 0x10c) == 2.0f && strstr(lastres, "0000000040000000 0000000040000000"),
+          "rows: read: %s", lastres);
+    snprintf(c, sizeof c, "d%llx,%llx,63,0,10c,0", (unsigned long long)(u64)dt, (unsigned long long)(u64)rowstruct); // a freed slot's name
+    cmd(c);
+    CHECK(!strcmp(lastres, "err no such row"), "rows: free slot: %s", lastres);
+    snprintf(c, sizeof c, "d%llx,%llx,b,0,10c,0", (unsigned long long)(u64)dt, (unsigned long long)(u64)rows); // another struct
+    cmd(c);
+    CHECK(!strcmp(lastres, "err not its row struct") && *(float *)(rows[0] + 0x10c) == 1.0f, "rows: wrong struct: %s", lastres);
+}
+
 int main(void)
 {
     void *m = mmap(0, 0x7100000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -236,6 +273,7 @@ int main(void)
     test_table(1, 23, 0);
     test_table(0, 40, 1);
     test_joints();
+    test_rows();
     printf("%s\n", fails ? "FAIL" : "PASS");
     return fails != 0;
 }

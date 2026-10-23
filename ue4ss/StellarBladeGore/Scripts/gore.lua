@@ -219,6 +219,25 @@ local function mark(what)
   prof.t = t
 end
 
+-- a stump seam is weighted to a helper, and that helper keeps moving after the cut (a thigh twist, Ab-AX3T, a knee
+-- driver): the opening's point swings out and the cut face cones. "H" rewrites the collapse point onto the rim's bone.
+-- No result file — reading one every frame is what stuttered. Her own tick calls this, before the mesh is posed.
+-- The cheat CDO it calls on is kept in native.hold_cdo (this chunk is at Lua's 200-local limit)
+function M.hold_seams()
+  if native.state ~= "ready" or #cuts == 0 then return end
+  local ok, err = pcall(function()
+    local list = {}
+    for _, c in ipairs(cuts) do
+      if valid(c.mesh) and try(function() return c.mesh:GetAddress() end) == c.addr then list[#list + 1] = string.format("%x", c.addr) end
+    end
+    if #list == 0 then return end
+    if not valid(native.hold_cdo) then native.hold_cdo = load_obj(CHEAT_CDO) end
+    if not native.hold_cdo then return end
+    native.hold_cdo:SBRewardGroupDropFormationPathLocation(FName("None"), 0, 0, 0, "H" .. table.concat(list, ","), 0, 0, 0)
+  end)
+  if not ok then native.hold_cdo = nil; log("seam hold failed: " .. tostring(err)) end
+end
+
 -- one command to sbslice.dll (see exec_slice there); the answer it leaves in sbslice.cut
 local function command(s, p, n)
   mark("lua")
@@ -574,6 +593,70 @@ local function set_cap_material(comp, mat)
   end
 end
 
+-- cap and stub actors made ahead, while she plays (M.watch, one a look): made in the cut's own frames (an actor, its
+-- procedural mesh, its material instance, each a handful of engine calls) they were most of the caps' and stubs'
+-- 10-17 ms a stage, a stutter at every cut (playtest). The cut takes one and moves it where it goes; with none left
+-- one is made there and then. lid: with its procedural mesh and material; plain: a static mesh actor (stubs, spheres)
+M.pool = { lid = {}, plain = {}, want = { lid = 6, plain = 6 } }
+function M.pool_make(pawn, kind)
+  local gs = load_obj("/Script/Engine.Default__GameplayStatics")
+  local cls = load_obj("/Script/Engine.StaticMeshActor")
+  local at = try(function() local v = pawn:K2_GetActorLocation(); return vec(v.X, v.Y, v.Z) end)
+  if not (gs and cls and at) then return nil end
+  local tm = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = at, Scale3D = vec(1, 1, 1) }
+  local a = try(function()
+    local d = gs:BeginDeferredActorSpawnFromClass(pawn, cls, tm, 1, nil)
+    return gs:FinishSpawningActor(d, tm)
+  end)
+  if not valid(a) then return nil end
+  try(function() a:SetActorHiddenInGame(true) end)
+  local root = try(function() return a.StaticMeshComponent end)
+  if valid(root) then
+    -- a spawned StaticMeshActor is static: it can't take a mesh or follow a bone until it is movable
+    try(function() root:SetMobility(2) end)
+    try(function() root:SetCollisionEnabled(0) end)
+    try(function() root:SetCastShadow(false) end)
+  end
+  local e = { a = a, root = root }
+  if kind == "lid" then
+    local pmc_cls = load_obj("/Script/ProceduralMeshComponent.ProceduralMeshComponent")
+    local pmc = pmc_cls and try(function()
+      return a:AddComponentByClass(pmc_cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }, false)
+    end)
+    if not valid(pmc) then try(function() a:K2_DestroyActor() end); return nil end
+    try(function() pmc:SetCollisionEnabled(0) end)
+    try(function() pmc:SetCastShadow(false) end)
+    set_cap_material(pmc, load_obj(cfg().capMaterial or CAP_MATERIAL))
+    e.pmc = pmc
+  end
+  return e
+end
+-- one for a cut (kept in caps, which destroys it with the cut), at at
+function M.pool_take(pawn, kind, at)
+  local list, e = M.pool[kind], nil
+  while #list > 0 and not e do
+    local x = table.remove(list)
+    if valid(x.a) and (kind ~= "lid" or valid(x.pmc)) then e = x end
+  end
+  e = e or M.pool_make(pawn, kind)
+  if not e then return nil end
+  caps[#caps + 1] = e.a
+  if at then try(function() e.a:K2_SetActorLocation(at, false, {}, true) end) end
+  return e
+end
+-- one more made, while either pool is short (a level reload leaves them gone: dropped as they're found so)
+function M.pool_fill(pawn)
+  for _, kind in ipairs({ "lid", "plain" }) do
+    local list = M.pool[kind]
+    for i = #list, 1, -1 do if not valid(list[i].a) then table.remove(list, i) end end
+    if #list < M.pool.want[kind] then
+      local e = M.pool_make(pawn, kind)
+      if e then list[#list + 1] = e end
+      return
+    end
+  end
+end
+
 -- one cap over an opening, riding on the bone that carries that side: the lid mesh when the DLL sent an
 -- outline and the procedural mesh takes it, else a flattened sphere fitted to the opening
 -- built: a lid made already (centre, verts, tris, normals, uvs, tangents, colors), in place of lid_mesh's
@@ -585,22 +668,10 @@ local function cap(pawn, mesh, o, bone, built)
   local km = load_obj("/Script/Engine.Default__KismetMathLibrary")
   local cls = load_obj("/Script/Engine.StaticMeshActor")
   if not (gs and km and cls) then return end
-  local spawn_at = function(at)
-    local tm = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = at, Scale3D = vec(1, 1, 1) }
-    local a = try(function()
-      local d = gs:BeginDeferredActorSpawnFromClass(pawn, cls, tm, 1, nil)
-      return gs:FinishSpawningActor(d, tm)
-    end)
-    if not valid(a) then return nil end
-    caps[#caps + 1] = a
-    try(function() a:SetActorHiddenInGame(true) end)
-    local root = try(function() return a.StaticMeshComponent end)
-    if valid(root) then
-      -- a spawned StaticMeshActor is static: it can't take a mesh or follow a bone until it is movable
-      try(function() root:SetMobility(2) end)
-      try(function() root:SetCollisionEnabled(0) end)
-    end
-    return a, root
+  local spawn_at = function(at, k)
+    local e = M.pool_take(pawn, k, at)
+    if not e then return nil end
+    return e.a, e.root, e.pmc
   end
   local kind
   local a, root, lid
@@ -609,20 +680,18 @@ local function cap(pawn, mesh, o, bone, built)
     local c, verts, tris, normals, uvs, tangents, colors
     if built then c, verts, tris, normals, uvs, tangents, colors = table.unpack(built)
     else c, verts, tris, normals, uvs, tangents, colors = lid_mesh(o, g.capScale or 1.05) end
-    a, root = spawn_at(c)
+    mark("cap mesh")
+    local pmc
+    a, root, pmc = spawn_at(c, "lid")
+    mark("cap actor")
     if not a then log("cap: spawn failed"); return end
-    local pmc = try(function()
-      return a:AddComponentByClass(pmc_cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }, false)
-    end)
     if valid(pmc) then
       -- 4.27 takes UV0..UV3; older builds only UV0
       local made = try(function() pmc:CreateMeshSection_LinearColor(0, verts, tris, normals, uvs, {}, {}, {}, colors, tangents, false); return true end)
         or try(function() pmc:CreateMeshSection_LinearColor(0, verts, tris, normals, uvs, colors, tangents, false); return true end)
       local sections = made and try(function() return pmc:GetNumSections() end) or 0
+      mark("cap section")
       if sections > 0 then
-        set_cap_material(pmc, mat)
-        try(function() pmc:SetCollisionEnabled(0) end)
-        try(function() pmc:SetCastShadow(false) end)
         kind = string.format("lid %d points", #o.p)
         lid = pmc
       else
@@ -635,7 +704,7 @@ local function cap(pawn, mesh, o, bone, built)
     local sm = load_obj(g.capMesh or CAP_MESH)
     if not sm then return end
     if not a then
-      a, root = spawn_at(o.c)
+      a, root = spawn_at(o.c, "plain")
       if not a then log("cap: spawn failed"); return end
     end
     if valid(root) then
@@ -652,6 +721,7 @@ local function cap(pawn, mesh, o, bone, built)
   M.repose(a, mesh, bone)
   -- EAttachmentRule::KeepWorld = 1
   try(function() a:K2_AttachToComponent(mesh, FName(bone), 1, 1, 1, false) end)
+  mark("cap place")
   return a, kind, lid
 end
 
@@ -762,21 +832,11 @@ local function stub(pawn, mesh, o, bone, rides, spine)
   end
   -- the stub's middle sits 1 cm under the opening, so `out` of it shows
   local mid = add(c, scale(z, out - len / 2 + 0.5))
-  local tm = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = mid, Scale3D = vec(1, 1, 1) }
-  local a = try(function()
-    local x = gs:BeginDeferredActorSpawnFromClass(pawn, cls, tm, 1, nil)
-    return gs:FinishSpawningActor(x, tm)
-  end)
+  local e = M.pool_take(pawn, "plain", mid)
+  local a = e and e.a
   if not valid(a) then log("bone stub: spawn failed"); return nil end
-  caps[#caps + 1] = a
-  try(function() a:SetActorHiddenInGame(true) end)
-  local root = try(function() return a.StaticMeshComponent end)
-  if valid(root) then
-    try(function() root:SetMobility(2) end)
-    try(function() root:SetCollisionEnabled(0) end)
-    try(function() root:SetStaticMesh(sm) end)
-    try(function() root:SetCastShadow(false) end)
-  end
+  local root = e.root
+  if valid(root) then try(function() root:SetStaticMesh(sm) end) end
   if rot then try(function() a:K2_SetActorRotation(rot, false) end) end
   try(function() a:SetActorScale3D(vec(sc.X, sc.Y, sc.Z)) end)
   -- the mesh's bounds may not be centred on its pivot: shift by its scaled, rotated origin
@@ -849,21 +909,11 @@ local function spine_halves(q, comp, o, list)
           sc = { X = flat, Y = width, Z = len }
         end
         for _, ax in ipairs({ "X", "Y", "Z" }) do sc[ax] = sc[ax] / math.max(d.e[ax] * 2, 0.01) end
-        local tm = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = mid, Scale3D = vec(1, 1, 1) }
-        local act = try(function()
-          local x = gs:BeginDeferredActorSpawnFromClass(q.pawn, cls, tm, 1, nil)
-          return gs:FinishSpawningActor(x, tm)
-        end)
+        local e = rot and M.pool_take(q.pawn, "plain", mid)
+        local act = e and e.a
         if valid(act) and rot then
-          caps[#caps + 1] = act
-          try(function() act:SetActorHiddenInGame(true) end)
-          local root = try(function() return act.StaticMeshComponent end)
-          if valid(root) then
-            try(function() root:SetMobility(2) end)
-            try(function() root:SetCollisionEnabled(0) end)
-            try(function() root:SetStaticMesh(sm) end)
-            try(function() root:SetCastShadow(false) end)
-          end
+          local root = e.root
+          if valid(root) then try(function() root:SetStaticMesh(sm) end) end
           try(function() act:K2_SetActorRotation(rot, false) end)
           try(function() act:SetActorScale3D(vec(sc.X, sc.Y, sc.Z)) end)
           local fwd = try(function() local v = act:GetActorForwardVector(); return vec(v.X, v.Y, v.Z) end)
@@ -1032,6 +1082,9 @@ local function pools_tick()
   local dt = TICK_S * POOL_EVERY
   local life, grow, every = g.poolTime or 12, g.poolGrow or 5, g.dripEvery or 18
   local maxDecals = g.maxDecals or 60
+  -- one decal made a pass (a floor trace and a spawn each): every opening's pool or drip due on the same pass took
+  -- 9-14 ms, every 0.1 s for seconds after a cut (playtest); the rest come on the next passes
+  local budget = 1
   for i = #trackers, 1, -1 do
     local k = trackers[i]
     k.t = k.t + dt
@@ -1046,13 +1099,15 @@ local function pools_tick()
         local off = len(vec(p.X - k.pool.at.X, p.Y - k.pool.at.Y, 0))
         if off > math.max(k.pool.r * 0.6, 15) then k.pool = nil end
       end
-      if not k.pool and k.still >= 0.3 and #decals < maxDecals then
+      if not k.pool and k.still >= 0.3 and #decals < maxDecals and budget > 0 then
         -- it came to rest: a pool starts under it
+        budget = budget - 1
         k.pool = floor_decal(k.pawn, p, 4, POOL_DECALS)
         if k.pool then k.pool.age = 0; k.pools = (k.pools or 0) + 1 end
-      elseif not k.pool and speed >= 25 and #decals < maxDecals then
+      elseif not k.pool and speed >= 25 and #decals < maxDecals and budget > 0 then
         -- on the move: drips every so often
         if not k.drop or len(sub(p, k.drop)) >= every then
+          budget = budget - 1
           k.drop = p
           floor_decal(k.pawn, p, 2.5 + math.random() * 4, DRIP_DECALS)
           k.drips = (k.drips or 0) + 1
@@ -1331,7 +1386,13 @@ end
 
 -- one sbslice.dll cut on a component: "c<comp>,<lod>,<bone>,<mode>,<radius in mm>[,<depth in mm>]", all hex
 local function cut_command(comp, index, mode, radius, at, n, depth, limbs)
-  send_nosink(comp, limbs)
+  -- a leg: the drivers that follow it (fffc), which the body's skin lets go of, and every driver a seam's bone of last
+  -- resort (fffd): the animation points them after the flying leg, the hip skin that hung partly on a thigh's
+  -- (Ab-L-AX2 under Dm-L-Thigh-point) made a spike out of her hips with both legs off, and each hip's seam had closed
+  -- on Dm-*-Thigh-point itself (playtest). The cut's weights stay for the cuts after it. (Not an arm's: its drivers
+  -- shape the shoulder its rim runs round, and a bent arm's cut lost half its opening in the test harness)
+  local leg = type(limbs) == "string" and not enemy.cur and (limbs:find("Thigh") or limbs:find("Calf") or limbs:find("Foot"))
+  send_nosink(comp, limbs, leg and true or nil, leg and M.side_drivers(comp, { limbs }) or nil)
   local s = string.format("c%x,0,%x,%x,%x", comp:GetAddress(), index, mode or 0, math.floor((radius or 0) * 10 + 0.5))
   if depth then s = s .. string.format(",%x", math.floor(depth * 10 + 0.5)) end
   return command(s, at, n)
@@ -1833,19 +1894,26 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
     end
     return nil
   end
-  local detached = {}
+  -- the chains kept off the limb (a cape) are cut off their roots a frame later each (M.stage_chains): in the limb's
+  -- own frame the two cuts were a 50 ms stutter (playtest)
+  local chains = {}
   if #kept > 0 and g.chains ~= "body" then
     for _, c in ipairs(kept) do
       if stay[c] then
         log(string.format("cut %s: %s, a strap over the plane, stays on her", bone, c))
       else
-        local dr = detach_cut(mesh, c, bone)
-        log(string.format("cut %s off %s: %s", c, bone, dr))
-        if ok_cut(dr) then detached[#detached + 1] = c end
+        chains[#chains + 1] = c
       end
     end
   end
-  return { at = at, n = n, result = r, face = fr and face, face_result = fr, facecut = facecut, kept = kept, detached = detached }
+  return { at = at, n = n, result = r, face = fr and face, face_result = fr, facecut = facecut, kept = kept, detached = {}, chains = chains }
+end
+function M.stage_chains(q)
+  local c = table.remove(q.c.chains, 1)
+  if not c then return end
+  local dr = detach_cut(q.mesh, c, q.bone)
+  log(string.format("cut %s off %s: %s", c, q.bone, dr))
+  if ok_cut(dr) then q.c.detached[#q.c.detached + 1] = c end
 end
 
 -- stage 1: new weights on the GPU, caps placed (hidden); nothing visible changes yet
@@ -1957,7 +2025,9 @@ local function bleed_from(q, cap_actor, o, bone, left, out)
   if c and size ~= 1.0 then try(function() c:SetWorldScale3D(vec(size, size, size)) end) end
   if c and left > 0 then
     local every = math.max(1, math.floor((cfg().bleedPulse or 0.35) / TICK_S + 0.5))
-    bleeds[#bleeds + 1] = { comp = c, left = left, every = every, n = 0 }
+    -- (each a few ticks off the last one's beat: every opening pulsing on the same tick reset 4-6 effects in one,
+    -- 8-12 ms, a stutter that went on for seconds after a cut, playtest)
+    bleeds[#bleeds + 1] = { comp = c, left = left, every = every, n = (#bleeds * 3) % every }
   end
   -- which way it really points (the effect's Z, the axis bleedAxis names, against where the opening faces)
   if c and dir and not bleed_logged then
@@ -3050,7 +3120,7 @@ local function split_physics(q, vel)
   rehome(q, b2, q.c.at, q.c.n)
   mark("rehome")
   if cfg().probes then copy_watch = { comp = b2, her = q.mesh, n = 0, helpers = { her = helper_pose(q.mesh), copy = helper_pose(b2) } } end
-  if ctx.on_copy then try(function() ctx.on_copy(b2) end) end
+  if ctx.on_copy and not q.massed then try(function() ctx.on_copy(b2) end) end
   mark("copy masses")
   -- she stood still while it was cut; now both halves fall, before they get pushed apart
   if ctx.on_release then try(function() ctx.on_release() end) end
@@ -3183,7 +3253,7 @@ local split_stage
 local function split_tick(q) split_stage(q) end
 split_stage = function(q)
   if q.stage == "cut" then
-    if stage_split_prep(q) then q.stage = "cut2"; q.wait = 2; return end
+    if stage_split_prep(q) then q.stage = "cut2"; q.wait = 3; return end -- (frames: the copy posed first)
   elseif q.stage == "cut2" then
     if stage_split_cut(q) then q.stage = "cut3"; q.wait = 0; return end
   elseif q.stage == "cut3" then
@@ -3204,8 +3274,16 @@ split_stage = function(q)
     split_caps(q, q.body2, q.r2, q.caps)
     M.posed = nil
     mark("lids")
-    if not q.anim then M.split_bodies(q) end
+    if not q.anim then M.split_bodies(q); q.stage, q.wait = "masses", 0; return end
     q.stage, q.wait = "open", 1
+    return
+  elseif q.stage == "masses" then
+    -- the copy's masses and spin caps (active.lua) a frame of their own: in the opening's frame they were 36 of its
+    -- 64 ms (playtest)
+    if ctx.on_copy and valid(q.body2) then try(function() ctx.on_copy(q.body2) end) end
+    q.massed = true
+    mark("copy masses")
+    q.stage, q.wait = "open", 0
     return
   elseif q.stage == "open" then
     stage_split_open(q)
@@ -3214,7 +3292,11 @@ split_stage = function(q)
     return
   else
     -- her fall plays on with both halves: each body's speed from the last two frames, then they fall apart
-    q.t = q.t + TICK_S
+    -- (in real time: the stages run a frame each)
+    local clk = os.clock()
+    local dt = q.tl and math.max(clk - q.tl, 1e-3) or TICK_S
+    q.tl = clk
+    q.t = q.t + dt
     local now = {}
     for _, b in ipairs(q.bodies or {}) do now[b] = bone_loc(q.mesh, b) end
     local vel = nil
@@ -3222,7 +3304,7 @@ split_stage = function(q)
       vel = {}
       for b, l in pairs(now) do
         local o = q.seen[b]
-        if o then vel[b] = scale(sub(vec(l.X, l.Y, l.Z), vec(o.X, o.Y, o.Z)), 1 / TICK_S) end
+        if o then vel[b] = scale(sub(vec(l.X, l.Y, l.Z), vec(o.X, o.Y, o.Z)), 1 / dt) end
       end
     end
     q.seen = now
@@ -3288,7 +3370,8 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
   end
   -- a split comes first, then the fall: she is held where she is until it opens
   if kind == "split" and not anim and ctx.on_hold then try(function() ctx.on_hold(mesh) end) end
-  M.tick(pawn)
+  -- its first stage now, in this frame, when nothing waits
+  M.pump()
   return true
 end
 
@@ -3643,6 +3726,16 @@ function M.blow(pawn, mesh, h, why)
   -- a blow from above landing at her neck (nearer it than her chest): a beheading, whichever way its plane runs
   local nk, s2 = bl("Bip001-Neck"), bl("Bip001-Spine2")
   local at_neck = down and nk and s2 and dot(sub(at, nk), sub(at, nk)) < dot(sub(at, s2), sub(at, s2))
+  -- a split needs her limbs on both sides of it: a blade down her front 4-10 cm off the spine had every arm and leg
+  -- on one side, and the "half" with them all came off as her whole body, the other a slab of her chest (playtest).
+  -- That one is a cut through her body instead (shave), where the blade passes beside the spine
+  local sides = { 0, 0 }
+  for _, b in ipairs({ "Bip001-L-UpperArm", "Bip001-R-UpperArm", "Bip001-L-Thigh", "Bip001-R-Thigh" }) do
+    local l = bl(b)
+    local x = l and dot(sub(l, at), n)
+    if x and x > SPINE_TOL then sides[1] = sides[1] + 1 elseif x and x < -SPINE_TOL then sides[2] = sides[2] + 1 end
+  end
+  local parts = sides[1] > 0 and sides[2] > 0
   local what
   if at_neck and not already_cut(mesh, "Bip001-Head") then
     what = "head"
@@ -3660,7 +3753,12 @@ function M.blow(pawn, mesh, h, why)
   else
     what = "limb"
   end
-  return { hs = hs, pos = pos, neg = neg, spine = spine, head_s = head_s, best = best, crossed = crossed, off = off, what = what }
+  local shave = false
+  if what == "slice" and not parts then
+    if best and best.d < (cfg().limbReach or 12) then what = "limb" else shave = true end
+  end
+  return { hs = hs, pos = pos, neg = neg, spine = spine, head_s = head_s, best = best, crossed = crossed, off = off, what = what,
+    shave = shave, sides = sides }
   end
   -- the blade decides what comes off, nothing rolled over it. For variety each blade is turned up to bladeJitter
   -- degrees and moved up to bladeShift cm along its normal (a sweep across her chest takes one arm, both, or an arm and
@@ -3808,15 +3906,16 @@ function M.blow(pawn, mesh, h, why)
   -- whichever way the blade went, and rolled the odds the rest (a waist cut square to her spine and nothing else,
   -- though the weapon went through her arms, playtest)
   local splits = what == "slice"
-  if splits and not lengthwise then
+  if splits and (not lengthwise or c.shave) then
     local body = not h.noSplit and mc.body ~= false and body_blade()
     if not body then
       log(string.format("blade (%s): %s plane across her body, too far from the hit or cut already", why, how))
       return false
     end
     local more = why == "death" and queue(extras({ kind = "torso" })) or ""
-    log(string.format("blade (%s): %s plane across her body: her body at %s %.2f%s%s",
-      why, how, body.bone, body.t, body.square and ", square" or "", more))
+    log(string.format("blade (%s): %s plane %s: her body at %s %.2f%s%s",
+      why, how, c.shave and string.format("down her length beside the spine, her limbs all on one side of it (%d/%d): no split", c.sides[1], c.sides[2]) or "across her body",
+      body.bone, body.t, body.square and ", square" or "", more))
     return go(bl(body.bone) or at, why, "torso", nil, nil, body)
   end
   -- a blow that would split her when she can't be split (h.noSplit: a hit after death on a body already cut; a split
@@ -3938,10 +4037,13 @@ end
 stage_step = function(q)
   if q.kind == "split" then return split_tick(q) end
   if q.stage == "cut" then
-    if stage_cut(q) then q.stage = "caps"; q.wait = 0; return end
+    if stage_cut(q) then q.stage = #q.c.chains > 0 and "chains" or "caps"; q.wait = 0; return end
     pending = nil
     -- nothing came off: give the LOD back unless an earlier cut still needs it
     release_lods()
+  elseif q.stage == "chains" then
+    M.stage_chains(q)
+    if #q.c.chains == 0 then q.stage = "caps" end
   elseif q.stage == "caps" then
     M.stage_caps(q)
     q.stage, q.wait = "stubs", 0
@@ -3986,6 +4088,11 @@ function M.watch(mesh)
     t.warm = true
     nosink_list(mesh); nocarry_list(mesh); limbs_list(mesh, nil); M.driven_list(mesh)
     for _, r in ipairs(LIMB_ROOTS) do limbs_list(mesh, r) end
+  end
+  -- and a cap or stub actor made ahead, one a look (M.pool), none while a cut is opening
+  if not pending then
+    local owner = try(function() return mesh:GetOwner() end)
+    if valid(owner) then M.pool_fill(owner) end
   end
   local path = w.preload[w.next]
   if path then
@@ -4066,6 +4173,20 @@ function M.tick(pawn, tm)
       end
     end
   end
+end
+
+-- the cut's stages, one a frame (main.lua calls this every frame, ahead of her mesh's tick; q.wait counts frames).
+-- On the 33 ms poll they were a tick each and the piece came off 350 ms after the killing blow, which read as a long
+-- delay between the hit and the cut (playtest); a frame each still keeps every stage's work in a frame of its own
+function M.pump()
+  if cfg().enabled == false or (not pending and #queued == 0) or M.pumping then return end
+  -- (a queued cut started from here runs its first stage below, not inside its start: a stage a frame)
+  M.pumping = true
+  local ok0, err0 = pcall(M.pump_once)
+  M.pumping = false
+  if not ok0 then error(err0, 0) end
+end
+function M.pump_once()
   if not pending and #queued > 0 then
     local nx = table.remove(queued, 1)
     local ok, err = pcall(enemy.run, owner_of(nx), nx)
@@ -4075,7 +4196,7 @@ function M.tick(pawn, tm)
   if not q then return end
   if not valid(q.mesh) then pending = nil; return end
   if q.wait > 0 then q.wait = q.wait - 1; return end
-  -- a stage that throws would run again on every tick and block every later cut: it ends the cut instead
+  -- a stage that throws would run again on every frame and block every later cut: it ends the cut instead
   local ok, err = xpcall(enemy.run, debug and debug.traceback or tostring, q.owner, stage_tick, q)
   if not ok then
     if pending == q then pending = nil end
@@ -4392,6 +4513,29 @@ function M.unpin(comp)
   end)
   if not ok then return tostring(err) end
   return read_file(UNPIN) or "no answer"
+end
+
+-- a float field of a loaded DataTable's row, read, and set to v when v is given (UE4SS's Lua can't reach the rows:
+-- sbslice.dll's d command, the field's offset from the row struct's reflection). The value it had, or nil and why.
+-- The row's name has no number (FName "X_1" would be X with number 2). Gets the DLL up itself (gore may be off)
+function M.row_float(dt, row, field, v)
+  native_tick()
+  if native.state ~= "ready" then return nil, "sbslice " .. native.state end
+  local rs = try(function() return dt.RowStruct end)
+  if not valid(rs) then return nil, "no row struct" end
+  local off
+  try(function() rs:ForEachProperty(function(p)
+    if p:GetFName():ToString() == field then off = p:GetOffset_Internal(); return true end
+  end) end)
+  if not off then return nil, "no field " .. field end
+  local idx = try(function() return FName(row):GetComparisonIndex() end)
+  if not idx then return nil, "no name " .. row end
+  local s = string.format("d%x,%x,%x,0,%x", addr(dt), addr(rs), idx, off)
+  if v then s = s .. string.format(",%x", string.unpack("<I4", string.pack("<f", v))) end
+  local r = command(s)
+  local was = r:match("^ok row %x+ (%x+) %x+$")
+  if not was then return nil, r end
+  return string.unpack("<f", string.pack("<I4", tonumber(was, 16) & 0xffffffff))
 end
 
 -- photo mode's activation checks skipped (on) or back (sbslice.dll's photo_cmd: the game turns photo mode down

@@ -454,87 +454,108 @@ end
 -- put back when it is turned off. The monsters' own KnockDownForward / Backward, the revival item's and the QTE's
 -- are left alone. Trees load with their levels: all of them are looked for once (FindAllOf, 50-90 ms: every 3 s it
 -- was a stutter of its own, playtest), then each new one is caught as it is made and swapped a second later, once
--- its asset's names are in
-local DOWN = { Getup = true, FastGetup = true, Down = true, DownFaceUp = true, DownFaceUp_E = true, DownFaceDown = true,
-  DownFaceDown_E = true, KnockDownForward_Eve = true, KnockDownBackward_Eve = true, KnockDownForwardTumbling_Eve = true,
-  KnockDownBackwardTumbling_Eve = true, KnockDownForwardTumblingReady_Eve = true, KnockDownBackwardTumblingReady_Eve = true }
+-- its asset's names are in.
+-- Off, with tune.holdDown (she lies in the data mod's Down_Eve, a name no tree knows), the checks listing Down get
+-- Down_Eve in place of KnockDownForward (a monster's own, never on her), so they wait through it as through Down.
+-- The 11 lone Down checks (EffectAlias, a few bosses: Juggernaut, Scarlet, Tachy, Sawshark) are left as they are
+local DOWN = { Getup = true, FastGetup = true, Down = true, Down_Eve = true, DownFaceUp = true, DownFaceUp_E = true,
+  DownFaceDown = true, DownFaceDown_E = true, KnockDownForward_Eve = true, KnockDownBackward_Eve = true,
+  KnockDownForwardTumbling_Eve = true, KnockDownBackwardTumbling_Eve = true, KnockDownForwardTumblingReady_Eve = true,
+  KnockDownBackwardTumblingReady_Eve = true }
 local NOT_DOWN = "SBGore_NotDown"
--- done: decorator address -> the decorator; orig: its name -> { field -> names }; pending: { obj, t } made since
-local down = { on = false, done = {}, orig = {}, pending = {} }
+-- the swap each mode makes in a decorator's name list: the new name for one, or nil to leave it (all: the list's names)
+local SWAP = {
+  attack = function(nm) return DOWN[nm] and NOT_DOWN end,
+  wait = function(nm, all) return nm == "KnockDownForward" and all.Down and not all.Down_Eve and "Down_Eve" or nil end,
+}
+-- mode: "attack", "wait" or nil (the game's trees); done: decorator address -> the decorator; orig: its name ->
+-- { field -> { was, now } (or a list of those) }; pending: { obj, t } made since
+local down = { mode = nil, done = {}, orig = {}, pending = {} }
 local DOWN_MS = 2
 local function decorators() return try(function() return FindAllOf("SBBTDecorator_SbCheckActorEffect") end) or {} end
-local function swap_names(d, key, field, list, back)
+local function swap_names(d, key, field, list, mode)
   local o = down.orig[key]
+  local swap = SWAP[mode]
   local changed = 0
   if list then
     local arr = try(function() return d[field] end)
     if not arr then return 0 end
+    local names, all = {}, {}
+    try(function() arr:ForEach(function(i, e) local nm = e:get():ToString(); names[i] = nm; all[nm] = true end) end)
     try(function() arr:ForEach(function(i, e)
-      local nm = e:get():ToString()
-      if back then
+      local nm = names[i]
+      if not swap then
         local was = o and o[field] and o[field][i]
-        if was and nm == NOT_DOWN then e:set(FName(was)); changed = changed + 1 end
-      elseif DOWN[nm] then
-        down.orig[key] = down.orig[key] or {}
-        down.orig[key][field] = down.orig[key][field] or {}
-        down.orig[key][field][i] = nm
-        e:set(FName(NOT_DOWN)); changed = changed + 1
+        if was and nm == was[2] then e:set(FName(was[1])); changed = changed + 1 end
+      else
+        local to = nm and swap(nm, all)
+        if to then
+          down.orig[key] = down.orig[key] or {}
+          down.orig[key][field] = down.orig[key][field] or {}
+          down.orig[key][field][i] = { nm, to }
+          e:set(FName(to)); changed = changed + 1
+        end
       end
     end) end)
   else
     local nm = try(function() return d[field]:ToString() end)
-    if back then
+    if not swap then
       local was = o and o[field]
-      if was and nm == NOT_DOWN then try(function() d[field] = FName(was) end); changed = 1 end
-    elseif nm and DOWN[nm] then
-      down.orig[key] = down.orig[key] or {}
-      down.orig[key][field] = nm
-      try(function() d[field] = FName(NOT_DOWN) end); changed = 1
+      if was and nm == was[2] then try(function() d[field] = FName(was[1]) end); changed = 1 end
+    else
+      local to = nm and swap(nm, { [nm] = true })
+      if to then
+        down.orig[key] = down.orig[key] or {}
+        down.orig[key][field] = { nm, to }
+        try(function() d[field] = FName(to) end); changed = 1
+      end
     end
   end
   return changed
 end
-local function attack_down(on, list, quiet)
+local LOG = { attack = "they attack her while she is down", wait = "they wait while she is held down (Down_Eve)" }
+-- mode nil: the ones in list put back as the game has them
+local function attack_down(mode, list, quiet)
   local nd, nn = 0, 0
   for _, d in ipairs(list or decorators()) do
     -- (by address for the ones already seen: a name for each of them every scan was a stutter of its own)
     local a = valid(d) and addr(d)
     -- only the checks on the target (ActorType Target: 1)
-    local key = a and (not on or not down.done[a]) and try(function() return d.ActorType end) == 1 and try(function() return d:GetFullName() end)
-    if a and on then down.done[a] = d end
+    local key = a and (not mode or not down.done[a]) and try(function() return d.ActorType end) == 1 and try(function() return d:GetFullName() end)
+    if a and mode then down.done[a] = d end
     if key then
-      local k = swap_names(d, key, "EffectAlias", false, not on) + swap_names(d, key, "OrCheck_EffectAliasArray", true, not on)
-        + swap_names(d, key, "AndCheck_EffectAliasArray", true, not on)
+      local k = swap_names(d, key, "EffectAlias", false, mode) + swap_names(d, key, "OrCheck_EffectAliasArray", true, mode)
+        + swap_names(d, key, "AndCheck_EffectAliasArray", true, mode)
       if k > 0 then nd, nn = nd + 1, nn + k end
     end
   end
-  if not on then down.done, down.orig = {}, {} end
+  if not mode then down.done, down.orig = {}, {} end
   if nd > 0 and not quiet then
-    log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", on and "they attack her while she is down"
-      or "they wait while she is down again", nn, nd))
+    log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", LOG[mode] or "they wait while she is down again",
+      nn, nd))
   end
   return nd, nn
 end
 local function down_tick()
-  local want = cfg().attackDown == true
-  if want ~= down.on then
-    down.on = want
-    if not want then
+  local mode = cfg().attackDown == true and "attack" or ctx.tune.holdDown ~= false and "wait" or nil
+  if mode ~= down.mode then
+    if down.mode then
       local list = {}
       for _, d in pairs(down.done) do if valid(d) then list[#list + 1] = d end end
-      attack_down(false, list)
+      attack_down(nil, list)
     end
+    down.mode = mode
     down.scanned, down.pending = false, {}
   end
-  if not want then return end
+  if not mode then return end
   if not down.hooked then
     down.hooked = true
     local ok, err = pcall(NotifyOnNewObject, "/Script/SB.SBBTDecorator_SbCheckActorEffect", function(o)
-      if down.on then down.pending[#down.pending + 1] = { o = o, t = os.clock() + 1 } end
+      if down.mode then down.pending[#down.pending + 1] = { o = o, t = os.clock() + 1 } end
     end)
     if not ok then log("enemies: knockdown checks not watched: " .. tostring(err)) end
   end
-  if not down.scanned then down.scanned = true; attack_down(true); return end
+  if not down.scanned then down.scanned = true; attack_down(mode); return end
   -- the new ones a few at a time, at most DOWN_MS a tick: a fight's worth loading at once (an enemy's whole tree) was
   -- 62-127 ms in one tick, at a death too (playtest). Due in order, as they were made
   local t0 = os.clock()
@@ -544,12 +565,12 @@ local function down_tick()
     local a = valid(x.o) and addr(x.o)
     if a then
       down.done[a] = nil
-      local d1, n1 = attack_down(true, { x.o }, true)
+      local d1, n1 = attack_down(mode, { x.o }, true)
       down.nd, down.nn = (down.nd or 0) + d1, (down.nn or 0) + n1
     end
   end
   if #down.pending == 0 and (down.nd or 0) > 0 then
-    log(string.format("they attack her while she is down: %d knockdown checks in %d of the enemies' decision nodes", down.nn, down.nd))
+    log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", LOG[mode], down.nn, down.nd))
     down.nd, down.nn = 0, 0
   end
 end

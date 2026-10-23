@@ -105,6 +105,14 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit.uasset ]] &&
     jobs+=("real waist cut CH_P_EVE_InnerSuit, every helper moved|WAIST=1 ALLMOVED=1|CH_P_EVE_InnerSuit"
            "real waist cut CH_P_EVE_InnerSuit after the left arm, every helper moved|WAIST=1 ARMFIRST=1 ALLMOVED=1|CH_P_EVE_InnerSuit")
+  # InnerSuit1's thigh skin is two sections, one only half way round the leg: both make the cap's rim (the cap covered
+  # half the stump, the seam's cones showing through the rest, playtest screenshot)
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit1.uasset ]] &&
+    jobs+=("real thigh cut CH_P_EVE_InnerSuit1|PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4|CH_P_EVE_InnerSuit1")
+  # the playtest's killing swing through both legs (the right thigh, then the left near the knee along the blade): no
+  # hip skin may follow the drivers the animation points after the flying legs (a spike out of her hips)
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
+    jobs+=("real thigh cuts CH_P_EVE_09, both legs along a blade|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.77 LEGFIRST=Bip001-R-Thigh|CH_P_EVE_09")
   # side panels under her arms tied to both halves by weight, few vertices over the cut: cut with the body, not sent
   # whole with the legs to stand up off her hips (thirty-seventh playtest)
   on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29.uasset ]] &&

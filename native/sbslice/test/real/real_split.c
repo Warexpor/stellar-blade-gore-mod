@@ -34,9 +34,12 @@ int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (v
 static u64 ld_buf[0x900 / 8];
 static u16 *act_buf; static int act_n;   // the LOD's ActiveBoneIndices as the engine built it
 // (stats.c) the DLL looks for ActiveBoneIndices in the LOD's render data: those two are all there is to read
+// and an array the DLL moved the active bones into (the engine's allocator, BONEMAP_ROOM entries)
+static int gm_owns(const void *p);
 int mem_readable(u64 p, u64 n)
 {
-    return (p >= (u64)ld_buf && p + n <= (u64)ld_buf + sizeof ld_buf) || (act_buf && p >= (u64)act_buf && p + n <= (u64)(act_buf + act_n));
+    return (p >= (u64)ld_buf && p + n <= (u64)ld_buf + sizeof ld_buf) || (act_buf && p >= (u64)act_buf && p + n <= (u64)(act_buf + act_n))
+        || (gm_owns((const void *)p) && n <= BONEMAP_ROOM * sizeof(unsigned short));
 }
 #undef CreateThread
 #undef Sleep
@@ -427,6 +430,8 @@ static int gone_sides(const int *g, int ng)
     }
     return limbs;
 }
+// a leg's bone (gore.lua sends the drivers with a leg's cut only)
+static int limb_is_leg(int i) { return strstr(bname[i], "Thigh") || strstr(bname[i], "Calf") || strstr(bname[i], "Foot"); }
 static int limb_of(int i)
 {
     for (int j = i; j >= 0; j = bparent[j]) {
@@ -790,6 +795,8 @@ int main(int argc, char **argv)
             for (int k = 0; k < 3; k++) { aat[k] = ap[k] + (bp[k] - ap[k]) * 0.4f; an[k] = bp[k] - ap[k]; al += an[k] * an[k]; }
             for (int k = 0; k < 3; k++) an[k] /= __builtin_sqrtf(al);
             set_nosink(); other_limbs_nosink(lf);
+            // as gore.lua sends a limb cut: every driver a sink of last resort (fffd), the limbs' gone so far let go (fffc)
+            if (!env_on("OLDDRV")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, gone_sides(&lf, 1) & 12) ? 2 : under_driver(i));
             limbs_comp = (u64)comp_a; ngone = 0; nkeep = 0; nride = 0; ndrop = 0;
             skin_cut((u64)comp_a, 0, lf, aat, an, MODE_CUT, 0, 0, -1);
             printf("leg first: %.200s\n", lastres);
@@ -808,9 +815,19 @@ int main(int argc, char **argv)
         limbs_comp = (u64)comp_a; ngone = 0; nkeep = onbody ? ncape : 0; nride = 0;
         ndrop = with ? ncape : 0;
         memcpy(keep_roots, capes, 4 * ncape); memcpy(drop_roots, capes, 4 * ncape);
+        int arm_s0 = nsinks;
+        // (legs only: an arm's drivers shape the shoulder the cut's rim runs round, posed arm cuts lost half their opening)
+        int gonel[2] = { ua, lf }, limbbits = gone_sides(gonel, lf >= 0 ? 2 : 1) & 12;
+        if (!env_on("OLDDRV") && limb_is_leg(ua)) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, limbbits) ? 2 : under_driver(i));
         skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1);
         printf("arm: %.300s\n", lastres);
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
+        int arm_s1 = nsinks;
+        // the cap's rim (the body side's kept sections, core_rim's last call) goes all the way round: InnerSuit1's thigh
+        // skin is two sections, one half way round, and the cap covered only the other's part (playtest screenshot)
+        int capbins = 0;
+        for (int s = 0; s < MAX_RIM_SECTIONS; s++) if (core_count[s] && core_keep[s]) capbins |= core_bins[s];
+        int capdirs = popcount16(capbins);
         // every sink of the cut on the cut's own limb or off the limbs (the body), none on another arm or leg
         {
             const char *q = strstr(lastres, " sinks=");
@@ -1020,6 +1037,36 @@ int main(int argc, char **argv)
         // triangle stretched from the body to the dropped arm is the outfit hanging off the shoulder (sixteenth playtest)
         int still = -1, flung = -1, hid = 0, still_hid = 0;
         skin_collapse(); // "k", as in game a few frames after the cut
+        // the stump's collapsed seam stays behind its cap: no body-side vertex wholly on sinks lies past the plane into
+        // the limb (an outfit cone stuck out of the cut face, playtest screenshot); the limb's likewise behind its own
+        int conev = 0; float conemax = 0, conelimb = 0;
+        {
+            for (int v = 0; v < NV; v++) {
+                int any = 0, all = 1, onlimb = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) {
+                    any = 1;
+                    // on this cut's own sinks (a cape cut off at its own joint, the other leg's stump have planes of their own)
+                    int mine = 0;
+                    for (int k = arm_s0; k < arm_s1 && !mine; k++) mine = !sinks[k].carry && !sinks[k].proj && sinks[k].bone == ov_a[v].bones[i];
+                    if (!mine) all = 0;
+                    if (armb[ov_a[v].bones[i]] || ov_a[v].bones[i] == ua) onlimb = 1;
+                }
+                if (!any || !all) continue;
+                float x[3]; skin_v(&ov_a[v], v, x);
+                float h = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
+                if (!onlimb && h > conemax) conemax = h;
+                if (onlimb && -h > conelimb) conelimb = -h;
+                if ((!onlimb && h > 0.5f) || (onlimb && h < -0.5f)) {
+                    conev++;
+                    if (env_on("DBGCONE") && conev < 6) {
+                        printf("cone v%d h=%.1f:", v, h);
+                        for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s=%d", bname[ov_a[v].bones[i]], ov_a[v].weights[i]);
+                        printf("\n");
+                    }
+                }
+            }
+            printf("cone: seam past its cap: %d vertices, body side up to %.1f cm into the limb, limb side up to %.1f cm into the body\n", conev, conemax, conelimb);
+        }
         // HEADAFTER=1: the killing swing's head cut right after the arm's (gore.lua's "one swing, then head"): MODE_PLANE
         // on Bip001-Head HEADAT (1.0) of the way from the neck, square to it, as for Eve (her head goes on the face mesh), then
         // collapsed. The arm must still come off clean (a sheet from the shoulder to the dropped arm, playtest)
@@ -1114,16 +1161,175 @@ int main(int argc, char **argv)
                 }
                 free(under);
             }
+            // as in game, where her tick holds every stump's seam on the bone its rim rides each frame ("H")
+            sink_hold(0, 0);
             skin_probe((u64)comp_a, 0);
             sscanf(lastres, "ok stretched=%d", &flung);
             printf("arm probe flung: %.400s\n", lastres);
             char *h = strstr(lastres, "hidden="); if (h) sscanf(h, "hidden=%d", &hid);
             memcpy(space, saved, 48 * NB); free(saved);
+            sink_hold(0, 0);
             hid = flung - hid;
+        }
+        // LEGCONE=1: the cut limb's drivers (Dm-*-Thigh-point and what hangs under them) are what the animation
+        // points after the leg once it has flown off. Skin the stump kept on them comes out as cones.
+        if (env_on("LEGCONE")) {
+            int bits = 0;
+            const char *nm = bname[ua];
+            if (strncmp(nm, "Bip001-", 7) == 0 && (nm[7] == 'L' || nm[7] == 'R')) {
+                int leg = strstr(nm, "Thigh") || strstr(nm, "Calf");
+                bits = (nm[7] == 'L' ? 1 : 2) << (leg ? 2 : 0);
+            }
+            printf("cone: under %s:", bname[bparent[ua]]);
+            for (int i = 0; i < NB; i++) if (bparent[i] == bparent[ua] && strncmp(bname[i], "Bip001", 6))
+                printf(" %s%s%s", bname[i], hasbody[i] ? "/body" : "", nocarry[i] ? "/nocarry" : "");
+            printf("\ncone: under %s:", bname[ua]);
+            for (int i = 0; i < NB; i++) if (bparent[i] == ua && strncmp(bname[i], "Bip001", 6))
+                printf(" %s%s%s", bname[i], hasbody[i] ? "/body" : "", nocarry[i] ? "/nocarry" : "");
+            printf("\ncone: sinks");
+            for (int k = 0; k < nsinks; k++) if (!sinks[k].carry) {
+                printf(" %s%s", bname[sinks[k].bone], side_driver(sinks[k].bone, bits) ? "*" : "");
+                for (int a = bparent[sinks[k].bone]; a >= 0 && strncmp(bname[a], "Bip001", 6); a = bparent[a]) printf("/%s", bname[a]);
+            }
+            printf("\n");
+            int outp = 0, wv = -1; float worst = 0, rad = 0;
+            for (int v = 0; v < NV; v++) {
+                int all = ov_a[v].weights[0] > 0, sk = 0;
+                for (int i = 0; i < MAX_INF && all; i++) if (ov_a[v].weights[i]) {
+                    int on = 0;
+                    for (int k = 0; k < nsinks; k++) if (!sinks[k].carry && sinks[k].bone == ov_a[v].bones[i]) on = 1;
+                    if (!on) all = 0; else sk = 1;
+                }
+                if (!sk || !all) continue;
+                float x[3]; skin_v(&ov_a[v], v, x);
+                float d[3] = { x[0] - at2[0], x[1] - at2[1], x[2] - at2[2] };
+                float h = d[0] * nn[0] + d[1] * nn[1] + d[2] * nn[2];
+                float r = __builtin_sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - h * h);
+                if (r > rad) rad = r;
+                // body seam stuck out through the cap (into the limb), or the limb's seam back out of its stump
+                int limb = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) limb = 1;
+                float poke = limb ? -h : h;
+                if (poke > 0.5f) { outp++; if (poke > worst) { worst = poke; wv = v; } }
+            }
+            printf("cone: per sink");
+            for (int k = 0; k < nsinks; k++) {
+                if (sinks[k].carry) continue;
+                int n = 0; float rh = 0, rr = 0;
+                for (int v = 0; v < NV; v++) {
+                    int w = 0;
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && ov_a[v].bones[i] == sinks[k].bone) w += ov_a[v].weights[i];
+                    if (w < 250) continue;
+                    float x[3]; skin_v(&ov_a[v], v, x);
+                    float d[3] = { x[0] - at2[0], x[1] - at2[1], x[2] - at2[2] };
+                    float h = d[0] * nn[0] + d[1] * nn[1] + d[2] * nn[2];
+                    float off = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - h * h;
+                    rh += h; rr += __builtin_sqrtf(off > 0 ? off : 0); n++;
+                }
+                if (n) printf(" %s n=%d h=%.1f r=%.1f", bname[sinks[k].bone], n, rh / n, rr / n);
+            }
+            printf("\n");
+            printf("cone: %d seam verts poke through the cap (worst %.1f cm, seam %.1f cm off the axis", outp, worst, rad);
+            if (wv >= 0) for (int i = 0; i < MAX_INF; i++) if (ov_a[wv].weights[i]) printf(" %s=%d", bname[ov_a[wv].bones[i]], ov_a[wv].weights[i]);
+            printf(")\n");
+            // each seam's bone turned 25 degrees about its own origin, as a corrective does after the cut
+            {
+                float *sv = malloc(48 * NB), *bx0 = malloc(12 * (size_t)NV);
+                memcpy(sv, space, 48 * NB);
+                for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, bx0 + (size_t)v * 3);
+                for (int k = 0; k < nsinks; k++) {
+                    if (sinks[k].carry || !strncmp(bname[sinks[k].bone], "Bip001", 6)) continue;
+                    int b = sinks[k].bone;
+                    float qv[4] = { 0, __builtin_sinf(0.218f), 0, __builtin_cosf(0.218f) }, *t = space + b * 12, nq[4], org[3] = { t[4], t[5], t[6] };
+                    qmul(qv, t, nq); memcpy(t, nq, 16);
+                    unsigned char *under = calloc(NB, 1);
+                    for (int i = 0; i < NB; i++) under[i] = i == b || (bparent[i] >= 0 && under[bparent[i]]);
+                    for (int i = 0; i < NB; i++) if (under[i] && i != b) {
+                        float *u = space + i * 12, o[4], d[3] = { u[4] - org[0], u[5] - org[1], u[6] - org[2] }, r[3];
+                        qmul(qv, u, o); memcpy(u, o, 16);
+                        quat_rot(qv, d, r); u[4] = org[0] + r[0]; u[5] = org[1] + r[1]; u[6] = org[2] + r[2];
+                    }
+                    free(under);
+                }
+                int mvn = 0, mb = -1; float mw = 0;
+                for (int v = 0; v < NV; v++) {
+                    int on = 0;
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) for (int k = 0; k < nsinks; k++)
+                        if (!sinks[k].carry && sinks[k].bone == ov_a[v].bones[i]) on = 1;
+                    if (!on) continue;
+                    float x[3]; skin_v(&ov_a[v], v, x);
+                    float mv = dist3(x, bx0 + (size_t)v * 3);
+                    if (mv > 1.0f) { mvn++; if (mv > mw) { mw = mv; mb = v; } }
+                }
+                printf("cone: seam swung with its sink: %d verts over 1 cm (worst %.1f cm", mvn, mw);
+                if (mb >= 0) for (int i = 0; i < MAX_INF; i++) if (ov_a[mb].weights[i]) printf(" %s=%d", bname[ov_a[mb].bones[i]], ov_a[mb].weights[i]);
+                printf(")\n");
+                memcpy(space, sv, 48 * NB); free(sv); free(bx0);
+            }
+            float *saved3 = malloc(48 * NB), *bx = malloc(12 * (size_t)NV);
+            memcpy(saved3, space, 48 * NB);
+            unsigned char *drv = calloc(NB, 1);
+            for (int i = 0; i < NB; i++) if (side_driver(i, bits) && !armb[i] && i != ua) drv[i] = 1;
+            int ndrv = 0;
+            for (int i = 0; i < NB; i++) ndrv += drv[i];
+            for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, bx + (size_t)v * 3);
+            float q[4] = { 0.3826834f, 0, 0, 0.9238795f };
+            for (int i = 0; i < NB; i++) if (drv[i]) {
+                float *t = space + i * 12, nq[4]; qmul(q, t, nq); memcpy(t, nq, 16);
+                float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + 40; t[5] = r[1]; t[6] = r[2] - 20;
+            }
+            int follow = 0, fw = -1; float fworst = 0;
+            for (int v = 0; v < NV; v++) {
+                int onlimb = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && (armb[ov_a[v].bones[i]] || ov_a[v].bones[i] == ua)) onlimb = 1;
+                if (onlimb) continue;
+                float x[3]; skin_v(&ov_a[v], v, x);
+                float mv = dist3(x, bx + (size_t)v * 3);
+                if (mv > 0.5f) { follow++; if (mv > fworst) { fworst = mv; fw = v; } }
+            }
+            printf("cone: %d drivers of the cut limb, %d body verts follow them (worst %.1f cm", ndrv, follow, fworst);
+            if (fw >= 0) for (int i = 0; i < MAX_INF; i++) if (ov_a[fw].weights[i]) printf(" %s%s=%d", bname[ov_a[fw].bones[i]], drv[ov_a[fw].bones[i]] ? "*" : "", ov_a[fw].weights[i]);
+            printf(")\n");
+            memcpy(space, saved3, 48 * NB); free(saved3); free(bx); free(drv);
+        }
+        // the drivers of the limbs gone (Dm-L-Thigh-point, the hip's Ab-L-AX2 under it) chase the flying limbs: moved
+        // 40 cm and turned 45 degrees, no body vertex may follow them (a spike out of her hips with both legs off,
+        // playtest: 310 hip vertices partly on them on CH_P_EVE_09). OLDDRV=1: as before, not checked
+        int drvfollow = 0;
+        if (!env_on("OLDDRV")) {
+            float *sv = malloc(48 * NB), *bx = malloc(12 * (size_t)NV);
+            memcpy(sv, space, 48 * NB);
+            unsigned char *drv = calloc(NB, 1);
+            for (int i = 0; i < NB; i++) if (side_driver(i, limbbits) && !armb[i] && i != ua && (lf < 0 || limb_of(i) != limb_of(lf) || limb_of(i) < 0)) drv[i] = 1;
+            for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, bx + (size_t)v * 3);
+            float q[4] = { 0.3826834f, 0, 0, 0.9238795f };
+            for (int i = 0; i < NB; i++) if (drv[i]) {
+                float *t = space + i * 12, nq[4]; qmul(q, t, nq); memcpy(t, nq, 16);
+                float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + 40; t[5] = r[1]; t[6] = r[2] - 20;
+            }
+            int fw = -1; float fworst = 0;
+            for (int v = 0; v < NV; v++) {
+                int onlimb = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) {
+                    int bb = ov_a[v].bones[i];
+                    if (armb[bb] || bb == ua || (lf >= 0 && limb_of(bb) == limb_of(lf) && limb_of(bb) >= 0)) onlimb = 1;
+                }
+                if (onlimb) continue;
+                float x[3]; skin_v(&ov_a[v], v, x);
+                float mv = dist3(x, bx + (size_t)v * 3);
+                if (mv > 0.5f) { drvfollow++; if (mv > fworst) { fworst = mv; fw = v; } }
+            }
+            printf("drivers: %d body verts follow the gone limbs' drivers (worst %.1f cm", drvfollow, fworst);
+            if (fw >= 0) for (int i = 0; i < MAX_INF; i++) if (ov_a[fw].weights[i]) printf(" %s%s=%d", bname[ov_a[fw].bones[i]], drv[ov_a[fw].bones[i]] ? "*" : "", ov_a[fw].weights[i]);
+            printf(")\n");
+            memcpy(space, sv, 48 * NB); free(sv); free(bx); free(drv);
         }
         // not named: part of it goes with the arm (the bug), the rest stays torn off on the body
         int bad = cape < 0 ? 0 : onbody ? cgone > nc / 200 : with ? cgone < nc - nc / 200 : cgone == 0;
         if (rimdirs < 12) { printf("FAIL: the stump's opening covers %d of 16 directions round the arm\n", rimdirs); bad = 1; }
+        if (drvfollow) { printf("FAIL: %d body vertices follow the drivers of the limbs cut off\n", drvfollow); bad = 1; }
+        if (conev) { printf("FAIL: %d collapsed seam vertices stick out past the cut\n", conev); bad = 1; }
+        if (capdirs < 15) { printf("FAIL: the stump's cap rim covers %d of 16 directions round the arm\n", capdirs); bad = 1; }
         // the stub moves with the limb's parent: the parent's subtree (the limb left out) turned 30 degrees about its
         // joint, every vertex wholly on a carrier must turn with it. A calf's stub carried on the spine stayed behind as
         // the thigh swung (twenty-fourth playtest)

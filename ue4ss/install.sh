@@ -18,6 +18,18 @@ OLDS=("$MODS/EveRagdollProbe" "$MODS/Severed") # the script's earlier names
 
 [[ -f $BIN/SB-Win64-Shipping.exe ]] || { echo "game not found at $GAME (set SB_GAME)"; exit 1; }
 
+# every script must load: gore.lua past Lua's 200 locals per chunk loaded as nothing in game, and no cut ran (playtest)
+if [[ ${1:-} != --uninstall* ]] && command -v luac >/dev/null; then
+  for f in "$ROOT"/ue4ss/StellarBladeGore/Scripts/*.lua; do
+    luac -p "$f" || { echo "not installed: $f doesn't load"; exit 1; }
+    # and reads no global but Lua's and UE4SS's: a local used above its definition is a nil global at run time
+    # (gore.lua's seam hold called addr() before it was defined and never ran, playtest)
+    bad=$(luac -l -p "$f" | grep -o 'GETTABUP.*_ENV "[A-Za-z_0-9]*"' | grep -o '"[^"]*"' | tr -d '"' | sort -u |
+      grep -vxE 'assert|collectgarbage|debug|dofile|error|io|ipairs|math|next|os|pairs|pcall|print|rawget|rawset|require|select|setmetatable|getmetatable|string|table|tonumber|tostring|type|xpcall|utf8|FName|FText|LoadAsset|StaticFindObject|StaticConstructObject|FindAllOf|FindFirstOf|FindObject|NotifyOnNewObject|RegisterHook|RegisterKeyBind|ExecuteInGameThread|ExecuteWithDelay|LoopAsync|DumpUSMAP|Key|ModifierKey|EInternalObjectFlags|EObjectFlags|UEHelpers' || true)
+    [[ -z $bad ]] || { echo "not installed: $f reads undefined globals: $bad"; exit 1; }
+  done
+fi
+
 if [[ ${1:-} == --uninstall ]]; then
   # only ours: UE4SS and other mods stay (--uninstall-all removes UE4SS too)
   rm -rf "$NEW" "$MODS/SBSlice" "${OLDS[@]}" && echo "removed StellarBladeGore and SBSlice from $MODS"

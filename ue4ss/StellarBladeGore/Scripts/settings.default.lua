@@ -31,6 +31,7 @@ return {
   cameraTrack = 2.5,           --   how closely it slides after her body, on the level, till you fly it (0: it stays put)
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
+  holdDown = true,             -- knocked down, she stays down till you dodge or jump (false: she gets up on her own)
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill
     attackDown = true,         -- they keep attacking her while she is knocked down (false: they wait, as in the game)

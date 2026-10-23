@@ -22,6 +22,8 @@ return {
                                -- game respawns her after that), so her cut body stays behind the screen; "timer": at
                                -- recoverAfter, under the screen
   screenWait = 4,              --   seconds past recoverAfter a death with no death screen at all (F5's) waits for one
+  holdDown = true,             -- knocked down, she stays down till you dodge or jump (the game's fast getup); false: she
+                               -- gets up on her own after 1 s, as in the game (needs the data pak and sbslice.dll)
   reviveAt = 7,                -- the revive item's screen (she carries one) is held hidden this many seconds into the death
   deathPhoto = true,           -- while a death is held (Shift+F4) the game's photo mode opens (P, or D-pad left + R1),
                                -- which the game turns down while she is dead
@@ -310,6 +312,11 @@ return {
                                -- (the cape's 8 bodies a side hang off the upper arm, the hair's 9 off the head:
                                -- heavier, they pulled both out of their joints)
     accessoryMinKg = 0.05,     -- ...but none lighter than this
+    capeHang = true,           -- in a ragdoll a cape hung off the upper arms (CH_P_EVE_09's two 7-link chains) hangs
+                               -- off the shoulder instead, so the flailing arm doesn't drag and tear it
+    capeKg = 0.12,             -- each of its links then weighs this (they hang off the 1.4 kg clavicle, not the arm)
+    capeSwing = 45,            -- degrees the cape swings at the shoulder, each way
+    capeTwist = 20,            -- degrees it turns about itself there
     buzzLog = false,           -- log which bodies shake over a ragdoll's first 2 s (reads every body every tick)
     bisect = false,            -- buzz hunt: F7 / F11 ragdolls take turns at 1 as it is, 2 plain engine
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s

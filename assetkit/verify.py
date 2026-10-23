@@ -106,10 +106,20 @@ for rel, job in spec["assets"].items():
         continue
     if job["mode"] == "table":
         rows = {r["Name"]: {p["Name"]: p.get("Value") for p in r["Value"]} for r in o["Exports"][0]["Table"]["Data"]}
+        vals = lambda x: [e["Value"] for e in x] if isinstance(x, list) else x
         for row, fields in job["rows"].items():
+            if row not in rows:
+                fail.append(f"{tag}: no row {row}")
+                continue
             for k, want in fields.items():
-                if rows[row][k] != want:
-                    fail.append(f"{tag}: {row}.{k}={rows[row][k]!r}")
+                if k == "_copy":
+                    # a copied row: the fields not set match the row it was copied from
+                    src = rows.get(want) or {}
+                    diff = [f for f in src if f not in fields and json.dumps(src[f]) != json.dumps(rows[row].get(f))]
+                    if diff:
+                        fail.append(f"{tag}: {row} differs from {want} in {diff}")
+                elif vals(rows[row][k]) != want:
+                    fail.append(f"{tag}: {row}.{k}={vals(rows[row][k])!r}")
         vrows = {r["Name"]: r for r in v["Exports"][0]["Table"]["Data"]}
         changed = [r["Name"] for r in o["Exports"][0]["Table"]["Data"]
                    if r["Name"] not in job["rows"] and json.dumps(r) != json.dumps(vrows[r["Name"]])]

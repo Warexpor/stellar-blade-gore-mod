@@ -293,13 +293,39 @@ def retarget(d, mapping):
 
 
 def table(d, rows):
+    """Set fields on DataTable rows. A row spec with "_copy" adds that row, as a copy of the row named, when the
+    table hasn't one of that name yet; a list value sets an array property's elements (names go in the name map)."""
     e = d["Exports"][0]
-    for row in e["Table"]["Data"]:
+    data = e["Table"]["Data"]
+    have = {row["Name"]: row for row in data}
+    for name, fields in rows.items():
+        if "_copy" in fields and name not in have:
+            src = have.get(fields["_copy"]) or die(f"no row {fields['_copy']} to copy")
+            row = copy.deepcopy(src)
+            row["Name"] = name
+            add_name(d, name)
+            data.append(row)
+            have[name] = row
+        if "ID" in fields and any(r["Name"] != name and any(p["Name"] == "ID" and p["Value"] == fields["ID"] for p in r["Value"])
+                                  for r in data):
+            die(f"row {name}: ID {fields['ID']} is taken")
+    for row in data:
         if row["Name"] in rows:
             for p in row["Value"]:
                 if p["Name"] in rows[row["Name"]]:
                     v = rows[row["Name"]][p["Name"]]
+                    if isinstance(v, list):
+                        els = p["Value"] or die(f"row {row['Name']}: {p['Name']} has no element to copy")
+                        p["Value"] = [copy.deepcopy(els[0]) for _ in v]
+                        for i, (el, x) in enumerate(zip(p["Value"], v)):
+                            el["Name"], el["Value"] = str(i), x
+                            if "NamePropertyData" in el["$type"]:
+                                add_name(d, x)
+                        p["IsZero"] = not v
+                        continue
                     p["Value"] = v
+                    if "NamePropertyData" in p["$type"]:
+                        add_name(d, v)
                     p["IsZero"] = v in ("", None) or (isinstance(v, (int, float)) and not isinstance(v, bool) and v == 0)
 
 

@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.2.3"
+local VERSION = "0.2.4"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -464,6 +464,9 @@ end
 -- game's SBPhotoMode_Bypass_ActivationConditionChecks while the death is held, and clears it when it is let go or ends
 -- (screen: the death screen's state, below; made here for the camera's sake)
 local screen = { n = 0, photo = false }
+-- revived where she lay, her movement left off is put back to walking within WINDOW polls (~20 s) after she got up,
+-- once it has been off POLLS (~1.5 s) with her capsule still; at = { since = after, at = capsule }: off since then, there
+screen.stuck = { WINDOW = 600, POLLS = 45, at = nil }
 function screen.allow_photo(on, why)
   if on == screen.photo or not gore or (on and tune.deathPhoto == false) then return end
   local r = gore.photo(on)
@@ -836,7 +839,9 @@ end
 function screen.probe(pawn)
   screen.n = screen.n + 1
   try(function() screen.revive(polls * POLL_MS / 1000 + ahead) end)
-  if active and not saved.manual then screen.hook() end
+  -- (in a death not before 1 s in: registering them took 166 ms, in the frame the killing blow's cut landed,
+  -- playtest; while she plays they're tried too, see the tick)
+  if not active or (not saved.manual and polls * POLL_MS / 1000 + ahead >= 1) then screen.hook() end
   -- only in a death, from 5 s in (the screen fades in at 7)
   if screen.n % 15 ~= 0 or not active or saved.manual or polls * POLL_MS / 1000 + ahead < 5 then return end
   -- gone only once this probe saw it up (the hook saying it came up while the visibility read no screen got her up
@@ -1093,7 +1098,7 @@ local function on_end(pawn, mesh)
     tostring(try(function() return mesh:HasAnyInternalFlags(EInternalObjectFlags.PendingKill) end)),
     tostring(try(function() return mesh:HasAnyFlags(EObjectFlags.RF_BeginDestroyed) end))))
   active, animDeath = false, nil
-  after, lastRecover, respawned = 0, -100, false
+  after, lastRecover, respawned, screen.stuck.at = 0, -100, false, nil
   camera_unfollow()
   capsule_report()
   screen.allow_photo(false, "she got up")
@@ -2215,7 +2220,7 @@ local function hook_once()
     local ok, err = pcall(RegisterHook, path, function(ctx)
       local o = try(function() return ctx:get() end)
       log(string.format("HOOK %s on %s", label, name(o)))
-      if label == "NotifyBP_ReInitActor" and after >= 0 then respawned, after, lastRecover = true, 0, -100 end
+      if label == "NotifyBP_ReInitActor" and after >= 0 then respawned, after, lastRecover, screen.stuck.at = true, 0, -100, nil end
       -- the game respawning her while she is still down (its death screen's button never seen): got up at once, not
       -- broken and with her weapon on the floor for the 1-2 s till the fallback timer (playtest)
       if active and label == "NotifyBP_ReInitActor" then screen.respawn = true end
@@ -2389,15 +2394,26 @@ end
 -- on while the step that lays the physics pose over it (after physics, which a pause skips) doesn't. A whole ragdoll
 -- (a death) kept its pose. So while the game is paused with a piece on her and her pelvis animated, her mesh stops
 -- ticking: her own tick runs before her mesh's, and checks every frame for that (a cheap engine call; sbslice's state
--- is a file round trip). It ticks again once the pause ends
+-- is a file round trip). It ticks again once the pause ends.
+-- Photo mode isn't a pause the engine knows (IsGamePaused stayed false, the freeze never came and her head pulled back
+-- to her neck, playtest): what tells it the frame it opens is the view going to photo mode's own pawn (its class
+-- looked at only when the view target changes), and sbslice's state read every 0.5 s backs that
 function screen.photo_freeze(pawn, mesh)
   local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
   local paused = valid(gs) and try(function() return gs:IsGamePaused(pawn) end)
+  local vt = try(function() return pawn.Controller.PlayerCameraManager.ViewTarget.Target end)
+  local va = valid(vt) and vt:GetAddress() or 0
+  if va ~= screen.vtAddr then
+    screen.vtAddr = va
+    screen.vtPhoto = va ~= 0 and (try(function() return vt:GetClass():GetFName():ToString() end) or ""):find("PhotoMode") ~= nil
+  end
+  paused = paused or screen.vtPhoto or screen.photoOn
   local fz = screen.frozenMesh
   if paused and not fz and not try(function() return mesh:IsSimulatingPhysics(PELVIS) end) then
     try(function() mesh:SetComponentTickEnabled(false) end)
     screen.frozenMesh = mesh:GetAddress()
-    log("game paused with a piece simulating on her alive: her mesh stops ticking (its animation would pull the piece back)")
+    log(string.format("game paused (%s) with a piece simulating on her alive: her mesh stops ticking (its animation would pull the piece back)",
+      screen.vtPhoto and "photo mode's view" or screen.photoOn and "photo mode" or "paused"))
   elseif not paused and fz then
     screen.frozenMesh = nil
     if fz == mesh:GetAddress() then try(function() mesh:SetComponentTickEnabled(true) end) end
@@ -2437,6 +2453,33 @@ function screen.photo_guard(pawn, mesh)
   return false
 end
 
+-- tune.holdDown: knocked down, she stays on the floor till the player gets her up (dodge or jump: the game's fast
+-- getup). The data mod chains her tumbling knockdowns into Down_Eve, a copy of the shared Down (1 s, then Getup)
+-- lasting held.LIFE s; off, its LifeTime in the loaded EffectTable goes back to Down's 1 s (gore.row_float). Looked at
+-- every few seconds and on a change of the setting; written once per change (`hold down:` in the log)
+screen.held = { key = nil, next = 0, LIFE = 100000, TABLE = "/Game/Local/Data/EffectTable.EffectTable" }
+function screen.held.tick()
+  local held = screen.held
+  local want = tune.holdDown ~= false
+  local now = os.clock()
+  if want == held.want and now < held.next then return end
+  held.want, held.next = want, now + 5
+  if not gore then return end
+  local dt = try(function() return StaticFindObject(held.TABLE) end)
+  if not valid(dt) then return end
+  local key = string.format("%s %x", tostring(want), dt:GetAddress())
+  if key == held.key then return end
+  local was, why = gore.row_float(dt, "Down_Eve", "LifeTime", want and held.LIFE or 1)
+  -- the DLL still starting: again next time
+  if not was and (why == "sbslice waiting" or why == "sbslice init") then held.next = 0; return end
+  held.key = key
+  if not was then
+    log("hold down: Down_Eve not set (" .. tostring(why) .. "): the data pak's 100000 s stands if it has the row "
+      .. "(\"err no such row\": the pak is missing or another mod's EffectTable wins, knockdowns stay the game's)")
+  elseif was ~= held.LIFE and was ~= 1 then log(string.format("hold down: Down_Eve's LifeTime was %g, not the data mod's (another mod's EffectTable?); now %g", was, want and held.LIFE or 1))
+  else log(string.format("hold down %s: Down_Eve lasts %g s (was %g)", want and "on" or "off", want and held.LIFE or 1, was)) end
+end
+
 local function tick()
   for i = #tp, 1, -1 do tp[i] = nil end
   tp.t = os.clock()
@@ -2456,6 +2499,7 @@ local function tick()
   tp.mark("find")
   try(function() screen.probe(pawn) end)
   tp.mark("death screen")
+  screen.held.tick()
   if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh, tp.mark) end
   tp.mark("enemies")
   if gore then
@@ -2575,12 +2619,22 @@ local function tick()
     if respawned and after == 5 then log("after respawn: unpin(" .. reattach_transform(mesh) .. ")") end
     if chatty and after % 10 == 0 then watch(pawn, mesh) end
     if chatty and after % 60 == 0 then log("ragdoll state after: " .. ragdoll_state(pawn)) end
-    -- revived where she lay (the item): no respawn comes, and the death left her movement off (MOVE_None)
-    if not respawned and after == 90 then -- ~3 s after she got up
+    -- revived where she lay (the item): the death left her movement off (MOVE_None), and she walked in place with
+    -- only the camera moving (reported). Checked once 3 s after she got up, it missed when the game turned it off
+    -- again later or its respawn event came with the revive. Now any time in screen.stuck.WINDOW after she got up:
+    -- off for screen.stuck.POLLS with her capsule still (a skill or a show that moves her with movement off is left
+    -- alone)
+    if after < screen.stuck.WINDOW then
       local mm = try(function() return pawn.CharacterMovement.MovementMode end)
-      if mm == 0 then
+      local c = mm == 0 and try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+      local st = screen.stuck.at
+      if not c then screen.stuck.at = nil
+      elseif not st or dist(c, st.at) > 5 or after < st.since then screen.stuck.at = { since = after, at = c }
+      elseif after - st.since >= screen.stuck.POLLS then
+        screen.stuck.at = nil
         local ok = try(function() pawn.CharacterMovement:SetMovementMode(1, 0); return true end)
-        log("revived in place: her movement was off, now walking" .. (ok and "" or " (failed)"))
+        log(string.format("revived in place: her movement was off for %.1f s, %.1f s after she got up%s, now walking%s",
+          screen.stuck.POLLS * POLL_MS / 1000, after * POLL_MS / 1000, respawned and " (respawned)" or "", ok and "" or " (failed)"))
       end
     end
     if not attached_to_capsule(pawn, mesh) and after - lastRecover >= 30 then
@@ -2704,6 +2758,14 @@ local function game_tick(ctx)
   if screen.watchFreeze then
     local mesh = try(function() return cachedPawn.Mesh end)
     if valid(mesh) then pcall(screen.photo_freeze, cachedPawn, mesh) end
+  end
+  -- every frame, ahead of her mesh tick: a stump's seam point is rewritten onto the bone its rim rides, or a twist
+  -- helper poses it out into a cone. The poll below skips frames, and one is enough
+  if gore and gore.hold_seams then gore.hold_seams() end
+  -- and a cut's stages, a frame each (on the poll below the piece came off 350 ms after the blow)
+  if gore and gore.pump and not screen.photoOn then
+    local ok, err = pcall(gore.pump)
+    if not ok then log("cut stage failed: " .. tostring(err)) end
   end
   if now < nextTick then return end
   nextTick = now + POLL_MS / 1000
