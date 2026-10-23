@@ -429,7 +429,7 @@ function M.kill_nearest(pawn)
   if not her then return end
   local best, bd, ba
   for a, e in pairs(known) do
-    local p = not e.dead and valid(e.mesh) and bone_loc(e.mesh, "Bip001-Pelvis")
+    local p = not e.dead and ctx.held(e.k) and valid(e.mesh) and bone_loc(e.mesh, "Bip001-Pelvis")
     local d = p and len(sub(p, her))
     if d and d < (cfg().reach or 2500) and (not bd or d < bd) then best, bd, ba = e, d, a end
   end
@@ -522,7 +522,8 @@ local function attack_down(mode, list, quiet)
     local a = valid(d) and addr(d)
     -- only the checks on the target (ActorType Target: 1)
     local key = a and (not mode or not down.done[a]) and try(function() return d.ActorType end) == 1 and try(function() return d:GetFullName() end)
-    if a and mode then down.done[a] = d end
+    -- (kept by its path: put back only while the game still has it, an enemy's tree goes with it, see main.lua held)
+    if a and mode and not down.done[a] then down.done[a] = key and ctx.keep(d) or true end
     if key then
       local k = swap_names(d, key, "EffectAlias", false, mode) + swap_names(d, key, "OrCheck_EffectAliasArray", true, mode)
         + swap_names(d, key, "AndCheck_EffectAliasArray", true, mode)
@@ -541,7 +542,7 @@ local function down_tick()
   if mode ~= down.mode then
     if down.mode then
       local list = {}
-      for _, d in pairs(down.done) do if valid(d) then list[#list + 1] = d end end
+      for _, k in pairs(down.done) do if k ~= true and ctx.held(k) then list[#list + 1] = k.obj end end
       attack_down(nil, list)
     end
     down.mode = mode
@@ -599,6 +600,7 @@ function M.tick(pawn, mesh, tm)
       if e and e.obj ~= c.obj and addr(e.obj) ~= c.addr then e = nil end
       -- (an actor being destroyed stays in the list until the next GC: a removed spawn was adopted again every tick)
       if not e and not dying(c.obj) then e = adopt(c.obj, c.addr, c.cls, k) end
+      if e then e.k = c.k end
       if e then
         if try(function() return e.obj.bActorIsBeingDestroyed end) ~= false then
           gone(c.addr, e, "destroyed", "destroyed")
@@ -663,7 +665,7 @@ end
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()
   known, mine, expect, hand = {}, {}, {}, {}
-  down.done, down.next = {}, 0
+  down.done, down.next, down.pending = {}, 0, {}
   freed = false
 end
 

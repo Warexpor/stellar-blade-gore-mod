@@ -177,7 +177,7 @@ local self_saved = nil      -- { mesh, resp }: her PhysicsBody response before a
 -- cur: the enemy the code running now cuts (nil: Eve). Their mesh assets are shared by every enemy of the kind, so
 -- their sinks are put back once the last cut corpse of a kind is gone (see M.enemy_gone). faced: enemies built like
 -- Eve (the Airborne Squad: her skeleton, a separate face mesh), cut with her rules: the face goes with the head
-local enemy = { owned = setmetatable({}, { __mode = "k" }), cur = nil, faced = {} }
+local enemy = { owned = setmetatable({}, { __mode = "k" }), kept = setmetatable({}, { __mode = "k" }), cur = nil, faced = {} }
 local TICK_S = 0.033 -- main.lua polls every 33 ms
 -- the main bodies of a cut-off piece, below its root bone (side left out)
 local PIECE_CHAIN = { Thigh = { "Thigh", "Calf", "Foot" }, Calf = { "Calf", "Foot" }, UpperArm = { "UpperArm", "Forearm", "Hand" },
@@ -4565,13 +4565,26 @@ function enemy.run(owner, fn, ...)
   for i, l in ipairs(lists) do n0[i] = #l end
   local r = table.pack(pcall(fn, ...))
   for i, l in ipairs(lists) do
-    for k = n0[i] + 1, #l do if enemy.owned[l[k]] == nil then enemy.owned[l[k]] = owner or false end end
+    for k = n0[i] + 1, #l do
+      local x = l[k]
+      if enemy.owned[x] == nil then
+        enemy.owned[x] = owner or false
+        -- an object on an enemy goes with its actor, freed by the game unseen: kept to be checked safely (enemy.alive)
+        if owner and type(x) == "userdata" then enemy.kept[x] = ctx.keep(x) end
+      end
+    end
   end
   enemy.cur = prev
   if not r[1] then error(r[2], 0) end
   return table.unpack(r, 2, r.n)
 end
 local function owner_of(x) return enemy.owned[x] or nil end
+-- valid() for an object tagged to an enemy: never read once the game may have freed it (main.lua held)
+function enemy.alive(x)
+  local k = enemy.kept[x]
+  if k then return ctx.held(k) end
+  return not enemy.owned[x] and valid(x)
+end
 
 local stage_step
 local function stage_tick(q)
@@ -5072,16 +5085,16 @@ function M.enemy_gone(owner, mesh, how)
     return keep
   end
   spawned = drop(spawned, function(c)
-    if not lost and valid(c) then c:Deactivate(); c:K2_DestroyComponent(c); nf = nf + 1 end
+    if not lost and enemy.alive(c) then c:Deactivate(); c:K2_DestroyComponent(c); nf = nf + 1 end
   end)
   bleeds = drop(bleeds)
   later = drop(later)
   queued = drop(queued)
   hid = drop(hid)
   trackers = drop(trackers)
-  caps = drop(caps, function(a) if valid(a) then a:K2_DestroyActor(); nc = nc + 1 end end)
-  hung = drop(hung, function(pc) if not lost and valid(pc) then pc:BreakConstraint(); pc:K2_DestroyComponent(pc) end end)
-  decals = drop(decals, function(d) if valid(d) then d:K2_DestroyComponent(d) end end)
+  caps = drop(caps, function(a) if enemy.alive(a) then a:K2_DestroyActor(); nc = nc + 1 end end)
+  hung = drop(hung, function(pc) if not lost and enemy.alive(pc) then pc:BreakConstraint(); pc:K2_DestroyComponent(pc) end end)
+  decals = drop(decals, function(d) if enemy.alive(d) then d:K2_DestroyComponent(d) end end)
   no_decals = drop(no_decals, function(e)
     if not gone and valid(e.comp) and addr(e.comp) == e.addr then e.comp:SetReceivesDecals(e.was ~= false) end
   end)
@@ -5137,8 +5150,8 @@ function M.enemy_fading(owner)
     end
     return keep
   end
-  caps = drop(caps, function(a) if valid(a) then a:K2_DestroyActor(); nc = nc + 1 end end)
-  spawned = drop(spawned, function(c) if valid(c) then c:Deactivate(); c:K2_DestroyComponent(c); nf = nf + 1 end end)
+  caps = drop(caps, function(a) if enemy.alive(a) then a:K2_DestroyActor(); nc = nc + 1 end end)
+  spawned = drop(spawned, function(c) if enemy.alive(c) then c:Deactivate(); c:K2_DestroyComponent(c); nf = nf + 1 end end)
   bleeds = drop(bleeds)
   trackers = drop(trackers)
   log(string.format("enemy %x dissolving: %d caps, %d effects removed", owner, nc, nf))

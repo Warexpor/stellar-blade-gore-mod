@@ -82,6 +82,21 @@ local XYZ, PYR = { "X", "Y", "Z" }, { "Pitch", "Yaw", "Roll" }
 local cachedPawn, pawnAddr, pawnSeen = nil, nil, 0
 local tune = {}
 local goreCtx = { tune = tune }
+-- an object held past this tick: its address and path, taken while it is alive. Garbage collection frees an object's
+-- memory, and IsValid on a freed one reads it and crashes UE4SS (no pcall catches that: a death crashed so once the
+-- game freed a killed enemy, 0.3.0). held() asks the game's object name table, which drops an object as it is freed,
+-- and touches the object only while its path still leads to that address
+function goreCtx.keep(o)
+  local a = o and try(function() return o:GetAddress() end)
+  local full = a and try(function() return o:GetFullName() end)
+  local path = full and full:match("^%S+ (.+)$")
+  return path and { obj = o, addr = a, path = path } or nil
+end
+function goreCtx.held(k)
+  if not k then return false end
+  local o = try(function() return StaticFindObject(k.path) end)
+  return o ~= nil and try(function() return o:GetAddress() end) == k.addr and valid(k.obj)
+end
 -- may an asset be loaded from the pak now (LoadAsset)? Not from her getting up in a death till the new level's Eve has
 -- ticked a while: a load on the game thread then waited on the respawn's own loading, whose new objects wait on the
 -- Lua lock that thread holds (NotifyOnNewObject: widgets, characters), an endless loading screen (Nexus report).
@@ -1525,7 +1540,8 @@ local chars, charsSeeded = {}, false
 local function add_char(o)
   local ad = try(function() return o:GetAddress() end)
   local cls = ad and try(function() return o:GetClass():GetFName():ToString() end)
-  if cls then chars[ad] = { obj = o, cls = cls } end
+  local k = cls and goreCtx.keep(o)
+  if k then chars[ad] = { obj = o, cls = cls, k = k } end
 end
 do
   local ok, err = pcall(NotifyOnNewObject, "/Script/SB.SBCharacter", function(o) add_char(o) end)
@@ -1538,8 +1554,8 @@ local function live_chars()
   end
   local out = {}
   for ad, e in pairs(chars) do
-    if valid(e.obj) and try(function() return e.obj:GetClass():GetFName():ToString() end) == e.cls then
-      out[#out + 1] = { obj = e.obj, addr = ad, cls = e.cls }
+    if goreCtx.held(e.k) then
+      out[#out + 1] = { obj = e.obj, addr = ad, cls = e.cls, k = e.k }
     else
       chars[ad] = nil
     end
@@ -1571,7 +1587,7 @@ function sw.near(mesh, within, most)
       and try(function() return a.bHidden end) ~= true then
       local l = try(function() return vof(a:K2_GetActorLocation()) end)
       local d = dist(l, at)
-      if l and d >= 0 and d < reach then out[#out + 1] = { actor = a, loc = l, d = d, cls = e.cls, addr = e.addr } end
+      if l and d >= 0 and d < reach then out[#out + 1] = { actor = a, loc = l, d = d, cls = e.cls, addr = e.addr, k = e.k } end
     end
   end
   table.sort(out, function(x, y) return x.d < y.d end)
@@ -1679,7 +1695,7 @@ local function swing_weapons(actor)
           local nm = try(function() return (c.SkeletalMesh or c.StaticMesh):GetName() end)
             or try(function() return c:GetName() end) or "weapon"
           local sock = try(function() return c:GetAttachSocketName():ToString() end) or "?"
-          out[#out + 1] = { comp = c, o = b.o, ax = ax, name = nm, socket = sock, cm = 2 * len(ax) }
+          out[#out + 1] = { comp = c, k = goreCtx.keep(c), o = b.o, ax = ax, name = nm, socket = sock, cm = 2 * len(ax) }
         end
       end
     end)
@@ -1710,7 +1726,7 @@ local function track_swing(pawn, mesh)
         local m = try(function() return a.actor.Mesh end)
         if valid(m) and a.cls then
           S = sw.state()
-          S.addr, S.actor, S.mesh, S.who = a.addr, a.actor, m, name(a.actor)
+          S.addr, S.actor, S.mesh, S.who, S.k = a.addr, a.actor, m, name(a.actor), a.k
           S.bones = swing_bones(m, a.cls)
           S.weapons = swing_weapons(a.actor)
           local ws = {}
@@ -1730,14 +1746,14 @@ local function track_swing(pawn, mesh)
   local keep = g.swingWindow or 0.6
   for i = #sw.list, 1, -1 do
     local S = sw.list[i]
-    if try(function() return S.actor.bActorIsBeingDestroyed end) ~= false then
+    if not goreCtx.held(S.k) or try(function() return S.actor.bActorIsBeingDestroyed end) ~= false then
       table.remove(sw.list, i)
       if swing == S then swing = sw.list[1] or sw.state() end
     elseif (S.bones and #S.bones > 0) or (S.weapons and #S.weapons > 0) then
       local s = { t = now, p = {}, w = {}, pose = pose }
       for k, b in ipairs(S.bones or {}) do s.p[k] = try(function() return vof(S.mesh:GetSocketLocation(FName(b))) end) end
       for k, w in ipairs(S.weapons or {}) do
-        if valid(w.comp) then
+        if goreCtx.held(w.k) then
           local a = comp_point(w.comp, { X = w.o.X - w.ax.X, Y = w.o.Y - w.ax.Y, Z = w.o.Z - w.ax.Z })
           local b = comp_point(w.comp, { X = w.o.X + w.ax.X, Y = w.o.Y + w.ax.Y, Z = w.o.Z + w.ax.Z })
           if a and b then s.w[k] = { a = a, b = b } end
@@ -1756,7 +1772,7 @@ function sw.of(swing, mesh)
   local g = tune.gore or {}
   local h = swing.hist
   -- an old trail (the enemy gone, or a death that started without it) is no swing
-  if #h < 3 or os.clock() - h[#h].t > (g.swingWindow or 0.6) then return nil end
+  if #h < 3 or os.clock() - h[#h].t > (g.swingWindow or 0.6) or not goreCtx.held(swing.k) then return nil end
   local fwd = try(function() return vof(swing.actor:GetActorForwardVector()) end)
   -- a weapon mesh's blade: the step (fast enough) whose sweep went through her, the plane through the blade line along
   -- its motion. The fastest step alone was the pull-back after a blocked blow: its plane passed 52 cm beside her, was
@@ -2099,7 +2115,7 @@ local function hits_after(pawn, mesh)
   ah.armed, ah.n = false, ah.n + 1
   -- the plane: the arc through the last three samples, else the step and the enemy's forward
   local dir = unit(sub(best.q, best.p))
-  local fwd = try(function() return vof(swing.actor:GetActorForwardVector()) end)
+  local fwd = goreCtx.held(swing.k) and try(function() return vof(swing.actor:GetActorForwardVector()) end)
   local n, how
   local cb = best.blade and dir and cross(best.blade, dir)
   if cb and len(cb) > 0.3 then n, how = unit(cb), "blade " .. best.name end
