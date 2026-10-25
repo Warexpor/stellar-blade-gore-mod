@@ -9,6 +9,7 @@ CloseHandle
 DeleteFileW
 GetModuleHandleW
 GetModuleHandleExW
+GetModuleFileNameW
 DisableThreadLibraryCalls
 GetProcessHeap
 HeapAlloc

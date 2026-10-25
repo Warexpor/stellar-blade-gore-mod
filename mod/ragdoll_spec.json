@@ -204,45 +204,6 @@
       "length": 2.1,
       "rm": null
     },
-    "Local/Data/CharacterDeadTable": {
-      "mode": "table",
-      "rows": {
-        "Player": {
-          "StandDeadShow": "CH_P_EVE_01/Basic/P_Eve_Dead",
-          "Step0DeadShow": "CH_P_EVE_01/Basic/P_Eve_Dead2",
-          "Step1DeadShow": "CH_P_EVE_01/Basic/P_Eve_Dead3",
-          "Step2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step2",
-          "Step3DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Step3",
-          "Explosion1DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion1",
-          "Explosion2DeadShow": "CH_P_EVE_01/Ragdoll/EveRD_Explosion2",
-          "AirborneDeadShow": "CH_P_EVE_01/Basic/P_Eve_AirDead",
-          "DefaultDeadUIDelayTime": 7.0,
-          "StandDeadUIDelayTime": 7.0,
-          "Step0DeadUIDelayTime": 7.0,
-          "Step1DeadUIDelayTime": 7.0,
-          "Step2DeadUIDelayTime": 7.0,
-          "Step3DeadUIDelayTime": 7.0,
-          "Explosion1DeadUIDelayTime": 7.0,
-          "Explosion2DeadUIDelayTime": 7.0,
-          "Custom2DeadUIDelayTime": 7.0,
-          "Custom3DeadUIDelayTime": 7.0,
-          "Custom5DeadUIDelayTime": 7.0,
-          "Custom9DeadUIDelayTime": 7.0,
-          "DownDeadUIDelayTime": 7.0,
-          "AirborneDeadUIDelayTime": 7.0
-        }
-      }
-    },
-    "Local/Data/EffectTable": {
-      "_comment": "Knocked down, she stays down till the player gets her up (dodge or jump: the game's fast getup, which the Down state allows). Her tumbling knockdowns chain into Down_Eve, a copy of the shared Down (1 s on the floor, then Getup) lasting 100000 s; main.lua writes its LifeTime back to 1 in game when holdDown is off (sbslice.dll's d command). The monsters keep Down",
-      "mode": "table",
-      "rows": {
-        "Down_Eve": { "_copy": "Down", "ID": 3009001, "LifeTime": 100000.0 },
-        "KnockDownForwardTumbling_Eve": { "ChainEffectAliasArray": ["Down_Eve"] },
-        "KnockDownBackwardTumbling_Eve": { "ChainEffectAliasArray": ["Down_Eve"] },
-        "KnockDownTumbling_Eve_EffectArea": { "ChainEffectAliasArray": ["Down_Eve"] }
-      }
-    },
     "Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3": {
       "_comment": "Eve's face (CH_P_EVE_01_Blueprint's face slot), extracted for the face cut tests. Not shipped: sbslice.dll keeps its LOD0 CPU copy at load (a beheading moves all of it onto the head bone), and a vanilla copy in the pak overrode face mods and stopped the game at launch",
       "mode": "extract"
@@ -330,7 +291,7 @@
       "mode": "extract"
     }
   },
-  "_comment_ui_delay": "Seconds before the death/respawn UI appears, so the ragdoll is visible. Vanilla is 0 for these (desert hole uses 2.5).",
+  "_comment_ui_delay": "No DataTable in the pak (CharacterDeadTable, EffectTable): loaded last, a whole vanilla-based copy overrode every other mod's rows. tables.lua changes only the rows it needs in game (sbslice.dll D/N/A): the Player death shows and revive screen delay, and Down_Eve.",
   "clone_defaults": {
     "bIgnorePlayer": false,
     "bOverrideHitBone": true,

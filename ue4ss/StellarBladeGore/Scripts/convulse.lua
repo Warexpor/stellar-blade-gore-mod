@@ -70,6 +70,11 @@ for _, s in ipairs({ "L", "R" }) do
 end
 -- her head (the neck's struggle): it simulates on its own, a beheading takes it
 CHAIN["Bip001-Head"], CUTS["Bip001-Head"] = { "Bip001-Head" }, { "Bip001-Head" }
+-- a waist cut whose legs play the fall on (gore.lua's torsoLegs): the arms and head went with the upper body, flying
+-- in the ragdoll, and a twitch's blend back onto the animation would have snapped them onto her legs' fall
+for _, b in ipairs({ "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck" }) do
+  for root, list in pairs(CUTS) do if not root:find("Calf") and not root:find("Foot") then list[#list + 1] = b end end
+end
 -- the chain a hand's or foot's is part of (it simulates with the forearm's or calf's)
 local INNER = {}
 for _, s in ipairs({ "L", "R" }) do
@@ -149,8 +154,10 @@ local function frame(comp)
   return { up = up, right = r, front = cross(r, up) }
 end
 
--- the angular velocity direction that turns bone b's far end towards `to`, or nil
-local function axis_of(comp, f, b, to)
+-- the angular velocity direction that turns bone b's far end towards `to`, or nil. floor: an animated death's chain,
+-- whose bodies don't collide with the floor: a far end sent down into it goes the other way (her head, strained back
+-- lying face up or front lying face down, sank into the floor and snapped back up onto the animation, playtest)
+local function axis_of(comp, f, b, to, floor)
   local j = J[b]
   if not j then return nil end
   local at, par = loc(comp, b), loc(comp, j[1])
@@ -164,6 +171,7 @@ local function axis_of(comp, f, b, to)
     local side = b:find("%-R%-") and 1 or b:find("%-L%-") and -1 or (math.random() < 0.5 and 1 or -1)
     t = ({ front = f.front, back = scale(f.front, -1), up = f.up, out = scale(f.right, side), ["in"] = scale(f.right, -side) })[to]
   end
+  if floor and t and t.Z < -0.35 then t = scale(t, -1) end
   local a = t and norm(cross(d, t))
   if not a then return nil end
   -- about the joint's own hinge when the movement runs about it
@@ -277,7 +285,7 @@ local function pulse(comp, f, b, to, amp, dur, at, anim, trem, hz, ax)
     if open then chain_open(open, at + dur)
     elseif not simulating(comp, b) and not chain_open(b, at + dur) then return false end
   elseif r and not r.live(comp, b) then return false end
-  local a = ax or axis_of(comp, f, b, to)
+  local a = ax or axis_of(comp, f, b, to, anim)
   if not a then return false end
   local p = J[b][1]
   local mass = r and r.MASS or {}

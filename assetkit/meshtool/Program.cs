@@ -3,6 +3,8 @@
 //   gltf <legacy_root> <usmap> <package> <out_dir>    glTF 2.0 (binary) for Blender
 //   morphs <legacy_root> <usmap> <package> <out.json>  morph target deltas (LOD0)
 //   bones <legacy_root> <usmap> - <out_dir>           reference skeletons only, package paths on stdin, <out_dir>/<package>.json
+//   tex <legacy_root> <usmap> - <out_dir>             textures decoded, package paths on stdin: <out_dir>/<name>.raw, a
+//                                                     "<width> <height> <pixel format>" line, then the pixels
 // <package> is the path under <legacy_root> without extension, e.g. SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30
 using System.Text.Json;
 using CUE4Parse.FileProvider;
@@ -10,6 +12,7 @@ using CUE4Parse.MappingsProvider.Usmap;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion;
+using CUE4Parse_Conversion.Textures;
 using CUE4Parse_Conversion.Options;
 
 if (args.Length != 5) { Console.Error.WriteLine("usage: meshtool dump|gltf <legacy_root> <usmap> <package> <out>"); return 2; }
@@ -19,7 +22,7 @@ var provider = new DefaultFileProvider(root, SearchOption.AllDirectories, true, 
 provider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmap);
 provider.Initialize();
 provider.Mount();
-if (cmd == "ls") { foreach (var k in provider.Files.Keys.Take(20)) Console.WriteLine(k); return 0; }
+if (cmd == "ls") { foreach (var k in provider.Files.Keys.Where(k => k.Contains(pkg, StringComparison.OrdinalIgnoreCase)).Take(20)) Console.WriteLine(k); return 0; }
 if (cmd == "bones")
 {
     string? p;
@@ -30,6 +33,46 @@ if (cmd == "bones")
         var o = Path.Combine(outp, p + ".json");
         Directory.CreateDirectory(Path.GetDirectoryName(o)!);
         await File.WriteAllTextAsync(o, JsonSerializer.Serialize(new { package = p, bones = Bones(m.ReferenceSkeleton) }));
+    }
+    return 0;
+}
+
+if (cmd == "vcolors")
+{
+    // vcolors <legacy_root> <usmap> <package> -: per LOD0 section, its vertex colours (min, mean, max of R G B A)
+    var sm = provider.LoadPackageObject<USkeletalMesh>($"{pkg}.{Path.GetFileName(pkg)}");
+    var l0 = sm.LODModels![0];
+    var cols = l0.ColorVertexBuffer?.Data ?? [];
+    Console.WriteLine($"{cols.Length} vertex colours, {l0.VertexBufferGPUSkin.GetVertexCount()} vertices");
+    foreach (var sec in l0.Sections)
+    {
+        if (cols.Length == 0) break;
+        int[] mn = { 255, 255, 255, 255 }, mx = { 0, 0, 0, 0 }; double[] sum = new double[4]; int c = 0;
+        for (var v = (int)sec.BaseVertexIndex; v < sec.BaseVertexIndex + sec.NumVertices && v < cols.Length; v++)
+        {
+            var k = cols[v]; int[] q = { k.R, k.G, k.B, k.A };
+            for (var j = 0; j < 4; j++) { mn[j] = Math.Min(mn[j], q[j]); mx[j] = Math.Max(mx[j], q[j]); sum[j] += q[j]; }
+            c++;
+        }
+        Console.WriteLine($"section material {sec.MaterialIndex}: {c} verts, min {string.Join(",", mn)} mean {string.Join(",", sum.Select(x => (int)(x / Math.Max(c, 1))))} max {string.Join(",", mx)}");
+    }
+    return 0;
+}
+
+if (cmd == "tex")
+{
+    string? p;
+    Directory.CreateDirectory(outp);
+    while ((p = Console.ReadLine()) != null)
+    {
+        p = p.Trim(); if (p.Length == 0) continue;
+        var t = provider.LoadPackageObject<CUE4Parse.UE4.Assets.Exports.Texture.UTexture2D>($"{p}.{Path.GetFileName(p)}");
+        var c = t.Decode();
+        if (c == null) { Console.Error.WriteLine($"{p}: not decoded"); continue; }
+        using var f = File.Create(Path.Combine(outp, Path.GetFileName(p) + ".raw"));
+        f.Write(System.Text.Encoding.ASCII.GetBytes($"{c.Width} {c.Height} {c.PixelFormat}\n"));
+        f.Write(c.Data);
+        Console.WriteLine($"{p} {c.Width}x{c.Height} {c.PixelFormat}");
     }
     return 0;
 }

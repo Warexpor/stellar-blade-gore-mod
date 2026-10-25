@@ -61,11 +61,12 @@ for d in "${OLDS[@]}" "$NEW"; do
   done
   [[ -f $d/usmap.done ]] && cp "$d/usmap.done" "$KEEP/"
 done
-# the player's settings.lua stays as they left it (main.lua makes one from settings.default.lua when there's none)
-[[ -f $NEW/Scripts/settings.lua ]] && cp "$NEW/Scripts/settings.lua" "$KEEP/settings.lua"
+# the player's settings.lua and the in-game menu's menu.lua stay as they left them (main.lua makes settings.lua
+# from settings.default.lua when there's none)
+for f in settings.lua menu.lua; do [[ -f $NEW/Scripts/$f ]] && cp "$NEW/Scripts/$f" "$KEEP/$f"; done
 rm -rf "${OLDS[@]}" "$NEW"
 cp -r "$ROOT/ue4ss/StellarBladeGore" "$MODS/"
-[[ -f $KEEP/settings.lua ]] && mv "$KEEP/settings.lua" "$NEW/Scripts/settings.lua"
+for f in settings.lua menu.lua; do [[ -f $KEEP/$f ]] && mv "$KEEP/$f" "$NEW/Scripts/$f"; done
 cp "$KEEP"/* "$NEW/" 2>/dev/null || true
 rm -rf "$KEEP"
 touch "$NEW/enabled.txt"

@@ -24,6 +24,7 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #define DeleteFileW DeleteFileW_
 #define GetModuleHandleW GetModuleHandleW_
 #define GetModuleHandleExW GetModuleHandleExW_
+#define GetModuleFileNameW GetModuleFileNameW_
 #define DisableThreadLibraryCalls DisableThreadLibraryCalls_
 #define GetProcessHeap GetProcessHeap_
 #define HeapAlloc HeapAlloc_
@@ -49,6 +50,7 @@ int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (v
 #undef DeleteFileW
 #undef GetModuleHandleW
 #undef GetModuleHandleExW
+#undef GetModuleFileNameW
 #undef DisableThreadLibraryCalls
 #undef GetProcessHeap
 #undef HeapAlloc
@@ -72,6 +74,7 @@ int CloseHandle_(HANDLE h) { (void)h; return 1; }
 int DeleteFileW_(const u16 *p) { (void)p; return 1; }
 void *GetModuleHandleW_(const u16 *p) { (void)p; return 0; }
 int GetModuleHandleExW_(u32 a, const void *b, void **c) { (void)a;(void)b;(void)c; return 1; }
+u32 GetModuleFileNameW_(void *a, u16 *b, u32 c) { (void)a; (void)c; if (b) b[0] = 0; return 0; }
 int DisableThreadLibraryCalls_(void *a) { (void)a; return 1; }
 HANDLE GetProcessHeap_(void) { return 0; }
 void *HeapAlloc_(HANDLE h, u32 f, u64 n) { (void)h; (void)f; return calloc(1, n); }

@@ -1,8 +1,8 @@
 // Linux harness for the weapon split ("e", weapon_split in sbslice.c) on a synthetic sword: a 100 cm square tube along
 // x, its grip (0-30 cm) on GRIP, the blade on BLADE, a guard piece of its own on GRIP, and helper bones no vertex uses.
 // The sword is posed turned and moved off its bind pose; a tilted plane through the blade splits it. Checks: each half
-// keeps its side where it was, gives up the other (the blade's far side pressed onto the plane where it projects, the
-// grip and guard past it collapsed onto the plane point), stays whole when the sword moves on, and "x" puts the
+// keeps its side where it was, gives up the other (the blade's far side slid along the sword onto the plane, the grip
+// and guard past it collapsed onto the plane point), stays whole when the sword moves on, and "x" puts the
 // asset's matrices back. Run: ./test/run.sh weapon
 #include "host.h"
 static u64 ld_buf[0x900 / 8];
@@ -149,10 +149,12 @@ int main(void)
             int keep = h == 0 ? d0 >= 0 : d0 < 0;
             if (keep) { for (int k = 0; k < 3; k++) if (fabsf_(x[k] - before[v][k]) > 0.01f) { bad++; break; } continue; }
             if (fabsf_(d) > 0.01f) { bad++; continue; }
-            // the blade's far side: where it projects; the grip and guard: the plane point
+            // the blade's far side: slid along the sword onto the plane; the grip and guard: the plane point
             if (vw[v][0] == BLADE) {
                 nflat++;
-                for (int k = 0; k < 3; k++) if (fabsf_(x[k] - (before[v][k] - d0 * nw[k])) > 0.01f) { flatbad++; break; }
+                float ux[3] = { 1, 0, 0 }, u[3]; quat_rot(q, ux, u);
+                float un = u[0] * nw[0] + u[1] * nw[1] + u[2] * nw[2];
+                for (int k = 0; k < 3; k++) if (fabsf_(x[k] - (before[v][k] - d0 / un * u[k])) > 0.01f) { flatbad++; break; }
             } else {
                 ngone++;
                 for (int k = 0; k < 3; k++) if (fabsf_(x[k] - pw[k]) > 0.01f) { gonebad++; break; }
@@ -194,7 +196,48 @@ int main(void)
     skin_restore(0);
     int restored = !memcmp(refinv, refinv0, sizeof refinv) && *(int *)(sec + SEC_BONE_MAP + 8) == nmap;
     printf("restored: %d\n", restored);
-    int fail = bad || flatbad || gonebad || !nflat || !ngone || rigidbad || !missed || !restored;
+    // her grip eased (relax_hand, "F"): GRIP stands for the hand, BLADE bent 60 degrees about y off it. Fully eased
+    // the blade's vertices sit as the bind pose has them against the grip; not eased, where the pose has them; "F"
+    // alone puts the matrices back
+    nsinks = 0;
+    pose();
+    {
+        float bq[4] = { 0, __builtin_sinf(0.5235988f), 0, __builtin_cosf(0.5235988f) }, *tg = space + GRIP * 12, *tb = space + BLADE * 12;
+        float wq[4], d[3] = { bonex[BLADE] - bonex[GRIP], 0, 0 }, rd[3];
+        quat_mul(tg, bq, wq);
+        quat_rot(tg, d, rd);
+        memcpy(tb, wq, 16); tb[4] = tg[4] + rd[0]; tb[5] = tg[5] + rd[1]; tb[6] = tg[6] + rd[2];
+        // (BLADE's children ride it)
+        for (int i = 0; i < NB; i++) if (parent[i] == BLADE) {
+            float *t = space + i * 12, dd[3] = { bonex[i] - bonex[BLADE], 0, 0 }, r[3];
+            quat_rot(wq, dd, r);
+            memcpy(t, wq, 16); t[4] = tb[4] + r[0]; t[5] = tb[5] + r[1]; t[6] = tb[6] + r[2];
+        }
+    }
+    int relaxbad = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        u64 f[3] = { (u64)comp_a, GRIP, pass ? 1000 : 0 };
+        relax_cmd(f, 3);
+        for (int v = 0; v < RINGS * 4; v++) {
+            if (vw[v][0] != BLADE) continue;
+            float x[3], e[3];
+            skin(&orig[v], vpos[v], x);
+            if (pass) {
+                // rigid with the grip, as bound
+                float l[3] = { vpos[v][0] - bonex[GRIP], vpos[v][1], vpos[v][2] }, r[3], *tg = space + GRIP * 12;
+                quat_rot(tg, l, r); e[0] = tg[4] + r[0]; e[1] = tg[5] + r[1]; e[2] = tg[6] + r[2];
+            } else {
+                float l[3] = { vpos[v][0] - bonex[BLADE], vpos[v][1], vpos[v][2] }, r[3], *tb = space + BLADE * 12;
+                quat_rot(tb, l, r); e[0] = tb[4] + r[0]; e[1] = tb[5] + r[1]; e[2] = tb[6] + r[2];
+            }
+            for (int k = 0; k < 3; k++) if (fabsf_(x[k] - e[k]) > 0.02f) { relaxbad++; break; }
+        }
+    }
+    u64 none[1] = { 0 };
+    relax_cmd(none, 1);
+    int unrelaxed = !memcmp(refinv, refinv0, sizeof refinv);
+    printf("grip eased: %d vertices off, put back %d\n", relaxbad, unrelaxed);
+    int fail = bad || flatbad || gonebad || !nflat || !ngone || rigidbad || !missed || !restored || relaxbad || !unrelaxed;
     printf("%s\n", fail ? "FAIL" : "PASS");
     return fail;
 }

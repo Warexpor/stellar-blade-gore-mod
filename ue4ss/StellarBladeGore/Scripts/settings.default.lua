@@ -12,11 +12,23 @@ return {
       limb = 50,               --   an arm or leg off
       head = 30,               --   beheaded
       torso = 12,              --   cut in half at the waist
-      split = 8,               --   cut in half top to bottom (only on a blow from above)
+      split = 8,               --   cut in half top to bottom (whatever the blow; a blade down her length splits too)
+      moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
+    },
+    bladeFollow = 0.6,         -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
+                               -- roll the odds above (1: always the blade, mostly waist cuts and splits)
+    torsoLegs = {
+      enabled = true,          -- a cut across her waist sometimes leaves her legs playing her fall while the upper
+                               -- body flies off (more often from a level swing; false: all of her ragdolls)
     },
     afterHits = {
       enabled = true,          -- enemies swinging at her body after she died cut it again
     },
+    throw = 250,               -- cm/s a cut-off piece flies off with (0: it just drops)
+    headRagdoll = true,        -- a beheading during her animated fall makes her a full ragdoll (false: the body plays
+                               -- the fall on headless)
+    legRagdoll = true,         -- a leg cut does too
+    armRagdoll = false,        -- an arm cut does too (false: she falls on, the arm drops)
     voice = {
       enabled = true,          -- her own death cry (false: the game's death voice only)
       -- sounds = { "vo_eve_die_01", "vo_eve_die_fall_01" },  -- which recordings (default: vo_eve_die_01-05); names
@@ -48,17 +60,31 @@ return {
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
   active = {
+    animated = true,           -- light deaths play her own fall animation and only the cut pieces fall by physics
+                               -- (heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway); false:
+                               -- every death a full ragdoll
+    push = 1.0,                -- how hard the killing blow throws her body, times the default (0: no push of ours)
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
                                -- she falls and lies (a stiffer, more held-together body)
   },
-  holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death holds
-                               -- it (no death screen, she stays down), again lets it go; key names as UE's Gamepad_*
-                               -- (false: none)
+  deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 7 s into
+                               -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
+                               -- hides it again once it is up (she stays down till you press it again)
+  holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
+                               -- shows the death screen or hides it again; key names as UE's Gamepad_* (false: none)
   holdDown = true,             -- knocked down, she stays down till you dodge or jump (false: she gets up on her own)
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill
     attackDown = true,         -- they keep attacking her while she is knocked down (false: they wait, as in the game)
+    cutChance = 1.0,           -- chance a kill near her cuts something off (0-1)
+    pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: drops on the spot; 2: twice as far);
+                               -- works with the cuts off too
+    push = 0,                  -- cm/s every dying enemy is pushed along the blow on top (0: none)
   },
+  smoothAnim = false,          -- every character animated every frame: the engine skips frames on characters further
+                               -- off or small on screen, which can look choppy, running most (costs some CPU)
+  verboseLog = false,          -- a detailed log, for a bug report when asked for one (the log is made anew each start,
+                               -- the last one kept as stellarbladegore.log.old)
   dev = false,                 -- test keys (F5, F7-F11 and their Shift/Ctrl variants), the enemy spawner, the glass
                                -- cannon mode (Shift+F8) and the schema dump on first start; see the README
 }

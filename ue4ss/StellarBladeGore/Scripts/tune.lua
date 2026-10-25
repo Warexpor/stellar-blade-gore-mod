@@ -26,7 +26,20 @@ return {
   photoNearClip = 1,           -- cm: the near clip plane while photo mode is on (the game's 10 cut into her up close; 0 leaves it)
   holdDown = true,             -- knocked down, she stays down till you dodge or jump (the game's fast getup); false: she
                                -- gets up on her own after 1 s, as in the game (needs the data pak and sbslice.dll)
-  reviveAt = 7,                -- the revive item's screen (she carries one) is held hidden this many seconds into the death
+  verboseLog = false,          -- the log's per-poll and per-frame watches (a death's bone speeds, her attachments, face
+                               -- and camera, hooks, each cut stage, each slow tick and frame hitch): for chasing a bug
+  smoothAnim = false,          -- every character's animation updated every frame (the engine skips frames on characters
+                               -- further off or small on screen: they can look choppy next to the world, running
+                               -- most; costs some CPU with many on screen)
+  menuPad = { "Gamepad_LeftShoulder", "Gamepad_RightShoulder", "Gamepad_LeftThumbstick" }, -- the settings menu (F3) on
+                               -- the controller: all held (false: none)
+  menuPadIcons = "playstation", -- the menu's controller key icons: "playstation" or "xbox"
+  deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
+                               -- seconds into the death, "key" only on Shift+F4 (or holdPad). Shift+F4 shows it early,
+                               -- and hides it again (the death held) once it is up
+  keepFresh = 2,               -- s: a character or widget seen as it spawned is checked alive (sbslice "G") this soon, or
+                               -- never held (characters are found again with FindAllOf)
+  reviveAt = 7,                -- the death screen (and the revive item's) is held hidden this many seconds into the death
   deathPhoto = true,           -- while a death is held (Shift+F4) the game's photo mode opens (P, or D-pad left + R1),
                                -- which the game turns down while she is dead
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
@@ -43,7 +56,7 @@ return {
   cameraFast = 3,              --   this many times faster with Shift
   cameraRange = 1500,          --   no further than this many cm from where it started
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
-                               -- holds it (no death screen, she stays down), again lets it go (false: none)
+                               -- shows the death screen, or hides it again (false: none)
   uvClean = true,              -- with Ultra Violence on, its blood comes off her at a respawn (it keeps it through one
                                -- on its own): she reads as swimming for 1.2 s as she gets up, its water clear
   deathSkip = true,            -- Esc on her death fast forwards the game to its death screen instead of the wait
@@ -68,11 +81,13 @@ return {
       limb = 50,               --   the arm or thigh nearest the hit comes off
       head = 30,               --   beheaded (the face goes with the head, the neck gets a stump)
       torso = 12,              --   cut in half at the waist
-      split = 8,               --   cut in half top to bottom along the blade; only counts when the killing blow
-                               --   came down from above (else the others are rolled)
-    },
+      split = 8,               --   cut in half top to bottom; rolled first on every death, whatever the blade
+      moreLimbs = 0.35,        --   a limb cut takes another nearest limb with this chance, and a third with it again
+    },                         --   (0.35: 35 % two or more, 12 % three)
+    bladeFollow = 0.6,         -- share of deaths with a blade seen that the blade decides; the rest roll the odds above
+                               -- (a blade mostly crosses her body: at 1 nearly every death was a waist cut or a split)
                                -- A death whose killing hit the game reported, or whose enemy's weapon swing was
-                               -- seen, is decided by that blade alone, nothing rolled: what its plane goes through
+                               -- seen, is otherwise decided by that blade alone, nothing rolled: what its plane goes through
                                -- comes off (the neck, her body along it or in two down her length, the arms and
                                -- legs it crosses); the odds above are rolled only without either
     bladeJitter = 15,          -- for variety, each blade is turned up to this many degrees at random
@@ -106,6 +121,8 @@ return {
     sliceTilt = 45,            -- a limb cut along a blade leans with it at most this many degrees off square
     bodyTilt = 15,             -- a cut across her body (under her bust) leans at most this many degrees off square to
                                --   her spine, whatever the blade or blow did: more ran through a breast
+    bodyLeanSide = 20,         -- a waist cut with no blade angle (rolled) leans at random up to this many degrees to
+    bodyLeanFront = 10,        --   either side, and up to this with her front lower (front higher ran into her bust)
     splitYaw = 15,             -- a split down her length turns at most this many degrees from her left/right middle
                                --   (never front from back: a slab of her chest)
     limbReach = 12,            -- a blade meeting an arm or leg this close to the hit, with the hit
@@ -137,6 +154,8 @@ return {
                                --   moves on: an arm raised to block had swung away and only her body was cut)
     attackerIgnore = { "Drone", "CH_P_", "AirborneSquad" }, -- class names (parts) never taken for her killer: her drone, playable characters, the passive angels
     legRagdoll = true,         -- a leg cut on her own death fall switches to the ragdoll first (she can't fall on it)
+    headRagdoll = true,        -- a beheading on it too (false: her body plays the fall on headless)
+    armRagdoll = false,        -- an arm cut on it too (false: she falls on, the arm drops)
     deathFace = {              -- a dead face held on her face mesh's morph targets from `at` s into a death, faded in
       enabled = true,          --   over `fade` s, until she gets up (the game's own death face was gone 1 s in and
       at = 0.3,                --   her eyes stayed open). Shift+F7 shows the moods in turn, 6 s each
@@ -256,12 +275,17 @@ return {
     splitBeside = 2,           -- cm beside her neck an F11 / F5 / odds split passes (leaning from her crotch up, between
                                --   her breasts), so the head stays whole on one half; 0 = straight up her spine through
                                --   the head. At 10 it ran through a breast
+    splitHipShift = 4,         -- cm its lower end moves off her crotch to either side at random, so it runs a little
+                               --   diagonally (the hip joints sit 10 cm off; an odds split with no swing also turns at
+                               --   random within splitYaw)
     splitMinShare = 0.12,      -- a split leaving either half less than this share of her body is a waist cut instead
     splitLidGrow = 0.4,        -- cm a split's flat lid reaches past the skin round its edge
     splitLidPush = 0.2,        -- cm it sits out of the half, over the flattened skin
     splitLidSkin = true,       -- the lid in one piece that bends with her spine (false: a rigid piece per spine bone,
                                --   which cracked into shards as she bent)
-    splitLidFollow = 12,       -- seconds the bending lid follows her (then it stays as it lies)
+    splitLidFollow = 0,        -- seconds the bending lid follows her, then it stays as it lies (0: as long as it is on
+                               --   her; it updates only while she moves. After 12 s it stayed put, and a ragdoll
+                               --   nudged later left it off her)
     splitRigOff = true,        -- a split turns the outfit's post-process AnimBP off on both halves: it moved the rig's
                                --   Dm- drivers after the limbs each half keeps, and the skin collapsed onto them came
                                --   out through the lid as spikes and patches
@@ -334,9 +358,53 @@ return {
     splitFlyUpper = 300,       --   and the upper body of one across the waist (at 200 it dropped at her feet)
     caps = true,               -- flesh caps over both openings
     capScale = 1.05,           -- cap size relative to the opening's outline (1 = ends exactly on the skin)
-    boneStubs = true,          -- a snapped bone (the game's GM_Brokenbone) in each limb and neck stump
-    stubBone = 0.3,            --   its thickness, as a share of the opening's width
-    stubOut = 0.5,             --   how far it sticks out, times the opening's narrow radius
+    boneStubs = true,          -- a bone in each stump: Tachy's metal bone and tubes in a limb's (tachy_core.lua), her
+                               -- bone alone at the spine in a neck's or waist's
+    torsoLegs = {              -- a death's cut across her waist while her fall plays: her legs and hips play the fall on
+      enabled = true,          --   while the upper body flies off in the ragdoll (else all of her goes to the ragdoll)
+      level = 0.75,            --   odds when the killing blade swung level across her (within levelDeg of flat)
+      slant = 0.35,            --   odds when it swung slanted
+      rolled = 0.5,            --   odds with no blade seen (the death odds' torso)
+      levelDeg = 30,
+    },
+    tachyCore = 1.0,           --   tachy: its bone and tubes' size, times the opening's
+    tachyCoreMax = 6,          --   tachy: cm the opening counts as at most (a thigh's core stays bone sized)
+    tachyCoreLeg = 1.4,        --   tachy: a leg's bone and tubes, times the above (thin in a thigh, playtest)
+    tachyCoreLook = {          --   tachy: her bone and tubes, a dark grey near the flesh (hers: 1, 0, white; near
+      brightness = 0.8,        --   black in the dark, at Brightness 1.8 too light, playtest); false: hers as is
+      desaturation = 0.7,      --   towards grey
+      tint = { 1, 0.8, 0.78 }, --   a little of the flesh's red
+    },
+    tachyRelief = 1.0,         --   how deep the flesh's torn relief is, times the default (0: smooth)
+    tachyDome = 0.2,           --   how far the flesh bulges out of the cut, as a share of a dome (0: flat; a little
+                               --   covers the cut's closed skin where it stands proud)
+    -- tachyLids = false,         -- tachy: her flesh disc on the caps too (off: 0.3.0's meat lids; on the procedural
+    --                            --   lids her flesh read pale and washed out, playtest). The bone and tubes are hers
+    -- tachyFlesh = {             -- the caps' flesh, on their own instance of Tachy's material: her own values (her
+    --   enabled = true,          --   master's defaults, Roughness Min 0.3, no glow) look as in the cutscene. Brightness
+    --                            --   8-10 here (it read near black on the texture) blew it out pale and washed in game
+    --                            --   (playtest); false: her material as is
+    --   brightness = 1,          --   her material's Brightness (hers 1)
+    --   tint = { 1, 1, 1 },      --   its Base Color Tint (hers white; under 1 in green and blue: a deeper red)
+    --   roughness = 0.9,         --   its Roughness Min (hers 0.3: her texture's own is near mirror smooth; the
+    --                            --   room's light off it is the pale haze, rough spreads it thin)
+    --   metallic = 1,            --   its Metallic, times her texture's (hers 1)
+    --   desaturation = 0,        --   its Desaturation (hers 0)
+    --   contrast = 0,            --   its Contrast (hers 0)
+    --   roughnessMax = 1,        --   its Roughness Max (hers 1)
+    --   ao = 0.5,                --   its AOMultiply: how much of the room's light and reflections reach it (hers 1),
+    --   aoTint = { 1, 1, 1 },    --   and the AO Tint they take (hers white) (the core keeps hers)
+    --   emissive = { power = 8, color = { 1, 0.02, 0.05 } }, -- a crimson glow, her texture's red times this (hers
+    --                            --   0): its own colour whatever the light. At Brightness 1-10 the flesh stayed pale in
+    --                            --   game, the room's light off it over its dark red (playtest)
+    -- },
+    -- boneSilver = false,        --   tachy: her bone on the metal of her texture (it is painted ivory, read as pale dirt)
+    tachyCapScale = 1.0,       --   tachy: the flesh's size against the opening (at 1.05 it ran over the cut's edge)
+    stubBone = 0.3,            --   the spine's bone: its shaft's thickness, as a share of the opening's width (at most
+                               --   spineBoneMax cm)
+    spineBoneMax = 3.5,        --   cm the spine's bone is at most thick (a waist's was a pipe)
+    spineBoneOut = 1.2,        --   how far it sticks out, times her bone's own height (a third of its width)
+    spineBoneWaist = 1.6,      --   a waist cut's spine bone that much wider, no taller (thin there, playtest)
     blood = true,              -- hit/cut/bleed effects
     sliceFx = false,           -- the game's flesh-slice burst at the cut: it drops a static meat stub made for
                                -- monster stumps, which hangs in the air where she was cut
@@ -510,6 +578,7 @@ return {
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s
     momentum = 1.0,            -- share of her speed before death carried into the fall (0 = drops on the spot)
     momentumMax = 1500,        -- cm/s
+    push = 1.0,                -- times impact and launch below: how hard her death throws her (0: none of ours)
     impact = 120,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
                                -- from the attacker when the game gives no direction)
     impactUp = 0.15,           -- upward share of that push
@@ -528,7 +597,8 @@ return {
       blockWindow = 0.5,       --   s: a killing blow this soon after her guard was up (guard key, montage or stance) breaks the sword
       guardKeys = { "E", "Gamepad_LeftShoulder" }, --   her guard keys, held (the game's input mappings read none)
                                --   whatever the plane did (across its middle when the plane missed it)
-      apart = 120,             --   cm/s the halves are pushed apart along the plane's normal
+      apart = 60,              --   cm/s the halves are pushed apart along the plane's normal (120 threw the tip off fast)
+      gap = 1.5,               --   cm each half's box stops short of the break (boxes meeting there pushed a half off)
       spin = 0.5,              --   their turn, a share of a thrown weapon's
     },
     grip = {                   --   a ragdoll death: the weapon in her hand rides with it, then slips out as her grip
@@ -537,6 +607,8 @@ return {
       holdMax = 0.9,           --   and at most (picked between)
       toss = 30,               --   cm/s on top of her hand's speed as it slips
       spin = 0.2,              --   its turn, a share of a thrown one's
+      open = 0.8,              --   once the weapon is out of her hand, its fingers ease this far to the open hand (0: the
+      openTime = 0.6,          --   fist stays), over this many seconds
     },
     weaponMaxCm = 120,         --   its box is never longer than this
     stiffness = 1.0,           -- how stiff her ragdoll is: times the tone's strength and resting share below (0: limp
@@ -594,15 +666,20 @@ return {
     cutChance = 1.0,           -- a kill near her takes something off
     bladeChance = 0.85,        --   ...along her swing (her right hand's arc) when she swung, else a rolled kind
     swingMinSpeed = 250,       -- cm/s her hand must reach to count as a swing
-    swingWindow = 0.5,         -- seconds of her hand's path kept
-    hitWindow = 1.0,           -- seconds a hit on its mesh is where the killing blow landed
+    swingWindow = 0.5,         -- seconds of her hand's path before the hit (else before its ragdoll) her swing is looked for in
+    hitWindow = 1.0,           -- seconds a hit on its mesh is where the killing blow landed (moved onto its body when
+                               -- the game put it off it)
     odds = { limb = 0.55, head = 0.3, torso = 0.15 }, -- a rolled kill (torso: across the waist; never a split)
     killWait = 2.0,            -- seconds a kill's cut waits for another cut to finish opening
+    push = 0,                  -- cm/s every enemy death's ragdoll is pushed along the blow on top of the game's throw
+    pushUp = 0.2,              --   upward share of it
+    pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: it drops on the spot; 2: twice as far)
     maxCorpses = 6,            -- cut corpses at once; past it a kill is left whole (each holds caps, effects and its
                                -- kind's collapsed helpers, which bend every live enemy of that kind near the cut)
     corpseHits = {             -- her swings through a corpse cut it again
       enabled = true,
-      reach = 35,              -- cm her hand passes from one of its parts
+      reach = 35,              -- cm her swing's plane passes from one of its parts...
+      blade = 130,             --   ...within this many cm of her hand (her sword's reach)
       max = 4,                 -- per corpse
       from = 0.4,              -- seconds after the kill (the killing swing itself)
       cutChance = 0.7,         -- else a hit mark

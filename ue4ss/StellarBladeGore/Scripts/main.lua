@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -57,11 +57,20 @@ local PHYSFIX_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/physfix.lua"
 local ENEMIES_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/enemies.lua"
 local USMAP_DONE = "ue4ss/Mods/StellarBladeGore/usmap.done"
 
-local fh = io.open(LOG_PATH, "a")
+-- a log of its own each start, the last one kept as .old (it was appended to forever: 19 MB of every session since
+-- the install, and a report meant digging for the one that counted). Past lg.max bytes only errors are written
+os.remove(LOG_PATH .. ".old")
+os.rename(LOG_PATH, LOG_PATH .. ".old")
+local lg = { fh = io.open(LOG_PATH, "w"), bytes = 0, max = 20 * 1024 * 1024 }
 local function log(s)
   local line = string.format("[%s] %s", os.date("%H:%M:%S"), s)
   print("[" .. MOD .. "] " .. line .. "\n")
-  if fh then fh:write(line, "\n"); fh:flush() end
+  if not lg.fh then return end
+  if lg.bytes > lg.max and not line:find("error", 1, true) then return end
+  lg.bytes = lg.bytes + #line + 1
+  lg.fh:write(line, "\n")
+  if lg.bytes > lg.max and not lg.full then lg.full = true; lg.fh:write("[log full: only errors from here on]\n") end
+  lg.fh:flush()
 end
 
 local function try(fn, ...)
@@ -81,21 +90,90 @@ local XYZ, PYR = { "X", "Y", "Z" }, { "Pitch", "Yaw", "Roll" }
 -- the Eve whose ReceiveTick runs the script (see adopt below)
 local cachedPawn, pawnAddr, pawnSeen = nil, nil, 0
 local tune = {}
+-- the per-poll and per-frame watches (a death's bone speeds, her attachments, face and camera, every hook): only with
+-- tune.verboseLog, for chasing a bug (they were most of the log)
+function lg.v(s) if tune.verboseLog then log(s) end end
 local goreCtx = { tune = tune }
--- an object held past this tick: its address and path, taken while it is alive. Garbage collection frees an object's
--- memory, and IsValid on a freed one reads it and crashes UE4SS (no pcall catches that: a death crashed so once the
--- game freed a killed enemy, 0.3.0). held() asks the game's object name table, which drops an object as it is freed,
--- and touches the object only while its path still leads to that address
+-- an object held past this tick. Garbage collection frees an object's memory, and IsValid on a freed one reads it
+-- and crashes UE4SS (no pcall catches that: a death crashed so once the game freed a killed enemy, 0.3.0). 0.3.0
+-- looked each one up by its path in the name table, but UE4SS's StaticFindObject finds no level actor by its path
+-- (".../F02.F02:PersistentLevel.X": "held: ... the name table has 0", playtest), so no enemy was ever held, none
+-- followed, no swing seen and every death rolled its cut (a level slash took a leg, a vertical one the head); the
+-- lookup by name under its level crashed the game at launch. sbslice's "G" asks the object's item in GUObjectArray
+-- instead, never touching the object: every held object in one call a tick (goreCtx.frame), the answers kept for
+-- that tick. The object's index is read off it at its first check, within keepFresh s of keep(): keep() runs in
+-- NotifyOnNewObject's callback too (characters as they spawn, photo mode's widgets), and an object that new isn't
+-- freed yet; one checked later is never held (live_chars finds such characters again with FindAllOf)
+goreCtx.frame, goreCtx.heldList, goreCtx.heldMiss = 0, {}, 0
 function goreCtx.keep(o)
   local a = o and try(function() return o:GetAddress() end)
-  local full = a and try(function() return o:GetFullName() end)
-  local path = full and full:match("^%S+ (.+)$")
-  return path and { obj = o, addr = a, path = path } or nil
+  return a and { obj = o, addr = a, t = os.clock() } or nil
+end
+-- one "G" for the listed held objects; nil when sbslice isn't up
+function goreCtx.alive_ask(list)
+  local g = goreCtx.gore
+  if not (g and g.native_ready and g.native_ready()) then return nil end
+  local f = {}
+  for _, k in ipairs(list) do f[#f + 1] = string.format("%x,%x", k.addr, k.idx or 0xffffffff) end
+  local r = g.command("G" .. table.concat(f, ","))
+  local bits = r:match("^ok (.*)$")
+  if not bits then log("held: sbslice " .. tostring(r)); return nil end
+  -- one 0/1 per object, an asked one's followed by ":<index> " (its index -1 when unreadable). (The index was read
+  -- with an optional colon: the bits of the objects after one not asked ran into it, 20 of them made a float, and
+  -- every tick after failed in format, the whole tick with it: her hair jiggled, nothing else ran, playtest)
+  local pos, n = 1, 0
+  while n < #list do
+    local b = bits:sub(pos, pos)
+    if b ~= "0" and b ~= "1" then break end
+    pos, n = pos + 1, n + 1
+    local k = list[n]
+    if bits:sub(pos, pos) == ":" then
+      local s, e = bits:find("^%-?%d+", pos + 1)
+      if not s then n = n - 1; break end
+      local ix = math.tointeger(tonumber(bits:sub(s, e)))
+      pos = e + 1
+      if bits:sub(pos, pos) == " " then pos = pos + 1 end
+      if ix and ix >= 0 then k.idx = ix else b = "0" end
+    end
+    k.alive, k.frame = b == "1", goreCtx.frame
+  end
+  if n < #list then log(string.format("held: sbslice answered %d of %d (%s)", n, #list, bits:sub(1, 80))); return nil end
+  return true
 end
 function goreCtx.held(k)
   if not k then return false end
-  local o = try(function() return StaticFindObject(k.path) end)
-  return o ~= nil and try(function() return o:GetAddress() end) == k.addr and valid(k.obj)
+  if k.dead then return false end
+  if k.frame == goreCtx.frame then k.asked = os.clock(); return k.alive and valid(k.obj) end
+  if not k.idx then
+    -- its index is read off it now, while it is surely alive
+    if os.clock() - k.t > (tune.keepFresh or 2) then k.dead, k.stale = true, true; return false end
+    if not goreCtx.alive_ask({ k }) then return false end
+    if not k.alive then k.dead = true; return false end
+    k.asked, k.listed = os.clock(), true
+    goreCtx.heldList[#goreCtx.heldList + 1] = k
+    return valid(k.obj)
+  end
+  -- the first check this tick: every held object asked at once (64 to a call), the ones not asked for 3 s let go
+  local keep, now = {}, os.clock()
+  for _, x in ipairs(goreCtx.heldList) do
+    if not x.dead and (x == k or now - (x.asked or now) < 3) then keep[#keep + 1] = x else x.listed = nil end
+  end
+  if not k.listed then k.listed = true; keep[#keep + 1] = k end
+  goreCtx.heldList = keep
+  for i = 1, #keep, 64 do
+    local part = { table.unpack(keep, i, math.min(i + 63, #keep)) }
+    if not goreCtx.alive_ask(part) then return false end
+  end
+  for _, x in ipairs(keep) do if x.frame == goreCtx.frame and not x.alive then x.dead = true end end
+  k.asked = now
+  if not k.alive then
+    if goreCtx.heldMiss < 6 then
+      goreCtx.heldMiss = goreCtx.heldMiss + 1
+      log(string.format("held: %x gone (index %s)", k.addr, tostring(k.idx)))
+    end
+    return false
+  end
+  return valid(k.obj)
 end
 -- may an asset be loaded from the pak now (LoadAsset)? Not from her getting up in a death till the new level's Eve has
 -- ticked a while: a load on the game thread then waited on the respawn's own loading, whose new objects wait on the
@@ -128,6 +206,22 @@ local function load_tune()
     if not sok and tostring(s):find("No such file", 1, true) then sok, s = pcall(dofile, SETTINGS_DEFAULT) end
     if sok and type(s) == "table" then overlay(t, s)
     elseif not tostring(s):find("No such file", 1, true) then log("settings.lua failed: " .. tostring(s)) end
+    -- the in-game menu's changes (gui.lua) over both: { ["path.to.key"] = value }
+    local mok, m = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/menu.lua")
+    if mok and type(m) == "table" then
+      for path, v in pairs(m) do
+        local x, parts = t, {}
+        for part in tostring(path):gmatch("[^.]+") do parts[#parts + 1] = tonumber(part) or part end
+        for i = 1, #parts - 1 do
+          if type(x[parts[i]]) ~= "table" then x[parts[i]] = {} end
+          x = x[parts[i]]
+        end
+        if #parts > 0 and type(v) ~= "table" then x[parts[#parts]] = v end
+      end
+    elseif not mok and not tostring(m):find("No such file", 1, true) then
+      -- (a broken menu.lua dropped every menu change without a word)
+      log("menu.lua failed, the menu's changes not applied: " .. tostring(m))
+    end
     t.dev = t.dev == true
     tune = t
     goreCtx.tune = t
@@ -141,12 +235,23 @@ local function load_tune()
     table.sort(keys)
     log("tune: " .. table.concat(keys, " "))
     if goreCtx.enemies then goreCtx.enemies.reload() end
+    if goreCtx.tables then goreCtx.tables.redo_dead() end
   else
     log("tune.lua failed: " .. tostring(t))
   end
 end
 log(string.format("Stellar Blade Gore Mod %s", VERSION))
 load_tune()
+goreCtx.reload_tune, goreCtx.version = load_tune, VERSION
+-- the settings without the menu's changes (tune.lua under settings.lua): what the menu's per-tab reset goes back to
+goreCtx.base_tune = function()
+  local ok, t = pcall(dofile, TUNE_PATH)
+  if not ok or type(t) ~= "table" then return nil end
+  local sok, st = pcall(dofile, SETTINGS_PATH)
+  if not sok and tostring(st):find("No such file", 1, true) then sok, st = pcall(dofile, SETTINGS_DEFAULT) end
+  if sok and type(st) == "table" then overlay(t, st) end
+  return t
+end
 
 local gore, rag, physfix = nil, nil, nil
 -- an animated death (see animated_death below): { pawn, mesh, push } while her own fall plays, nil otherwise
@@ -167,7 +272,7 @@ local function ragdoll_now(why)
     tostring(try(function() return a.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
   if rag then rag.start(a.pawn, a.mesh, "death", a.push) end
 end
-goreCtx.log, goreCtx.try, goreCtx.valid, goreCtx.v3 = log, try, valid, v3
+goreCtx.log, goreCtx.try, goreCtx.valid, goreCtx.v3, goreCtx.vlog = log, try, valid, v3, lg.v
 -- her mesh's physics asset, the one physfix gave an outfit without one included
 goreCtx.physics_of = function(m)
   if physfix then return physfix.asset(m) end
@@ -253,6 +358,22 @@ do
     en.init(goreCtx)
   else
     log("enemies.lua failed: " .. tostring(en))
+  end
+  -- the game's DataTables changed in game (goreCtx.tables): no table in the pak overrides other mods' any more
+  local ok7, tb = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/tables.lua")
+  if ok7 and type(tb) == "table" then
+    goreCtx.tables = tb
+    tb.init(goreCtx)
+  else
+    log("tables.lua failed: " .. tostring(tb))
+  end
+  -- the in-game settings menu (goreCtx.gui, F3)
+  local ok8, gu = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/gui.lua")
+  if ok8 and type(gu) == "table" then
+    goreCtx.gui = gu
+    gu.init(goreCtx)
+  else
+    log("gui.lua failed: " .. tostring(gu))
   end
   -- the glass cannon mode (goreCtx.glass, tune.glassCannon)
   local ok5, gl = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/glass.lua")
@@ -349,6 +470,7 @@ end
 -- the eighteenth playtest no death showed one
 local function face_probe(pawn, mesh, at)
   local face = gore and gore.face_of and gore.face_of(pawn, mesh)
+  if not tune.verboseLog then return end
   if not valid(face) then log(string.format("face at %.1f s: no face component", at)); return end
   local ai = try(function() return face:GetAnimInstance() end)
   local mont = valid(ai) and try(function() return ai:GetCurrentActiveMontage() end)
@@ -587,6 +709,25 @@ end
 -- game's SBPhotoMode_Bypass_ActivationConditionChecks while the death is held, and clears it when it is let go or ends
 -- (screen: the death screen's state, below; made here for the camera's sake)
 local screen = { n = 0, photo = false }
+-- slow ticks and frame hitches: each one with verboseLog, else one line a minute with how many and the worst of each
+-- (one line per hitch was a sixth of the log)
+screen.perf = { t = os.clock(), slow = { n = 0, ms = 0 }, hitch = { n = 0, ms = 0 } }
+function screen.perf_note(kind, ms, line)
+  if tune.verboseLog then log(line); return end
+  local k = screen.perf[kind]
+  k.n = k.n + 1
+  if ms > k.ms then k.ms, k.line = ms, line end
+end
+function screen.perf_flush()
+  local p = screen.perf
+  if os.clock() - p.t < 60 then return end
+  p.t = os.clock()
+  for _, kind in ipairs({ "slow", "hitch" }) do
+    local k = p[kind]
+    if k.n > 0 then log(string.format("%d %s in the last minute, the worst %s", k.n, kind == "slow" and "slow ticks" or "frame hitches", k.line)) end
+    p[kind] = { n = 0, ms = 0 }
+  end
+end
 -- revived where she lay, her movement left off is put back to walking within WINDOW polls (~20 s) after she got up,
 -- once it has been off POLLS (~1.5 s) with her capsule still; at = { since = after, at = capsule }: off since then, there
 screen.stuck = { WINDOW = 600, POLLS = 45, at = nil }
@@ -808,7 +949,7 @@ local function camera_watch(pawn, mesh)
   end)
   local c = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
   local h = try(function() local v = mesh:GetSocketLocation(FName("Bip001-Head")); return { X = v.X, Y = v.Y, Z = v.Z } end)
-  log(string.format("camera at %.1f s: view%s, %.0f cm from her capsule%s, %.0f from her head%s",
+  lg.v(string.format("camera at %.1f s: view%s, %.0f cm from her capsule%s, %.0f from her head%s",
     t, v3(cam), dist(cam, c), v3(c), dist(cam, h), v3(h)))
 end
 
@@ -828,14 +969,21 @@ end
 -- read): the scan every 2 s while it wasn't found was 60 ms each in a big level, and the death screen's class only
 -- loads at the death. One scan a death is left, from 5 s in, for one made before the mod loaded
 local dead_hud = { scans = 0 }
+-- (kept through goreCtx.keep and asked through held before each use: the last death's screen, freed after the
+-- respawn, was read at the next death and crashed the game, UE4SS reading the freed widget's class, playtest)
+function dead_hud.get(f)
+  local k = dead_hud[f]
+  if k and goreCtx.held(k) then return k.obj end
+  dead_hud[f] = nil
+end
 do
   local ok, err = pcall(NotifyOnNewObject, "/Script/UMG.UserWidget", function(o)
     -- (any time: the death screen may be made in the frame she dies, before the mod's tick knows it)
     local cls = try(function() return o:GetClass():GetFName():ToString() end)
     if (cls == "WB_MainHUD_Dead_C" or cls == "WB_MainHUD_ResurrectionItem_C")
       and tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then return end
-    if cls == "WB_MainHUD_Dead_C" then dead_hud.w = o
-    elseif cls == "WB_MainHUD_ResurrectionItem_C" then dead_hud.rv = o end
+    if cls == "WB_MainHUD_Dead_C" then dead_hud.w = goreCtx.keep(o)
+    elseif cls == "WB_MainHUD_ResurrectionItem_C" then dead_hud.rv = goreCtx.keep(o) end
     if cls and cls:find("[Pp]hoto") and not tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then
       local ok, err = pcall(screen.photo_widget, o, cls)
       if not ok then log("photo mode widget: " .. tostring(err)) end
@@ -845,18 +993,26 @@ do
     end
   end)
   if not ok then print("[StellarBladeGore] widgets: NotifyOnNewObject failed: " .. tostring(err) .. "\n") end
+  -- photo mode's own pawn, made as it opens, before its widgets: with a piece off her alive her head and upper body
+  -- were already back on her neck by the first widget (playtest), so the freeze comes here first
+  ok, err = pcall(NotifyOnNewObject, "/Script/SB.SBPhotoModePawn", function(o)
+    if tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then return end
+    local cls = try(function() return o:GetClass():GetFName():ToString() end) or "SBPhotoModePawn"
+    local ok2, err2 = pcall(screen.photo_widget, o, cls, true)
+    if not ok2 then log("photo mode pawn: " .. tostring(err2)) end
+  end)
+  if not ok then print("[StellarBladeGore] photo mode pawn: NotifyOnNewObject failed: " .. tostring(err) .. "\n") end
 end
 local function death_screen()
-  local w = dead_hud.w
-  if not valid(w) then
-    dead_hud.w = nil
+  local w = dead_hud.get("w")
+  if not w then
     if dead_hud.scans > 0 then return false end
     dead_hud.scans = 1
     for _, x in ipairs(try(function() return FindAllOf("WB_MainHUD_Dead_C") end) or {}) do
       if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then w = x end
     end
     if not w then return false end
-    dead_hud.w = w
+    dead_hud.w = goreCtx.keep(w)
   end
   local function shown(x)
     local vis = try(function() return x:GetVisibility() end) or 0 -- 1 collapsed, 2 hidden
@@ -903,7 +1059,18 @@ end
 -- loaded (tried once a second in a death till then); none had ever been hooked, as the screen was never seen
 local SCREEN_FNS = { WB_Common_btn_1_Event_0 = "press", WB_Common_btn_2_Event_0 = "press", WB_Common_btn_1_Event = "press",
   WB_Common_btn_2_Event = "press", FinishPressAnimation = "press", FinishYouDieAnimation = "shown" }
-function screen.reset() dead_hud.scans, dead_hud.made, screen.rv.shown = 0, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen = false end
+function screen.reset() dead_hud.scans, dead_hud.made, screen.rv.shown = 0, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen, screen.shown = false, false end
+-- the death and revive screens kept hidden t s into the death: held (Shift+F4, photo mode), else as tune.deathScreen
+-- says: "game" when the game puts them up (at once), "delay" till tune.reviveAt s, "key" till Shift+F4 (or the pad
+-- combo) shows them
+function screen.hiding(t)
+  if screen.frozen then return true end
+  if screen.shown then return false end
+  local m = tune.deathScreen
+  if m == "game" then return false end
+  if m == "key" then return true end
+  return t < (tune.reviveAt or 7)
+end
 function screen.hook()
   if screen.hooked or os.clock() < (screen.retry or 0) then return end
   screen.retry = os.clock() + 1
@@ -946,7 +1113,10 @@ local REVIVE_WAIT = 2.5
 function screen.revive(t)
   local rv = screen.rv
   if not active or saved.manual then
-    for w, vis in pairs(rv.held or {}) do if valid(w) then try(function() w:SetVisibility(vis); w:SetIsEnabled(true) end) end end
+    for f, vis in pairs(rv.held or {}) do
+      local w = vis and dead_hud.get(f)
+      if w then try(function() w:SetVisibility(vis); w:SetIsEnabled(true) end) end
+    end
     rv.held, rv.up, rv.down, rv.told = nil, nil, nil, nil
     return
   end
@@ -955,24 +1125,26 @@ function screen.revive(t)
     log(string.format("revive screen: made %.1f s into the death: %s", t, dead_hud.made))
   end
   local on = false
-  for _, w in ipairs({ dead_hud.w, dead_hud.rv }) do
-    if valid(w) then
+  for _, f in ipairs({ "w", "rv" }) do
+    local w = dead_hud.get(f)
+    if w then
       local vis = try(function() return w:GetVisibility() end) or 1 -- 1 collapsed, 2 hidden
       local up = vis ~= 1 and vis ~= 2 and try(function() return w:IsVisible() end) ~= false
       rv.held = rv.held or {}
-      if t < (tune.reviveAt or 7) or screen.frozen then
+      if screen.hiding(t) then
         if up then
-          if not rv.held[w] then
-            rv.held[w] = vis
+          if not rv.held[f] then
+            rv.held[f] = vis
             log(string.format("revive screen: %s up %.1f s into the death, held hidden %s",
               tostring(try(function() return w:GetClass():GetFName():ToString() end)), t,
-              screen.frozen and "while the death is held (Shift+F4)" or string.format("till %.0f s", tune.reviveAt or 7)))
+              screen.frozen and "while the death is held (Shift+F4)" or tune.deathScreen == "key" and "till Shift+F4"
+              or string.format("till %.0f s", tune.reviveAt or 7)))
           end
           try(function() w:SetVisibility(1); w:SetIsEnabled(false) end)
         end
-      elseif rv.held[w] ~= nil and rv.held[w] ~= false then
-        try(function() w:SetVisibility(rv.held[w]); w:SetIsEnabled(true) end)
-        rv.held[w], up = false, true
+      elseif rv.held[f] ~= nil and rv.held[f] ~= false then
+        try(function() w:SetVisibility(rv.held[f]); w:SetIsEnabled(true) end)
+        rv.held[f], up = false, true
         rv.shown = true
         log(string.format("revive screen: shown %.1f s into the death", t))
       end
@@ -989,6 +1161,9 @@ function screen.revive(t)
 end
 function screen.probe(pawn)
   screen.n = screen.n + 1
+  -- (asked while new: a kept object's index is read at its first check, within keepFresh s of being made)
+  if dead_hud.w and not dead_hud.w.idx then dead_hud.get("w") end
+  if dead_hud.rv and not dead_hud.rv.idx then dead_hud.get("rv") end
   try(function() screen.revive(polls * POLL_MS / 1000 + ahead) end)
   -- (in a death not before 1 s in: registering them took 166 ms, in the frame the killing blow's cut landed,
   -- playtest; while she plays they're tried too, see the tick)
@@ -1003,11 +1178,11 @@ function screen.probe(pawn)
       if screen.last then log("death screen: gone"); screen.last = nil end
       screen.gone = true
     end
-    if not (screen.seen and valid(dead_hud.w)) then return end
+    if not (screen.seen and dead_hud.get("w")) then return end
   else
     screen.vis, screen.seen = true, true
   end
-  local w = dead_hud.w
+  local w = dead_hud.get("w")
   local function f(x) return x and string.format("%.2f", x) or "?" end
   local parts = { string.format("%s: widget vis %s visible %s in viewport %s opacity %s", on and "up" or "hooked up, reads hidden",
     tostring(try(function() return w:GetVisibility() end)), tostring(try(function() return w:IsVisible() end)),
@@ -1252,7 +1427,7 @@ local function watch(pawn, mesh)
   local cloc = cap and try(function() return cap:K2_GetComponentLocation() end)
   local mloc = try(function() return mesh:K2_GetComponentLocation() end)
   local ploc = try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end)
-  log(string.format("a%03d parent=%s capsule%s mesh%s pelvis%s pelvisGap=%.0f visible=%s hidden=%s sim=%s meshLockup=%s move=%s",
+  lg.v(string.format("a%03d parent=%s capsule%s mesh%s pelvis%s pelvisGap=%.0f visible=%s hidden=%s sim=%s meshLockup=%s move=%s",
     after, name(try(function() return mesh:GetAttachParent() end)), v3(cloc), v3(mloc), v3(ploc), dist(ploc, cloc),
     tostring(try(function() return mesh:IsVisible() end)), tostring(try(function() return pawn.bHidden end)),
     tostring(try(function() return mesh:IsSimulatingPhysics(FName("None")) end)),
@@ -1548,8 +1723,12 @@ do
   if not ok then log("characters: NotifyOnNewObject failed: " .. tostring(err)) end
 end
 local function live_chars()
+  -- (none till sbslice is up: held() can't tell yet, and a character it said no to would be dropped for good)
+  local g = goreCtx.gore
+  if not (g and g.native_ready and g.native_ready()) then return {} end
+  if goreCtx.reseed and os.clock() - (goreCtx.seededAt or -99) > 5 then charsSeeded, goreCtx.reseed = false, nil end
   if not charsSeeded then
-    charsSeeded = true
+    charsSeeded, goreCtx.seededAt = true, os.clock()
     for _, a in ipairs(try(function() return FindAllOf("SBCharacter") end) or {}) do add_char(a) end
   end
   local out = {}
@@ -1557,6 +1736,8 @@ local function live_chars()
     if goreCtx.held(e.k) then
       out[#out + 1] = { obj = e.obj, addr = ad, cls = e.cls, k = e.k }
     else
+      -- (one spawned while no tick ran, a level loading, came too late to be checked: found again by a new seed)
+      if e.k.stale then goreCtx.reseed = true end
       chars[ad] = nil
     end
   end
@@ -2471,11 +2652,24 @@ local function gore_cut(pawn, mesh, h, hit)
     end
   end
   if g.sliceOnDeath ~= false and math.random() <= (g.sliceChance or 1.0) then
+    -- the odds' split share stands whatever the blade: a blade decides only the rest. It needed a blow from above,
+    -- which single player never reports, or a blade down her length, rare: no split in many deaths (reported)
+    local odds, total = g.death or {}, 0
+    for _, k in ipairs(KINDS) do total = total + math.max(tonumber(odds[k]) or 0, 0) end
+    if g.deathSplit ~= false and total > 0 and math.random() * total < math.max(tonumber(odds.split) or 0, 0) then
+      log(string.format("death: split rolled (%s of %s in the odds), down her length", tostring(odds.split), tostring(total)))
+      if gore.split(pawn, mesh, hit or (h and h.loc), split_normal(h), "death") then return end
+    end
     -- a killing blow the game told us about cuts along the blade (gore.blow), else the roll below. A made-up one (no
     -- skill hit, no weapon swing seen: a guessed plane through a guessed part of her, most of the time her spine) is
     -- rolled: cut along, it took her body at most deaths, the legs almost never (playtest)
+    -- (bladeFollow: the share of deaths with a blade seen that it decides; the rest roll the odds as well, near
+    -- where it hit: a blade mostly crossed her body, and waist cuts and splits were nearly every death, playtest)
+    local follow = math.min(math.max(tonumber(g.bladeFollow) or 1, 0), 1)
     if h and h.made then
       log(string.format("death: no blade seen (blow from %s), rolling the odds", tostring(h.src)))
+    elseif h and math.random() >= follow then
+      log(string.format("death: last hit %.2f s ago, its blade left aside (bladeFollow %.2f), rolling the odds", os.clock() - h.t, follow))
     elseif h then
       log(string.format("death: last hit %.2f s ago (hook called %d times, %d on Eve), cutting along the blade",
         os.clock() - h.t, hitCalls, hitsOnEve))
@@ -2483,9 +2677,10 @@ local function gore_cut(pawn, mesh, h, hit)
     end
     local normal = split_normal(h)
     -- a death always takes something off
-    local kind = pick_kind(normal ~= nil)
-    -- from above, the body is cut down through her, not across the waist (a stomp's level cut, playtest)
-    if normal and kind == "torso" then
+    local kind = pick_kind(false)
+    -- from above, the body is cut down through her, not across the waist (a stomp's level cut, playtest). Not on a
+    -- made-up blow: it comes from the nearest enemy, mostly "from above", and turned most waist cuts into splits
+    if normal and kind == "torso" and not (h and h.made) then
       log("death: rolled torso on a blow from above, split down her instead")
       kind = "split"
     end
@@ -2494,7 +2689,7 @@ local function gore_cut(pawn, mesh, h, hit)
     if kind == "split" then
       gore.split(pawn, mesh, hit or (h and h.loc), normal, "death")
     else
-      gore.slice(pawn, mesh, hit, "death", kind)
+      if gore.slice(pawn, mesh, hit, "death", kind) and kind == "limb" then gore.more_limbs(pawn, mesh, hit, "death") end
     end
   end
 end
@@ -2541,12 +2736,13 @@ RegisterKeyBind(Key.F7, on_key("F7", sandbox_ragdoll, true))
 RegisterKeyBind(Key.F7, { ModifierKey.SHIFT }, on_key("Shift+F7", sandbox_face, true))
 RegisterKeyBind(Key.F8, on_key("F8", sandbox_recover, true))
 RegisterKeyBind(Key.F6, on_key("F6", load_tune))
+RegisterKeyBind(Key.F3, on_key("F3", function() if goreCtx.gui then goreCtx.gui.toggle(find_eve()) end end))
 -- P in a death: the death keeps the key from photo mode, so sbslice.dll enters photo mode itself (its answer: the
 -- manager and the gates the key's path checks, read before). A death not held yet is held first, as Shift+F4 does:
 -- the death screen and getting up would come on over photo mode
 function screen.photo_key(label)
   if not active or saved.manual or (camHeld and camHeld.photo) or not gore then return end
-  if not screen.frozen then screen.hold(label) end
+  if not screen.frozen then screen.frozen = true; screen.allow_photo(true, label) end
   local pawn = find_eve()
   local mesh = pawn and try(function() return pawn.Mesh end)
   local r = gore.photo_open(mesh)
@@ -2584,7 +2780,7 @@ function screen.pad_photo()
   local on = try(function() return pc:IsInputKeyDown(k[1]) and pc:IsInputKeyDown(k[2]) end) == true
   if on and not screen.padWas then screen.photo_key(k.label) end
   screen.padWas = on
-  -- Shift+F4 on the controller (tune.holdPad, D-pad down + R1 unless set): both down holds the death or lets it go
+  -- Shift+F4 on the controller (tune.holdPad, D-pad down + R1 unless set): both down shows the death screen or hides it
   local hp = tune.holdPad
   if type(hp) ~= "table" or not hp[2] then screen.holdWas = nil; return end
   if not screen.holdKeys or screen.holdKeys.label ~= hp[1] .. "+" .. hp[2] then
@@ -2595,16 +2791,16 @@ function screen.pad_photo()
   if hold and not screen.holdWas then screen.hold(h.label) end
   screen.holdWas = hold
 end
--- Shift+F4 in a death: hold it, no death screen and no getting up till pressed again (the screen then comes back);
--- the game respawning her on its own still ends it
+-- Shift+F4 in a death: the death screen up now if it is still hidden (tune.deathScreen "key" waits for this), else
+-- hidden and the death held, no getting up, till pressed again; the game respawning her on its own still ends it
 function screen.hold(why)
-  screen.frozen = not screen.frozen
+  local t = polls * POLL_MS / 1000 + ahead
+  if screen.hiding(t) then screen.frozen, screen.shown = false, true else screen.frozen = true end
   screen.allow_photo(screen.frozen, why)
-  log(string.format("%s: death %s %.1f s in", why, screen.frozen and "held, no death screen or getting up till Shift+F4 (or the pad combo) again" or "let go",
-    polls * POLL_MS / 1000 + ahead))
+  log(string.format("%s: death %s %.1f s in", why, screen.frozen and "held, no death screen or getting up till Shift+F4 (or the pad combo) again" or "screen shown", t))
 end
 RegisterKeyBind(Key.F4, { ModifierKey.SHIFT }, on_key("Shift+F4", function()
-  if not active or saved.manual then log("Shift+F4: no death to hold"); return end
+  if not active or saved.manual then log("Shift+F4: no death"); return end
   screen.hold("Shift+F4")
 end))
 -- Esc on her death: fast forward to the death screen (tune.deathSkip; parked for now, untested)
@@ -2672,7 +2868,7 @@ local function hook_once()
   local function h(path, label)
     local ok, err = pcall(RegisterHook, path, function(ctx)
       local o = try(function() return ctx:get() end)
-      log(string.format("HOOK %s on %s", label, name(o)))
+      lg.v(string.format("HOOK %s on %s", label, name(o)))
       if label == "NotifyBP_ReInitActor" and after >= 0 then respawned, after, lastRecover, screen.stuck.at = true, 0, -100, nil end
       -- the game respawning her while she is still down (its death screen's button never seen): got up at once, not
       -- broken and with her weapon on the floor for the 1-2 s till the fallback timer (playtest)
@@ -2720,7 +2916,7 @@ local function trace(pawn, mesh)
     end
     parts[#parts + 1] = string.format("%s v=%.0f w=%.0f", tag, len(lv), len(av))
   end
-  log(string.format("p%03d %s", polls, table.concat(parts, " ")))
+  lg.v(string.format("p%03d %s", polls, table.concat(parts, " ")))
 end
 
 -- Animated deaths: the data mod's ragdoll key in her animated death shows (P_Eve_Dead, Dead2, Dead3, _Nikke,
@@ -2756,7 +2952,8 @@ end
 -- her fall plays on as the death (the show's own, or one of DEATH_FALLS over it)
 anim_fall = function(pawn, mesh, push)
   local a = tune.active or {}
-  animDeath = { pawn = pawn, mesh = mesh, push = push, z0 = try(function() return mesh:K2_GetComponentLocation().Z end) }
+  animDeath = { pawn = pawn, mesh = mesh, push = push, z0 = try(function() return mesh:K2_GetComponentLocation().Z end),
+    p0 = try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end) }
   log(string.format("death: animated fall, physics off (pelvis simulating %s)",
     tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
   local fall = forceFall
@@ -2809,6 +3006,8 @@ end
 -- after death wait photoGrace s
 function screen.photo_watch(pawn, mesh)
   local now = os.clock()
+  -- (a death lying still stays so while it is on: rag.hold_still)
+  if rag and rag.hold_still then rag.hold_still() end
   if now < screen.photoNext then return true end
   screen.photoNext = now + 0.5
   local st = gore.photo_state()
@@ -2838,6 +3037,7 @@ function screen.photo_watch(pawn, mesh)
   screen.photoOn = false
   screen.photoOpened = nil
   screen.photoAfter = now + ((tune.gore or {}).photoGrace or 0.5)
+  screen.stillTill = now + 1
   sw.drop()
   log("photo mode closed: the enemy's weapon trail starts over")
   return false
@@ -2916,13 +3116,23 @@ function screen.unfreeze(mesh)
   screen.frozenHair = nil
   log("pause over: her mesh and hair tick again")
 end
+-- the freeze holds this many seconds after photo mode's pawn or a widget of its is made: her tick ran between its
+-- pawn and its widgets, before its view or widgets showed, found no photo mode, and let her mesh and hair tick again
+-- for a frame: the hair on a cut-off head flew back to where it sits on her (playtest)
+screen.PHOTO_HOLD = 1.5
 -- photo mode's widgets, as they are made (the widget watch above): her own tick, where the rest of this runs, stops
 -- while photo mode is on (playtest: nothing of the mod's logged from photo mode opening till it closed, and the head
 -- and hair went to her neck), so the freeze comes here, on the game thread, as photo mode opens. Each one is kept:
 -- photo mode is on while one of them shows
-function screen.photo_widget(o, cls)
+-- (pawn_made: photo mode's pawn, not a widget to watch)
+function screen.photo_widget(o, cls, pawn_made)
   screen.photoW = screen.photoW or {}
-  screen.photoW[#screen.photoW + 1] = o
+  -- (kept by path: photo mode frees its widgets as it closes, and asking a freed one IsValid crashed UE4SS, playtest)
+  -- Only its panels: its ~90 slots and tab buttons are never in the viewport themselves, and each kept one is a name
+  -- table lookup a frame
+  if not pawn_made and not cls:find("_Slot_C$") and not cls:find("_Btn_C$") then
+    screen.photoW[#screen.photoW + 1] = goreCtx.keep(o)
+  end
   local pawn = cachedPawn
   local mesh = valid(pawn) and try(function() return pawn.Mesh end)
   local cut = gore and valid(mesh) and (gore.cuts_on(mesh)) > 0
@@ -2933,17 +3143,20 @@ function screen.photo_widget(o, cls)
     screen.photoOpened = true
     log(string.format("photo mode opening: head %s off where it was", head and h0 and string.format("%.0f cm", dist(head, h0)) or "?"))
   end
-  log(string.format("photo mode widget made: %s%s", cls, cut and "" or " (no piece off her)"))
-  if cut then screen.freeze(pawn, mesh, "photo mode's widget " .. cls) end
+  ;(pawn_made and log or lg.v)(string.format("photo mode %s made: %s%s", pawn_made and "pawn" or "widget", cls, cut and "" or " (no piece off her)"))
+  if cut then
+    screen.freeze(pawn, mesh, "photo mode's " .. (pawn_made and "pawn " or "widget ") .. cls)
+    screen.photoHold = os.clock() + screen.PHOTO_HOLD
+  end
 end
 local function photo_widget_up()
-  local up = false
   for i = #(screen.photoW or {}), 1, -1 do
-    local w = screen.photoW[i]
-    if not valid(w) then table.remove(screen.photoW, i)
-    elseif try(function() return w:IsInViewport() end) == true then up = true end
+    local k = screen.photoW[i]
+    local w = goreCtx.held(k) and k.obj
+    if not w then table.remove(screen.photoW, i)
+    elseif try(function() return w:IsInViewport() end) == true then return true end
   end
-  return up
+  return false
 end
 function screen.photo_freeze(pawn, mesh)
   local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
@@ -2952,10 +3165,16 @@ function screen.photo_freeze(pawn, mesh)
   local stopped = screen.time_stopped(pawn, gs)
   local widget = photo_widget_up()
   paused = paused or stopped or widget or screen.vtPhoto or screen.photoOn or screen.photoLive
+    or os.clock() < (screen.photoHold or 0)
   if paused then
     screen.freeze(pawn, mesh, screen.vtPhoto and "photo mode's view" or widget and "photo mode's widget"
       or (screen.photoOn or screen.photoLive) and "photo mode" or stopped and "the game's clock stopped" or "paused")
-  else screen.unfreeze(mesh) end
+  else
+    screen.unfreeze(mesh)
+    -- (where her head is the last frame before a pause, for the log as photo mode opens: the 0.5 s poll's was off by
+    -- however far a thrown piece had gone since)
+    screen.photoHead = try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end) or screen.photoHead
+  end
 end
 
 -- photo mode hides her when its camera comes close (ewanhowell5195's Nexus mod 319 un-hides her as the camera
@@ -3117,6 +3336,9 @@ end
 -- and photo mode's state read every 0.5 s while she has one, her head's place kept from before: the watch above takes
 -- over however photo mode opened
 function screen.photo_guard(pawn, mesh)
+  if screen.stillTill and rag and rag.hold_still then
+    if os.clock() < screen.stillTill then rag.hold_still() else screen.stillTill = nil end
+  end
   screen.watchFreeze = screen.frozenMesh ~= nil or (gore.cuts_on(mesh)) > 0
   if not screen.watchFreeze then screen.clock, screen.stopped = nil, nil end
   if screen.photoOn then return screen.photo_watch(pawn, mesh) end
@@ -3147,7 +3369,7 @@ function screen.photo_guard(pawn, mesh)
 end
 
 -- tune.holdDown: knocked down, she stays on the floor till the player gets her up (dodge or jump: the game's fast
--- getup). The data mod chains her tumbling knockdowns into Down_Eve, a copy of the shared Down (1 s, then Getup)
+-- getup). tables.lua chains her tumbling knockdowns into Down_Eve, a copy of the shared Down (1 s, then Getup)
 -- lasting held.LIFE s; off, its LifeTime in the loaded EffectTable goes back to Down's 1 s (gore.row_float). Looked at
 -- every few seconds and on a change of the setting; written once per change (`hold down:` in the log)
 screen.held = { key = nil, next = 0, LIFE = 100000, TABLE = "/Game/Local/Data/EffectTable.EffectTable" }
@@ -3158,6 +3380,9 @@ function screen.held.tick()
   if want == held.want and now < held.next then return end
   held.want, held.next = want, now + 5
   if not gore then return end
+  -- after tables.lua made Down_Eve
+  local tb = goreCtx.tables
+  if tb and not tb.done[tb.EFFECT] then held.want = nil; return end
   local dt = try(function() return StaticFindObject(held.TABLE) end)
   if not valid(dt) then return end
   local key = string.format("%s %x", tostring(want), dt:GetAddress())
@@ -3167,9 +3392,8 @@ function screen.held.tick()
   if not was and (why == "sbslice waiting" or why == "sbslice init") then held.next = 0; return end
   held.key = key
   if not was then
-    log("hold down: Down_Eve not set (" .. tostring(why) .. "): the data pak's 100000 s stands if it has the row "
-      .. "(\"err no such row\": the pak is missing or another mod's EffectTable wins, knockdowns stay the game's)")
-  elseif was ~= held.LIFE and was ~= 1 then log(string.format("hold down: Down_Eve's LifeTime was %g, not the data mod's (another mod's EffectTable?); now %g", was, want and held.LIFE or 1))
+    log("hold down: Down_Eve not set (" .. tostring(why) .. "): knockdowns stay the game's")
+  elseif was ~= held.LIFE and was ~= 1 then log(string.format("hold down: Down_Eve's LifeTime was %g (another mod's row?); now %g", was, want and held.LIFE or 1))
   else log(string.format("hold down %s: Down_Eve lasts %g s (was %g)", want and "on" or "off", want and held.LIFE or 1, was)) end
 end
 
@@ -3192,6 +3416,8 @@ local function tick()
   tp.mark("find")
   try(function() screen.probe(pawn) end)
   tp.mark("death screen")
+  if goreCtx.tables then goreCtx.tables.tick() end
+  if goreCtx.gui then goreCtx.gui.tick(pawn) end
   screen.held.tick()
   if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh, tp.mark) end
   tp.mark("enemies")
@@ -3308,6 +3534,16 @@ local function tick()
       log(string.format("animated death at 0.5 s: pelvis%s, simulating %s", v3(try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end)),
         tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
     end
+    -- her fall never played: another mod drives her pose (a body slider), and she stood frozen with pieces stuck in
+    -- the air (reported). Pelvis still and head at standing height 0.7 s in: the ragdoll instead
+    if polls == 20 and animDeath.p0 then
+      local p = try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end)
+      local h = try(function() return mesh:GetSocketLocation(FName("Bip001-Head")).Z - mesh:K2_GetComponentLocation().Z end)
+      local a0 = animDeath.p0
+      if p and h and h > 100 and math.abs(p.X - a0.X) + math.abs(p.Y - a0.Y) + math.abs(p.Z - a0.Z) < 3 then
+        ragdoll_now(string.format("her fall didn't play: pelvis still, head %.0f cm up", h))
+      end
+    end
     -- is she lying at the end? her head's height over the mesh's origin (her feet, the floor)
     if polls == 90 or polls == 150 then
       local h = try(function() return mesh:GetSocketLocation(FName("Bip001-Head")).Z - mesh:K2_GetComponentLocation().Z end)
@@ -3322,7 +3558,7 @@ local function tick()
     local chatty = respawned or after < AFTER_POLLS
     if respawned and after == 5 then log("after respawn: unpin(" .. reattach_transform(mesh) .. ")") end
     if chatty and after % 10 == 0 then watch(pawn, mesh) end
-    if chatty and after % 60 == 0 then log("ragdoll state after: " .. ragdoll_state(pawn)) end
+    if chatty and after % 60 == 0 then lg.v("ragdoll state after: " .. ragdoll_state(pawn)) end
     -- revived where she lay (the item): the death left her movement off (MOVE_None), and she walked in place with
     -- only the camera moving (reported). Checked once 3 s after she got up, it missed when the game turned it off
     -- again later or its respawn event came with the revive. Now any time in screen.stuck.WINDOW after she got up:
@@ -3449,6 +3685,7 @@ local lastFrame, lastTick, lastDil = nil, nil, nil
 local lastTickErr, tickErrRepeats = nil, 0
 local function game_tick(ctx)
   if not adopt(ctx) then return end
+  goreCtx.frame = goreCtx.frame + 1
   local now = os.clock()
   local gap = lastFrame and (now - lastFrame) * 1000
   lastFrame = now
@@ -3458,10 +3695,23 @@ local function game_tick(ctx)
   if gap and gap >= HITCH_MS and gap < HITCH_MAX_MS then
     local st = gore and gore.last_stage
     local slow = math.min(dil or 1, lastDil or 1)
-    log(string.format("frame hitch: %.0f ms%s%s%s", gap,
+    screen.perf_note("hitch", gap, string.format("frame hitch: %.0f ms%s%s%s", gap,
       lastTick and now - lastTick.t < 0.5 and string.format(", the mod's last tick %.0f ms", lastTick.ms) or "",
       st and now - st.t < 0.5 and ", after " .. st.what or "",
       slow < 0.99 and string.format(", her time x%.2f (the game's hit-stop)", slow) or ""))
+  end
+  screen.perf_flush()
+  -- a run of slow frames with the mod's own tick short (an fps dip, playtest): told once with what the mod has out
+  if gap and gap >= HITCH_MS and gap < HITCH_MAX_MS and not (lastTick and now - lastTick.t < 0.5 and lastTick.ms > 20) then
+    local d = screen.dip or { t = {}, told = 0 }
+    screen.dip = d
+    d.t[#d.t + 1] = now
+    while d.t[1] and now - d.t[1] > 1.5 do table.remove(d.t, 1) end
+    if #d.t >= 4 and now - d.told > 10 then
+      d.told = now
+      log(string.format("fps dip: %d slow frames in 1.5 s, the mod's tick short; out now: %s", #d.t,
+        gore and gore.load_counts and (try(gore.load_counts) or "?") or "?"))
+    end
   end
   lastDil = dil
   for _, fn in ipairs(pending) do fn() end
@@ -3508,11 +3758,14 @@ local function game_tick(ctx)
   nextTick = now + POLL_MS / 1000
   local ok, err = xpcall(tick, debug and debug.traceback or tostring)
   lastTick = { t = os.clock(), ms = (os.clock() - now) * 1000 }
-  if lastTick.ms >= ((tune.gore or {}).slowMs or 15) then log(string.format("slow tick: %.0f ms: %s", lastTick.ms, table.concat(tp, ", "))) end
+  if lastTick.ms >= ((tune.gore or {}).slowMs or 15) then
+    screen.perf_note("slow", lastTick.ms, string.format("slow tick: %.0f ms: %s", lastTick.ms, table.concat(tp, ", ")))
+  end
   if not ok then
     -- the same error on every tick filled the log (900 lines in 30 s): once with its traceback, then a count
+    -- (by its message alone: the same error reached by two paths alternated tracebacks and was told every tick)
     err = tostring(err)
-    if err == lastTickErr then
+    if err:match("^[^\n]*") == (lastTickErr or ""):match("^[^\n]*") then
       tickErrRepeats = tickErrRepeats + 1
       if tickErrRepeats % 300 == 0 then log(string.format("tick error repeated %d times", tickErrRepeats)) end
     else
@@ -3560,18 +3813,31 @@ function screen.vis_watch()
 end
 
 local TICK_FN = "/Game/Art/Character/PC/CH_P_EVE_01/Blueprints/CH_P_EVE_01_Blueprint.CH_P_EVE_01_Blueprint_C:ReceiveTick"
--- hooked once, then the loop stops: her Blueprint stays loaded for the whole game (one hook a session in 163 logged
--- sessions, never again at a respawn), and nothing of the mod's then runs off the game thread through a respawn's
--- level load. (UE4SS's BeginPlay hook never fires in this game: hooked from it, she was never hooked.) Only object
--- lookups from this thread, no engine calls
-LoopAsync(250, function()
-  if not valid(FindFirstOf("CH_P_EVE_01_Blueprint_C")) then return false end
+-- hooked once: her Blueprint stays loaded for the whole game (one hook a session in 163 logged sessions, never again
+-- at a respawn). (UE4SS's BeginPlay hook never fires in this game: hooked from it, she was never hooked.) From the
+-- player controller's ClientRestart, on the game thread as the level's player starts: hooked from an async loop
+-- (a FindFirstOf over every object, then RegisterHook, off the game thread while the save loaded) the game now and
+-- then crashed on launch a second or two after it (null + 0x88, four launches, playtest). The loop is left only for
+-- a script reloaded mid-game, which sees no ClientRestart: from 20 s on, a name lookup alone
+screen.tickHooked, screen.loadedAt = false, os.clock()
+function screen.hook_tick(how)
+  if screen.tickHooked then return true end
   local fn = try(function() return StaticFindObject(TICK_FN) end)
   local addr = valid(fn) and fn:GetAddress() or nil
   if not addr then return false end
   local ok, err = pcall(RegisterHook, TICK_FN, function(ctx) game_tick(ctx) end)
-  log(string.format("tick hook on %x: %s", addr, ok and "ok" or tostring(err)))
+  screen.tickHooked = ok
+  log(string.format("tick hook on %x (%s): %s", addr, how, ok and "ok" or tostring(err)))
   return ok
+end
+screen.restartHook, screen.restartErr = pcall(RegisterHook, "/Script/Engine.PlayerController:ClientRestart", function()
+  if not screen.tickHooked then pcall(screen.hook_tick, "player start") end
+end)
+if not screen.restartHook then log("ClientRestart hook failed: " .. tostring(screen.restartErr) .. " (her tick hooked from the loop)") end
+LoopAsync(1000, function()
+  if screen.tickHooked then return true end
+  if screen.restartHook and os.clock() - screen.loadedAt < 20 then return false end
+  return screen.hook_tick("late")
 end)
 
 log("loaded (stabiliser + logger)")

@@ -20,6 +20,7 @@
 #define DeleteFileW DeleteFileW_
 #define GetModuleHandleW GetModuleHandleW_
 #define GetModuleHandleExW GetModuleHandleExW_
+#define GetModuleFileNameW GetModuleFileNameW_
 #define DisableThreadLibraryCalls DisableThreadLibraryCalls_
 #define GetProcessHeap GetProcessHeap_
 #define HeapAlloc HeapAlloc_
@@ -55,6 +56,7 @@ int mem_readable(u64 p, u64 n)
 #undef DeleteFileW
 #undef GetModuleHandleW
 #undef GetModuleHandleExW
+#undef GetModuleFileNameW
 #undef DisableThreadLibraryCalls
 #undef GetProcessHeap
 #undef HeapAlloc
@@ -78,6 +80,7 @@ int CloseHandle_(HANDLE h) { (void)h; return 1; }
 int DeleteFileW_(const u16 *p) { (void)p; return 1; }
 void *GetModuleHandleW_(const u16 *p) { (void)p; return 0; }
 int GetModuleHandleExW_(u32 a, const void *b, void **c) { (void)a;(void)b;(void)c; return 1; }
+u32 GetModuleFileNameW_(void *a, u16 *b, u32 c) { (void)a; (void)c; if (b) b[0] = 0; return 0; }
 int DisableThreadLibraryCalls_(void *a) { (void)a; return 1; }
 HANDLE GetProcessHeap_(void) { return 0; }
 void *HeapAlloc_(HANDLE h, u32 f, u64 n) { (void)h; (void)f; return calloc(1, n); }
@@ -343,7 +346,7 @@ static void write_obj(const char *fn, const skin_info *o)
 static const char *NOSINK_PRE[] = { "Bip001", "SC_", "Ab_" };
 static const char *NOSINK_PART[] = { "Hair", "Cape", "Breast", "Prop" };
 // the spine bones the lid rides, as gore.lua sends them after the limbs (SPLIT_RIDE.of); NORIDE=1: none (axis bands).
-// The copy (half B) lets its head go free, so it never rides it; with the spine broken (brk), each half rides only
+// Never the head (gore.lua's lid stops at the neck); with the spine broken (brk), each half rides only
 // its own side of the break (A the break bone and up)
 static void set_ride(int copy, int brk)
 {
@@ -354,7 +357,8 @@ static void set_ride(int copy, int brk)
     for (int i = 0; i < 6; i++) if (brk >= 0 && bone(ride[i]) == brk) si = i;
     for (int i = 0; i < 6; i++) {
         int ok = si < 0 ? (!copy || i > 0) : copy ? i > si : i <= si;
-        if (ok && bone(ride[i]) >= 0) ride_bones[nride++] = bone(ride[i]);
+        // (never the head: the lid stops at the neck, and the sheet behind it with it)
+        if (ok && i > 0 && bone(ride[i]) >= 0) ride_bones[nride++] = bone(ride[i]);
     }
 }
 static void base_nosink(void)
@@ -616,7 +620,20 @@ int main(int argc, char **argv)
                     printf("\n");
                 }
             }
-            printf("half %c: %d faces stretched over the cut (worst %.1f cm)\n", h ? 'B' : 'A', nbad, worst);
+            // and what it gave up stays within the sword's cross-section on the plane (the cut face): pressed along
+            // the normal, the far blade lay over the plane a slanted, squashed copy of the sword (playtest)
+            float wide = 0, side0 = 0, side1 = 0;
+            for (int k = 0; k < 3; k++) if (k != ax) { if (side0 == 0) side0 = hi[k] - lo[k]; else side1 = hi[k] - lo[k]; }
+            float room = __builtin_sqrtf(side0 * side0 + side1 * side1) / 2 / __builtin_cosf(tl) + 2;
+            for (int v = 0; v < NV; v++) {
+                float d = dist3(xs + v * 3, x0 + v * 3);
+                if (d < 0.01f) continue;
+                float r = dist3(xs + v * 3, at);
+                if (r > wide) wide = r;
+            }
+            if (wide > room) nbad++;
+            printf("half %c: %d faces stretched over the cut (worst %.1f cm), its far side within %.1f cm of the cut (%.1f room)\n",
+                   h ? 'B' : 'A', nbad, worst, wide, room);
             bad += nbad;
             if (argc > 2) {
                 char fn[512]; snprintf(fn, sizeof fn, "%s_%c.obj", argv[2], h ? 'b' : 'a');
@@ -910,6 +927,10 @@ int main(int argc, char **argv)
         if (!env_on("OLDDRV") && limb_is_leg(ua)) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, limbbits) ? 2 : under_driver(i));
         skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1);
         printf("arm: %.300s\n", lastres);
+        // the body cap's centre (bc=, on the rim the DLL sends, where gore.lua puts the cap): its height off the plane
+        float capc[3] = { 0, 0, 0 };
+        int capok = 0;
+        { const char *q = strstr(lastres, " bc="); capok = q && sscanf(q + 4, "%f,%f,%f", &capc[0], &capc[1], &capc[2]) == 3; }
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
         int arm_s1 = nsinks;
         // the cap's rim (the body side's kept sections, core_rim's last call) goes all the way round: InnerSuit1's thigh
@@ -1128,7 +1149,7 @@ int main(int argc, char **argv)
         skin_collapse(); // "k", as in game a few frames after the cut
         // the stump's collapsed seam stays behind its cap: no body-side vertex wholly on sinks lies past the plane into
         // the limb (an outfit cone stuck out of the cut face, playtest screenshot); the limb's likewise behind its own
-        int conev = 0; float conemax = 0, conelimb = 0;
+        int conev = 0; float conemax = -1e9f, conelimb = 0;
         {
             for (int v = 0; v < NV; v++) {
                 int any = 0, all = 1, onlimb = 0;
@@ -1155,6 +1176,10 @@ int main(int argc, char **argv)
                 }
             }
             printf("cone: seam past its cap: %d vertices, body side up to %.1f cm into the limb, limb side up to %.1f cm into the body\n", conev, conemax, conelimb);
+            // and behind the cap itself, which sits on the rim, not the plane: a thigh's rim lay 3.4 cm in from the plane
+            // and its seam's point, 2 cm in from the plane, drew half the suit out over the cap (playtest screenshot)
+            float rimh = capok ? (capc[0] - at2[0]) * nn[0] + (capc[1] - at2[1]) * nn[1] + (capc[2] - at2[2]) * nn[2] : 0;
+            if (capok && conemax > -1e8f && conemax > rimh - 1.0f) conev++, printf("cone: the body's seam reaches %.1f cm, its rim's middle %.1f: in front of its cap\n", conemax, rimh);
         }
         // HEADAFTER=1: the killing swing's head cut right after the arm's (gore.lua's "one swing, then head"): MODE_PLANE
         // on Bip001-Head HEADAT (1.0) of the way from the neck, square to it, as for Eve (her head goes on the face mesh), then
@@ -2295,6 +2320,7 @@ int main(int argc, char **argv)
         bend(local, "Bip001-Spine", 0, 1, 0, 30); bend(local, "Bip001-Spine2", 1, 0, 0, -20); bend(local, "Bip001-Head", 0, 0, 1, 40);
         bend(local, "Bip001-L-Clavicle", 1, 0, 0, 15);
         pose_from_local(space);
+        sink_hold(0, 0); // "H", her tick: the held seams and sheets on their bones
         for (int h = 0; h < 2; h++) {
             skin_info *o = h ? ov_b : ov_a;
             float *nn = h ? neg : n;
@@ -2392,7 +2418,8 @@ int main(int argc, char **argv)
             // skin_lid bends it (splitLidSkin, the default): each point between the two ride bones of the spine
             // segment nearest to it, blended along that segment; LIDRIGID=1 the rigid pieces (each on the nearest bone)
             int chain[6], nch = 0, rigid = env_on("LIDRIGID");
-            for (int r = h ? 1 : 0; r < 6; r++) if (bone(ride[r]) >= 0) chain[nch++] = bone(ride[r]);
+            // (never the head: gore.lua's lid stops at the neck)
+            for (int r = 1; r < 6; r++) if (bone(ride[r]) >= 0) chain[nch++] = bone(ride[r]);
             int poke = 0, sheet = 0, pv = -1, p1 = 0, p2 = 0, p3 = 0; float pworst = 0;
             for (int v = 0; v < NV && nch; v++) {
                 if (!vanished_in(&o[v], h ? (u64)comp_b : (u64)comp_a) || tied_to_gone(h, v)) continue;

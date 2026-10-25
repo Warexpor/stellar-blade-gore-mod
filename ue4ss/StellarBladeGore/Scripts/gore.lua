@@ -73,6 +73,14 @@ function SPLIT_RIDE.of(q, comp)
   end
   return #list > 0 and list or SPLIT_RIDE
 end
+-- the ones a half's lid bends with, and the sheet behind it (sbslice's bands): never the head. The points by the neck
+-- turned fully with it, and as the head flopped in her ragdoll they fanned out of her in long spikes, where the
+-- neck's skin follows it only in part (playtest)
+function SPLIT_RIDE.lid(q, comp)
+  local list = {}
+  for _, b in ipairs(SPLIT_RIDE.of(q, comp)) do if b ~= "Bip001-Head" then list[#list + 1] = b end end
+  return #list > 0 and list or SPLIT_RIDE.of(q, comp)
+end
 -- the joints a split sorts the arms and legs by (shoulder, hip). Not LIMB_ROOTS' clavicles: those sit by the neck, and
 -- a split leaned beside it gave both arms to the half with the head, one cut through at the shoulder
 local SPLIT_LIMBS = { "Bip001-L-UpperArm", "Bip001-R-UpperArm", "Bip001-L-Thigh", "Bip001-R-Thigh" }
@@ -210,6 +218,26 @@ local function load_obj(path)
   return valid(o) and o or nil
 end
 
+-- the stumps as the game made Tachy's (tachy_core.lua): her damage material on the caps,
+-- their flesh mapped onto its disc, and her metal bone and tubes in place of GM_Brokenbone. The material and its
+-- textures are the game's own (loaded from its paks, nothing shipped)
+M.TACHY_MAT = "/Game/Art/Character/NPC/CH_NPC_TachyNPC/Materials/MI_CH_NPC_TachyNPC_Destroyed.MI_CH_NPC_TachyNPC_Destroyed"
+function M.tachy()
+  if M.tachy_data == nil then
+    local ok, t = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/tachy_core.lua")
+    M.tachy_data = ok and type(t) == "table" and t.disc and t.verts and t.tris and t or false
+    if not M.tachy_data then log("tachy stumps: tachy_core.lua NOT read (" .. tostring(t) .. "), the meat as before") end
+  end
+  return M.tachy_data or nil
+end
+-- the cap's material: Tachy's on a lid mapped onto her disc (tachyLids; not a split's lid pieces, built: theirs tile
+-- the meat). Off by default: on the caps' procedural mesh her flesh read pale and washed out whatever its parameters
+-- (playtest), so lids keep 0.3.0's meat and only the bone and tubes are hers
+function M.cap_mat(built)
+  if not built and M.tachy() and cfg().tachyLids then return M.TACHY_MAT end
+  return cfg().capMaterial or CAP_MATERIAL
+end
+
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local function sub(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
 local function add(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
@@ -248,6 +276,17 @@ function M.hold_seams()
     native.hold_cdo:SBRewardGroupDropFormationPathLocation(FName("None"), 0, 0, 0, "H" .. table.concat(list, ","), 0, 0, 0)
   end)
   if not ok then native.hold_cdo = nil; log("seam hold failed: " .. tostring(err)) end
+end
+
+function M.native_ready() return native.state == "ready" end
+-- a command with no answer file (active.lua's eased grip, sent every tick: reading an answer each time stuttered)
+function M.fire(s)
+  if native.state ~= "ready" then return end
+  local ok, err = pcall(function()
+    if not valid(native.hold_cdo) then native.hold_cdo = load_obj(CHEAT_CDO) end
+    if native.hold_cdo then native.hold_cdo:SBRewardGroupDropFormationPathLocation(FName("None"), 0, 0, 0, s, 0, 0, 0) end
+  end)
+  if not ok then native.hold_cdo = nil; log("sbslice " .. s:sub(1, 1) .. " failed: " .. tostring(err)) end
 end
 
 -- one command to sbslice.dll (see exec_slice there); the answer it leaves in sbslice.cut
@@ -302,11 +341,16 @@ local function native_tick()
       local note = read_file(p)
       if note then log("sbslice.dll last session: " .. note); os.remove(p) end
     end
+    -- (and its own start: written from its DllMain, by its own path, for a launch that closed before the first window)
+    log("sbslice.dll " .. tostring(read_file("ue4ss/Mods/StellarBladeGore/sbslice.boot") or "boot: no note (an older sbslice.dll?)"))
     local f = try(function() return StaticFindObject(UFUNC) end)
     if not valid(f) then native.state = "failed"; log("no " .. UFUNC); return end
-    local w = io.open(REQ, "w")
+    -- (written whole, then renamed in: the DLL polls for it and could read it half written)
+    local w = io.open(REQ .. ".tmp", "w")
     if not w then native.state = "failed"; log("cannot write " .. REQ); return end
     w:write(string.format("%x", f:GetAddress())); w:close()
+    os.remove(REQ)
+    if not os.rename(REQ .. ".tmp", REQ) then native.state = "failed"; log("cannot write " .. REQ); return end
     native.state = "waiting"
     log(string.format("asked sbslice.dll to take over %s (UFunction %x)", UFUNC, f:GetAddress()))
     return
@@ -655,6 +699,178 @@ local function lid_mesh(o, k)
   return c, verts, tris, normals, uvs, tangents, colors
 end
 
+-- Tachy's flesh as a torn surface: rings from the rim in to the centre, each point raised by her
+-- texture's relief (t.relief, read where that point lands on the disc) and a swell where the flesh pushes out of the
+-- skin, the normals worked out from the faces so the light shows it. The relief fades out at the rim, which stays on
+-- her skin, and under the core. The back face is lid_mesh's flat one. Same return as lid_mesh
+-- one frame for both openings of a cut (tachy_lid, M.core): the body side's x and y. Each opening had its own (its
+-- first rim point, its fitted ellipse) and Tachy's core was turned, not mirrored, onto the other side: the stump and
+-- the cut piece showed different cross-sections, the bone in one place on the arm and elsewhere on the shoulder. With
+-- this the piece's side is the stump's mirror image, as the two faces of one cut are
+function M.pair(ob, ol)
+  local z = ob and ob.z and norm(ob.z)
+  local x = z and ob.x and norm(sub(ob.x, scale(z, dot(ob.x, z))))
+  if not x then return end
+  local y = cross(z, x)
+  ob.tx, ob.ty = x, y
+  if ol then ol.tx, ol.ty = x, y end
+end
+-- an opening's frame for the tachy look: x along it, y across it (the shared one, M.pair), and whether that is
+-- mirrored (the cut piece's side: y = -(z cross x))
+function M.tachy_frame(o, z)
+  local x0 = o.tx or o.x
+  local x = x0 and norm(sub(x0, scale(z, dot(x0, z))))
+  if not x then return nil end
+  local y = cross(z, x)
+  local mirrored = o.ty and dot(y, o.ty) < 0 or false
+  if mirrored then y = scale(y, -1) end
+  return x, y, mirrored
+end
+-- a cap with no core of Tachy's over it (a neck's or waist's, which get the snapped bone at the spine, and a split's)
+-- takes this patch of her disc, {x, y, radius} in disc radii: plain flesh away from her core, whose gold socket and
+-- tube holes are painted on the disc and showed through on a neck as a stray bump by the bone (playtest)
+M.TACHY_PATCH = { -0.3, -0.3, 0.38 }
+-- how high the flesh rises in the middle of an opening of mean radius r (tachyDome of a dome: 0 flat, as a blade
+-- leaves it; the lid was a smooth dome and read as a cover, not a cut, playtest). Tachy's core stands on it
+function M.tachy_dome(r)
+  return math.min(math.max(r * 0.18, 0.4), 1.8) * (cfg().tachyDome or 0)
+end
+-- smooth value noise, -1..1, on a hashed lattice
+function M.tachy_noise(x, y)
+  local function h(i, j)
+    local n = (i * 374761393 + j * 668265263) % 2147483647
+    n = (n ~ (n >> 13)) * 1274126177 % 2147483647
+    return (n % 2001) / 1000 - 1
+  end
+  local i, j = math.floor(x), math.floor(y)
+  local fx, fy = x - i, y - j
+  fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+  local a = h(i, j) + (h(i + 1, j) - h(i, j)) * fx
+  local b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * fx
+  return a + (b - a) * fy
+end
+-- the torn surface: rings from the rim in, and points round each (the outline's, more put between them up to
+-- TACHY_AROUND: at the outline's 15-40 the relief was too coarse to read as torn)
+M.TACHY_RINGS = { 1, 0.94, 0.88, 0.82, 0.75, 0.68, 0.61, 0.54, 0.47, 0.4, 0.33, 0.26, 0.19, 0.12, 0.06 }
+M.TACHY_AROUND = 72
+function M.tachy_lid(o, k, t)
+  local g = cfg()
+  local n = #o.p
+  local c = vec(0, 0, 0)
+  for _, q in ipairs(o.p) do c = add(c, q) end
+  c = scale(c, 1 / n)
+  local z = o.z
+  local r = 0
+  for _, q in ipairs(o.p) do local d = sub(q, c); r = r + math.sqrt(math.max(dot(d, d) - dot(d, z) ^ 2, 0)) end
+  r = r / n
+  local dome = M.tachy_dome(r)
+  -- (deep: a harsh cut's torn flesh; at r * 0.22 the relief's typical 0.27 of it was 2-3 mm on a neck and read as flat,
+  -- playtest)
+  -- (at r * 0.45 up to 3 cm, with the noise on top, it was too lumpy, playtest)
+  -- (still too lumpy at r * 0.3 up to 1.5 cm, and its creases sank under the cut, where the limb's own closed skin hid the
+  -- flesh: the stump looked uncovered, playtest. Creases go at most a fifth of it down)
+  local amp = math.min(math.max(r * 0.12, 0.3), 0.8) * (g.tachyRelief or 1)
+  local u, w = M.tachy_frame(o, z)
+  if not u then
+    u = norm(sub(o.p[1], add(c, scale(z, dot(sub(o.p[1], c), z))))) or o.x
+    w = cross(z, u)
+  end
+  local disc, rel = t.disc, t.relief
+  -- (a plain patch of the disc under a core too: the whole disc's painted gold socket showed beside the core's own,
+  -- playtest)
+  local pa = M.TACHY_PATCH
+  local gs = rel and rel.size or 0
+  -- the relief at a point of the disc's square (-1..1 each way), bilinear
+  local function relief(x, y)
+    if gs == 0 then return 0 end
+    local fx, fy = (x + 1) * 0.5 * gs - 0.5, (y + 1) * 0.5 * gs - 0.5
+    local x0, y0 = math.max(0, math.min(gs - 2, math.floor(fx))), math.max(0, math.min(gs - 2, math.floor(fy)))
+    local ax, ay = math.max(0, math.min(1, fx - x0)), math.max(0, math.min(1, fy - y0))
+    local function at(i, j) return (rel[j * gs + i + 1] or 0) / 99 end
+    local h = (at(x0, y0) * (1 - ax) + at(x0 + 1, y0) * ax) * (1 - ay) + (at(x0, y0 + 1) * (1 - ax) + at(x0 + 1, y0 + 1) * ax) * ay
+    -- torn finer than the texture's 48 cells: smooth noise on the disc (the same on both faces of a cut: they mirror)
+    return math.max(-1, math.min(1, h + 0.25 * M.tachy_noise(x * 9, y * 9) + 0.15 * M.tachy_noise(x * 21 + 7, y * 21 + 3)))
+  end
+  local verts, normals, uvs, tris, tangents, colors = {}, {}, {}, {}, {}, {}
+  local function vert(pos, nrm, uv)
+    verts[#verts + 1] = pos
+    normals[#normals + 1] = nrm
+    uvs[#uvs + 1] = uv
+    tangents[#tangents + 1] = { TangentX = u, bFlipTangentY = dot(cross(nrm, u), w) < 0 }
+    colors[#colors + 1] = { R = 1, G = 1, B = 1, A = 1 }
+    return #verts - 1
+  end
+  -- the front: ring i, point j; ρ the share of the way out to the rim
+  local R = M.TACHY_RINGS
+  local pts = {}
+  local per = math.max(1, math.ceil(M.TACHY_AROUND / n))
+  for j, q in ipairs(o.p) do
+    local q2 = o.p[j % n + 1]
+    for s2 = 0, per - 1 do pts[#pts + 1] = add(q, scale(sub(q2, q), s2 / per)) end
+  end
+  local nf = #pts
+  local grid = {}
+  for i, rho in ipairs(R) do
+    grid[i] = {}
+    for j, q in ipairs(pts) do
+      local d = sub(q, c)
+      local h = dot(d, z)
+      local flat = sub(d, scale(z, h))
+      local ang = math.atan(dot(flat, w), dot(flat, u))
+      local cx, cy = pa[1] + math.cos(ang) * rho * pa[3], pa[2] + math.sin(ang) * rho * pa[3]
+      -- (out at the rim: the skin's own height; in from it the dome, a swell just inside the skin, the relief, which
+      -- fades in over the outer tenth, and under a core)
+      local fade = math.min(1, (1 - rho) / 0.1) * (o.core and math.min(1, rho / 0.3) or 1)
+      if o.boneAt then
+        local b = sub(add(c, scale(flat, k * rho)), o.boneAt)
+        local bd = math.sqrt(math.max(dot(b, b) - dot(b, z) ^ 2, 0))
+        fade = fade * math.max(0, math.min(1, (bd - 1.2) / 1.5))
+      end
+      local lift = 0.2 + h * rho + dome * (1 - rho * rho) * 0.85 + dome * 0.35 * math.sin(math.min(1, (1 - rho) / 0.3) * math.pi)
+        + amp * fade * math.max(relief(cx, cy), -0.2)
+      grid[i][j] = vert(add(scale(flat, k * rho), scale(z, lift)), z,
+        { X = disc[1] + disc[3] * cx, Y = disc[2] + disc[3] * cy })
+    end
+  end
+  local centre = vert(scale(z, dome * 0.85 + 0.2), z, { X = disc[1] + disc[3] * pa[1], Y = disc[2] + disc[3] * pa[2] })
+  local front = {}
+  -- counter-clockwise from +z, as lid_mesh's (each written backwards for UE's clockwise front faces)
+  local function tri(a, b, cc) front[#front + 1] = { a, b, cc } end
+  for i = 1, #R - 1 do
+    for j = 1, nf do
+      local jn = j % nf + 1
+      local a, b, cc, d = grid[i][j], grid[i][jn], grid[i + 1][jn], grid[i + 1][j]
+      tri(a, b, cc); tri(a, cc, d)
+    end
+  end
+  for j = 1, nf do tri(grid[#R][j], grid[#R][j % nf + 1], centre) end
+  -- normals from the faces (each face's, by its area, onto its corners)
+  local acc = {}
+  for _, f in ipairs(front) do
+    local p1, p2, p3 = verts[f[1] + 1], verts[f[2] + 1], verts[f[3] + 1]
+    local fn = cross(sub(p2, p1), sub(p3, p1))
+    if dot(fn, z) < 0 then fn = scale(fn, -1) end
+    for _, v in ipairs(f) do acc[v] = acc[v] and add(acc[v], fn) or fn end
+    tris[#tris + 1] = f[3]; tris[#tris + 1] = f[2]; tris[#tris + 1] = f[1]
+  end
+  for v, a in pairs(acc) do normals[v + 1] = norm(a) or z end
+  -- the back: lid_mesh's flat face, the other way
+  local nz = scale(z, -1)
+  local base = #verts
+  vert(scale(z, dome), nz, { X = disc[1], Y = disc[2] })
+  for _, q in ipairs(o.p) do
+    local d = sub(q, c)
+    local h = dot(d, z)
+    local flat = sub(d, scale(z, h))
+    vert(add(scale(flat, k), scale(z, h + 0.2)), nz, { X = disc[1], Y = disc[2] })
+  end
+  for j = 0, n - 1 do
+    local jn = (j + 1) % n
+    tris[#tris + 1] = base + 1 + j; tris[#tris + 1] = base + 1 + jn; tris[#tris + 1] = base
+  end
+  return c, verts, tris, normals, uvs, tangents, colors
+end
+
 -- the flesh on a cap: MI_A_Meat_01_1 is an effect material whose BloodColor glows (emissive 10, 2.4, 0: bright orange
 -- on her stumps), so each cap gets its own instance with tune.gore.capBloodColor
 local cap_mid_logged = false
@@ -705,8 +921,150 @@ function M.matte_cap(comp)
   matte.ok = true
   return true
 end
+-- Tachy's flesh as it showed on the caps: near black red (sRGB 35, 0, 0) and near mirror smooth (her texture's
+-- roughness 0.05 over the instance's floor 0.3), so in game the room's reflections were all of it, grey (playtest).
+-- Each cap gets its own instance of her material, brighter, tinted crimson and rougher (tune.gore.tachyFlesh); her
+-- core keeps hers as it is. False when it wasn't made
+function M.tachy_flesh(comp, mat)
+  local f = cfg().tachyFlesh
+  if type(f) ~= "table" or f.enabled == false then return false end
+  local mid = try(function() return comp:CreateDynamicMaterialInstance(0, mat, FName("None")) end)
+  if not valid(mid) then return false end
+  M.flesh_params(mid, f)
+  -- (its component kept for M.reflesh: the menu's flesh rows change the stumps already out. Kept by path, the
+  -- instance and then the component were never found again, the rows changed nothing, playtest)
+  M.fleshComps = M.fleshComps or {}
+  local own = try(function() return comp:GetOwner() end)
+  if valid(own) then
+    local ca = try(function() return comp:GetAddress() end)
+    for i = #M.fleshComps, 1, -1 do if M.fleshComps[i].addr == ca then table.remove(M.fleshComps, i) end end
+    M.fleshComps[#M.fleshComps + 1] = { comp = comp, addr = ca, actor = try(function() return own:GetAddress() end) }
+    if #M.fleshComps > 64 then table.remove(M.fleshComps, 1) end
+  end
+  if not M.fleshLogged then
+    M.fleshLogged = true
+    M.flesh_log(mid)
+  end
+  return true
+end
+-- what the mod has out in the world now, for a run of slow frames its own tick didn't cause (main.lua's fps dip)
+function M.load_counts()
+  local function n(t) local k = 0; for _ in pairs(t) do k = k + 1 end; return k end
+  return string.format("caps %d, pool lids %d, floor decals %d, bleeding openings %d, bleed effects %d, effects %d, held chains %d, cuts %d, split pieces %d",
+    #caps, #(M.pool.lid or {}), n(decals), n(trackers), n(bleeds), n(spawned), n(hung), #cuts, n(clones))
+end
+-- the menu changed a flesh setting: every stump's flesh out now takes it
+function M.reflesh()
+  local f = cfg().tachyFlesh
+  if type(f) ~= "table" then return end
+  local n, gone, other, last = 0, 0, 0, nil
+  local tachy = M.TACHY_MAT and try(function() return StaticFindObject(M.TACHY_MAT) end)
+  local ta = valid(tachy) and try(function() return tachy:GetAddress() end)
+  -- alive: its actor still one of the cuts' caps or a pool lid (the mod destroys them only off those lists, so a
+  -- freed one is never touched)
+  -- (by address: each UE4SS call hands back its own Lua object for the same actor, never equal to the list's)
+  local live = {}
+  local function mark_live(a, ok) local ad = ok and try(function() return a:GetAddress() end); if ad then live[ad] = true end end
+  -- (an enemy's caps by enemy.alive: valid() on one the game may have freed crashed UE4SS, 0.3.0)
+  for _, x in ipairs(caps) do mark_live(x, enemy.alive(x)) end
+  for _, e in ipairs(M.pool.lid or {}) do mark_live(e.a, valid(e.a)) end
+  for i = #(M.fleshComps or {}), 1, -1 do
+    local k = M.fleshComps[i]
+    if k.actor and live[k.actor] and valid(k.comp) then
+      -- (the instance it draws now: a pool lid may have gone to a core or the meat since)
+      local m = try(function() return k.comp:GetMaterial(0) end)
+      local par = valid(m) and try(function() return m.Parent end)
+      local isMid = valid(m) and (try(function() return m:GetClass():GetFName():ToString() end) or ""):find("MaterialInstanceDynamic")
+      if isMid and valid(par) and ta and try(function() return par:GetAddress() end) == ta then
+        M.flesh_params(m, f); n = n + 1; last = m
+      else other = other + 1 end
+    else table.remove(M.fleshComps, i); gone = gone + 1 end
+  end
+  log(string.format("menu: flesh set on %d stump(s) out (%d gone, %d on another material)", n, gone, other))
+  if last then M.flesh_log(last, n) end
+end
+function M.flesh_params(mid, f)
+  local t = f.tint or {}
+  try(function()
+    mid:SetScalarParameterValue(FName("Brightness"), f.brightness or 1)
+    mid:SetVectorParameterValue(FName("Base Color Tint"), { R = t[1] or 1, G = t[2] or 1, B = t[3] or 1, A = 1 })
+    mid:SetScalarParameterValue(FName("Roughness Min"), f.roughness or 0.9)
+    mid:SetScalarParameterValue(FName("Desaturation"), f.desaturation or 0)
+    -- (partly metallic: its reflections take the flesh's red; on a dielectric they were white over a dark red, the
+    -- flesh read pink-grey whatever its tint, playtest)
+    mid:SetScalarParameterValue(FName("Metallic"), f.metallic or 1)
+    if f.contrast then mid:SetScalarParameterValue(FName("Contrast"), f.contrast) end
+  end)
+  M.tachy_dull(mid, f)
+  -- a glow of its own colour (her colour texture as the emissive one, tinted): lit only by the room, the flesh read
+  -- grey-blue in the dark whatever its tint and shine (playtest). EmissivePower 0 turns it off
+  local em = f.emissive or {}
+  if (em.power or 0) > 0 then
+    try(function()
+      local base = mid:K2_GetTextureParameterValue(FName("Basecolor"))
+      if valid(base) then
+        -- (Emissive_CH is a channel mask, a vector: its R picks the Emissive texture's red as the glow)
+        mid:SetTextureParameterValue(FName("Emissive"), base)
+      end
+      local c = em.color or {}
+      mid:SetVectorParameterValue(FName("EmissiveColor"), { R = c[1] or 1, G = c[2] or 0.08, B = c[3] or 0.05, A = 1 })
+      mid:SetScalarParameterValue(FName("EmissivePower"), em.power)
+    end)
+  else
+    try(function() mid:SetScalarParameterValue(FName("EmissivePower"), 0) end)
+  end
+end
+function M.flesh_log(mid, n)
+  do
+    local function sc(n) return tostring(try(function() return mid:K2_GetScalarParameterValue(FName(n)) end)) end
+    local function vc(n) return tostring(try(function() local v = mid:K2_GetVectorParameterValue(FName(n)); return string.format("%.2f, %.2f, %.2f", v.R, v.G, v.B) end)) end
+    local function tc(n) return tostring(try(function() local x = mid:K2_GetTextureParameterValue(FName(n)); return valid(x) and x:GetFName():ToString() or "none" end)) end
+    log(string.format("cap material: Tachy's flesh%s, Brightness reads %s, Contrast %s, Roughness Min %s Max %s, Desaturation %s, Metallic %s, AOMultiply %s, AO Tint %s, Emissive %s, Emissive_CH %s, EmissiveColor %s, EmissivePower %s",
+      n and string.format(" (%d stumps changed)", n) or "", sc("Brightness"), sc("Contrast"), sc("Roughness Min"), sc("Roughness Max"), sc("Desaturation"), sc("Metallic"), sc("AOMultiply"), vc("AO Tint"),
+      tc("Emissive"), vc("Emissive_CH"), vc("EmissiveColor"), sc("EmissivePower")))
+  end
+end
+-- what kept her flesh and bone grey in the dark: the room's reflections (indirect light), which the material's
+-- ambient occlusion holds back. Roughness Max with Min, and AOMultiply / AO Tint down (tachyFlesh.ao, .aoTint),
+-- on the caps' instance and the core's
+function M.tachy_dull(mid, f)
+  local a = f.aoTint or {}
+  try(function()
+    mid:SetScalarParameterValue(FName("Roughness Max"), math.max(f.roughness or 0.9, f.roughnessMax or 1))
+    mid:SetScalarParameterValue(FName("AOMultiply"), f.ao or 0.5)
+    mid:SetVectorParameterValue(FName("AO Tint"), { R = a[1] or 1, G = a[2] or 1, B = a[3] or 1, A = 1 })
+  end)
+end
+-- the core on her material, a dark grey with a little of the flesh's red (tachyCoreLook: Brightness, Desaturation,
+-- Base Color Tint; hers 1, 0, white): as it is near black in the dark, at Brightness 1.8 too light (playtest). Its
+-- metal reads as metal only by the room's reflections (dulled with the flesh, AOMultiply down, it looked like pale
+-- dirt). False: the caller sets hers
+function M.tachy_core_mat(comp, mat)
+  local l = cfg().tachyCoreLook
+  if type(l) ~= "table" then return false end
+  local mid = try(function() return comp:CreateDynamicMaterialInstance(0, mat, FName("None")) end)
+  if not valid(mid) then return false end
+  local t = l.tint or {}
+  try(function()
+    mid:SetScalarParameterValue(FName("Brightness"), l.brightness or 1)
+    mid:SetScalarParameterValue(FName("Desaturation"), l.desaturation or 0)
+    mid:SetVectorParameterValue(FName("Base Color Tint"), { R = t[1] or 1, G = t[2] or 1, B = t[3] or 1, A = 1 })
+  end)
+  return true
+end
+-- (Tachy's material: no matte, no BloodColor)
+function M.tachy_mat_is(mat)
+  local t = M.TACHY_MAT and StaticFindObject and try(function() return StaticFindObject(M.TACHY_MAT) end)
+  return valid(t) and try(function() return t:GetAddress() == mat:GetAddress() end) or false
+end
 local function set_cap_material(comp, mat, meat)
   if not mat then return end
+  if M.tachy_mat_is(mat) then
+    local made
+    if meat == "core" then made = M.tachy_core_mat(comp, mat) else made = M.tachy_flesh(comp, mat) end
+    if not made then try(function() comp:SetMaterial(0, mat) end) end
+    return
+  end
   if not meat and not cfg().debugCaps and M.matte_cap(comp) then return end
   -- debugCaps: every cap and lid glows green, to tell them apart from her skin in game
   local c = cfg().debugCaps and { 0, 8, 0 } or cfg().capBloodColor
@@ -760,7 +1118,8 @@ function M.pool_make(pawn, kind)
     if not valid(pmc) then try(function() a:K2_DestroyActor() end); return nil end
     try(function() pmc:SetCollisionEnabled(0) end)
     try(function() pmc:SetCastShadow(false) end)
-    set_cap_material(pmc, load_obj(cfg().capMaterial or CAP_MATERIAL))
+    e.mat = M.cap_mat()
+    set_cap_material(pmc, load_obj(e.mat))
     e.pmc = pmc
   end
   return e
@@ -805,7 +1164,7 @@ local function cap(pawn, mesh, o, bone, built)
   local spawn_at = function(at, k)
     local e = M.pool_take(pawn, k, at)
     if not e then return nil end
-    return e.a, e.root, e.pmc
+    return e.a, e.root, e.pmc, e
   end
   local kind
   local a, root, lid
@@ -813,10 +1172,14 @@ local function cap(pawn, mesh, o, bone, built)
   if pmc_cls then
     local c, verts, tris, normals, uvs, tangents, colors
     if built then c, verts, tris, normals, uvs, tangents, colors = table.unpack(built)
+    elseif M.tachy() and g.tachyLids then c, verts, tris, normals, uvs, tangents, colors = M.tachy_lid(o, g.tachyCapScale or 1.0, M.tachy())
     else c, verts, tris, normals, uvs, tangents, colors = lid_mesh(o, g.capScale or 1.05) end
     mark("cap mesh")
-    local pmc
-    a, root, pmc = spawn_at(c, "lid")
+    local pmc, e
+    a, root, pmc, e = spawn_at(c, "lid")
+    -- (a pool lid made under the other look, or the look changed in the menu since)
+    local want = M.cap_mat(built)
+    if e and valid(pmc) and e.mat ~= want then set_cap_material(pmc, load_obj(want)); e.mat = want end
     mark("cap actor")
     if not a then log("cap: spawn failed"); return end
     if valid(pmc) then
@@ -859,9 +1222,8 @@ local function cap(pawn, mesh, o, bone, built)
   return a, kind, lid
 end
 
--- a snapped bone in a stump: GM_Brokenbone, its long axis along the opening's normal (out of that side), as thick as
--- stubBone of the opening's narrow radius, sticking out stubOut of it (scaled by that radius), riding the cap's bone.
--- Its own axes are read from its bounds (the longest one is the bone), so the asset's orientation doesn't matter
+-- GM_Brokenbone's bounds, for a split's spine halves (splitSpine): its own axes read from them (the longest one is the
+-- bone), so the asset's orientation doesn't matter
 local stub_dims = nil
 -- her back on a plane with normal z: square to her spine, away from her front. A Bip001 spine bone's own -Z points
 -- to her back (within 15 degrees on every outfit's skeleton, pelvis to head), so it is read off the spine bone at
@@ -919,37 +1281,11 @@ end
 -- the spine runs near her back, not through the middle of the opening: a stub on a spine or neck bone moves from
 -- the opening's centre towards her back, this share of the opening's half depth that way
 local SPINE_BACK = 0.55
+-- (a neck's: towards the nape, a little short of the waist's)
+M.NECK_BACK = 0.5
 -- spine: the cut goes through the spine or the neck (a thigh's parent is Bip001-Spine too, and by that bone's name its
 -- hip stump's stub sat halfway to her back, sixteenth playtest)
-local function stub(pawn, mesh, o, bone, rides, spine)
-  local g = cfg()
-  if g.boneStubs == false or not (o and o.z and o.e) then return nil end
-  local sm = load_obj(g.stubMesh or STUB_MESH)
-  local gs = load_obj("/Script/Engine.Default__GameplayStatics")
-  local km = load_obj("/Script/Engine.Default__KismetMathLibrary")
-  local cls = load_obj("/Script/Engine.StaticMeshActor")
-  if not (sm and gs and km and cls) then log("bone stub: " .. (sm and "no spawner" or "no mesh " .. tostring(g.stubMesh or STUB_MESH))); return nil end
-  if not stub_dims then
-    local b = try(function() local x = sm:GetBounds(); return { o = vec(x.Origin.X, x.Origin.Y, x.Origin.Z), e = vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z) } end)
-    if not b then log("bone stub: no bounds"); return nil end
-    local long = (b.e.X >= b.e.Y and b.e.X >= b.e.Z) and "X" or (b.e.Y >= b.e.Z and "Y" or "Z")
-    stub_dims = { o = b.o, e = b.e, long = long }
-    log(string.format("bone stub mesh: extents %.1f x %.1f x %.1f cm, long axis %s", b.e.X * 2, b.e.Y * 2, b.e.Z * 2, long))
-  end
-  local d = stub_dims
-  local radius = math.min(o.e.X, o.e.Y)
-  local thick = math.max(radius * 2 * (g.stubBone or 0.3), 0.6)
-  local out = radius * (g.stubOut or 0.5)
-  local len = out * 2 + 1
-  local z = norm(o.z)
-  if not z then return nil end
-  local sc, rot = {}, nil
-  for _, ax in ipairs({ "X", "Y", "Z" }) do
-    sc[ax] = (ax == d.long and len or thick) / math.max(d.e[ax] * 2, 0.01)
-  end
-  if d.long == "X" then rot = try(function() return km:MakeRotFromX(z) end)
-  elseif d.long == "Y" then rot = try(function() return km:MakeRotFromY(z) end)
-  else rot = try(function() return km:MakeRotFromZ(z) end) end
+function M.stub_centre(mesh, o, z, bone, spine)
   local c = outline_centre(o) or o.c
   if spine then
     local back = back_on(mesh, z, bone, true)
@@ -957,36 +1293,207 @@ local function stub(pawn, mesh, o, bone, rides, spine)
       local x = norm(sub(o.x, scale(z, dot(o.x, z))))
       local y = x and cross(z, x)
       if x and y then
-        -- how far the opening reaches that way: its outline when it has one, else its fitted ellipse
+        -- how far the opening reaches that way: its outline when it has one, else its fitted ellipse. Across her
+        -- (square to her back) the bone goes midway between the outline's sides: the centroid alone, then pushed
+        -- back, left a neck's bone off to one side (playtest)
         local half = math.sqrt((o.e.X * dot(back, x)) ^ 2 + (o.e.Y * dot(back, y)) ^ 2)
         if o.p then
+          local side = cross(z, back)
+          local lo, hi
           half = 0
-          for _, pt in ipairs(o.p) do half = math.max(half, dot(sub(pt, o.c), back)) end
+          for _, pt in ipairs(o.p) do
+            local d = sub(pt, c)
+            half = math.max(half, dot(d, back))
+            local sd = dot(d, side)
+            lo, hi = math.min(lo or sd, sd), math.max(hi or sd, sd)
+          end
+          if lo then c = add(c, scale(side, (lo + hi) / 2)) end
         end
-        c = add(c, scale(back, half * SPINE_BACK))
+        local neck = bone == "Bip001-Neck" or bone == "Bip001-Head"
+        c = add(c, scale(back, half * (neck and M.NECK_BACK or SPINE_BACK)))
       end
     end
   end
-  -- the stub's middle sits 1 cm under the opening, so `out` of it shows
-  local mid = add(c, scale(z, out - len / 2 + 0.5))
-  local e = M.pool_take(pawn, "plain", mid)
-  local a = e and e.a
-  if not valid(a) then log("bone stub: spawn failed"); return nil end
-  local root = e.root
-  if valid(root) then try(function() root:SetStaticMesh(sm) end) end
-  if rot then try(function() a:K2_SetActorRotation(rot, false) end) end
-  try(function() a:SetActorScale3D(vec(sc.X, sc.Y, sc.Z)) end)
-  -- the mesh's bounds may not be centred on its pivot: shift by its scaled, rotated origin
-  local fwd = try(function() local v = a:GetActorForwardVector(); return vec(v.X, v.Y, v.Z) end)
-  local right = try(function() local v = a:GetActorRightVector(); return vec(v.X, v.Y, v.Z) end)
-  local up = try(function() local v = a:GetActorUpVector(); return vec(v.X, v.Y, v.Z) end)
-  if fwd and right and up then
-    local off = add(add(scale(fwd, d.o.X * sc.X), scale(right, d.o.Y * sc.Y)), scale(up, d.o.Z * sc.Z))
-    try(function() a:K2_SetActorLocation(sub(mid, off), false, {}, false) end)
+  return c
+end
+-- Tachy's core (M.tachy): her bone and tubes as a procedural mesh on a pool lid, at the opening's middle, out along its
+-- normal, scaled from her 4.1 cm disc to the opening's mean radius (at most tachyCoreMax cm), standing on the cap's
+-- dome. A limb's only: an arm's bone and tubes in a waist read as mushrooms, not a spine (playtest), so a spine or
+-- neck cut gets the snapped bone at her spine (stub)
+-- her metal bone alone, out of the core (its shaft and its end, two pieces; the two tubes and the flat disc by them
+-- are left out), centred on 0, 0: a neck's or waist's stump shows only the bone, at her spine. {tris, centre, shaft}
+-- (shaft: the shaft's radius in disc radii, from its vertices above the flare)
+function M.tachy_bone(t)
+  if t.bone then return t.bone end
+  local v, nv = t.verts, #t.verts // 11
+  local par = {}
+  for i = 0, nv - 1 do par[i] = i end
+  local function f(a) while par[a] ~= a do par[a] = par[par[a]]; a = par[a] end return a end
+  for i = 1, #t.tris, 3 do
+    local a, b, c = t.tris[i], t.tris[i + 1], t.tris[i + 2]
+    par[f(a)] = f(b); par[f(b)] = f(c)
   end
+  local comps = {}
+  for i = 0, nv - 1 do
+    local r = f(i)
+    local c = comps[r] or { n = 0, x = 0, y = 0 }
+    comps[r] = c
+    c.n, c.x, c.y = c.n + 1, c.x + v[i * 11 + 1], c.y + v[i * 11 + 2]
+  end
+  local big
+  for r, c in pairs(comps) do if not big or c.n > comps[big].n then big = r end end
+  local bx, by = comps[big].x / comps[big].n, comps[big].y / comps[big].n
+  local reach = 0
+  for i = 0, nv - 1 do
+    if f(i) == big then reach = math.max(reach, math.sqrt((v[i * 11 + 1] - bx) ^ 2 + (v[i * 11 + 2] - by) ^ 2)) end
+  end
+  local keep = {}
+  for r, c in pairs(comps) do
+    if math.sqrt((c.x / c.n - bx) ^ 2 + (c.y / c.n - by) ^ 2) < reach * 0.5 then keep[r] = true end
+  end
+  local tris = {}
+  for i = 1, #t.tris, 3 do
+    if keep[f(t.tris[i])] then for k = 0, 2 do tris[#tris + 1] = t.tris[i + k] end end
+  end
+  local shaft, top = 0, -1
+  for i = 0, nv - 1 do if keep[f(i)] then top = math.max(top, v[i * 11 + 3]) end end
+  for i = 0, nv - 1 do
+    if keep[f(i)] and v[i * 11 + 3] > top * 0.4 then
+      shaft = math.max(shaft, math.sqrt((v[i * 11 + 1] - bx) ^ 2 + (v[i * 11 + 2] - by) ^ 2))
+    end
+  end
+  local set = {}
+  for i = 0, nv - 1 do if keep[f(i)] then set[i] = true end end
+  -- its lean: the shaft's middles over its lowest and highest quarters, per unit of height
+  local z0, z1 = math.huge, -math.huge
+  for i = 0, nv - 1 do if f(i) == big then z0, z1 = math.min(z0, v[i * 11 + 3]), math.max(z1, v[i * 11 + 3]) end end
+  local lo, hi = { 0, 0, 0, 0 }, { 0, 0, 0, 0 }
+  for i = 0, nv - 1 do
+    local h = v[i * 11 + 3]
+    local q = f(i) == big and (h < z0 + (z1 - z0) * 0.25 and lo or h > z1 - (z1 - z0) * 0.25 and hi) or nil
+    if q then q[1], q[2], q[3], q[4] = q[1] + v[i * 11 + 1], q[2] + v[i * 11 + 2], q[3] + h, q[4] + 1 end
+  end
+  local lx, ly = 0, 0
+  if lo[4] > 0 and hi[4] > 0 then
+    local dz = hi[3] / hi[4] - lo[3] / lo[4]
+    if dz > 1e-3 then lx, ly = (hi[1] / hi[4] - lo[1] / lo[4]) / dz, (hi[2] / hi[4] - lo[2] / lo[4]) / dz end
+  end
+  -- her gold socket: the flat pieces lying low on her disc (two rings, 0.05 high at most; a tube's end lies flat too,
+  -- but up at its top)
+  local gold, span = {}, {}
+  for i = 0, nv - 1 do
+    local r, h = f(i), v[i * 11 + 3]
+    local sp = span[r] or { math.huge, -math.huge }
+    span[r] = sp
+    sp[1], sp[2] = math.min(sp[1], h), math.max(sp[2], h)
+  end
+  for i = 0, nv - 1 do local sp = span[f(i)]; if sp[2] < 0.08 and sp[2] - sp[1] < 0.1 then gold[i] = true end end
+  t.bone = { tris = tris, cx = bx, cy = by, shaft = shaft > 0 and shaft or reach, verts = set, lx = lx, ly = ly, gold = gold }
+  return t.bone
+end
+-- her bone in silver (boneSilver): on her texture it is painted ivory, not metal (its metal mask 0.01-0.04), and read
+-- as pale dirt (playtest); her metal is on the strip along the bottom (v 0.82-0.93, a mask of 0.95) and in the tube
+-- ends' tiles down the left. Its end goes onto a tube end's tile, its shaft onto the strip, each scaled, not turned
+-- (her tangents stay right)
+function M.bone_uv(t, i, u, w)
+  if cfg().boneSilver == false or not M.tachy_bone(t).verts[i] then return { X = u, Y = w } end
+  if u < 0.3 and w < 0.35 then return { X = 0.02 + (u - 0.01) / 0.28 * 0.15, Y = 0.40 + (w - 0.01) / 0.33 * 0.16 } end
+  return { X = 0.05 + (u - 0.74) / 0.25 * 0.65, Y = 0.82 + (w - 0.12) / 0.87 * 0.11 }
+end
+-- spine: her bone alone (M.tachy_bone) at her spine, its shaft stubBone of the opening wide (at most spineBoneMax cm)
+function M.core(pawn, mesh, o, bone, rides, t, spine)
+  local g = cfg()
+  local z = norm(o.z)
+  local x, y, mirrored
+  if z then x, y, mirrored = M.tachy_frame(o, z) end
+  if not x then return nil end
+  local r = 0
+  if o.p then
+    local m = vec(0, 0, 0)
+    for _, q in ipairs(o.p) do m = add(m, q) end
+    m = scale(m, 1 / #o.p)
+    for _, q in ipairs(o.p) do local d = sub(q, m); r = r + math.sqrt(math.max(dot(d, d) - dot(d, z) ^ 2, 0)) end
+    r = r / #o.p
+  else
+    r = (o.e.X + o.e.Y) / 2
+  end
+  -- (tachy_lid's dome: the core stands where the lid rises to, from the lid's own radius)
+  -- (on the meat lids, lid_mesh's: its inner ring's height, where the core's base reaches; at her flat lid's it sank
+  -- into the meat)
+  local dome = g.tachyLids and M.tachy_dome(r) * 0.85 + 0.2 or math.min(math.max(r * 0.18, 0.4), 1.8) * 0.7 + 0.2
+  -- (a leg's bone thicker: tachyCoreLeg times; at the arm's it looked thin in a thigh, playtest)
+  -- (her bone leans, some 14 degrees off her disc's normal: it looked bent, playtest; the core sheared upright, its
+  -- lean along x and y per unit of height)
+  local bn = M.tachy_bone(t)
+  local src, ox, oy, hs, lx, ly = t.tris, 0, 0, 1, bn.lx or 0, bn.ly or 0
+  -- (a leg's without her gold socket: an arm's only, playtest)
+  if o.leg and not spine then
+    src = {}
+    for i = 1, #t.tris, 3 do
+      if not bn.gold[t.tris[i]] then for k = 0, 2 do src[#src + 1] = t.tris[i + k] end end
+    end
+  end
+  -- (and along the limb or spine, not square to the cut: a slanted cut tipped the bone with it, playtest. Within 50
+  -- degrees of the cut's normal; the frame's x and y squared to it)
+  if o.axis and dot(o.axis, z) > 0.64 then
+    local za = o.axis
+    local xa = norm(sub(x, scale(za, dot(x, za))))
+    if xa then
+      local ya = cross(za, xa)
+      if mirrored then ya = scale(ya, -1) end
+      o.cz, z, x, y = z, za, xa, ya
+    end
+  end
+  if spine then
+    local narrow = math.min(o.e.X, o.e.Y)
+    local thick = math.min(math.max(narrow * 2 * (g.stubBone or 0.3), 0.8), g.spineBoneMax or 3.5)
+    src, ox, oy = bn.tris, bn.cx, bn.cy
+    r = thick / (2 * bn.shaft)
+    -- (a waist's wider by spineBoneWaist, no taller: thin in a waist, playtest)
+    local wide = o.waist and (g.spineBoneWaist or 1.6) or 1
+    r = r * wide
+    -- (taller than her own: at its height, a third of its width, it barely showed above the flesh, playtest)
+    hs = (g.spineBoneOut or 1.2) / wide
+  else
+    r = math.min(r * (g.capScale or 1.05), g.tachyCoreMax or 6) * (g.tachyCore or 1) * (o.leg and (g.tachyCoreLeg or 1) or 1)
+  end
+  -- (its foot where the cut's own normal puts it: on the lid)
+  local zc = o.cz or z
+  o.cz = nil
+  local c = add(M.stub_centre(mesh, o, zc, bone, spine), scale(zc, dome))
+  local v = t.verts
+  local verts, normals, uvs, tangents, colors, tris = {}, {}, {}, {}, {}, {}
+  local function to(a, b, h) return add(add(scale(x, a), scale(y, b)), scale(z, h)) end
+  for i = 1, #v, 11 do
+    verts[#verts + 1] = scale(to(v[i] - ox - lx * v[i + 2], v[i + 1] - oy - ly * v[i + 2], v[i + 2] * hs), r)
+    normals[#normals + 1] = norm(to(v[i + 3], v[i + 4], (v[i + 5] + lx * v[i + 3] + ly * v[i + 4]) / hs)) or z
+    tangents[#tangents + 1] = { TangentX = to(v[i + 6] - lx * v[i + 8], v[i + 7] - ly * v[i + 8], v[i + 8]), bFlipTangentY = mirrored }
+    uvs[#uvs + 1] = M.bone_uv(t, (i - 1) // 11, v[i + 9], v[i + 10])
+    colors[#colors + 1] = { R = 1, G = 1, B = 1, A = 1 }
+  end
+  -- (mirrored, each triangle the other way round, or its front faces in)
+  for i = 1, #src, 3 do
+    if mirrored then tris[i], tris[i + 1], tris[i + 2] = src[i + 2], src[i + 1], src[i]
+    else tris[i], tris[i + 1], tris[i + 2] = src[i], src[i + 1], src[i + 2] end
+  end
+  local e = M.pool_take(pawn, "lid", c)
+  if not (e and valid(e.a) and valid(e.pmc)) then log("tachy core: spawn failed"); return nil end
+  local a, pmc = e.a, e.pmc
+  try(function() a:K2_SetActorRotation({ Pitch = 0, Yaw = 0, Roll = 0 }, false) end)
+  local made = try(function() pmc:CreateMeshSection_LinearColor(0, verts, tris, normals, uvs, {}, {}, {}, colors, tangents, false); return true end)
+    or try(function() pmc:CreateMeshSection_LinearColor(0, verts, tris, normals, uvs, colors, tangents, false); return true end)
+  if not made then log("tachy core: no mesh section"); return nil end
+  if e.mat ~= "core" then set_cap_material(pmc, load_obj(M.TACHY_MAT), "core"); e.mat = "core" end
   M.repose(a, mesh, rides or bone)
   try(function() a:K2_AttachToComponent(mesh, FName(rides or bone), 1, 1, 1, false) end)
   return a
+end
+local function stub(pawn, mesh, o, bone, rides, spine)
+  local g = cfg()
+  if g.boneStubs == false or not (o and o.z and o.e) then return nil end
+  -- (Tachy's core, or at the spine her bone alone: the game's GM_Brokenbone, a human bone, is gone from the stumps)
+  if M.tachy() then return M.core(pawn, mesh, o, bone, rides, M.tachy(), spine) end
+  return nil
 end
 
 -- a split down her length cuts the spine in half along it: on each half's lid, one bone piece per spine segment
@@ -1105,8 +1612,8 @@ local function blood_tick()
   if x >= 1 then
     b.done = true
     -- the game may drive these itself: read them back once
-    log(string.format("body blood: now BloodFactor %s, BloodOffset %s", tostring(mpc_get(b.pawn, b.mpc, "BloodFactor")),
-      tostring(mpc_get(b.pawn, b.mpc, "BloodOffset"))))
+    if ctx.tune.verboseLog then log(string.format("body blood: now BloodFactor %s, BloodOffset %s", tostring(mpc_get(b.pawn, b.mpc, "BloodFactor")),
+      tostring(mpc_get(b.pawn, b.mpc, "BloodOffset")))) end
   end
 end
 local function blood_down()
@@ -1605,7 +2112,7 @@ local function rehome(q, b2, at, n)
   -- went to the copy too and rode its bones; her half lay open and the copy carried both lids, the second one in
   -- flat shards off its body as the halves moved apart (eighteenth playtest)
   for _, act in ipairs(caps) do
-    local root = valid(act) and try(function() return act:K2_GetRootComponent() end)
+    local root = enemy.alive(act) and try(function() return act:K2_GetRootComponent() end)
     local a = root and addr(root)
     if a then skip[a] = true end
   end
@@ -1944,6 +2451,21 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
       n = p and norm(add(scale(axis, math.cos(max)), scale(p, math.sin(max)))) or axis
       lean = lean .. string.format(" (held to %.0f deg)", math.deg(max))
     end
+    -- a waist cut with no blade's angle of its own (rolled, or squared off a blade down her length) leans at random:
+    -- up to bodyLeanSide degrees to either side and bodyLeanFront with her front lower (higher, it ran into her bust).
+    -- Square every time, every waist cut looked the same (playtest)
+    local f = (not blade or blade.square) and body_frame(mesh)
+    local side, front = math.rad(g.bodyLeanSide or 20), math.rad(g.bodyLeanFront or 10)
+    if f and (side > 0 or front > 0) then
+      local sx, fy = (math.random() * 2 - 1) * side, math.random() * front
+      local x = norm(sub(f.x, scale(axis, dot(f.x, axis))))
+      local y = x and norm(cross(axis, x))
+      if y and dot(y, f.y) < 0 then y = scale(y, -1) end
+      if y then
+        n = norm(add(add(axis, scale(x, math.tan(sx))), scale(y, math.tan(fy)))) or n
+        lean = lean .. string.format(" (leaned %.0f deg, her %s side lower, %.0f front down)", math.abs(math.deg(sx)), sx > 0 and "left" or "right", math.deg(fy))
+      end
+    end
   end
   if facecut and valid(face) and g.jawClear ~= false then
     local note
@@ -2077,10 +2599,14 @@ local function stage_cut(q)
   -- (a blade's beheading: its swing)
   local blow = q.out or (q.why == "death" and try(function() local v = q.pawn.RagdollInfo.ImpulseValue; return vec(v.X, v.Y, v.Z) end)) or nil
   for _, b in ipairs(q.bone and { q.bone } or q.blade and { q.blade.bone } or rank_bones(q.mesh, q.hit, q.kind)) do
-    -- her own fall can't stand on a leg that's gone (both thighs off, and she still played it, eighteenth playtest)
-    if (q.why == "death" or q.why == "after") and cfg().legRagdoll ~= false and (b:find("Thigh") or b:find("Calf") or b:find("Foot"))
-      and ctx.animated and ctx.animated() and ctx.on_need_ragdoll then
-      try(function() ctx.on_need_ragdoll("a leg off") end)
+    -- her own fall can't stand on a leg that's gone (both thighs off, and she still played it, eighteenth playtest),
+    -- and a headless body playing it on read as no ragdoll at all, only the head falling (reported): legRagdoll,
+    -- headRagdoll, armRagdoll switch an animated death to the ragdoll before the cut
+    local leg, head = b:find("Thigh") or b:find("Calf") or b:find("Foot"), b:find("Head") or b:find("Neck")
+    local rule = leg and cfg().legRagdoll ~= false or head and cfg().headRagdoll ~= false
+      or (b:find("Arm") or b:find("Hand") or b:find("Clavicle")) and cfg().armRagdoll == true
+    if (q.why == "death" or q.why == "after") and rule and ctx.animated and ctx.animated() and ctx.on_need_ragdoll then
+      try(function() ctx.on_need_ragdoll(leg and "a leg off" or head and "beheaded" or "an arm off") end)
     end
     q.c = cut_limb(q.pawn, q.mesh, b, q.why, blow, q.face, q.blade)
     mark("cut " .. b)
@@ -2104,6 +2630,7 @@ local function stage_cut(q)
     return most
   end
   if fb and not (q.ob and round(q.c.result) >= 14 and wide(q.ob) > wide(fb)) then q.ob, q.obFace = fb, true end
+  M.pair(q.ob, q.ol)
   -- the caps and stubs ride the bone each opening's rim rides (the DLL's bb / lb): a thigh's stump follows the hip's
   -- twist helpers, not the pelvis, and a stub on the pelvis slid off to the stump's edge as she moved
   local function ride(key, fallback)
@@ -2132,9 +2659,59 @@ end
 function M.riders(q, a, bone)
   if q.entry and q.entry.riders and valid(a) then q.entry.riders[#q.entry.riders + 1] = { a = a, bone = bone } end
 end
+-- an outline's points well off its plane are another layer's (a harness strap counted as going round an arm, 3-5 cm
+-- up it and 8-9 cm out): the cap spanned them and was drawn down the arm as a kite (playtest). Left out, when enough stay
+function M.flat_outline(o, what)
+  if not (o and o.p and o.z and #o.p >= 6) then return end
+  local z = norm(o.z)
+  if not z then return end
+  local hs, rs = {}, {}
+  for i, q in ipairs(o.p) do
+    local d = sub(q, o.c)
+    hs[i] = dot(d, z)
+    rs[#rs + 1] = math.sqrt(math.max(dot(d, d) - hs[i] ^ 2, 0))
+  end
+  table.sort(rs)
+  local lim = math.max(2, 0.35 * rs[(#rs + 1) // 2])
+  local kept = {}
+  for i, q in ipairs(o.p) do if math.abs(hs[i]) <= lim then kept[#kept + 1] = q end end
+  if #kept < #o.p and #kept >= 5 then
+    log(string.format("cap %s: %d of %d outline points over %.1f cm off the cut left out", what, #o.p - #kept, #o.p, lim))
+    o.p = kept
+  end
+end
 function M.stage_caps(q)
   M.posed = q.posed
   if cfg().caps ~= false then
+    -- (her flesh lids only: on 0.3.0's meat lids it left out up to half an arm's rim, 9 of 18 points on a shoulder,
+    -- and the lids no longer reached the skin, playtest)
+    if cfg().tachyLids then
+      M.flat_outline(q.ob, "body side")
+      M.flat_outline(q.ol, "piece side")
+    end
+    -- (a limb's caps get Tachy's core over their middle: M.tachy_lid maps them onto all of her disc)
+    local core = cfg().boneStubs ~= false and PARTS[q.bone] and PARTS[q.bone].kind == "limb" or false
+    local leg = core and (q.bone:find("Thigh") or q.bone:find("Calf") or q.bone:find("Foot")) and true or false
+    -- (at the spine: where her bone will stand, kept clear of the torn relief, which buried it)
+    if not core then
+      if q.ob and q.ob.z then q.ob.boneAt = M.stub_centre(q.mesh, q.ob, norm(q.ob.z), q.parent or q.bone, true) end
+      if q.ol and q.ol.z then q.ol.boneAt = M.stub_centre(q.mesh, q.ol, norm(q.ol.z), q.bone, true) end
+    end
+    -- (the cut bone's own direction, for the bone in the stump: out of each opening)
+    local part = PARTS[q.bone]
+    local ja, jb = part and bone_loc(q.mesh, part.from or q.bone), part and part.to and bone_loc(q.mesh, part.to)
+    local axis = ja and jb and norm(vec(jb.X - ja.X, jb.Y - ja.Y, jb.Z - ja.Z))
+    for _, o in ipairs({ q.ob or false, q.ol or false }) do
+      if o and o.z and axis then
+        local oz = norm(o.z)
+        o.axis = oz and (dot(axis, oz) < 0 and scale(axis, -1) or axis) or nil
+      end
+    end
+    local waist = PARTS[q.bone] and PARTS[q.bone].kind == "torso" or false
+    if q.ob then q.ob.waist = waist end
+    if q.ol then q.ol.waist = waist end
+    if q.ob then q.ob.core, q.ob.leg = core, leg end
+    if q.ol then q.ol.core, q.ol.leg = core, leg end
     q.caps[1], q.kinds[1] = cap(q.pawn, q.mesh, q.ob, q.rideB)
     q.caps[2], q.kinds[2] = cap(q.pawn, q.mesh, q.ol, q.rideL)
     M.riders(q, q.caps[1], q.rideB)
@@ -3023,8 +3600,10 @@ end
 -- moves the vertices every tick. Riding a bone a piece, the lid cracked into shards as she bent (eighteenth playtest)
 local function skin_lid(comp, actor, pmc, pc, ride)
   local chain = {}
+  -- (the bones as noted at the cut, M.posed: the lid's points are where the opening was then)
+  local posed = M.posed and M.posed[addr(comp)] or {}
   for _, b in ipairs(ride) do
-    local tm = bone_tm(comp, b)
+    local tm = posed[b] or bone_tm(comp, b)
     if tm then chain[#chain + 1] = { name = b, tm = tm } end
   end
   if #chain == 0 or not pc.wv then return false end
@@ -3066,7 +3645,8 @@ local function lids_tick()
   lid_ms.n, lid_ms.sum, lid_ms.top = lid_ms.n + 1, lid_ms.sum + ms, math.max(lid_ms.top, ms)
 end
 lids_step = function()
-  local limit = (cfg().splitLidFollow or 12) / TICK_S
+  local follow = tonumber(cfg().splitLidFollow) or 0
+  local limit = follow > 0 and follow / TICK_S or math.huge
   for i = #skinned, 1, -1 do
     local s = skinned[i]
     s.n = s.n + 1
@@ -3136,6 +3716,8 @@ local function split_caps(q, comp, r, list)
     local pieces, nt = flat_lid(o, comp, g.splitLidGrow or 0.4, g.splitLidPush or 0.2, ride)
     mark("lid shape")
     local made, bent = 0, 0
+    -- the lid bends with the spine up to the neck, as the sheet behind it does (SPLIT_RIDE.lid)
+    local lid_ride = SPLIT_RIDE.lid(q, comp)
     for _, pc in ipairs(pieces or {}) do
       local a, kind, pmc = cap(q.pawn, comp, o, pc.bone, pc.built)
       -- a split's lid on the meat material, solid (capMatte.splitLids false): on the matte master it didn't look
@@ -3143,7 +3725,7 @@ local function split_caps(q, comp, r, list)
       if valid(pmc) and type(g.capMatte) == "table" and g.capMatte.splitLids == false then
         set_cap_material(pmc, load_obj(g.capMaterial or CAP_MATERIAL), true)
       end
-      if a and pmc and pc.skin and skin_lid(comp, a, pmc, pc, ride) then bent = bent + 1 end
+      if a and pmc and pc.skin and skin_lid(comp, a, pmc, pc, lid_ride) then bent = bent + 1 end
       if a then
         made = made + 1
         list[#list + 1] = { actor = a, o = o, ride = pc.bone, comp = comp, kind = kind, whole = pc.skin }
@@ -3215,6 +3797,11 @@ local function split_plane(q)
   end
   local tilt = (cfg().tilt or 0.25) * 0.3
   n = square(add(n, vec((math.random() - 0.5) * tilt, (math.random() - 0.5) * tilt, (math.random() - 0.5) * tilt))) or n
+  -- with no swing to follow, turned at random within splitYaw about her spine (it was the same plane every time)
+  if from == "her right" then
+    local th = (math.random() * 2 - 1) * math.rad(cfg().splitYaw or 15)
+    n = square(add(scale(n, math.cos(th)), scale(cross(axis, n), math.sin(th)))) or n
+  end
   -- left from right only, at most splitYaw off her middle: a plane facing her front cut a slab off her chest
   local r = M.her_right(q.mesh, axis)
   if r then
@@ -3229,14 +3816,18 @@ local function split_plane(q)
   -- splitBeside: leaned about her front-to-back axis from her crotch to that far beside her neck, so the head stays
   -- whole on her half. Her crotch, the gap between her breasts (they sit 4.3 cm either side) and her neck all lie on
   -- her middle, so the lean is small: at 10 cm the cut ran 7 cm off it at the chest, through a breast; at 2, 1.4 cm
+  -- Its lower end moves up to splitHipShift cm off her crotch to either side at random, so it runs a little
+  -- diagonally (the breasts, 4.3 cm off her middle, see under a third of it; the hip joints are 10 cm off)
   local side, neck = cfg().splitBeside or 2, bone_loc(q.mesh, "Bip001-Neck")
   if side > 0 and neck then
     local t = norm(cross(axis, n))
-    local d = sub(sub(neck, scale(n, side)), pel)
+    local hip = (math.random() * 2 - 1) * (cfg().splitHipShift or 4)
+    local low = add(pel, scale(n, hip))
+    local d = sub(sub(neck, scale(n, side)), low)
     local m = t and norm(cross(t, d))
     if m then
       if dot(m, n) < 0 then m = scale(m, -1) end
-      at, n, from = pel, m, from .. ", beside the neck"
+      at, n, from = low, m, from .. string.format(", beside the neck, %.1f cm off her crotch", hip)
     end
   end
   return at, n, from
@@ -3400,9 +3991,12 @@ local function stage_split_cut(q)
   for _, b in ipairs(front) do keep1[#keep1 + 1] = b end
   for _, b in ipairs(q.gone1) do keep2[#keep2 + 1] = b end
   for _, b in ipairs(back) do keep2[#keep2 + 1] = b end
-  send_limbs(q.mesh, q.gone1, keep1, back, SPLIT_RIDE.of(q, q.mesh), q.spine, true)
+  send_limbs(q.mesh, q.gone1, keep1, back, SPLIT_RIDE.lid(q, q.mesh), q.spine, true)
   local h1 = send_neck(q.mesh, 1)
   local r1 = side_cut(q.mesh, SPLIT_SINK, at, n, q.gone1)
+  -- her spine as her half was cut: the lid's points are placed against it (skin_lid), as sbslice placed the sheet.
+  -- Noted a frame later with the copy's, an animated fall had moved her on and the lid sat off the sheet
+  q.posed1 = M.snap({ { q.mesh, { "Bip001-Neck", table.unpack(SPLIT_RIDE.of(q, q.mesh)) } } })
   -- the copy's cut the next tick (M.stage_split_copy): each cut is the engine building a new skin weight buffer,
   -- 15-30 ms, and the two in one frame were a stutter at the death (playtest 41). She is held still meanwhile, and
   -- the new weights show nothing till the opening
@@ -3413,7 +4007,7 @@ function M.stage_split_copy(q)
   local c1 = q.cut1
   q.cut1 = nil
   local at, n, from, p, h1, r1, front, back = q.c.at, q.c.n, c1.from, c1.p, c1.h1, c1.r1, c1.front, c1.back
-  send_limbs(q.body2, q.gone2, c1.keep2, front, SPLIT_RIDE.of(q, q.body2), q.spine2, false)
+  send_limbs(q.body2, q.gone2, c1.keep2, front, SPLIT_RIDE.lid(q, q.body2), q.spine2, false)
   local h2 = send_neck(q.body2, 2)
   local r2 = side_cut(q.body2, SPLIT_SINK, at, c1.neg, q.gone2)
   log(string.format("split (%s) at %s normal %s (%s), pose %s, limbs %s | %s, chains %s | %s, spine breaks at %s, neck %s | %s",
@@ -3549,8 +4143,8 @@ end
 -- the copy's physics bodies, kinematic in her pose till split_physics: a tick before the opening (made in the
 -- opening's own tick, with the rest of it, that frame was 55-70 ms, playtest 41)
 function M.split_bodies(q)
-  if q.bodies then return end
-  q.bodies = true
+  if q.bodied then return end
+  q.bodied = true
   local b2 = q.body2
   local pa = ctx.physics_of(q.mesh)
   -- the copy was made without collision, so it has no physics bodies: a profile change doesn't create them (only
@@ -3747,6 +4341,7 @@ split_stage = function(q)
     if M.stage_split_copy(q) then
       local function rides(c) local l = { "Bip001-Neck" }; for _, b in ipairs(SPLIT_RIDE.of(q, c) or {}) do l[#l + 1] = b end; return l end
       q.posed = M.snap({ { q.mesh, rides(q.mesh) }, { q.body2, rides(q.body2) } })
+      for a, t in pairs(q.posed1 or {}) do q.posed[a] = t end
       q.stage = "caps"; q.wait = 0; return
     end
   elseif q.stage == "caps" then
@@ -3848,7 +4443,12 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
   -- it for tune.gore.splitAnim seconds once it opens, before they come apart (split_tick). (Switched to the ragdoll
   -- at the roll, she hung frozen in it for the ~0.4 s the cut took, then fell apart: the ragdoll came before the cut)
   local anim = why == "death" and kind == "split" and ctx.animated and ctx.animated()
-  if anim then
+  -- or a cut across her waist in her fall that keeps her legs in it (torsoLegs): the upper body breaks off into the
+  -- ragdoll as a cut limb does (its joint broken, flung with the blow), her legs and hips play the fall on
+  local legs = why == "death" and kind == "torso" and not anim and ctx.animated and ctx.animated() and M.torso_legs(blade)
+  if legs then
+    log("waist cut: her legs play the fall on, the upper body flies off (" .. legs .. ")")
+  elseif anim then
     pending.anim = math.max(tonumber(g.splitAnim) or 0, 0)
     local pa = ctx.physics_of(mesh)
     pending.bodies = {}
@@ -3905,6 +4505,42 @@ function M.cuts_on(mesh)
 end
 
 function M.slice(pawn, mesh, hit, why, kind) return start(pawn, mesh, hit, why, kind or "limb") end
+-- a rolled limb cut's further limbs (tune.gore.death.moreLimbs): each one more with that chance, at most two more,
+-- queued after it; each takes the arm or thigh nearest the hit not cut yet and flies the way the first one did
+function M.more_limbs(pawn, mesh, hit, why)
+  local k = math.min(math.max(tonumber((cfg().death or {}).moreLimbs) or 0, 0), 1)
+  local n = 0
+  while n < 2 and math.random() < k do n = n + 1 end
+  if n == 0 then return 0 end
+  local fly = pending and pending.fly
+  for _ = 1, n do
+    queued[#queued + 1] = function()
+      if not valid(mesh) then return false end
+      aimed = fly and { d = fly, t = os.clock() } or nil
+      return start(pawn, mesh, hit, why, "limb")
+    end
+  end
+  M.queue_gap = cfg().queueGap or 1
+  log(string.format("death: %d more limb%s after it (moreLimbs %.2f)", n, n == 1 and "" or "s", k))
+  return n
+end
+-- tune.gore.torsoLegs: whether a death's waist cut keeps her legs in her animated fall, by the blade's swing (level
+-- across her: `level`, slanted: `slant`) or, with none seen, `rolled`. Returns why when it does, nil else
+function M.torso_legs(blade)
+  local t = cfg().torsoLegs
+  if type(t) ~= "table" or t.enabled == false then return nil end
+  local odds, what = tonumber(t.rolled) or 0.5, "no blade seen"
+  local n = blade and blade.n and norm(blade.n)
+  if n then
+    local level = math.abs(n.Z) >= math.cos(math.rad(tonumber(t.levelDeg) or 30))
+    odds = tonumber(level and t.level or t.slant) or (level and 0.75 or 0.35)
+    what = level and "a level swing" or "a slanted swing"
+  end
+  local r = math.random()
+  log(string.format("waist cut: legs on in the fall at %.2f odds (%s), rolled %.2f", odds, what, r))
+  if r < odds then return string.format("%s, %.0f%%", what, odds * 100) end
+  return nil
+end
 -- normal: the split plane's normal (made square to her spine, the plane goes through it), or nil for her left/right
 function M.split(pawn, mesh, hit, normal, why) return start(pawn, mesh, hit, why, "split", normal) end
 
@@ -4418,7 +5054,7 @@ function M.blow(pawn, mesh, h, why)
       local into = h.early and M.held or queued
       into[#into + 1] = function()
         if e.kind == "head" then return go(bl("Bip001-Neck") or at, why, "head", h.dir) end
-        local c = { bone = e.blade.bone, t = e.blade.t, d = e.blade.d, n = e.blade.n }
+        local c = { bone = e.blade.bone, t = e.blade.t, d = e.blade.d, n = e.blade.n, square = e.blade.square }
         local fn = rel and body_frame(mesh)
         if fn then c.n = norm(from_body(fn, rel)) or c.n end
         if already_cut(mesh, c.bone) then return false end
@@ -4430,22 +5066,25 @@ function M.blow(pawn, mesh, h, why)
     return ", then " .. table.concat(names, ", ")
   end
   -- a cut down her length (the plane along her spine) at death is off (deathSplit false): the limbs it crosses near
-  -- the hit come off instead, or the death's odds are rolled
+  -- the hit come off instead, or the death's odds are rolled. An enemy is never split: the same for its corpse (a
+  -- downward chop through one rolled its odds, whatever arm it went through)
   local axis = (function()
     local p0, p1 = bl("Bip001-Pelvis"), bl("Bip001-Neck")
     return p0 and p1 and norm(sub(p1, p0))
   end)()
   local lengthwise = axis and math.abs(dot(axis, n)) < M.ALONG
-  if (what == "slice" or (not pos and not neg)) and lengthwise and (why == "death" or why == "after") and cfg().deathSplit == false then
+  local nosplit = why == "enemy" or ((why == "death" or why == "after") and cfg().deathSplit == false)
+  if (what == "slice" or (not pos and not neg)) and lengthwise and nosplit then
     local list = extras(nil)
     if #list == 0 or list[1].kind ~= "limb" then
-      log(string.format("blade (%s): %s plane down her length, no split at death (deathSplit off)", why, how))
+      log(string.format("blade (%s): %s plane down her length, no split %s", why, how,
+        why == "enemy" and "on an enemy" or "at death (deathSplit off)"))
       return false
     end
     local first = table.remove(list, 1)
     local more = queue(list)
-    log(string.format("blade (%s): %s plane down her length, no split at death: %s at %.2f instead%s", why, how,
-      first.blade.bone, first.blade.t, more))
+    log(string.format("blade (%s): %s plane down her length, no split %s: %s at %.2f instead%s", why, how,
+      why == "enemy" and "on an enemy" or "at death", first.blade.bone, first.blade.t, more))
     return go(at, why, "limb", nil, nil, first.blade)
   end
   -- a blade across her body cuts it along the blade (the chest or the waist), and every arm and leg it crossed comes
@@ -4459,7 +5098,7 @@ function M.blow(pawn, mesh, h, why)
       log(string.format("blade (%s): %s plane across her body, too far from the hit or cut already", why, how))
       return false
     end
-    local more = why == "death" and queue(extras({ kind = "torso" })) or ""
+    local more = (why == "death" or why == "enemy") and queue(extras({ kind = "torso" })) or ""
     log(string.format("blade (%s): %s plane %s: her body at %s %.2f%s%s",
       why, how, c.shave and "down her length facing her front or back: no split" or "across her body",
       body.bone, body.t, body.square and ", square" or "", more))
@@ -4471,6 +5110,19 @@ function M.blow(pawn, mesh, h, why)
   if h.noSplit and (hip or knee
     or (what ~= "limb" and what ~= "head")) then
     log(string.format("blade (%s): %s plane through her body, she is cut already: no split", why, how))
+    return false
+  end
+  -- (an enemy: its waist cut square to the spine, as a body cut: it is never split)
+  if (hip or knee) and why == "enemy" and not already_cut(mesh, "Bip001-Spine1") then
+    local a, b = bl("Bip001-Spine1"), bl("Bip001-Spine2")
+    local sp = a and b and norm(sub(b, a))
+    if sp then
+      log(string.format("blade (%s): it only met %s at %.2f, its waist cut square instead", why, best.bone, best.t))
+      return go(a, why, "torso", nil, nil, { bone = "Bip001-Spine1", t = PARTS["Bip001-Spine1"].at, d = 0, n = sp, square = true })
+    end
+  end
+  if why == "enemy" and (hip or knee or (what ~= "limb" and what ~= "head")) then
+    log(string.format("blade (%s): %s plane through its body, no split on an enemy", why, how))
     return false
   end
   if hip or knee then
@@ -4503,11 +5155,11 @@ function M.blow(pawn, mesh, h, why)
     blade and (" " .. blade.bone .. string.format(" at %.2f", blade.t)) or ""))
   if what == "limb" then
     if not blade then return false end
-    local more = why == "death" and queue(extras({ kind = "limb", bone = blade.bone })) or ""
+    local more = (why == "death" or why == "enemy") and queue(extras({ kind = "limb", bone = blade.bone })) or ""
     if more ~= "" then log("blade (" .. why .. "): one swing" .. more) end
     return go(at, why, "limb", nil, nil, blade)
   elseif what == "head" then
-    local more = why == "death" and queue(extras({ kind = "head" })) or ""
+    local more = (why == "death" or why == "enemy") and queue(extras({ kind = "head" })) or ""
     if more ~= "" then log("blade (" .. why .. "): one swing" .. more) end
     return go(at, why, "head", h.dir)
   end
@@ -4596,7 +5248,8 @@ local function stage_tick(q)
   M.last_stage = { t = os.clock(), what = string.format("%s stage %s %.0f ms", q.kind, stage, ms) }
   -- every stage, with how long after the cut was asked for it ran: the cut showed late after her death (twenty-fifth
   -- playtest)
-  if stage ~= "anim" then
+  -- (only a slow one without verboseLog: one line a stage was most of a cut's log)
+  if stage ~= "anim" and (ctx.tune.verboseLog or ms >= (cfg().slowMs or 15)) then
     log(string.format("%s stage %s at +%.0f ms took %.0f ms%s", q.kind, stage, (t0 - (q.t0 or t0)) * 1000, ms,
       ms >= (cfg().slowMs or 15) and ": " .. table.concat(prof, ", ") or ""))
   end
@@ -4642,8 +5295,12 @@ function M.watch(mesh)
   if not w.preload then
     local g, list = cfg(), {}
     for _, v in pairs(FX) do list[#list + 1] = v end
-    for _, sets in pairs(SFX) do for _, set in ipairs(sets) do for _, v in ipairs(set) do list[#list + 1] = v end end end
-    for _, v in ipairs(vox.DIE) do list[#list + 1] = v end
+    -- (the sounds after the rest, and not in her first 30 s: loaded as the lobby came up, while the game's audio
+    -- mixer was starting, its render thread crashed on a null lock, exe+0xb4b8817, on one launch in a few since
+    -- 0.3.0 added her breaths and moans here, playtest)
+    local sounds = {}
+    for _, sets in pairs(SFX) do for _, set in ipairs(sets) do for _, v in ipairs(set) do sounds[#sounds + 1] = v end end end
+    for _, v in ipairs(vox.DIE) do sounds[#sounds + 1] = v end
     local cv = type(ctx.tune.convulse) == "table" and ctx.tune.convulse.voice
     if type(cv) == "table" and cv.enabled ~= false then
       for _, names in ipairs({ cv.breaths or {}, cv.moans or {} }) do
@@ -4651,7 +5308,7 @@ function M.watch(mesh)
           n = tostring(n)
           if n:sub(1, 1) ~= "/" then n = vox.DIR .. n:gsub("_VO$", "") .. "_VO" end
           if not n:find(".", 1, true) then n = n .. "." .. n:match("([^/]+)$") end
-          list[#list + 1] = n
+          sounds[#sounds + 1] = n
         end
       end
     end
@@ -4659,12 +5316,16 @@ function M.watch(mesh)
     for _, v in ipairs(DRIP_DECALS) do list[#list + 1] = v end
     for _, v in ipairs(M.MARK_DECALS) do list[#list + 1] = v end
     for _, v in ipairs(M.MARK_SLASH) do list[#list + 1] = v end
-    for _, v in ipairs({ vox.ATTENUATION, MPC_DIRTY, g.capMaterial or CAP_MATERIAL, g.stubMesh or STUB_MESH }) do list[#list + 1] = v end
+    for _, v in ipairs({ MPC_DIRTY, g.capMaterial or CAP_MATERIAL, g.stubMesh or STUB_MESH }) do list[#list + 1] = v end
+    if M.tachy() then list[#list + 1] = M.TACHY_MAT end
     if type(g.capMatte) == "table" and g.capMatte.enabled ~= false then
       list[#list + 1] = g.capMatte.material or M.matte.master
       for _, v in pairs(M.matte.tex) do list[#list + 1] = v end
     end
-    w.preload, w.next = list, 1
+    sounds[#sounds + 1] = vox.ATTENUATION
+    w.sounds = #list + 1
+    for _, v in ipairs(sounds) do list[#list + 1] = v end
+    w.preload, w.next, w.t0 = list, 1, os.clock()
   end
   -- and her outfit's bone tree, 40 bones a look, then the cut's bone lists made from it (warm: nothing left to read
   -- when the cut comes)
@@ -4680,6 +5341,7 @@ function M.watch(mesh)
     if valid(owner) then M.pool_fill(owner) end
   end
   local path = w.preload[w.next]
+  if path and w.next >= w.sounds and os.clock() - w.t0 < 30 then path = nil end
   if path and ctx.may_load() then
     w.next = w.next + 1
     if not native.rooted[path] then load_obj(path) end
@@ -5050,8 +5712,9 @@ function M.enemy_cut(owner, pawn, mesh, h, kind, faced)
     if pending then return nil end
     h = h or {}
     M.aim(h.push or h.dir)
+    -- (M.blow knows an enemy is never split; h.noSplit, a body already cut, kept its body cuts along the blade off:
+    -- a level swing through its waist rolled the odds)
     if kind ~= "mark" and (h.n or (h.dir and h.fwd)) and h.loc then
-      h.noSplit = true
       if M.blow(pawn, mesh, h, "enemy") then return "blade" end
       if pending then return nil end
     end
@@ -5059,6 +5722,8 @@ function M.enemy_cut(owner, pawn, mesh, h, kind, faced)
     return start(pawn, mesh, h.loc, "enemy", kind or "limb") and (kind or "limb") or nil
   end)
 end
+-- the hit's blood where an enemy was struck, its effects tagged to it (they go with its corpse)
+function M.enemy_hit(owner, pawn, mesh, at) return enemy.run(owner, M.on_hit, pawn, mesh, at) end
 -- the cuts made on an enemy so far, and whether one is still opening
 function M.enemy_cuts(owner)
   local n = 0

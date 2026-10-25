@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Build and run the skin cut harness natively (clang, ASan/UBSan), then the cuts on real outfit and enemy meshes when
 # the build cache has them (test/real/run.sh). The real-mesh runs go in parallel (JOBS, default the CPU count).
-#   test/run.sh [group...]   groups: unit (test_cut.c), weapon (test_weapon.c), stats (test_stats.c), phys (test_phys.c and the outfit physics
+#   test/run.sh [group...]   groups: unit (test_cut.c), weapon (test_weapon.c), stats (test_stats.c), rows (test_rows.c), addr (test_addr.c), alive (test_alive.c), phys (test_phys.c and the outfit physics
 #                            parity, phys/parity.py), split, waist, arm, head, mark, enemy; default all
 # What to run for a change:
 #   stats.c / glass.lua            stats
+#   sbslice.c, the table rows      rows
+#   sbslice.c, the addresses       addr
+#   sbslice.c, held objects (G)    alive
 #   physfix.lua, its tune, b/t/j   phys
 #   sbslice.c, a limb or neck cut  unit arm head enemy
 #   sbslice.c, the split (SIDE)    unit split waist
@@ -15,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
-[[ $# -eq 0 ]] && SEL=" unit weapon stats phys split waist arm head mark enemy "
+[[ $# -eq 0 ]] && SEL=" unit weapon stats rows addr alive phys split waist arm head mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
 fail=0
 if on unit; then
@@ -36,6 +39,27 @@ if on stats; then
   r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-stats" | tail -1)
   echo "stats: $r"
   [[ $r == PASS ]] || fail=1
+fi
+# the engine's addresses looked for on the real exe (resolve_addresses), as on another game build
+if on addr; then
+  clang -O1 -g -w -o "$OUT-addr" test_addr.c
+  r=$("$OUT-addr" | tail -1)
+  echo "addr: $r"
+  [[ $r == PASS ]] || { "$OUT-addr" | grep FAIL; fail=1; }
+fi
+# the held objects' liveness check (G) on a made-up object array
+if on alive; then
+  clang -O1 -g -fsanitize=address,undefined -w -o "$OUT-alive" test_alive.c
+  r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-alive" | tail -1)
+  echo "alive: $r"
+  [[ $r == PASS ]] || { ASAN_OPTIONS=detect_leaks=0 "$OUT-alive" | grep FAIL; fail=1; }
+fi
+# the data table row commands (D, N, A) on a made-up table
+if on rows; then
+  clang -O1 -g -fsanitize=address,undefined -w -o "$OUT-rows" test_rows.c
+  r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-rows" | tail -1)
+  echo "rows: $r"
+  [[ $r == PASS ]] || { ASAN_OPTIONS=detect_leaks=0 "$OUT-rows" | grep FAIL; fail=1; }
 fi
 # the outfit physics commands on made-up data, then physfix.lua against the build's patched physics assets (needs a
 # build's cache and lua)

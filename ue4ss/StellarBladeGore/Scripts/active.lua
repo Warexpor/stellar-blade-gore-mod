@@ -31,6 +31,7 @@ local ctx
 
 local function cfg() return ctx.tune.active or {} end
 local function log(s) ctx.log("active: " .. s) end
+local function vlog(s) if ctx.tune.verboseLog then log(s) end end -- (the settle watch's lines: tune.verboseLog only)
 local try, valid = nil, nil
 
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
@@ -76,6 +77,8 @@ local run = nil         -- the ragdoll in progress: { mesh, pac, t, masses = {bo
 local dropped = {}      -- { comp, box, parent, socket, loc, rot }: weapons let go of
 local gripped = {}      -- address -> { comp, parent, socket, loc, rot }: weapons still in her hand in a ragdoll death
 local extra = {}        -- other ragdolls to settle with hers (a split's copy)
+-- her hands opening once a weapon left them (tune.active.grip.open): hand bone -> { t, comps = { {comp, bone index} } }
+local eased = {}
 local STILL = { "Bip001-Pelvis", "Bip001-Spine2", "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand", "Bip001-L-Foot", "Bip001-R-Foot" }
 
 function M.init(c)
@@ -253,7 +256,8 @@ end
 -- splitFly already, and on top of the split's own release it shot her half through the floor (thirty-seventh)
 local function impact(mesh, g, dir, boost, whole)
   local out = ""
-  boost = boost or g.impact or 350
+  local k = math.max(tonumber(g.push) or 1, 0)
+  boost = (boost or g.impact or 350) * k
   if dir and boost > 0 then
     local h = math.sqrt(dir.X * dir.X + dir.Y * dir.Y)
     if h > 1e-3 then
@@ -264,7 +268,7 @@ local function impact(mesh, g, dir, boost, whole)
         if try(function() mesh:AddImpulse(vec(d.X * boost * share, d.Y * boost * share, d.Z * boost * share), FName(bone), true); return true end) then n = n + 1 end
       end
       out = string.format(", impact %.0f cm/s on %d bones", boost, n)
-      local l = (whole and not run.split) and (g.launch or 0) or 0
+      local l = (whole and not run.split) and (g.launch or 0) * k or 0
       if l > 0 then
         local lu = g.launchUp or 0.3
         local ld = vec(dir.X / h * (1 - lu) * l, dir.Y / h * (1 - lu) * l, lu * l)
@@ -363,6 +367,96 @@ end
 -- only: drop just the weapons it says yes to (a cut arm's); one already dropped stays on its box
 -- extra: components to drop besides her own weapons (a split sword's second half); bound(w): the box for w (its
 -- component-space origin and extent: a half's), else its mesh's bounds; push: cm/s more along it (the halves apart)
+-- (its vertices' box from sbslice, "W": the asset's imported bounds are twice her sword's width and far longer than
+-- its 140 cm, so the break "across its middle" fell by the hilt, the blade stayed whole and its boxes overlapped, which
+-- threw the tip off fast, playtest; the imported bounds only when sbslice can't read the mesh). By mesh asset
+local real_bounds = {}
+local function true_bounds(w)
+  local sm = try(function() return w.SkeletalMesh end)
+  local ma = sm and addr(sm)
+  if not ma then return nil end
+  if real_bounds[ma] ~= nil then return real_bounds[ma] or nil end
+  real_bounds[ma] = false -- (asked once: a mesh sbslice can't read keeps its imported bounds)
+  local o, e
+  if ctx.gore and ctx.gore.command then
+    local r = ctx.gore.command(string.format("W%x,0", addr(w) or 0))
+    local v = {}
+    for x in (r:match("^ok W (.+)$") or ""):gmatch("[^,]+") do v[#v + 1] = tonumber(x) end
+    if #v == 6 then
+      o = vec((v[1] + v[4]) / 2, (v[2] + v[5]) / 2, (v[3] + v[6]) / 2)
+      e = vec((v[4] - v[1]) / 2, (v[5] - v[2]) / 2, (v[6] - v[3]) / 2)
+      real_bounds[ma] = { o = o, e = e }
+      log(string.format("weapon %s: %.0f x %.0f x %.0f cm", tostring(try(function() return sm:GetFName():ToString() end)),
+        e.X * 2, e.Y * 2, e.Z * 2))
+    else
+      log("weapon bounds: " .. tostring(r))
+    end
+  end
+  return real_bounds[ma]
+end
+-- her hand opens once what it held is gone: the ragdoll's fingers have no bodies and kept the animation's fist
+-- (playtest). sbslice eases each bone under the hand toward its bind pose, the open hand ("F", every tick: grip_ease)
+-- It writes the mesh asset's bind matrices, which every component on that asset shares (a split's copy, a cut-off
+-- arm): one component per asset, the one whose hand is nearest the weapon (at: where it left the hand). Eased on
+-- both halves of a split, the copy's frozen hand overwrote hers each tick and her fist stayed shut (playtest)
+local function ease_start(pawn, mesh, hand, at)
+  local o = (cfg().grip or {}).open or 0.8
+  if not hand or eased[hand] or o <= 0 or not (ctx.gore and ctx.gore.fire) then return end
+  local comps, seen = {}, {}
+  local cand = { mesh }
+  for _, c in ipairs(extra) do cand[#cand + 1] = c end
+  try(function()
+    local cls = StaticFindObject("/Script/Engine.SkeletalMeshComponent")
+    for _, c in ipairs(pawn:K2_GetComponentsByClass(cls)) do cand[#cand + 1] = c end
+  end)
+  local by = {} -- asset address -> its pick
+  for _, c in ipairs(cand) do
+    local a = addr(c)
+    local i = a and not seen[a] and try(function() return c:GetBoneIndex(FName(hand)) end)
+    if a then seen[a] = true end
+    local sm = i and i >= 0 and try(function() return c.SkeletalMesh:GetAddress() end)
+    if sm then
+      local h = at and try(function() local v = c:GetSocketLocation(FName(hand)); return vec(v.X, v.Y, v.Z) end)
+      local d = h and len(vec(at.X - h.X, at.Y - h.Y, at.Z - h.Z)) or math.huge
+      if not by[sm] then by[sm] = { c = c, a = a, i = i, d = d }; comps[#comps + 1] = by[sm]
+      elseif d < by[sm].d then by[sm].c, by[sm].a, by[sm].i, by[sm].d = c, a, i, d end
+    end
+  end
+  if #comps > 0 then eased[hand] = { t = 0, comps = comps } end
+end
+-- the hand nearest a weapon of hers, within 30 cm (the one holding it)
+local function holding_hand(mesh, w)
+  local at = try(function() local v = w:K2_GetComponentLocation(); return vec(v.X, v.Y, v.Z) end)
+  local hand, best
+  for _, sd in ipairs({ "R", "L" }) do
+    local b = "Bip001-" .. sd .. "-Hand"
+    local h = at and try(function() local v = mesh:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end)
+    local d = h and len(vec(at.X - h.X, at.Y - h.Y, at.Z - h.Z))
+    if d and d < 30 and (not best or d < best) then hand, best = b, d end
+  end
+  return hand
+end
+-- every tick: the eased hands opened a little more, toward grip.open over grip.openTime s (smoothed)
+local function grip_ease(dt)
+  if not next(eased) then return end
+  local gp = cfg().grip or {}
+  local o, T = math.min(math.max(gp.open or 0.8, 0), 1), math.max(gp.openTime or 0.6, 0.01)
+  local f = {}
+  for _, e in pairs(eased) do
+    e.t = e.t + dt
+    local x = math.min(e.t / T, 1)
+    local a = math.floor(o * x * x * (3 - 2 * x) * 1000 + 0.5)
+    for _, c in ipairs(e.comps) do
+      if valid(c.c) and addr(c.c) == c.a then f[#f + 1] = string.format("%x,%x,%x", c.a, c.i, a) end
+    end
+  end
+  -- (eight hands a command: sbslice reads 24 fields)
+  for i = 1, #f, 8 do ctx.gore.fire("F" .. table.concat(f, ",", i, math.min(i + 7, #f))) end
+end
+local function ease_stop()
+  if next(eased) and ctx.gore and ctx.gore.fire then ctx.gore.fire("F") end
+  eased = {}
+end
 local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
   if g.dropWeapon == false then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.BoxComponent") end)
@@ -390,7 +484,9 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
     local function bnd(fn) return try(function() local x = fn(); return { o = vec(x.Origin.X, x.Origin.Y, x.Origin.Z),
       e = vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z) } end) end
     local b = bound and bound(w)
-    b = b or bnd(function() return w.SkeletalMesh:GetImportedBounds() end) or bnd(function() return w.SkeletalMesh:GetBounds() end)
+    local tb = not b and true_bounds(w)
+    b = b or (tb and { o = vec(tb.o.X, tb.o.Y, tb.o.Z), e = vec(tb.e.X, tb.e.Y, tb.e.Z) })
+      or bnd(function() return w.SkeletalMesh:GetImportedBounds() end) or bnd(function() return w.SkeletalMesh:GetBounds() end)
     if b then
       local half = (g.weaponMaxCm or 120) / 2
       b.e = vec(math.min(b.e.X, half), math.min(b.e.Y, half), math.min(b.e.Z, half))
@@ -404,6 +500,7 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
       -- (one her grip held: back onto its prop bone on recovery, not her hand)
       local ga = addr(w)
       local o = ga and gripped[ga]
+      local hold = (o and o.hand) or (soft and soft.hand) or holding_hand(mesh, w)
       if o then d.parent, d.socket, d.loc, d.rot, gripped[ga] = o.parent, o.socket, o.loc, o.rot, nil end
       dropped[#dropped + 1] = d
       local ok = try(function()
@@ -433,6 +530,7 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
           (math.random() - 0.5) * 360 * spin), false, FName("None"))
         return true
       end)
+      if ok then ease_start(pawn, mesh, hold, try(function() local v = w:K2_GetComponentLocation(); return vec(v.X, v.Y, v.Z) end)) end
       names[#names + 1] = string.format("%s %.0fx%.0fx%.0f%s", tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)),
         b.e.X * 2, b.e.Y * 2, b.e.Z * 2, ok and "" or " (failed)")
     end
@@ -517,9 +615,13 @@ end
 local splits = {} -- { w, b }: the sword and its other half
 -- a component's mesh bounds: its long axis's two ends in the world, and the bounds (component space)
 local function weapon_axis(w)
-  local x = try(function() return w.SkeletalMesh:GetImportedBounds() end)
-  if not x then return nil end
-  local o, e = vec(x.Origin.X, x.Origin.Y, x.Origin.Z), vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z)
+  local tb = true_bounds(w)
+  local o, e = tb and tb.o, tb and tb.e
+  if not o then
+    local x = try(function() return w.SkeletalMesh:GetImportedBounds() end)
+    if not x then return nil end
+    o, e = vec(x.Origin.X, x.Origin.Y, x.Origin.Z), vec(x.BoxExtent.X, x.BoxExtent.Y, x.BoxExtent.Z)
+  end
   local k = e.X >= e.Y and e.X >= e.Z and "X" or e.Y >= e.Z and "Y" or "Z"
   local function at(sg)
     local p = vec(o.X, o.Y, o.Z)
@@ -581,7 +683,7 @@ function M.weapon_cut(mesh, at, n, blocked)
       out[#out + 1] = nm .. ": in two already"
     elseif not reach then
       out[#out + 1] = nm .. ": the blade misses it"
-    elseif reach > (wc.reach or 80) then
+    elseif reach > (wc.reach or 80) and not forced then -- (a blocked blow breaks it however far off the guessed hit was)
       out[#out + 1] = string.format("%s: crossed %.0f cm from the hit (over %d)", nm, reach, wc.reach or 80)
     elseif t < ends or t > 1 - ends then
       out[#out + 1] = string.format("%s: crossed at its very end (%.2f)", nm, t)
@@ -601,8 +703,13 @@ function M.weapon_cut(mesh, at, n, blocked)
         try(function() b:SetMasterPoseComponent(w, true) end)
         try(function() w:SetForcedLOD(1) end)
         try(function() b:SetForcedLOD(1) end)
+        -- its pose frozen as it is cut (the copy follows it): the sword's gears, panels and blade segments go on
+        -- animating, and the flat cut faces and the collapsed ends are made in this pose, so both halves showed most
+        -- of the sword with its ends bent off to where the moved bones went (playtest)
+        try(function() w.bNoSkeletonUpdate = true end)
         local r = gore.command(string.format("e%x,%x,0", w:GetAddress(), b:GetAddress()), pa, pn)
         if r:sub(1, 2) ~= "ok" then
+          try(function() w.bNoSkeletonUpdate = false end)
           try(function() w:SetForcedLOD(0) end)
           try(function() b:K2_DestroyComponent(b) end)
           out[#out + 1] = nm .. ": " .. r
@@ -614,14 +721,29 @@ function M.weapon_cut(mesh, at, n, blocked)
           local front = ha >= 0 and -1 or 1 -- the end (-1 a, 1 b) in front of the plane
           local k = ax.k
           local cx = ax.o[k] + (2 * t - 1) * ax.e[k]
-          local function half(sg)
-            local lo, hi = cx, ax.o[k] + sg * ax.e[k]
+          -- (each box stops gap cm short of the break: two boxes meeting there, or overlapping, threw a half off fast)
+          local gap = wc.gap or 1.5
+          -- across the sword, each box as wide and thick as its own half (sbslice's abox / bbox): on the whole sword's
+          -- section, guard and all, the tip lay 2-3 cm over the floor (playtest)
+          local function own(tag)
+            local v = {}
+            for x in (r:match(" " .. tag .. "=([%d%.,%-]+)") or ""):gmatch("[^,]+") do v[#v + 1] = tonumber(x) end
+            if #v ~= 6 then return nil end
+            return { o = vec((v[1] + v[4]) / 2, (v[2] + v[5]) / 2, (v[3] + v[6]) / 2), e = vec((v[4] - v[1]) / 2, (v[5] - v[2]) / 2, (v[6] - v[3]) / 2) }
+          end
+          local function half(sg, box)
+            local lo, hi = cx + sg * gap, ax.o[k] + sg * ax.e[k]
             local o, e = vec(ax.o.X, ax.o.Y, ax.o.Z), vec(ax.e.X, ax.e.Y, ax.e.Z)
+            if box then
+              for _, j in ipairs({ "X", "Y", "Z" }) do
+                if j ~= k then o[j], e[j] = box.o[j], math.max(box.e[j], 0.5) end
+              end
+            end
             o[k], e[k] = (lo + hi) / 2, math.max(math.abs(hi - lo) / 2, 1.5)
             local cap = (g.weaponMaxCm or 120) / 2
             return { o = o, e = vec(math.min(e.X, cap), math.min(e.Y, cap), math.min(e.Z, cap)) }
           end
-          local hw, hbx = half(front), half(-front)
+          local hw, hbx = half(front, own("abox")), half(-front, own("bbox"))
           local apart = wc.apart or 120
           local gp = g.grip or {}
           local soft = { toss = gp.toss or 30, spin = wc.spin or 0.5, hand = gripped[aw or 0] and gripped[aw].hand or nil }
@@ -649,7 +771,7 @@ local function splits_back()
       if valid(sp.w) then gore.command(string.format("x%x,0", sp.w:GetAddress())) end
       if valid(sp.b) then gore.command(string.format("x%x,0", sp.b:GetAddress())) end
     end
-    if valid(sp.w) then try(function() sp.w:SetForcedLOD(0) end) end
+    if valid(sp.w) then try(function() sp.w:SetForcedLOD(0); sp.w.bNoSkeletonUpdate = false end) end
     if valid(sp.b) then try(function() sp.b:K2_DestroyComponent(sp.b) end) end
     n = n + 1
   end
@@ -1115,7 +1237,7 @@ local function clamp_flung(comp, s)
   -- that started mid-fall (a leg cut) shot her torso off at 1600 cm/s with 57 of momentum, thirty-fourth playtest
   if run.t < (s.launchTime or 0.5) then
     local g = cfg()
-    local lim = (run.mom or 0) + (g.impact or 200) + (run.launchV or 0) + (s.launchOver or 400) + 981 * run.t
+    local lim = (run.mom or 0) + (g.impact or 200) * math.max(tonumber(g.push) or 1, 1) + (run.launchV or 0) + (s.launchOver or 400) + 981 * run.t
     for b in pairs(MASS) do
       local v = lin_vel(comp, b)
       local l = v and len(v)
@@ -1237,7 +1359,7 @@ local function settle(dt)
     for i, c in ipairs(comps) do
       if valid(c) then local w, b = turning(c); if w > wt then wt, wb, wi = w, b, i end end
     end
-    log(string.format("not settled at %.1f s: fastest %s %.0f cm/s (body %d), drift %.1f cm (%s) over %.1f s, turning %s %.0f deg/s (body %d)",
+    vlog(string.format("not settled at %.1f s: fastest %s %.0f cm/s (body %d), drift %.1f cm (%s) over %.1f s, turning %s %.0f deg/s (body %d)",
       run.t, tostring(which), top, wc or 0, drift == math.huge and -1 or drift, tostring(far), win, tostring(wb), wt, wi))
   end
   if run.still < (st.time or 0.5) then return end
@@ -1286,6 +1408,8 @@ local function fall_assist(dt)
 end
 
 function M.tick(dt)
+  -- (an animated death's hand too: its animation kept the fist as well)
+  if not (run and run.held) then grip_ease(dt) end
   if not run then return end
   if run.held then
     run.held.t = run.held.t + dt
@@ -1299,7 +1423,7 @@ function M.tick(dt)
     log(string.format("her grip eased at %.2f s%s", run.t, r ~= "" and (": " .. r .. " slipped out") or ", nothing left in it"))
   end
   if run.probe and STRETCH_AT[run.probe] and run.t >= STRETCH_AT[run.probe] then
-    log(string.format("stretch at %.1f s (cm off the start): %s%s", run.t, stretch_report(run.mesh, run.joints),
+    vlog(string.format("stretch at %.1f s (cm off the start): %s%s", run.t, stretch_report(run.mesh, run.joints),
       run.capes and ("; cape " .. stretch_report(run.mesh, run.capes)) or ""))
     run.probe = run.probe + 1
   end
@@ -1430,6 +1554,7 @@ function M.stop(pawn, restart)
   if run and run.held and valid(run.mesh) then gravity(run.mesh, true) end
   if run then run.held = nil end
   if not restart then
+    ease_stop()
     local ns = #splits > 0 and splits_back() or 0
     if ns > 0 then log(string.format("%d split weapons whole again", ns)) end
     local ng = next(gripped) and grip_back() or 0
@@ -1450,7 +1575,7 @@ function M.stop(pawn, restart)
   end
   run = nil
   freed = {}
-  log(string.format("stopped, %d masses put back", n))
+  vlog(string.format("stopped, %d masses put back", n))
 end
 
 -- convulse.lua's view of the ragdoll: the components to move (hers and a split's copy), how long it has run and
@@ -1471,6 +1596,22 @@ function M.twitch(s)
   if not run then return end
   run.twitchTill = math.max(run.twitchTill or 0, run.t + s)
   if run.asleep then run.asleep, run.still = false, 0 end
+end
+
+-- photo mode over a death she lies still in: her bodies, and a split's copy's, put back to sleep every tick it is on
+-- and a second after. A split's halves, asleep, moved her head 2 cm as it opened and 6 more as it closed (playtest)
+function M.hold_still()
+  if not run or not run.asleep then return 0 end
+  local n = 0
+  local comps = { run.mesh }
+  for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  for _, c in ipairs(comps) do
+    if valid(c) then
+      if not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
+      n = n + 1
+    end
+  end
+  return n
 end
 
 -- a new Eve (the level reloaded): drop what was held from the old one without touching it

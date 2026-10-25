@@ -16,16 +16,20 @@ local M = {}
 local ctx, try, valid
 local function cfg() return ctx.tune.enemies or {} end
 local function log(s) ctx.log("enemies: " .. s) end
+local function vlog(s) if ctx.tune.verboseLog then log(s) end end -- (per-enemy chatter: tune.verboseLog only)
 
 local DIR = "ue4ss/Mods/StellarBladeGore/"
 local LIST, CMD, REQ, STATE = DIR .. "spawner.list", DIR .. "spawner.cmd", DIR .. "spawner.req", DIR .. "spawner.state"
 local TICK_S = 0.033
+-- seconds of her hand kept: a kill is seen when its ragdoll starts, which comes a while after the blow that killed it
+-- (the death show's hit pause and stagger first); the swing is looked for round the hit, not in the last swingWindow
+local HAND_S = 1.5
 
 local known = {}     -- actor address -> { obj, mesh, cls, kind, dead, t, hit, cut, hits, still, sm }
 local mine = {}      -- actor address -> true: spawned here (Remove all takes them)
 local expect = {}    -- { kind, at, t }: spawn requests waiting for their actor
 local pick = 1       -- the kind F5 spawns
-local hand = {}      -- Eve's right hand, the last swingWindow seconds: { t, p }
+local hand = {}      -- Eve's right hand, the last HAND_S seconds: { t, p }
 local n = 0
 local freed = false  -- the mouse is given to the spawner window
 
@@ -176,20 +180,22 @@ local function read_req(pawn)
 end
 
 -- ---- Eve's swing ----
--- her right hand, sampled every tick; a kill's blade is the fastest stretch of the last swingWindow seconds, its
--- plane the arc through the samples round it (else the swing and her forward)
+-- her right hand, sampled every tick; a kill's blade is the fastest stretch of the swingWindow seconds up to the hit
+-- (since..upto; the last swingWindow seconds when not given), its plane the arc through the samples round it (else
+-- the swing and her forward)
 local function track_hand(pawn, mesh)
   local now = os.clock()
   local p = bone_loc(mesh, "Bip001-R-Hand")
   if p then hand[#hand + 1] = { t = now, p = p } end
-  local keep = cfg().swingWindow or 0.5
+  local keep = math.max(cfg().swingWindow or 0.5, HAND_S)
   while #hand > 0 and now - hand[1].t > keep do table.remove(hand, 1) end
 end
-local function her_swing(pawn, since)
+local function her_swing(pawn, since, upto)
+  since = since or os.clock() - (cfg().swingWindow or 0.5)
   local best
   for i = 2, #hand do
     local dt = hand[i].t - hand[i - 1].t
-    if dt > 1e-3 and (not since or hand[i].t > since) then
+    if dt > 1e-3 and hand[i].t > since and (not upto or hand[i - 1].t <= upto) then
       local v = len(sub(hand[i].p, hand[i - 1].p)) / dt
       if not best or v > best.v then best = { v = v, i = i } end
     end
@@ -232,17 +238,48 @@ local function part_at(mesh, e)
   return b and vec(a.X + 0.4 * (b.X - a.X), a.Y + 0.4 * (b.Y - a.Y), a.Z + 0.4 * (b.Z - a.Z)) or a
 end
 
--- the killing blow on enemy e: her swing's plane through where its mesh was hit (else the part nearest the plane and
--- her hand, moved onto it), else a made-up blade from her towards it
+-- where the body is struck near p: p itself when one of its parts is within ONTO cm, else the nearest part (a hit's
+-- location the game reported off the body, above its head: the blade's plane through it missed it, playtest)
+local ONTO = 30
+local ONTO_ALSO = { { "Bip001-Head" }, { "Bip001-Pelvis" } }
+local function onto(mesh, p)
+  local bd, bl, bb
+  for _, x in ipairs(PARTS) do
+    local l = part_at(mesh, x)
+    local d = l and len(sub(l, p))
+    if d and (not bd or d < bd) then bd, bl, bb = d, l, x[1] end
+  end
+  -- (the head and the hips are struck too, though no blade is aimed at them as parts)
+  for _, x in ipairs(ONTO_ALSO) do
+    local l = bone_loc(mesh, x[1])
+    local d = l and len(sub(l, p))
+    if d and (not bd or d < bd) then bd, bl, bb = d, l, nil end
+  end
+  if not bd or bd <= ONTO then return p, nil end
+  return bl, bb
+end
+
+-- the killing blow on enemy e: her swing up to the hit, its plane through where its mesh was hit (else the part
+-- nearest the plane and her hand, moved onto it), else a made-up blade from her towards it. The hit is moved on with
+-- the body since (its pelvis then and now): the ragdoll starts a while after the blow
 local function kill_blow(pawn, e)
   local g = cfg()
   local hit = e.hit and os.clock() - e.hit.t < (g.hitWindow or 1.0) and e.hit or nil
-  local sw = math.random() <= (g.bladeChance or 0.85) and her_swing(pawn) or nil
+  local w = g.swingWindow or 0.5
+  local sw = math.random() <= (g.bladeChance or 0.85)
+    and (hit and her_swing(pawn, hit.t - w, hit.t + 0.1) or her_swing(pawn)) or nil
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
   local pel = bone_loc(e.mesh, "Bip001-Pelvis")
   local push = hit and hit.push or (her and pel and unit(vec(pel.X - her.X, pel.Y - her.Y, 0)))
+  local hloc, hbone = hit and hit.loc, hit and hit.bone
+  if hloc then
+    if hit.pel and pel then hloc = vec(hloc.X + pel.X - hit.pel.X, hloc.Y + pel.Y - hit.pel.Y, hloc.Z + pel.Z - hit.pel.Z) end
+    local b
+    hloc, b = onto(e.mesh, hloc)
+    hbone = b or hbone
+  end
   if sw then
-    local loc, bone, off = hit and hit.loc, hit and hit.bone, nil
+    local loc, bone, off = hloc, hbone, nil
     if not loc then
       local bd
       for _, p in ipairs(PARTS) do
@@ -262,11 +299,11 @@ local function kill_blow(pawn, e)
     end
   end
   -- no swing: a blade from her side, level, slanted or down across it, through a part of it
-  if not push then return { loc = hit and hit.loc, push = nil, src = "none" } end
+  if not push then return { loc = hloc, push = nil, src = "none" } end
   local side = math.random() < 0.5 and -1 or 1
   local ang = math.rad(({ 0, 20, 45, 45, 70, 90 })[math.random(6)])
   local dir = vec(-push.Y * side * math.cos(ang), push.X * side * math.cos(ang), -math.sin(ang))
-  local loc, bone = hit and hit.loc, hit and hit.bone
+  local loc, bone = hloc, hbone
   if not loc then
     local sum = 0
     for _, p in ipairs(PARTS) do sum = sum + p[2] end
@@ -302,7 +339,7 @@ local function poll_hit(e)
   local pel = bone_loc(m, "Bip001-Pelvis")
   local function near(p) return p and pel and len(sub(p, pel)) < 150 end
   e.hit = { t = os.clock(), loc = (near(at) and at) or (near(sp) and sp) or nil, push = f and len(f) > 1e-3 and unit(f) or nil,
-    bone = try(function() return m.PhysicalHitForceTargetBone:ToString() end) }
+    bone = try(function() return m.PhysicalHitForceTargetBone:ToString() end), pel = pel }
 end
 
 local function simulating(e) return try(function() return e.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true end
@@ -334,11 +371,11 @@ local function hidden(e)
     or try(function() return e.mesh:IsVisible() end) == false
 end
 
-local function adopt(o, a, cls, k)
+local function adopt(o, a, cls, k, cuts)
   local mesh = try(function() return o.Mesh end)
   if not valid(mesh) then return nil end
   local e = { obj = o, mesh = mesh, cls = cls, kind = k, dead = false, cuts = 0, hits = 0 }
-  if cfg().nativeSlice == false then
+  if cuts and cfg().nativeSlice == false then
     local was = try(function() return o.bUseSliceSkeletalMesh end)
     if was then try(function() o.bUseSliceSkeletalMesh = false end) end
     e.slice = was
@@ -353,7 +390,7 @@ local function adopt(o, a, cls, k)
       if l and len(sub(l, x.at)) < 800 then mine[a] = true; table.remove(expect, i); break end
     end
   end
-  log(string.format("following %s %x (%s)%s%s", k.alias, a, cls, mine[a] and ", spawned here" or "",
+  ;(mine[a] and log or vlog)(string.format("following %s %x (%s)%s%s", k.alias, a, cls, mine[a] and ", spawned here" or "",
     e.slice ~= nil and string.format(", its own slicer %s -> off", tostring(e.slice)) or ""))
   return e
 end
@@ -365,7 +402,9 @@ local function gone(a, e, how, why)
   if e.cut then log(string.format("%s %x %s: its gore removed", e.kind.alias, a, why)) end
 end
 
--- the kill: its cut, once gore is free (one cut opens at a time), tried for killWait seconds
+-- the kill: its cut, once gore is free (one cut opens at a time), tried for killWait seconds. What it waited for is
+-- moved on with the body (its pelvis when it was asked and now): a corpse cut after another's flew on meanwhile, and
+-- the blade's plane was left where it had been
 local function try_cut(pawn, a, e)
   local r = e.want
   if not r then return end
@@ -375,20 +414,30 @@ local function try_cut(pawn, a, e)
     return
   end
   if ctx.gore.busy() then return end
+  local pel = r.pel and bone_loc(e.mesh, "Bip001-Pelvis")
+  if pel then
+    local d = sub(pel, r.pel)
+    local function mv(v) return v and vec(v.X + d.X, v.Y + d.Y, v.Z + d.Z) end
+    r.loc = mv(r.loc)
+    if r.h then r.h.loc = mv(r.h.loc) end
+    r.pel = pel
+  end
   local got = ctx.gore.enemy_cut(a, e.obj, e.mesh, r.h, r.kind, e.kind.face)
   if not got and not ctx.gore.busy() and r.kind ~= "mark" then
-    -- nothing came off that way: the next kind (a limb, the head, across the waist), each once
+    -- nothing came off that way: the next kind (a limb, the head, across the waist), each once, near where it was
+    -- struck and flying the way the blow went
     r.tried = r.tried or {}
     r.tried[r.kind] = true
+    local h = { loc = r.loc, push = r.h and r.h.push }
     r.h = nil
     for _, k in ipairs({ "limb", "head", "torso" }) do
-      if not r.tried[k] then r.kind = k; got = ctx.gore.enemy_cut(a, e.obj, e.mesh, nil, k, e.kind.face); if got then break end; r.tried[k] = true end
+      if not r.tried[k] then r.kind = k; got = ctx.gore.enemy_cut(a, e.obj, e.mesh, h, k, e.kind.face); if got then break end; r.tried[k] = true end
     end
   end
   if got or ctx.gore.busy() then
     e.cut = true
     e.cuts = e.cuts + 1
-    if r.loc then ctx.gore.on_hit(e.obj, e.mesh, r.loc) end
+    if r.loc then ctx.gore.enemy_hit(a, e.obj, e.mesh, r.loc) end
     log(string.format("%s %x: %s %s (%s)", e.kind.alias, a, r.what, tostring(got or r.kind), r.src))
   else
     log(string.format("%s %x: nothing came off (%s)", e.kind.alias, a, r.src))
@@ -396,19 +445,22 @@ local function try_cut(pawn, a, e)
   e.want = nil
 end
 
--- her swing passing through a corpse: cut again (corpseHits)
+-- her swing passing through a corpse: cut again (corpseHits). Her sword reaches past her hand: a part within reach cm
+-- of the swing's plane and blade cm of her hand is struck (her hand alone within 35 cm of a lying corpse's part
+-- almost never was)
 local function corpse_hit(pawn, a, e)
   local ch = cfg().corpseHits or {}
   if ch.enabled == false or e.want or e.hits >= (ch.max or 4) or os.clock() - e.t < (ch.from or 0.4) then return end
-  local sw = her_swing(pawn, e.lastSwing)
+  local sw = her_swing(pawn, math.max(e.lastSwing or 0, e.t + (ch.from or 0.4), os.clock() - (cfg().swingWindow or 0.5)))
   if not sw then return end
-  local reach = ch.reach or 35
+  local reach, blade = ch.reach or 35, ch.blade or 130
   local bd, bl, bb
   for _, p in ipairs(PARTS) do
     local l = part_at(e.mesh, p)
     if l then
+      local off = math.abs(dot(sub(l, sw.at), sw.n))
       local d = len(sub(l, sw.at))
-      if d < reach and (not bd or d < bd) then bd, bl, bb = d, l, p[1] end
+      if off < reach and d < blade and (not bd or off < bd) then bd, bl, bb = off, l, p[1] end
     end
   end
   if not bl then return end
@@ -418,7 +470,8 @@ local function corpse_hit(pawn, a, e)
   local loc = vec(bl.X - k * sw.n.X, bl.Y - k * sw.n.Y, bl.Z - k * sw.n.Z)
   local cut = math.random() <= (ch.cutChance or 0.7)
   e.want = { t = os.clock(), kind = cut and "limb" or "mark", loc = loc, what = "corpse hit",
-    src = string.format("%s at %.0f cm/s, %.0f cm from %s", sw.how, sw.speed, bd, bb),
+    pel = bone_loc(e.mesh, "Bip001-Pelvis"),
+    src = string.format("%s at %.0f cm/s, %.0f cm off %s", sw.how, sw.speed, bd, bb),
     h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb } }
 end
 
@@ -552,7 +605,7 @@ local function down_tick()
   if not down.hooked then
     down.hooked = true
     local ok, err = pcall(NotifyOnNewObject, "/Script/SB.SBBTDecorator_SbCheckActorEffect", function(o)
-      if down.mode then down.pending[#down.pending + 1] = { o = o, t = os.clock() + 1 } end
+      if down.mode then down.pending[#down.pending + 1] = { k = ctx.keep(o), t = os.clock() + 1 } end
     end)
     if not ok then log("enemies: knockdown checks not watched: " .. tostring(err)) end
   end
@@ -562,11 +615,13 @@ local function down_tick()
   local t0 = os.clock()
   while #down.pending > 0 and down.pending[1].t <= t0 and os.clock() - t0 < DOWN_MS / 1000 do
     local x = table.remove(down.pending, 1)
-    -- a new object: an address seen before was another decorator, since collected
-    local a = valid(x.o) and addr(x.o)
+    -- a new object: an address seen before was another decorator, since collected. Asked through held (sbslice's
+    -- object array check) before it is touched: one freed in that second (an enemy's tree going at her death) was
+    -- read by its ActorType and crashed the game (UE4SS reading the freed object's class, playtest)
+    local a = x.k and ctx.held(x.k) and x.k.addr
     if a then
       down.done[a] = nil
-      local d1, n1 = attack_down(mode, { x.o }, true)
+      local d1, n1 = attack_down(mode, { x.k.obj }, true)
       down.nd, down.nn = (down.nd or 0) + d1, (down.nn or 0) + n1
     end
   end
@@ -574,6 +629,63 @@ local function down_tick()
     log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", LOG[mode], down.nn, down.nd))
     down.nd, down.nn = 0, 0
   end
+end
+
+-- the death's push (pushScale, push, pushUp): the game's own throw (its death show's ragdoll key, 0.01 s in) scaled
+-- once it is in, and a push of our own along the blow on top, every body of it at once (velocity, not force: the
+-- same on any kind's mass). The blow: where its mesh was last hit from, else away from her
+local function blow_dir(pawn, e, pel)
+  local hit = e.hit and os.clock() - e.hit.t < (cfg().hitWindow or 1.0) and e.hit or nil
+  if hit and hit.push then return hit.push end
+  local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
+  return her and pel and unit(vec(pel.X - her.X, pel.Y - her.Y, 0)) or nil
+end
+local function push_all(e, v)
+  return try(function() e.mesh:AddImpulseToAllBodiesBelow(v, FName("Bip001"), true, true); return true end) == true
+end
+local function death_push(pawn, e, pel)
+  local g = cfg()
+  local p, up = tonumber(g.push) or 0, math.min(math.max(tonumber(g.pushUp) or 0.2, 0), 1)
+  local d = p > 0 and blow_dir(pawn, e, pel)
+  if d then
+    local h = math.sqrt(d.X * d.X + d.Y * d.Y)
+    if h > 1e-3 then
+      local v = vec(d.X / h * (1 - up) * p, d.Y / h * (1 - up) * p, up * p)
+      if push_all(e, v) then log(string.format("%s died: pushed %.0f cm/s along the blow", e.kind.alias, p)) end
+    end
+  end
+  local k = tonumber(g.pushScale) or 1
+  if k ~= 1 then e.scaleAt = os.clock() + 0.06 end
+end
+-- the game's throw scaled: what its pelvis moves at, times pushScale less one, added to every body (0: dropped dead)
+local function scale_push(e)
+  e.scaleAt = nil
+  local k = math.max(tonumber(cfg().pushScale) or 1, 0)
+  local v = try(function() return vof(e.mesh:GetPhysicsLinearVelocity(FName("Bip001-Pelvis"))) end)
+  if v and push_all(e, vec(v.X * (k - 1), v.Y * (k - 1), v.Z * (k - 1))) then
+    log(string.format("%s: its throw %.0f cm/s scaled x%g", e.kind.alias, len(v), k))
+  end
+end
+
+-- tune.smoothAnim: every character's animation updated every frame. The engine's update rate optimisation skips
+-- frames on characters further off or small on screen, and they ran choppy next to a smooth world (reported). Each
+-- character is set once (keyed by its live-check token), looked over once a second; switched off again, the engine's
+-- own is given back to those set
+local smooth = { next = 0, set = setmetatable({}, { __mode = "k" }) }
+local function smooth_tick()
+  local now = os.clock()
+  if now < smooth.next then return end
+  smooth.next = now + 1
+  local on = ctx.tune.smoothAnim == true
+  local n = 0
+  for _, c in ipairs(ctx.live_chars()) do
+    if (smooth.set[c.k] or false) ~= on then
+      smooth.set[c.k] = on
+      local m = try(function() return c.obj.Mesh end)
+      if valid(m) and try(function() m.bEnableUpdateRateOptimizations = not on; return true end) then n = n + 1 end
+    end
+  end
+  if n > 0 then log(string.format("smoothAnim %s: %d characters' animation %s", tostring(on), n, on and "updated every frame" or "back to the engine's rate")) end
 end
 
 -- every tick of hers (main.lua), pawn and mesh hers
@@ -585,10 +697,15 @@ function M.tick(pawn, mesh, tm)
   tm("enemies attack-down")
   if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end
   tm("enemies dev reads")
+  smooth_tick()
+  tm("enemies smooth")
   local g = cfg()
   local gore = ctx.gore
-  if g.enabled == false or not gore or ((ctx.tune.gore or {}).enabled == false) then return end
-  track_hand(pawn, mesh)
+  -- the cuts, or only the death's push (cuts off: the ragdolls still get it)
+  local cuts = g.enabled ~= false and gore and (ctx.tune.gore or {}).enabled ~= false
+  local pushes = (tonumber(g.push) or 0) > 0 or (tonumber(g.pushScale) or 1) ~= 1
+  if not (cuts or pushes) then return end
+  if cuts then track_hand(pawn, mesh) end
   tm("enemies hand")
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
   local seen = {}
@@ -599,7 +716,7 @@ function M.tick(pawn, mesh, tm)
       local e = known[c.addr]
       if e and e.obj ~= c.obj and addr(e.obj) ~= c.addr then e = nil end
       -- (an actor being destroyed stays in the list until the next GC: a removed spawn was adopted again every tick)
-      if not e and not dying(c.obj) then e = adopt(c.obj, c.addr, c.cls, k) end
+      if not e and not dying(c.obj) then e = adopt(c.obj, c.addr, c.cls, k, cuts) end
       if e then e.k = c.k end
       if e then
         if try(function() return e.obj.bActorIsBeingDestroyed end) ~= false then
@@ -614,7 +731,8 @@ function M.tick(pawn, mesh, tm)
             if near then poll_hit(e) end
             if sim and not hidden(e) then
               e.dead, e.t, e.still, e.looks = true, os.clock(), 0, looks(e.mesh)
-              local cut_now = near and math.random() <= (g.cutChance or 1.0)
+              if near and pushes then death_push(pawn, e, pel) end
+              local cut_now = cuts and near and math.random() <= (g.cutChance or 1.0)
               local corpses = 0
               for _, x in pairs(known) do if x.cut then corpses = corpses + 1 end end
               if cut_now and corpses >= (g.maxCorpses or 6) then
@@ -623,7 +741,7 @@ function M.tick(pawn, mesh, tm)
               end
               if cut_now then
                 local h = kill_blow(pawn, e)
-                e.want = { t = os.clock(), h = h.loc and h or nil, kind = roll_kind(), loc = h.loc, what = "killed",
+                e.want = { t = os.clock(), h = h.loc and h or nil, kind = roll_kind(), loc = h.loc, what = "killed", pel = pel,
                   src = string.format("blow %s at %s", h.src, v3(h.loc)) }
               end
             end
@@ -640,15 +758,16 @@ function M.tick(pawn, mesh, tm)
               end
             else
               e.still = 0
+              if e.scaleAt and os.clock() >= e.scaleAt then scale_push(e) end
               if not e.faded and n % 4 == 0 then
                 local yes, now = dissolving(e)
                 if yes then
                   e.faded, e.want = true, nil
-                  if e.cut then ctx.gore.enemy_fading(c.addr) end
+                  if e.cut and gore then gore.enemy_fading(c.addr) end
                   log(string.format("%s %x dissolving (%s)%s", e.kind.alias, c.addr, now, e.cut and ": its caps and bleeds removed" or ""))
                 end
               end
-              if e.faded then -- nothing more on a body going
+              if e.faded or not cuts then -- nothing more on a body going (cuts off: the push was all)
               elseif e.want then try_cut(pawn, c.addr, e) elseif near then corpse_hit(pawn, c.addr, e) end
             end
           end

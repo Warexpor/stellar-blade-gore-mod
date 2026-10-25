@@ -530,16 +530,26 @@ function M.check(pawn, mesh, live)
     -- a borrowed asset is the component's own override, which the mesh's own (none) can replace again: gore's undo
     -- and recovery re-make the bodies from the mesh's asset (nineteenth playtest: InnerSuit read no physics asset at
     -- death, so the active ragdoll found no bodies to weigh)
+    -- at most once in 2 s and 10 times an outfit: another mod that keeps setting its own asset (an outfit or body
+    -- mod) had her bodies re-made every tick, 1-2 fps (reported)
     local now = try(function() return mesh:GetPhysicsAsset() end)
-    if not live and state and state.borrowed and valid(state.pa)
+    if not live and state and state.borrowed and valid(state.pa) and (state.lost or 0) < 10
+      and os.clock() - (state.lostAt or -1e9) >= 2
       and not (valid(now) and try(function() return now:GetAddress() == state.pa:GetAddress() end)) then
       local ok = try(function() mesh:SetPhysicsAsset(state.pa, true); return true end)
-      state.lost = (state.lost or 0) + 1
-      if state.lost <= 3 or not ok then
+      state.lost, state.lostAt = (state.lost or 0) + 1, os.clock()
+      if state.lost <= 3 or state.lost == 10 or not ok then
         log(string.format("outfit %s lost the physics asset it was given: %s%s", name(sk), ok and "given again" or "NOT given again",
-          state.lost == 3 and " (not logged again)" or ""))
+          state.lost == 10 and " (another mod keeps its own: left to it)" or ""))
       end
     end
+    return
+  end
+  -- a mesh checked before in this level: its state back, nothing re-made (a mod swapping her meshes back and forth
+  -- ran the whole check, bodies re-made, on every swap)
+  local back = M.seen[addr]
+  if back and back.name == name(sk) then
+    seenMesh, state = addr, back.state
     return
   end
   seenMesh = addr
@@ -605,6 +615,7 @@ function M.check(pawn, mesh, live)
   end
   -- an asset fixed here reads as patched from then on: it isn't
   state = { patched = valid(pa) and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa, borrowed = borrowed:find("gave it") ~= nil }
+  M.seen[addr] = { name = name(sk), state = state }
   -- (the asset's flag; sbslice.dll keeps every skeletal mesh's LOD0 CPU copy whatever it says)
   local forced = ctx and ctx.cpu_forced
   local what = string.format("outfit %s, physics %s%s: %s, LOD0 CPU access %s%s", name(sk), name(pa), borrowed,
@@ -620,13 +631,18 @@ function M.check(pawn, mesh, live)
     local d = dll()
     if d ~= "ready" and d ~= "failed" then
       if not waiting then log("outfit " .. name(sk) .. ": waiting for sbslice.dll to fix its physics"); waiting = true end
-      seenMesh = nil
+      seenMesh, M.seen[addr] = nil, nil
       return
     end
     fixed[paddr] = true
     what = what .. "; " .. fix_defaults(pa, mesh, sk)
     -- (the ends' turn damping again: fix_defaults set every main body's to angularDamping)
     if steadied[paddr] then steady(pa) end
+  elseif weld == "" then
+    -- fixed already: the game made this outfit's bodies from the fixed asset. Re-made on every outfit change, a mod
+    -- swapping her meshes back and forth re-made them each time (reported: 1-2 fps)
+    log(what .. note .. ", fixed before")
+    return
   end
   if not live then
     local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
@@ -905,6 +921,8 @@ function M.piece_collision(mesh, pa, roots, base)
   return all, told(pairs, near, guessed, r)
 end
 
+M.seen = {} -- SkeletalMesh address -> { name, state }: meshes checked in this level
+
 -- recovery: the locks go (the mesh's bodies are re-made by the game anyway)
 function M.stop()
   for _, pc in ipairs(locks) do
@@ -920,7 +938,7 @@ end
 
 -- a reloaded level: everything held is gone (the assets' changed defaults stay with them)
 function M.forget()
-  locks, seenMesh, state = {}, nil, nil
+  locks, seenMesh, state, M.seen = {}, nil, nil, {}
 end
 
 return M
