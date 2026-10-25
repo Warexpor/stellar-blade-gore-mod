@@ -519,6 +519,9 @@ function M.asset(mesh)
   return nil
 end
 
+-- her bodies re-made (SetPhysicsAsset): main.lua sets her ponytail's cloth up again after it (ctx.on_remade)
+local function remade(ok) if ok and ctx and ctx.on_remade then try(ctx.on_remade) end end
+
 -- every gameplay tick: a new outfit mesh is checked once, and an unpatched physics asset fixed (bodies re-made
 -- from it while they are kinematic). live: she is ragdolled already, so the bodies are left as they are
 function M.check(pawn, mesh, live)
@@ -617,7 +620,7 @@ function M.check(pawn, mesh, live)
     weld = "; " .. steady(pa)
     if not live then
       local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
-      weld = weld .. (ok and ", bodies re-made" or ", bodies NOT re-made")
+      weld = weld .. (ok and ", bodies re-made" or ", bodies NOT re-made"); remade(ok)
     end
   end
   if paddr and not welded[paddr] and cfg().weldKinematic ~= false then
@@ -627,7 +630,7 @@ function M.check(pawn, mesh, live)
       weld = string.format("; %d kinematic accessory joints locked (%s)", #w, table.concat(w, " "))
       if not live then
         local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
-        weld = weld .. (ok and ", bodies re-made" or ", bodies NOT re-made")
+        weld = weld .. (ok and ", bodies re-made" or ", bodies NOT re-made"); remade(ok)
       end
     end
   end
@@ -664,7 +667,7 @@ function M.check(pawn, mesh, live)
   end
   if not live then
     local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
-    what = what .. (ok and ", bodies re-made" or ", bodies NOT re-made")
+    what = what .. (ok and ", bodies re-made" or ", bodies NOT re-made"); remade(ok)
   end
   log(what .. note)
 end

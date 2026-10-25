@@ -48,7 +48,14 @@ local function scan(cmd)
     local r = ctx.gore.command("&?")
     if r == "busy" and os.clock() - M.runAt < 30 then error(PENDING, 0) end
     M.running = nil
-    M.memo[cmd] = r:match("^done (.*)$") or ("err scan: " .. r)
+    local got = r:match("^done (.*)$")
+    -- (the game freed memory under the scan, a level streaming in: sbslice gave it up, it runs again in 2 s)
+    if got == "err memory freed" and (M.retries or 0) < 10 then
+      M.retries = (M.retries or 0) + 1
+      if M.cont then M.cont.at = os.clock() + 2 end
+      error(PENDING, 0)
+    end
+    M.memo[cmd] = got or ("err scan: " .. r)
     return M.memo[cmd]
   end
   local r = ctx.gore.command("&" .. cmd)
@@ -150,7 +157,7 @@ local function game_ids(adt, ars, idoff, from, to, t0)
     return out
   end
   local aliases, ids, tried = nil, nil, {}
-  log("tables: looking for the game's ID maps (alias)")
+  if not M.memo["log alias"] then M.memo["log alias"] = true; log("tables: looking for the game's ID maps (alias)") end
   for _, h in ipairs(hits(scan(string.format("Y%x", key)))) do
     -- (the qword after the key: its ID, then its hash chain's next)
     if not aliases and ((tonumber(h.q[5] or "", 16) or 0) & 0xffffffff) == id then
@@ -159,7 +166,7 @@ local function game_ids(adt, ars, idoff, from, to, t0)
       if not aliases then tried[#tried + 1] = h.at .. ": " .. a:sub(1, 300) end
     end
   end
-  log("tables: looking for the game's ID maps (ID)")
+  if not M.memo["log ID"] then M.memo["log ID"] = true; log("tables: looking for the game's ID maps (ID)") end
   for _, h in ipairs(hits(scan(string.format("Yd%x", id)))) do
     -- (the 4 bytes after the ID: its name. The 5th qword is the ID's own 8-aligned one)
     local at = tonumber(h.at, 16)
@@ -218,7 +225,7 @@ local function effect_rows()
   end
   out[#out + 1] = string.format("%d of %d knockdowns chained into it", chained, #h.chains)
   -- (the game's ID maps: through M.tick while its scans run)
-  M.memo = {}
+  M.memo, M.retries = {}, 0
   M.cont = { out = out, args = { addr(dt), addr(rs), fs.ID.off, from, to, os.clock() } }
   return PENDING
 end
@@ -238,7 +245,7 @@ local function dead_rows()
   end
   -- (the game's own 0 for deathScreen "game": the screen at once; else the screen is made by reviveAt and main.lua
   -- holds it hidden as the mode says)
-  local delay = ctx.tune.deathScreen == "game" and 0 or tonumber(ctx.tune.reviveAt) or 7
+  local delay = ctx.tune.deathScreen == "game" and 0 or tonumber(ctx.tune.reviveAt) or 10
   local delays = 0
   for _, k in ipairs(M.DELAYS) do
     local was = ctx.gore.row_float(dt, M.DEAD_ROW, k .. "DeadUIDelayTime", delay)

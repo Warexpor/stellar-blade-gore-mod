@@ -12,10 +12,10 @@ return {
       limb = 42,               --   an arm or leg off
       head = 25,               --   beheaded
       torso = 15,              --   cut in half at the waist
-      split = 18,              --   cut in half top to bottom (whatever the blow; a blade down her length splits too)
+      split = 18,              --   cut in half top to bottom (when the blow doesn't decide; a blade down her length splits too)
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
-    bladeFollow = 0.6,         -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
+    bladeFollow = 0.75,        -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
                                -- roll the odds above (1: always the blade, mostly waist cuts and splits)
     torsoLegs = {
       enabled = true,          -- a cut across her waist sometimes leaves her legs playing her fall while the upper
@@ -68,7 +68,7 @@ return {
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
                                -- she falls and lies (a stiffer, more held-together body)
   },
-  deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 7 s into
+  deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
                                -- hides it again once it is up (she stays down till you press it again)
   hideHud = true,             -- the HUD (HP bar, skills, minimap) hidden through a death, back as she is up again
@@ -79,6 +79,10 @@ return {
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill
     attackDown = true,         -- they keep attacking her while she is knocked down (false: they wait, as in the game)
+    -- afterDeath = {           (parked for now)
+    --   enabled = false,         -- after her death the enemies around her keep attacking her as if she were alive
+    --   time = 10,               --   for this many seconds
+    -- },
     cutChance = 1.0,           -- chance a kill near her cuts something off (0-1)
     pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: drops on the spot; 2: twice as far);
                                -- works with the cuts off too

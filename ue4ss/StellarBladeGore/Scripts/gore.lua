@@ -117,7 +117,6 @@ local FX = {
   -- glowing orange liquid (MI_A_EmissiveLiquid, EnemyCommon/MI_ParBloodDecal); Eve's own hit blood and the flesh
   -- decal use MI_A_DefaultBlood and the common decal, like the bleed
   hit = "/Game/Art/FX/Char/Common/Hit/PC/NS_HitBlood_PC_01.NS_HitBlood_PC_01",
-  splat = "/Game/Art/FX/Char/Common/Hit/Flesh/NS_Hit_Flesh_Decal_Strong_01.NS_Hit_Flesh_Decal_Strong_01",
 }
 -- the game's own gore sounds (sound cues, played where it happens): each kind has a few sets of cues from the same
 -- family (the slice of a Naytiba's limb, a boss finisher's gore splash, a power hit's blood),
@@ -1471,8 +1470,15 @@ function M.core(pawn, mesh, o, bone, rides, t, spine)
   local v = t.verts
   local verts, normals, uvs, tangents, colors, tris = {}, {}, {}, {}, {}, {}
   local function to(a, b, h) return add(add(scale(x, a), scale(y, b)), scale(z, h)) end
+  local top, foot = 0, 0
+  for i = 1, #v, 11 do top = math.max(top, v[i + 2] * hs) end
   for i = 1, #v, 11 do
     verts[#verts + 1] = scale(to(v[i] - ox - lx * v[i + 2], v[i + 1] - oy - ly * v[i + 2], v[i + 2] * hs), r)
+    -- (its foot's width: what of it lies in its lowest quarter)
+    if v[i + 2] * hs < 0.25 * top then
+      local q = verts[#verts]
+      foot = math.max(foot, math.sqrt(math.max(dot(q, q) - dot(q, z) ^ 2, 0)))
+    end
     normals[#normals + 1] = norm(to(v[i + 3], v[i + 4], (v[i + 5] + lx * v[i + 3] + ly * v[i + 4]) / hs)) or z
     tangents[#tangents + 1] = { TangentX = to(v[i + 6] - lx * v[i + 8], v[i + 7] - ly * v[i + 8], v[i + 8]), bFlipTangentY = mirrored }
     uvs[#uvs + 1] = M.bone_uv(t, (i - 1) // 11, v[i + 9], v[i + 10])
@@ -1483,6 +1489,11 @@ function M.core(pawn, mesh, o, bone, rides, t, spine)
     if mirrored then tris[i], tris[i + 1], tris[i + 2] = src[i + 2], src[i + 1], src[i]
     else tris[i], tris[i + 1], tris[i + 2] = src[i], src[i + 1], src[i + 2] end
   end
+  -- tipped along the limb on a slanted cut, its foot is square to the limb, not the cut: the side of it towards the
+  -- cut's high side stood off the lid by its width x tan(tilt), and on a sharp slant the bone floated over the stump
+  -- (playtest). Sunk into the meat by that much, at most its own width and a half
+  local ct = math.min(math.max(dot(zc, z), 0.05), 1)
+  if ct < 0.999 and foot > 0 then c = sub(c, scale(z, math.min(foot * math.sqrt(1 - ct * ct) / ct, foot * 1.5))) end
   local e = M.pool_take(pawn, "lid", c)
   if not (e and valid(e.a) and valid(e.pmc)) then log("tachy core: spawn failed"); return nil end
   local a, pmc = e.a, e.pmc
@@ -1644,10 +1655,9 @@ local POOL_DECALS = {
   "/Game/Art/FX/Enviroment/WaterFloodedCity/Cinematic/MV_DED01_Parkinglot_AfterBattle/MA/MI_D_NoiseBloodDecal_03.MI_D_NoiseBloodDecal_03",
   "/Game/Art/FX/Enviroment/WaterFloodedCity/Cinematic/MV_DED01_Parkinglot_AfterBattle/MA/MI_D_NoiseBloodDecal_04.MI_D_NoiseBloodDecal_04",
 }
-local DRIP_DECALS = {
-  "/Game/Art/FX/Enviroment/WasteLand/Cinematic/MV_Nest_RavenBattle_After_QTE_success/MI_FloorBloodDecal_5.MI_FloorBloodDecal_5",
-  "/Game/Art/FX/Enviroment/WaterFloodedCity/Cinematic/MV_DED01_Parkinglot_AfterBattle/MA/MI_D_NoiseBloodDecal_03.MI_D_NoiseBloodDecal_03",
-}
+-- drips and splats: the pools' own (the Raven cinematic's splat, MI_FloorBloodDecal_5 on MA_A_BloodDecal_01, has no
+-- BloodBright darkening and twice the specular: drips read bright red beside the dark pools, playtest)
+local DRIP_DECALS = POOL_DECALS
 -- the pool's final radius in cm by the cut bone (first match)
 local POOL_R = { { "Neck", 55 }, { "Head", 55 }, { "Spine", 80 }, { "Pelvis", 80 }, { "Thigh", 60 }, { "UpperArm", 40 },
   { "Calf", 38 }, { "Forearm", 30 }, { "split", 90 } }
@@ -1678,21 +1688,100 @@ local function floor_at(pawn, p)
   return add(p, vec(0, 0, -5)), vec(0, 0, 1)
 end
 
--- one decal on the floor under p, r cm across (radius); its box reaches 20 cm into and out of the floor
-local function floor_decal(pawn, p, r, list)
+-- where a pool may spread: a decal's box projects along the floor's normal and paints whatever is in it, so a pool
+-- spread up to a wall smeared down it in long streaks (playtest). Two checks keep it on open, flat floor:
+-- wall_room as it starts: level traces in 16 directions, 3 and 10 cm over the floor, out to its full size; a surface
+-- steeper than 45 deg is a wall, and the pool stays 10 % short of the nearest. ring_ok before it grows into each
+-- next ring (6 cm out): 16 traces down onto the ring, each must find floor facing up (within 25 deg of the pool's)
+-- within 3 cm of the pool's plane, else it stops at the last ring that held (a post, a curb, a step, a gap, a thin
+-- wall a level trace slipped past). (On M: gore.lua is at Lua's 200 locals)
+M.POOL_DIRS = 16
+function M.pool_frame(n)
+  local up = n or vec(0, 0, 1)
+  local a = norm(cross(up, math.abs(up.X) < 0.9 and vec(1, 0, 0) or vec(0, 1, 0))) or vec(1, 0, 0)
+  return up, a, cross(up, a)
+end
+function M.pool_trace(pawn, from, to)
+  local ks = load_obj("/Script/Engine.Default__KismetSystemLibrary")
+  if not ks then return nil end
+  local hit = {}
+  local ok = try(function()
+    return ks:LineTraceSingle(pawn, from, to, 0, false, { pawn }, 0, hit, true,
+      { R = 1, G = 0, B = 0, A = 1 }, { R = 0, G = 1, B = 0, A = 1 }, 0)
+  end)
+  if not ok then return false end
+  local at = try(function() local l = hit.ImpactPoint or hit.Location; return vec(l.X, l.Y, l.Z) end)
+  local hn = try(function() local l = hit.ImpactNormal or hit.Normal; return vec(l.X, l.Y, l.Z) end)
+  return at ~= nil, at, hn and norm(hn)
+end
+function M.wall_room(pawn, at, n, rmax)
+  local up, a, b = M.pool_frame(n)
+  local room = rmax
+  for _, h in ipairs({ 3, 10 }) do
+    local from = add(at, scale(up, h))
+    for i = 0, M.POOL_DIRS - 1 do
+      local ang = i * 2 * math.pi / M.POOL_DIRS
+      local d = add(scale(a, math.cos(ang)), scale(b, math.sin(ang)))
+      local hit, p, hn = M.pool_trace(pawn, from, add(from, scale(d, rmax)))
+      if hit and p and hn and math.abs(dot(hn, up)) < 0.7 then
+        local w = len(sub(p, from))
+        if w < room then room = w end
+      end
+    end
+  end
+  return math.max(room * 0.9, 4)
+end
+function M.ring_ok(pawn, at, n, ring)
+  local up, a, b = M.pool_frame(n)
+  for i = 0, M.POOL_DIRS - 1 do
+    local ang = (i + 0.5) * 2 * math.pi / M.POOL_DIRS
+    local c = add(at, add(scale(a, math.cos(ang) * ring), scale(b, math.sin(ang) * ring)))
+    local hit, p, hn = M.pool_trace(pawn, add(c, scale(up, 15)), add(c, scale(up, -15)))
+    if not (hit and p and hn) or dot(hn, up) < 0.9 or math.abs(dot(sub(p, at), up)) > 3 then return false end
+  end
+  return true
+end
+
+-- one decal on the floor under p, r cm across (radius); its box reaches 8 cm into and out of the floor (20 cm drew
+-- the pools far up a wall beside them, playtest)
+local function floor_decal(pawn, p, r, list, life)
   local gs = load_obj("/Script/Engine.Default__GameplayStatics")
   local km = load_obj("/Script/Engine.Default__KismetMathLibrary")
   local mat = load_obj(pick(list))
   if not (gs and km and mat) then return nil end
+  local t0 = os.clock()
   local at, n = floor_at(pawn, p)
+  local t1 = os.clock()
   -- the decal projects along its X: into the floor, turned at random about it
   local rot = try(function() return km:MakeRotFromX(scale(n, -1)) end)
   rot = rot and { Pitch = rot.Pitch, Yaw = rot.Yaw, Roll = math.random() * 360 } or { Pitch = -90, Yaw = 0, Roll = math.random() * 360 }
-  local d = try(function() return gs:SpawnDecalAtLocation(pawn, mat, vec(20, 1, 1), at, rot, 0) end)
+  local d = try(function() return gs:SpawnDecalAtLocation(pawn, mat, vec(8, 1, 1), at, rot, life or 0) end)
+  local t2 = os.clock()
+  if valid(d) then try(function() d:SetWorldScale3D(vec(1, r, r)) end) end
+  -- (each pool or drip pass held a frame 9-14 ms in 0.4.x, playtest: which part)
+  local ms = (os.clock() - t0) * 1000
+  if ms >= (cfg().slowMs or 15) * 0.5 then
+    log(string.format("floor decal took %.1f ms: trace %.1f, spawn %.1f, scale %.1f", ms, (t1 - t0) * 1000,
+      (t2 - t1) * 1000, (os.clock() - t2) * 1000))
+  end
   if not valid(d) then return nil end
-  decals[#decals + 1] = d
-  try(function() d:SetWorldScale3D(vec(1, r, r)) end)
-  return { d = d, at = at, r = r }
+  -- (one with a life of its own goes by itself, kept off the list and its cap)
+  if not life then decals[#decals + 1] = d end
+  return { d = d, at = at, n = n, r = r }
+end
+
+-- the splat under a cut or a hit: a splash of the pools' blood on the floor under `at`, kept off walls as they are.
+-- The game's splat effect (NS_Hit_Flesh_Decal_Strong_01) put its own blood decal down (MI_ParBloodDecal_01, coloured
+-- by its particles), a brighter red than the pools (playtest). life: s it stays (a hit she lives through; 0: till
+-- she is up again, with the pools)
+function M.splat(pawn, at, life)
+  if not at then return end
+  local g = cfg()
+  if not life and #decals >= (g.maxDecals or 60) then return end
+  local r = (g.splatSize or 14) * (0.75 + math.random() * 0.5)
+  local f, n = floor_at(pawn, at)
+  if f then r = math.min(r, M.wall_room(pawn, f, n, r)) end
+  floor_decal(pawn, at, r, POOL_DECALS, life)
 end
 
 -- a pool under her would stain her skin: her meshes take no decals while it is down
@@ -1735,7 +1824,7 @@ local function pools_tick()
   local maxDecals = g.maxDecals or 60
   -- one decal made a pass (a floor trace and a spawn each): every opening's pool or drip due on the same pass took
   -- 9-14 ms, every 0.1 s for seconds after a cut (playtest); the rest come on the next passes
-  local budget = 1
+  local budget, ringBudget = 1, 2
   for i = #trackers, 1, -1 do
     local k = trackers[i]
     k.t = k.t + dt
@@ -1754,7 +1843,15 @@ local function pools_tick()
         -- it came to rest: a pool starts under it
         budget = budget - 1
         k.pool = floor_decal(k.pawn, p, 4, POOL_DECALS)
-        if k.pool then k.pool.age = 0; k.pools = (k.pools or 0) + 1 end
+        if k.pool then
+          k.pool.age, k.pools = 0, (k.pools or 0) + 1
+          -- it spreads only up to the nearest wall
+          k.pool.rmax = M.wall_room(k.pawn, k.pool.at, k.pool.n, k.rmax)
+          if k.pool.rmax < k.rmax and not M.wallLogged then
+            M.wallLogged = true
+            log(string.format("floor blood: a pool by a wall spreads %.0f cm across, not %.0f", k.pool.rmax * 2, k.rmax * 2))
+          end
+        end
       elseif not k.pool and speed >= 25 and #decals < maxDecals and budget > 0 then
         -- on the move: drips every so often
         if not k.drop or len(sub(p, k.drop)) >= every then
@@ -1767,7 +1864,23 @@ local function pools_tick()
       if k.pool and valid(k.pool.d) then
         k.pool.age = k.pool.age + dt
         -- fast at first, slowing down: 63 % of the way after poolGrow s
-        local r = 4 + (k.rmax - 4) * (1 - math.exp(-k.pool.age / grow))
+        local rm = math.min(k.rmax, k.pool.rmax or k.rmax)
+        local r = 4 + (rm - 4) * (1 - math.exp(-k.pool.age / grow))
+        -- the next ring checked before it grows into it (one ring a pass, every pool's together under ringBudget)
+        k.pool.ok = k.pool.ok or 4
+        if r > k.pool.ok and not k.pool.stopped and ringBudget > 0 then
+          ringBudget = ringBudget - 1
+          local ring = math.min(k.pool.ok + 6, rm)
+          if M.ring_ok(k.pawn, k.pool.at, k.pool.n, ring) then k.pool.ok = ring
+          else
+            k.pool.stopped = true
+            if not M.ringLogged then
+              M.ringLogged = true
+              log(string.format("floor blood: a pool stopped at %.0f cm across, the floor not flat past it", k.pool.ok * 2))
+            end
+          end
+        end
+        r = math.min(r, k.pool.ok)
         if r - k.pool.r > 0.2 then
           k.pool.r = r
           try(function() k.pool.d:SetWorldScale3D(vec(1, r, r)) end)
@@ -2225,6 +2338,29 @@ function M.lod0(comp, on)
   try(function() comp:SetForcedLOD(on and 1 or 0) end)
 end
 
+-- every forced one checked twice a second and forced again if anything took it off LOD0: a cut's weights are on LOD0
+-- alone, and drawn at another LOD her cut limbs stretched from the body to the flying pieces (reported, a crowded
+-- area). Logged once a component (on M: gore.lua is at Lua's 200 locals)
+M.lodSeen = {}
+function M.lod_guard()
+  local now = os.clock()
+  if now < (M.lodNext or 0) then return end
+  M.lodNext = now + 0.5
+  for a, comp in pairs(forced) do
+    if valid(comp) then
+      local f, o, m = try(function() return comp.ForcedLodModel end), try(function() return comp.bOverrideMinLod end),
+        try(function() return comp.MinLodModel end)
+      if (f and f ~= 1) or o == false or (m and m ~= 0) then
+        M.lod0(comp, true)
+        if not M.lodSeen[a] then
+          M.lodSeen[a] = true
+          log(string.format("LOD: %s taken off LOD0 (forced %s, min %s %s): forced again", mesh_name(comp) or "?",
+            tostring(f), tostring(o), tostring(m)))
+        end
+      end
+    end
+  end
+end
 local function force_lod(comp)
   local a = addr(comp)
   if a and not forced[a] then M.lod0(comp, true); forced[a] = comp; return true end
@@ -3033,6 +3169,8 @@ local function stage_open(q)
     -- a killing blow sends the piece flying the way it hit her (q.fly), else it drops off away from the body; every
     -- body of the piece gets the speed (the root's alone dragged the rest, a small push)
     local throw = q.fly and (g.deathThrow or 650) or (g.throw or 250)
+    -- a hit after her death: harder (deathThrow, a killing blow's, was hardly a push on her lying body, playtest)
+    if q.why == "after" then throw = g.afterThrow or 500 end
     -- a leg is the big piece: dropping off it gets more (legThrow), or it dropped at her feet
     local leg = q.bone:find("Thigh") or q.bone:find("Calf")
     if leg and not q.fly then throw = throw * (g.legThrow or 1.4) end
@@ -3115,11 +3253,12 @@ local function stage_open(q)
   later[#later + 1] = { n = 1, fn = function()
     if g.blood ~= false then
       if g.sliceFx == true then niagara(FX.slice, q.pawn, nil, at, false) end
-      niagara(FX.splat, q.pawn, nil, at, false)
+      M.splat(q.pawn, at)
     end
     -- a leg is as big a cut as the head or the waist
-    sfx((q.bone == "Bip001-Head" or q.bone == "Bip001-Spine1" or q.bone:find("Thigh") or q.bone:find("Calf")) and "big" or "cut",
-      q.pawn, at)
+    -- (a hit after her death too: the small slice alone went unheard, playtest)
+    sfx((q.why == "after" or q.bone == "Bip001-Head" or q.bone == "Bip001-Spine1" or q.bone:find("Thigh") or q.bone:find("Calf"))
+      and "big" or "cut", q.pawn, at)
   end }
   if g.blood ~= false then
     -- bleed from both openings, for a while: from the cap, which rides on that side's bone, else from the
@@ -4329,7 +4468,7 @@ local function stage_split_open(q)
     if g.blood == false or not valid(q.mesh) then return end
     blood_up(q.pawn)
     niagara(FX.hit, q.pawn, nil, q.hit or at, false)
-    niagara(FX.splat, q.pawn, nil, at, false)
+    M.splat(q.pawn, at)
     -- bleeding along the seam: from the chest and neck lids of each half
     local left = math.floor((g.bleedTime or 2.5) / TICK_S + 0.5)
     for _, c in ipairs(q.caps) do
@@ -4803,6 +4942,12 @@ end
 
 function M.blow(pawn, mesh, h, why)
   local n, how = blade_plane(h)
+  -- a hit after her death with no plane (a bare hand's swing along the attacker's forward, no attack direction from
+  -- the game: "no plane", blood only, playtest): sideways or from the front, as a rolled attack direction would be
+  if not n and why == "after" then
+    n, how = blade_plane(setmetatable({ attack_dir = math.random() < 0.5 and 1 or 3 }, { __index = h }))
+    if n then how = how .. " (rolled: no plane of its own)" end
+  end
   local at = h.loc
   -- her pose as the blow landed (h.pose, from main.lua's swing samples): the blade is judged against it, not a frame
   -- into her death, when the death show had swung her arms on (an arm raised to block kept, the body behind it cut).
@@ -5208,11 +5353,26 @@ function M.blow(pawn, mesh, h, why)
     return go(bl(body.bone) or at, why, "torso", nil, nil, body)
   end
   -- a blow that would split her when she can't be split (h.noSplit: a hit after death on a body already cut; a split
-  -- needs her whole): nothing here, main.lua marks her instead
+  -- needs her whole): the arms and legs its plane crossed near the hit come off instead, else her body along the
+  -- blade while it is whole; only with neither does main.lua mark her (every such hit was a mark, playtest)
   local knee = what == "limb" and best and off < (cfg().spineReach or 15) and best.bone:find("Calf") and not down
   if h.noSplit and (hip or knee
     or (what ~= "limb" and what ~= "head")) then
-    log(string.format("blade (%s): %s plane through her body, she is cut already: no split", why, how))
+    local list = extras(nil)
+    if list[1] and list[1].kind == "limb" then
+      local first = table.remove(list, 1)
+      local more = queue(list)
+      log(string.format("blade (%s): %s plane through her body, she is cut already: no split, %s at %.2f instead%s",
+        why, how, first.blade.bone, first.blade.t, more))
+      return go(at, why, "limb", nil, nil, first.blade)
+    end
+    local body = mc.body ~= false and body_blade()
+    if body then
+      log(string.format("blade (%s): %s plane through her body, she is cut already: no split, her body at %s %.2f instead",
+        why, how, body.bone, body.t))
+      return go(bl(body.bone) or at, why, "torso", nil, nil, body)
+    end
+    log(string.format("blade (%s): %s plane through her body, she is cut already: no split, no arm, leg or body cut near it", why, how))
     return false
   end
   -- (an enemy: its waist cut square to the spine, as a body cut: it is never split)
@@ -5436,7 +5596,6 @@ function M.watch(mesh)
       end
     end
     for _, v in ipairs(POOL_DECALS) do list[#list + 1] = v end
-    for _, v in ipairs(DRIP_DECALS) do list[#list + 1] = v end
     for _, v in ipairs(M.MARK_DECALS) do list[#list + 1] = v end
     for _, v in ipairs(M.MARK_SLASH) do list[#list + 1] = v end
     for _, v in ipairs({ MPC_DIRTY, g.capMaterial or CAP_MATERIAL, g.stubMesh or STUB_MESH }) do list[#list + 1] = v end
@@ -5467,7 +5626,13 @@ function M.watch(mesh)
   if path and w.next >= w.sounds and os.clock() - w.t0 < 30 then path = nil end
   if path and ctx.may_load() then
     w.next = w.next + 1
-    if not native.rooted[path] then load_obj(path) end
+    if not native.rooted[path] then
+      local t0 = os.clock()
+      load_obj(path)
+      -- (a look held a frame 440-540 ms in the first minute, playtest: which asset)
+      local ms = (os.clock() - t0) * 1000
+      if ms >= (cfg().slowMs or 15) then log(string.format("cut asset load took %.0f ms: %s", ms, path)) end
+    end
     if w.next > #w.preload then
       local n = 0
       for _, ok in pairs(native.rooted) do if ok then n = n + 1 end end
@@ -5481,6 +5646,7 @@ function M.tick(pawn, tm)
   if cfg().enabled == false then return end
   tm = tm or function() end
   native_tick()
+  M.lod_guard()
   if M.blood_restore and valid(pawn) then
     local from, mpc = M.blood_restore, load_obj(MPC_DIRTY)
     M.blood_restore = nil
@@ -5647,7 +5813,7 @@ end
 function M.on_hit(pawn, mesh, at)
   if cfg().enabled == false or cfg().blood == false then return end
   niagara(FX.hit, pawn, nil, at, false)
-  if cfg().hitSplat ~= false then niagara(FX.splat, pawn, nil, at, false) end
+  if cfg().hitSplat ~= false then M.splat(pawn, at, cfg().splatLife or 30) end
 end
 
 -- once the body has settled, leave a pool under it

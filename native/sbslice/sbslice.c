@@ -1902,7 +1902,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // a helper the head's skin hangs on is the head's, wherever it lies (CH_P_EVE_09's Ab-NeckSub swings past the plane
     // when she is posed): the kept head lets go of nothing
     // (but not one the broken spine lets go of: it is free)
-    if (hmode) for (int i = 0; i < nb; i++) if (headused[i] && !gonebone[i] && !spfree[i]) limb[i] = onplane[i] = 0;
+    // (nor a driver of a limb this half lets go: CH_P_EVE_01's collar hangs on the shoulder's Ab-L-AX1T-BKWING under
+    // Dm-L-Trape, which the animation turns after the dropped arm, and the kept half's skin left on it followed the arm
+    // 44-123 cm, the outfit sweep)
+    if (hmode) for (int i = 0; i < nb; i++)
+        if (headused[i] && !gonebone[i] && !spfree[i] && !(limbs_comp == comp && nosink_mesh == c.sm && drivenb[i] == 2)) limb[i] = onplane[i] = 0;
 
     // pass 2: triangles across the cut
     if (mode != MODE_SIDE)
@@ -2522,12 +2526,39 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             if (all) continue;
         }
         const unsigned char *drop = side[v] ? drop_l : drop_b;
+        // a split's kept skin on a bone it gives up, with no kept ancestor of that bone in its section: that ancestor is
+        // borrowed in, so the skin stays on its own side. Else it went to the section's first kept bone by index:
+        // CH_P_EVE_01's outer suit (11 shoulder and hip helpers, no main bone) put 4103 hip vertices given up with
+        // Ab-R-AX2T-Add on the dropped side's Ab-L-AX1T-BKWING, and they flew off with the arm (the outfit sweep)
+        if (mode == MODE_SIDE && secs)
+            for (int i = 0; i < MAX_INF; i++) {
+                int mb = o->bones[i];
+                if (!o->weights[i] || mb < 0 || mb >= nb || !drop[mb] || (keep_to_on && keep_to_on[mb] >= 0)) continue;
+                int a = parent_of(&c, mb);
+                while (a >= 0 && a < nb && drop[a]) a = parent_of(&c, a);
+                if (a > 0 && a < nb && !inmap[(u64)s * nb + a]) borrow_bone(secs, s, a, inmap, nb);
+            }
         // the stub's skin on B's subtree goes to the section's carrier whole
         int cw = 0, cb = ncarry && !side[v] && s < CARRY_SECTIONS ? seccarry[s] : -1;
         if (cb >= 0)
             for (int i = 0; i < MAX_INF; i++)
                 if (o->weights[i] && o->bones[i] < nb && subb[o->bones[i]]) { cw += o->weights[i]; o->weights[i] = 0; }
         int r = cw == 255 ? 1 : keep_only(&c, s, o, drop, fallback_bone(&c, s, side[v] || mode == MODE_SIDE ? b : parent_b, drop));
+        // the body's skin with all its bones given up and no kept one in its section to go to: the nearest kept ancestor
+        // is borrowed in. Left as it was, it went with the limb: CH_P_EVE_14's jacket hem 3-5 cm under a waist cut, on
+        // Spine1 and the jacket's chest helpers, flew off with the upper body and tore 13 triangles off the seam (the
+        // outfit sweep). A cut only: a head plane's hat skin (CH_P_EVE_45) stuck on its bones goes with the head as it should
+        if (r < 0 && secs && !side[v] && mode == MODE_CUT) {
+            int got = 0;
+            for (int i = 0; i < MAX_INF; i++) {
+                int mb = o->bones[i];
+                if (!o->weights[i] || mb < 0 || mb >= nb || !drop[mb]) continue;
+                int a = parent_of(&c, mb);
+                while (a >= 0 && a < nb && drop[a]) a = parent_of(&c, a);
+                if (a > 0 && a < nb && (inmap[(u64)s * nb + a] || borrow_bone(secs, s, a, inmap, nb))) got = 1;
+            }
+            if (got) r = keep_only(&c, s, o, drop, fallback_bone(&c, s, side[v] || mode == MODE_SIDE ? b : parent_b, drop));
+        }
         if (cw) {
             int slot = -1;
             for (int k = 0; k < MAX_INF; k++) if (o->weights[k] && o->bones[k] == cb) slot = k;
@@ -2690,7 +2721,14 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 float mc[3] = { 0, 0, 0 };
                 int m = 0, r0 = sd ? nrim[0] : 0;
                 for (int r = 0; r < nrim[sd]; r++) { for (int k = 0; k < 3; k++) mc[k] += rimpos[(u64)(r0 + r) * 3 + k]; m++; }
-                if (m) for (int k = 0; k < 3; k++) at[k] = mc[k] / m;
+                if (m) {
+                    // (never on the other side of the plane: CH_P_EVE_09_V02's upper arm rim reached past it, its
+                    // flaps' skin, and the body's seam stood 2.7 cm out into the cut-off arm, the outfit sweep)
+                    for (int k = 0; k < 3; k++) mc[k] /= m;
+                    float h = (mc[0] - p[0]) * n[0] + (mc[1] - p[1]) * n[1] + (mc[2] - p[2]) * n[2];
+                    float hh = (i & 1) ? (h > 0 ? h : 0) : (h < 0 ? h : 0);
+                    for (int k = 0; k < 3; k++) at[k] = mc[k] - (h - hh) * n[k];
+                }
             } else {
                 // (this section's rim on this side, its middle put on the plane)
                 float mc[3] = { 0, 0, 0 };
@@ -2699,12 +2737,21 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     if (rimsec[r0 + r] == sec) { for (int k = 0; k < 3; k++) mc[k] += rimpos[(u64)(r0 + r) * 3 + k]; m++; }
                 if (m) {
                     for (int k = 0; k < 3; k++) mc[k] /= m;
-                    // (only a rim near the plane, else the plane point: a statue's arm seam follows its weights at the shoulder, 30 cm up
+                    // (only a rim near the plane, else the rim's middle as it is: a statue's arm seam follows its weights at the shoulder, 30 cm up
                     // from a cut down the arm, and a tilted plane put its point 20 cm down the stump, a cone of skin)
                     float h = (mc[0] - p[0]) * n[0] + (mc[1] - p[1]) * n[1] + (mc[2] - p[2]) * n[2];
                     if (h <= SINK_DEEP && h >= -SINK_DEEP) {
-                        for (int k = 0; k < 3; k++) at[k] = mc[k] - h * n[k];
+                        // (SINK_IN in from the rim itself where it lies further in than the plane: the cap sits on the
+                        // rim, and on coarse leg skin (CH_P_EVE_01-05) the rim lay 5 cm in, so a point SINK_IN in from
+                        // the plane stood 3 cm out past the cap, the seam drawn through it; the outfit sweep)
+                        float hh = (i & 1) ? (h > 0 ? h : 0) : (h < 0 ? h : 0);
+                        for (int k = 0; k < 3; k++) at[k] = mc[k] - (h - hh) * n[k];
                         own_mid++;
+                    } else {
+                        // (far off it: the rim's own middle where it is. The plane point instead, 36 cm from a statue's
+                        // arm seam under a blade tilted 10-40 deg, drew its skin out 39 cm, nothing moved)
+                        // (still SINK_IN in from it: on the rim itself it lay on the cap, CH_P_EVE_05's calf rim 7.8 cm in)
+                        for (int k = 0; k < 3; k++) at[k] = mc[k];
                     }
                 }
             }
@@ -2939,9 +2986,38 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 if (got == 2) ns++;
             }
             o = put(o, " s0segs="); o = put_int(o, ns);
+            // closed wider while the outside gets in, and while what is left is a scrap of the opening: on CH_P_EVE_06,
+            // 19, 28, 43 and others the rim's gaps let the outside in round most of the torso and the outline kept
+            // 180-380 cm2 of a 1000 cm2 opening, the lid a patch on it (the outline sweep). A scrap is under 40 % of the
+            // ellipse the rim's points spread over (its box's)
+            float ru0 = 1e30f, ru1 = -1e30f, rv0 = 1e30f, rv1 = -1e30f;
+            for (int i = 0; i < m; i++) {
+                const float *q = rimpos + (u64)i * 3;
+                float u = q[0] * ax[0] + q[1] * ax[1] + q[2] * ax[2], v = q[0] * bx[0] + q[1] * bx[1] + q[2] * bx[2];
+                if (u < ru0) ru0 = u; if (u > ru1) ru1 = u; if (v < rv0) rv0 = v; if (v > rv1) rv1 = v;
+            }
+            float want = 0.4f * 0.785f * (ru1 - ru0) * (rv1 - rv0) * tm[8] * tm[8];
+            char *o0 = o, *best_o = 0;
+            static char best_s[OUTLINE_MAX * 40 + 64];
+            float best_a = -1;
             ol_area = -1;
-            for (float gap = OUTLINE_GAP; gap < 8.0f && ol_area < 0; gap *= 2)
-                o = put_outline(o, "s0", rimpos, m, neck, mn, ol_segs, ns, pc, out_dir, ax, bx, tm, gap);
+            for (float gap = OUTLINE_GAP; gap < 16.0f; gap *= 2) {
+                o = put_outline(o0, "s0", rimpos, m, neck, mn, ol_segs, ns, pc, out_dir, ax, bx, tm, gap);
+                if (ol_area > best_a) {
+                    best_a = ol_area;
+                    u64 l = (u64)(o - o0);
+                    if (l < sizeof best_s) { for (u64 k = 0; k < l; k++) best_s[k] = o0[k]; best_o = o0 + l; }
+                }
+                if (ol_area >= want && ol_area > 0) break;
+                o = o0; *o = 0;
+            }
+            if (ol_area < want || ol_area <= 0) {
+                // (none big enough: the biggest one found)
+                o = o0;
+                if (best_o) { for (char *k = o0; k < best_o; k++) *o++ = best_s[k - o0]; }
+                *o = 0;
+                ol_area = best_a;
+            }
         }
         if (mn >= 3) {
             // the neck's opening faces the side that let go: down from the kept head, up out of the dropped one's stump
@@ -4123,6 +4199,36 @@ static void weapon_split(u64 ca, u64 cb, int lod, const float *pw, const float *
             if (role >= 2) flat[half]++; else gone[half]++;
         }
     }
+    // (its triangles, for the flat sinks' squeeze onto the cut face; not through ib_indices, whose two slots are
+    // her body's and face's)
+    u64 ib = *(u64 *)(ld + LOD_INDICES);
+    int ni = ib ? ((index_num_fn)(*(u64 *)(*(u64 *)ib + 0x58)))(ib) : 0;
+    u32 *ix = ni > 0 ? mem_alloc((u64)ni * 4) : 0;
+    if (ix) { index_get_fn get = (index_get_fn)(*(u64 *)(*(u64 *)ib + 0x68)); for (int i = 0; i < ni; i++) ix[i] = get(ib, i); }
+    int squeezed = 0;
+    // the cut face's middle (its crossed edges' points): the point sinks collapse there, not at the blow's point,
+    // which lies on the blade's surface or off it, so the faces from the flattened side to the collapsed one fanned out
+    // past the blade's edge as thin strips (playtest)
+    float fmid[3] = { p[0], p[1], p[2] };
+    if (ix) {
+        double acc[3] = { 0, 0, 0 };
+        int nc = 0;
+        for (int t = 0; t + 2 < ni; t += 3)
+            for (int e = 0; e < 3; e++) {
+                u32 va = ix[t + e], vb = ix[t + (e + 1) % 3];
+                if (va >= (u32)nv || vb >= (u32)nv || side[va] == side[vb]) continue;
+                float xa[3], xb[3];
+                skin_point(&c, &orig[va], (float *)(pos + (u64)va * pstride), xa);
+                skin_point(&c, &orig[vb], (float *)(pos + (u64)vb * pstride), xb);
+                float ha = (xa[0] - p[0]) * n[0] + (xa[1] - p[1]) * n[1] + (xa[2] - p[2]) * n[2];
+                float hb = (xb[0] - p[0]) * n[0] + (xb[1] - p[1]) * n[1] + (xb[2] - p[2]) * n[2];
+                if (ha == hb) continue;
+                float f = ha / (ha - hb);
+                for (int k = 0; k < 3; k++) acc[k] += xa[k] + (xb[k] - xa[k]) * f;
+                nc++;
+            }
+        if (nc) for (int k = 0; k < 3; k++) fmid[k] = (float)(acc[k] / nc);
+    }
     // the sinks' matrices, collapsed on "k" (the new weights first)
     for (int r = 0; r < 2 + 2 * ng; r++) {
         int b = sink[r];
@@ -4134,7 +4240,7 @@ static void weapon_split(u64 ca, u64 cb, int lod, const float *pw, const float *
         for (int k = 0; k < 16; k++) sinks[i].m[k] = c.refinv[(u64)b * 16 + k];
         if (r < 2) {
             sinks[i].proj = 0;
-            local_of_cs(ts, p, sinks[i].at);
+            local_of_cs(ts, fmid, sinks[i].at);
         } else {
             // the crossed part's bind position to where it is now, into the sink's frame, pressed onto the plane
             int q = grep_[(r - 2) / 2];
@@ -4153,8 +4259,89 @@ static void weapon_split(u64 ca, u64 cb, int lod, const float *pw, const float *
             al = __builtin_sqrtf(al);
             if (al > 1e-6f) for (int k = 0; k < 3; k++) along[k] /= al;
             proj_matrix_along(base, ts, p, n, al > 1e-6f ? along : 0, sinks[i].pm);
+            // and squeezed onto the blade's own cut face: slid along the sword, the far side's wider parts (the blade
+            // widening off the break) landed outside the thin face, little fins of metal out to both sides of its edge
+            // (playtest). The face is where the plane crosses the triangles (indices: "ok" without them, unsqueezed);
+            // in-plane, about the face's middle, the half's flat vertices of this group are scaled along the blade's
+            // width and thickness (its bind box's other two axes as the part lies now) to fit the face's extent
+            if (ix && al > 1e-6f) {
+                float u[3], w[3], ul = 0, wl;
+                int wa = (longax + 1) % 3, wb = (longax + 2) % 3;
+                if (bhi[wb] - blo[wb] > bhi[wa] - blo[wa]) wa = wb;
+                for (int k = 0; k < 3; k++) u[k] = t1[wa * 4 + k];
+                float un = u[0] * n[0] + u[1] * n[1] + u[2] * n[2];
+                for (int k = 0; k < 3; k++) { u[k] -= un * n[k]; ul += u[k] * u[k]; }
+                ul = __builtin_sqrtf(ul);
+                if (ul > 1e-6f) {
+                    for (int k = 0; k < 3; k++) u[k] /= ul;
+                    w[0] = n[1] * u[2] - n[2] * u[1]; w[1] = n[2] * u[0] - n[0] * u[2]; w[2] = n[0] * u[1] - n[1] * u[0];
+                    wl = __builtin_sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+                    for (int k = 0; k < 3; k++) w[k] /= wl;
+                    // the face: its extent along u and w, about its own middle
+                    float flo[2] = { 1e30f, 1e30f }, fhi[2] = { -1e30f, -1e30f };
+                    for (int t = 0; t + 2 < ni; t += 3)
+                        for (int e = 0; e < 3; e++) {
+                            u32 va = ix[t + e], vb = ix[t + (e + 1) % 3];
+                            if (va >= (u32)nv || vb >= (u32)nv || side[va] == side[vb]) continue;
+                            float xa[3], xb[3];
+                            skin_point(&c, &orig[va], (float *)(pos + (u64)va * pstride), xa);
+                            skin_point(&c, &orig[vb], (float *)(pos + (u64)vb * pstride), xb);
+                            float ha = (xa[0] - p[0]) * n[0] + (xa[1] - p[1]) * n[1] + (xa[2] - p[2]) * n[2];
+                            float hb = (xb[0] - p[0]) * n[0] + (xb[1] - p[1]) * n[1] + (xb[2] - p[2]) * n[2];
+                            if (ha == hb) continue;
+                            float f = ha / (ha - hb), q[3];
+                            for (int k = 0; k < 3; k++) q[k] = xa[k] + (xb[k] - xa[k]) * f - p[k];
+                            float qu = q[0] * u[0] + q[1] * u[1] + q[2] * u[2], qw = q[0] * w[0] + q[1] * w[1] + q[2] * w[2];
+                            if (qu < flo[0]) flo[0] = qu; if (qu > fhi[0]) fhi[0] = qu;
+                            if (qw < flo[1]) flo[1] = qw; if (qw > fhi[1]) fhi[1] = qw;
+                        }
+                    // this group's flat vertices of this half, slid along the sword onto the plane
+                    float an = along[0] * n[0] + along[1] * n[1] + along[2] * n[2];
+                    float mid[2] = { (flo[0] + fhi[0]) / 2, (flo[1] + fhi[1]) / 2 }, plo[2] = { 0, 0 }, phi[2] = { 0, 0 };
+                    int half = r & 1, g = (r - 2) / 2, any2 = 0;
+                    if (fhi[0] > flo[0] && an * an > 1e-6f)
+                        for (int v = 0; v < nv; v++) {
+                            if (vsec[v] == 0xffff || (half == 0) == (side[v] != 0)) continue;
+                            int part = -1;
+                            for (int k = 0; k < np; k++) if (parts[k] == strong[v]) part = pgroup[k];
+                            if (part != g) continue;
+                            float x[3];
+                            skin_point(&c, &orig[v], (float *)(pos + (u64)v * pstride), x);
+                            float h = (x[0] - p[0]) * n[0] + (x[1] - p[1]) * n[1] + (x[2] - p[2]) * n[2], q[3];
+                            for (int k = 0; k < 3; k++) q[k] = x[k] - along[k] * (h / an) - p[k];
+                            float qq[2] = { q[0] * u[0] + q[1] * u[1] + q[2] * u[2] - mid[0], q[0] * w[0] + q[1] * w[1] + q[2] * w[2] - mid[1] };
+                            for (int k = 0; k < 2; k++) { if (qq[k] < plo[k]) plo[k] = qq[k]; if (qq[k] > phi[k]) phi[k] = qq[k]; }
+                            any2 = 1;
+                        }
+                    float sc[2] = { 1, 1 };
+                    for (int k = 0; any2 && k < 2; k++) {
+                        float lo2 = flo[k] - mid[k], hi2 = fhi[k] - mid[k];
+                        if (phi[k] > hi2 && phi[k] > 1e-4f) sc[k] = hi2 / phi[k];
+                        if (plo[k] < lo2 && plo[k] < -1e-4f && lo2 / plo[k] < sc[k]) sc[k] = lo2 / plo[k];
+                        if (sc[k] < 0) sc[k] = 0;
+                    }
+                    if (sc[0] < 0.999f || sc[1] < 0.999f) {
+                        // in component space about the face's middle: x' = x - (1-su)(x-m).u u - (1-sw)(x-m).w w
+                        float m3[3], S[16], TS[16], TI[16], t2[16], t3[16];
+                        for (int k = 0; k < 3; k++) m3[k] = p[k] + u[k] * mid[0] + w[k] * mid[1];
+                        for (int rr = 0; rr < 3; rr++) {
+                            for (int k = 0; k < 3; k++) S[rr * 4 + k] = (rr == k) - (1 - sc[0]) * u[rr] * u[k] - (1 - sc[1]) * w[rr] * w[k];
+                            S[rr * 4 + 3] = 0;
+                        }
+                        for (int k = 0; k < 3; k++) S[12 + k] = m3[k] - (m3[0] * S[k] + m3[1] * S[4 + k] + m3[2] * S[8 + k]);
+                        S[15] = 1;
+                        tm_mat(ts, TS);
+                        tm_inv_mat(ts, TI);
+                        mat_mul(sinks[i].pm, TS, t2);
+                        mat_mul(t2, S, t3);
+                        mat_mul(t3, TI, sinks[i].pm);
+                        squeezed++;
+                    }
+                }
+            }
         }
     }
+    if (ix) mem_free(ix);
     tarray arr = { oa, nv, nv };
     ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(ca, lod, &arr);
     arr.data = ob;
@@ -4174,6 +4361,7 @@ static void weapon_split(u64 ca, u64 cb, int lod, const float *pw, const float *
     o = put(o, " a_flat="); o = put_int(o, flat[0]); o = put(o, " a_gone="); o = put_int(o, gone[0]);
     o = put(o, " b_flat="); o = put_int(o, flat[1]); o = put(o, " b_gone="); o = put_int(o, gone[1]);
     o = put(o, " nomap="); o = put_int(o, borrowfail); o = put(o, " active="); o = put_int(o, act_arr != 0);
+    o = put(o, " squeezed="); o = put_int(o, squeezed);
     for (int h = 0; h < 2; h++) {
         o = put(o, h ? " bbox=" : " abox=");
         for (int k = 0; k < 6; k++) { if (k) *o++ = ','; o = put_f(o, k < 3 ? hlo[h][k] : hhi[h][k - 3]); }
@@ -5241,11 +5429,32 @@ static u16 async_txt[256];
 static int async_len;
 static void scan_cmd(const u16 *txt, int len);
 static void game_cmd(const u16 *txt, int len);
+// the game's memory freed under a scan (the level streaming in as it ran: a crash in mem_scan, playtest): a fault on
+// the scan's thread is caught here and the scan given up ("err memory freed"), the thread picked up at its setjmp.
+// First in line, and only for that thread
+static void *async_jb[5];
+static volatile int async_guard;
+static long WINAPI async_fault(void *info)
+{
+    u32 code = **(u32 **)info;
+    if (code != 0xc0000005 || !async_guard || GetCurrentThreadId() != async_tid) return 0;
+    async_guard = 0;
+    unsigned char *c = ((unsigned char **)info)[1];  // EXCEPTION_POINTERS.ContextRecord: Rsp 0x98, Rbp 0xa0, Rip 0xf8
+    *(u64 *)(c + 0xa0) = (u64)async_jb[0];
+    *(u64 *)(c + 0xf8) = (u64)async_jb[1];
+    *(u64 *)(c + 0x98) = (u64)async_jb[2];
+    return -1; // EXCEPTION_CONTINUE_EXECUTION
+}
 static u32 WINAPI async_main(void *arg)
 {
     (void)arg;
     async_tid = GetCurrentThreadId();
-    if (async_txt[0] == 'Y') scan_cmd(async_txt + 1, async_len - 1); else game_cmd(async_txt + 1, async_len - 1);
+    if (__builtin_setjmp(async_jb)) skin_result("err memory freed");
+    else {
+        async_guard = 1;
+        if (async_txt[0] == 'Y') scan_cmd(async_txt + 1, async_len - 1); else game_cmd(async_txt + 1, async_len - 1);
+    }
+    async_guard = 0;
     async_tid = 0;
     async_have = 1;
     __atomic_store_n(&async_busy, 0, __ATOMIC_SEQ_CST);
@@ -5784,6 +5993,7 @@ int WINAPI DllMain(void *inst, u32 reason, void *reserved)
         self_lo = (u64)inst;
         self_hi = self_lo + *(u32 *)(self_lo + *(u32 *)(self_lo + 0x3c) + 0x50); // SizeOfImage
         AddVectoredExceptionHandler(0, crash_note);
+        AddVectoredExceptionHandler(1, async_fault);
         // (a note of each step at the start: a launch that closed before the first window left nothing else)
         boot_path(inst);
         write_file(BOOT, "boot: looking for the addresses");

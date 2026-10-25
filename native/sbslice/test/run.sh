@@ -197,8 +197,9 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # more crossed parts than free bones for their sinks (the playtest's cut face stretched at 0.23)
   SW=Art/Character/Weapon/Sword/CH_W_Sword_01/CH_W_Sword_01
   if on weapon && [[ -f ../../../.cache/work/vanilla/SB/Content/$SW.uasset ]]; then
-    for w in 0.1 0.23 0.3 0.5 0.9; do
-      for t in 0 60; do jobs+=("real sword split at $w, $t degrees off square|WEAPON=1 WAT=$w WTILT=$t PKG=vanilla/SB/Content/$SW|CH_W_Sword_01"); done
+    # (53 degrees: the most a break leans in game, active.lua's weaponCut.across 0.6; 0.55-0.68 its breakAt)
+    for w in 0.1 0.23 0.3 0.5 0.55 0.62 0.68 0.9; do
+      for t in 0 53; do jobs+=("real sword split at $w, $t degrees off square|WEAPON=1 WAT=$w WTILT=$t PKG=vanilla/SB/Content/$SW|CH_W_Sword_01"); done
     done
   fi
   on mark && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&

@@ -275,7 +275,8 @@ function goreCtx.pose.free(why)
   if valid(f.mesh) then try(function() f.mesh.bNoSkeletonUpdate = false end) end
   log(string.format("death: her pose let go after %.0f ms (%s)", (os.clock() - f.t) * 1000, why))
 end
-local function ragdoll_now(why)
+-- quiet: from her fall's end pose, as she lies (struggle.lua, maimed): no blow, no momentum, she just goes limp
+local function ragdoll_now(why, quiet)
   local a = animDeath
   if not a then return end
   animDeath = nil
@@ -287,7 +288,9 @@ local function ragdoll_now(why)
   try(function() a.mesh:WakeAllRigidBodies() end)
   log(string.format("animated death: ragdoll after all (%s), pelvis simulating %s", why,
     tostring(try(function() return a.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
-  if rag then rag.start(a.pawn, a.mesh, "death", a.push) end
+  if rag then
+    if quiet then rag.start(a.pawn, a.mesh, "quiet") else rag.start(a.pawn, a.mesh, "death", a.push) end
+  end
 end
 goreCtx.log, goreCtx.try, goreCtx.valid, goreCtx.v3, goreCtx.vlog = log, try, valid, v3, lg.v
 -- her mesh's physics asset, the one physfix gave an outfit without one included
@@ -334,6 +337,7 @@ goreCtx.on_release = function() if rag then rag.release() end end
 goreCtx.on_need_ragdoll = function(kind) ragdoll_now(kind) end
 -- her death fall is playing (a split then plays on with it before the halves come apart)
 goreCtx.animated = function() return animDeath ~= nil end
+goreCtx.ragdoll_quiet = function(why) ragdoll_now(why, true) end
 -- a piece cut off a standing Eve gets human masses
 goreCtx.on_piece = function(pawn, mesh) if rag then return rag.piece(pawn, mesh) end end
 do
@@ -359,6 +363,14 @@ do
     cv.init(goreCtx)
   else
     log("convulse.lua failed: " .. tostring(cv))
+  end
+  -- a maimed Eve's struggle on the floor (goreCtx.struggle, tune.struggle)
+  local ok7, sg = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/struggle.lua")
+  if ok7 and type(sg) == "table" then
+    goreCtx.struggle = sg
+    sg.init(goreCtx)
+  else
+    log("struggle.lua failed: " .. tostring(sg))
   end
   local ok3, p = pcall(dofile, PHYSFIX_PATH)
   if ok3 and type(p) == "table" then
@@ -687,6 +699,8 @@ end
 local faceCheck = nil
 -- hits after death (hits_after, below): n so far this death, armed once the weapon slowed after the last, t0 the death
 local ah = { n = 0, armed = false, t0 = 0 }
+-- when her death began (os.clock), nil while she lives (enemies.lua: tune.enemies.afterDeath)
+goreCtx.dead_since = function() return active and ah.t0 or nil end
 local function sandbox_face()
   local pawn = find_eve()
   local mesh = pawn and try(function() return pawn.Mesh end)
@@ -1024,9 +1038,22 @@ end
 local dead_hud = { scans = 0 }
 -- (kept through goreCtx.keep and asked through held before each use: the last death's screen, freed after the
 -- respawn, was read at the next death and crashed the game, UE4SS reading the freed widget's class, playtest)
-function dead_hud.get(f)
+-- One made while a level loads (her tick waits 2 s on a new level) went stale unchecked, and Shift+F4's hold never
+-- found the screen (playtest): in a death, one missing is looked for once by its class (find)
+dead_hud.CLASS = { w = "WB_MainHUD_Dead_C", rv = "WB_MainHUD_ResurrectionItem_C" }
+function dead_hud.get(f, find)
   local k = dead_hud[f]
   if k and goreCtx.held(k) then return k.obj end
+  dead_hud[f] = nil
+  if not (find and active) or (dead_hud.found or {})[f] then return end
+  dead_hud.found = dead_hud.found or {}
+  dead_hud.found[f] = true
+  for _, x in ipairs(try(function() return FindAllOf(dead_hud.CLASS[f]) end) or {}) do
+    if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then
+      dead_hud[f] = goreCtx.keep(x)
+    end
+  end
+  if dead_hud[f] and goreCtx.held(dead_hud[f]) then return dead_hud[f].obj end
   dead_hud[f] = nil
 end
 -- (watched from the mod's start, START_S after the lobby's player start: see screen.started)
@@ -1114,7 +1141,7 @@ end
 -- loaded (tried once a second in a death till then); none had ever been hooked, as the screen was never seen
 local SCREEN_FNS = { WB_Common_btn_1_Event_0 = "press", WB_Common_btn_2_Event_0 = "press", WB_Common_btn_1_Event = "press",
   WB_Common_btn_2_Event = "press", FinishPressAnimation = "press", FinishYouDieAnimation = "shown" }
-function screen.reset() dead_hud.scans, dead_hud.made, screen.rv.shown = 0, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen, screen.shown, screen.hpZero, screen.hpBack = false, false, false, 0; screen.offSince, screen.shownAt = nil, nil end
+function screen.reset() dead_hud.scans, dead_hud.made, dead_hud.found, screen.rv.shown = 0, nil, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen, screen.shown, screen.hpZero, screen.hpBack = false, false, false, 0; screen.offSince, screen.shownAt = nil, nil end
 -- the death and revive screens kept hidden t s into the death: held (Shift+F4, photo mode), else as tune.deathScreen
 -- says: "game" when the game puts them up (at once), "delay" till tune.reviveAt s, "key" till Shift+F4 (or the pad
 -- combo) shows them
@@ -1124,7 +1151,7 @@ function screen.hiding(t)
   local m = tune.deathScreen
   if m == "game" then return false end
   if m == "key" then return true end
-  return t < (tune.reviveAt or 7)
+  return t < (tune.reviveAt or 10)
 end
 function screen.hook()
   if screen.hooked or os.clock() < (screen.retry or 0) then return end
@@ -1182,7 +1209,9 @@ function screen.revive(t)
   end
   local on = false
   for _, f in ipairs({ "w", "rv" }) do
-    local w = dead_hud.get(f)
+    -- (the death screen looked for by class from 1 s in when not caught as it was made: the fall's first second is
+    -- busy. The revive item's is made in the death, always caught)
+    local w = dead_hud.get(f, f == "w" and t >= 1)
     if w then
       local vis = try(function() return w:GetVisibility() end) or 1 -- 1 collapsed, 2 hidden
       local up = vis ~= 1 and vis ~= 2 and try(function() return w:IsVisible() end) ~= false
@@ -1194,7 +1223,7 @@ function screen.revive(t)
             log(string.format("revive screen: %s up %.1f s into the death, held hidden %s",
               tostring(try(function() return w:GetClass():GetFName():ToString() end)), t,
               screen.frozen and "while the death is held (Shift+F4)" or tune.deathScreen == "key" and "till Shift+F4"
-              or string.format("till %.0f s", tune.reviveAt or 7)))
+              or string.format("till %.0f s", tune.reviveAt or 10)))
           end
           try(function() w:SetVisibility(1); w:SetIsEnabled(false) end)
         end
@@ -1361,6 +1390,7 @@ local function on_start(pawn, mesh)
   -- her voice for any death: a cry as she dies, nothing after (gore.lua, tune.gore.voice)
   if gore then try(function() gore.voice_death(pawn, mesh) end) end
   if goreCtx.convulse then try(function() goreCtx.convulse.start(pawn, mesh) end) end
+  if goreCtx.struggle then try(function() goreCtx.struggle.start(pawn, mesh) end) end
   ah.n, ah.armed, ah.t0 = 0, false, os.clock()
   no_snapshot(pawn)
   hold = nil
@@ -1625,6 +1655,7 @@ local function on_end(pawn, mesh)
   skip_stop("she got up")
   dface.stop()
   if goreCtx.convulse then try(function() goreCtx.convulse.stop() end) end
+  if goreCtx.struggle then try(function() goreCtx.struggle.stop() end) end
   try(function() mesh:SetCollisionResponseToChannel(CH.PhysicsBody, saved.meshPB or BLOCK) end)
   try(function() goreCtx.reset_pairs(mesh) end)
   if valid(saved.hair) and saved.hairEnabled then try(function() saved.hair:SetCollisionEnabled(saved.hairEnabled) end) end
@@ -1895,6 +1926,7 @@ local function ignored(cls)
   end
   return false
 end
+goreCtx.ignored = ignored
 
 -- the killing swing's helpers (one local: this chunk is near Lua's 200): the enemies followed, nearest first (list),
 -- when they are looked over again (next)
@@ -2518,7 +2550,11 @@ local function hits_after(pawn, mesh)
   -- a split needs her whole: once something is off her, a blow through her body is a hit mark instead
   local h = { t = os.clock(), loc = at, dir = dir, fwd = fwd or dir, n = n, how = how, push = dir, attack_dir = 0,
     bone = bone, noSplit = ncut > 0, attacker = swing.who }
-  if math.random() <= (c.cutChance or 0.75) and gore.blow(pawn, mesh, h, "after") then return end
+  -- (the marks off, as they ship: every hit cuts. The cutChance share alone left a quarter of them showing nothing,
+  -- playtest)
+  local marks = (g.hitMarks or {}).enabled ~= false
+  if (not marks or math.random() <= (c.cutChance or 0.75)) and gore.blow(pawn, mesh, h, "after") then return end
+  if not marks then log("after death: the hit didn't cut, and hit marks are off: blood only"); return end
   gore.hit_mark(pawn, mesh, at, dir, nil)
 end
 
@@ -2589,23 +2625,41 @@ function hm.blocking(t)
   local w = ((tune.active or {}).weaponCut or {}).blockWindow or 0.5
   if hm.guardT and (t or os.clock()) - hm.guardT <= w then return hm.guardStance end
 end
--- what a death does, rolled once (at the lethal hit, else at the death): "split" (the odds' split share, whatever the
--- blade), "odds" (a blade seen but left aside, bladeFollow) or "blade" (cut along the blade when one is seen). The
--- cut at the hit took the blade every time, and a split share of 100 never split (reported)
-function hm.death_roll()
+-- what a death does, rolled once (at the lethal hit, else at the death): "blade" (cut along the blade seen, the
+-- bladeFollow share of deaths with one), "split" (the odds' split share of the rest) or "odds". The cut at the hit
+-- took the blade every time, and a split share of 100 never split (reported). A blade seen decides first: with the
+-- split share rolled ahead of it a dual blades' cross across both arms and a level swing both split her down her
+-- length (playtest)
+function hm.death_roll(seen)
   local g = tune.gore or {}
   local odds, total = g.death or {}, 0
   for _, k in ipairs(KINDS) do total = total + math.max(tonumber(odds[k]) or 0, 0) end
+  local sp = math.max(tonumber(odds.split) or 0, 0)
+  -- (odds that are all split still split every death, blade or not)
+  local follow = math.min(math.max(tonumber(g.bladeFollow) or 1, 0), 1)
+  if seen and not (total > 0 and sp >= total) and math.random() < follow then return "blade" end
   if g.deathSplit ~= false and total > 0 and math.random() * total < math.max(tonumber(odds.split) or 0, 0) then
     return "split", odds.split, total
   end
-  local follow = math.min(math.max(tonumber(g.bladeFollow) or 1, 0), 1)
-  if math.random() >= follow then return "odds" end
-  return "blade"
+  -- (no blade seen: "blade" still, which gore_cut rolls the odds for as a made-up blow)
+  return seen and "odds" or "blade"
+end
+-- the killing cut made at the hit on a blow she lived through (a revive, a skill, her bar back up, no death within
+-- LIVED_S): it stayed on her alive, a stump's seam at her neck as she played on (reported). Undone as the death's end
+-- undoes it
+hm.LIVED_S = 6
+function hm.lived(pawn, mesh, why)
+  hm.lethal.cut = nil
+  log("lethal hit: she lived (" .. why .. "): the cut made at the hit undone")
+  if gore then try(function() gore.cleanup(pawn, mesh) end) end
+  if rag then try(function() rag.stop(pawn) end) end
 end
 function hm.lethal_watch(pawn, mesh)
   local g = tune.gore or {}
   if not gore or g.enabled == false or g.woundAtHit == false or not goreCtx.glass then return end
+  if hm.lethal and hm.lethal.cut and os.clock() - hm.lethal.t > hm.LIVED_S then
+    hm.lived(pawn, mesh, string.format("no death %d s after her HP bar hit 0", hm.LIVED_S))
+  end
   local pct = goreCtx.glass.bar_pct(true)
   -- (the HUD looked for, 35 ms, at most every 30 s till it is found: it is kept after that)
   if not pct and os.clock() >= (hm.barTry or 0) then
@@ -2614,7 +2668,10 @@ function hm.lethal_watch(pawn, mesh)
   end
   if not pct then return end
   if pct ~= hm.barLast then hm.barLast, hm.barT = pct, os.clock() end
-  if pct > 0.0005 then hm.lethal = nil; hm.armed = true; return end
+  if pct > 0.0005 then
+    if hm.lethal and hm.lethal.cut then hm.lived(pawn, mesh, string.format("her HP bar back at %.3f", pct)) end
+    hm.lethal = nil; hm.armed = true; return
+  end
   -- only a bar seen above 0 while she lived and now at 0: right after a respawn it still reads 0, and the watch cut
   -- her there (playtest)
   if hm.lethal or not hm.armed then return end
@@ -2632,7 +2689,7 @@ function hm.lethal_watch(pawn, mesh)
   -- over openTime; a split waits for the death, and so do the blow's further cuts (gore.release_held at the death)
   if g.cutAtHit == false or g.sliceOnDeath == false then return end
   if math.random() > (g.sliceChance or 1.0) then hm.lethal.roll = "none"; return end
-  hm.lethal.roll = hm.death_roll()
+  hm.lethal.roll = hm.death_roll(ws ~= nil)
   if hm.lethal.roll ~= "blade" then return end
   local h = death_hit(pawn, mesh)
   if not (h and not h.made and (h.n or (h.dir and h.fwd))) then return end
@@ -2846,7 +2903,7 @@ local function gore_cut(pawn, mesh, h, hit)
   -- down her length, rare: no split in many deaths (reported)
   local roll = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.roll
   if not roll then
-    roll = (g.sliceOnDeath == false or math.random() > (g.sliceChance or 1.0)) and "none" or hm.death_roll()
+    roll = (g.sliceOnDeath == false or math.random() > (g.sliceChance or 1.0)) and "none" or hm.death_roll(h ~= nil and not h.made)
   end
   -- a split rolled where the killing blade crossed both her arms: they come off instead, armsOverSplit of the time
   if roll == "split" and h and not h.made and math.random() < (g.armsOverSplit or 0.6) then
@@ -3084,6 +3141,110 @@ if goreCtx.keys then goreCtx.keys.register() else log("keys: keys.lua didn't loa
 
 -- who touches the mesh around death/respawn: Blueprint-level destroys and Eve's (re)init events
 local hooked = false
+-- her ponytail as she comes into the world: it starts through her hair tie, or on top of her sword on her back, and
+-- jiggles there till photo mode is opened and closed (playtests). It is cloth (SBPonytail, no animation of its own: the
+-- hair's KawaiiPhysics only moves her front and side strands) and collides with her bodies. physfix.lua re-makes her
+-- bodies as she spawns (SetPhysicsAsset), and the cloth settles on the wrong side of her hair tie, kept there by
+-- those collisions: the cloth and anim dynamics resets, the game's own cloth set up again
+-- (NeedPonytailClothConfigUpdate) and passes of them at 0.3-5.5 s each ran the cloth again from where the collisions
+-- let it, and it came back off the tie (0.4.1 playtests). Photo mode puts it right because it switches every character
+-- mesh's collision to query only while it is on (0x1423a33e0): the cloth falls back through the tie with nothing
+-- in its way, and stays there once the collision is back. So the reset does what photo mode does: CLOTH_AFTER s after
+-- the last of a new Eve, a respawn, an outfit change or her bodies re-made (each starts the wait again), her meshes'
+-- collision goes to query only (hits still find her) and the cloth is reset once, and the collision is given back
+-- 1.5 s later, the cloth left to settle through the tie meanwhile, as photo mode leaves it. The game's set up again
+-- (NeedPonytailClothConfigUpdate) and a second reset half a second later made her hair snap three times as she
+-- spawned (playtest): neither is asked any more. Given back at once should she die or photo mode open meanwhile. The
+-- log lists each mesh with its animation (`cloth: meshes ...`)
+screen.CLOTH_AFTER = { 4, 5.5 }
+function screen.cloth_soon(why)
+  screen.cloth_restore()
+  screen.cloth = { at = os.clock(), i = 1, why = why }
+end
+-- her bodies re-made with a fixed physics asset (physfix.lua): her ponytail's cloth set up again after it
+goreCtx.on_remade = function() screen.cloth_soon("her bodies re-made") end
+function screen.cloth_meshes(pawn)
+  local out, seen = {}, {}
+  local cls = StaticFindObject("/Script/Engine.SkeletalMeshComponent")
+  local function walk(c, depth)
+    if not valid(c) or depth > 8 then return end
+    local a = c:GetAddress()
+    if seen[a] then return end
+    seen[a] = true
+    if try(function() return c:IsA(cls) end) then out[#out + 1] = c end
+    local kids = {}
+    try(function() c.AttachChildren:ForEach(function(_, e) kids[#kids + 1] = e:get() end) end)
+    for _, k in ipairs(kids) do walk(k, depth + 1) end
+  end
+  walk(try(function() return pawn.RootComponent end), 0)
+  return out
+end
+-- the collision taken off her meshes, given back (each kept, asked alive first: a level change frees them)
+function screen.cloth_restore()
+  local list = screen.clothColl
+  screen.clothColl = nil
+  if not list or #list == 0 then return 0 end
+  local n = 0
+  if goreCtx.alive_ask(list) then
+    for _, k in ipairs(list) do
+      if k.alive and valid(k.obj) and try(function() k.obj:SetCollisionEnabled(k.was); return true end) then n = n + 1 end
+    end
+  end
+  return n
+end
+function screen.cloth_tick(pawn)
+  local c = screen.cloth
+  if screen.clothColl and (active or screen.photoOn or not c) then
+    local n = screen.cloth_restore()
+    log(string.format("cloth: her meshes' collision given back early (%d)", n))
+  end
+  if not c or active or screen.photoOn then return end
+  local wait = screen.CLOTH_AFTER[c.i]
+  if not wait then screen.cloth = nil; return end
+  if os.clock() - c.at < wait then return end
+  c.i = c.i + 1
+  local meshes = screen.cloth_meshes(pawn)
+  if c.i == 3 then
+    local n = screen.cloth_restore()
+    log(string.format("cloth: her meshes' collision given back (%d)", n))
+    screen.cloth = nil
+    return
+  end
+  -- ECollisionEnabled: QueryOnly 1 (photo mode's), QueryAndPhysics 3
+  local off = 0
+  if c.i == 2 then
+    screen.clothColl = {}
+    for _, m in ipairs(meshes) do
+      local was = try(function() return m:GetCollisionEnabled() end)
+      local k = was and was ~= 0 and was ~= 1 and goreCtx.keep(m)
+      if k and try(function() m:SetCollisionEnabled(1); return true end) then
+        k.was = was
+        screen.clothColl[#screen.clothColl + 1] = k
+        off = off + 1
+      end
+    end
+    -- their indexes read now, while they surely live
+    if #screen.clothColl > 0 then goreCtx.alive_ask(screen.clothColl) end
+  end
+  local ok, err = pcall(function() pawn:ForceAllClothNextUpdateTeleportAndReset() end)
+  local info = {}
+  local function nm(o) return valid(o) and (try(function() return o:GetFName():ToString() end) or "?") or "-" end
+  local function cl(o) return valid(o) and (try(function() return o:GetClass():GetFName():ToString() end) or "?") or "-" end
+  for _, m in ipairs(meshes) do
+    -- ETeleportType::ResetPhysics
+    pcall(function() m:ResetAnimInstanceDynamics(2) end)
+    pcall(function() m:ForceClothNextUpdateTeleportAndReset() end)
+    if c.i == 2 then
+      info[#info + 1] = string.format("%s (%s, anim %s, post %s)", nm(m), nm(try(function() return m.SkeletalMesh end)),
+        cl(try(function() return m.AnimScriptInstance end)), cl(try(function() return m.PostProcessAnimInstance end)))
+    end
+  end
+  if c.i == 2 then
+    log(string.format("cloth: her ponytail reset (%s): %d mesh(es), %d of them query only for 1.5 s (as photo mode)%s",
+      c.why, #meshes, off, ok and "" or ("; her cloth reset failed: " .. tostring(err))))
+    log("cloth: meshes " .. table.concat(info, "; "))
+  end
+end
 local function hook_once()
   if hooked then return end
   hooked = true
@@ -3095,6 +3256,7 @@ local function hook_once()
       -- the game respawning her while she is still down (its death screen's button never seen): got up at once, not
       -- broken and with her weapon on the floor for the 1-2 s till the fallback timer (playtest)
       if active and label == "NotifyBP_ReInitActor" then screen.respawn = true end
+      if label ~= "NotifyBP_InitActor" then screen.cloth_soon(label) end
     end)
     log(string.format("hook %s: %s", label, ok and "ok" or tostring(err)))
   end
@@ -3164,6 +3326,14 @@ local function animated_death(pawn, mesh, push)
   -- in the air: her fall animation played on mid-air and she sank at 1.2 m/s for 3 s (thirty-fifth playtest)
   if try(function() return pawn.CharacterMovement:IsFalling() end) then
     log("death: animated show in the air, the ragdoll instead")
+    return false
+  end
+  -- nor with her feet off the floor while her movement doesn't say falling (killed in mid-air, it was already off):
+  -- the fall played where she died, up in the air, and she hung there (0.4.0 report)
+  local feet = try(function() local l = mesh:K2_GetComponentLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
+  local over = feet and rag and rag.over_floor and rag.over_floor(pawn, feet)
+  if over and over > 30 then
+    log(string.format("death: animated show with her feet %.0f cm over the floor, the ragdoll instead", over))
     return false
   end
   try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
@@ -3632,6 +3802,8 @@ local function tick()
   hook_once()
   local mesh = try(function() return pawn.Mesh end)
   if not valid(mesh) then return end
+  if screen.clothFor ~= pawnAddr then screen.clothFor, screen.clothColl = pawnAddr, nil; screen.cloth_soon("she came into the world") end
+  screen.cloth_tick(pawn)
   if gore and screen.photo_guard(pawn, mesh) then return end
   local function simulating() return try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true end
   local sim = simulating()
@@ -3910,6 +4082,7 @@ local function forget_world()
   if goreCtx.glass then goreCtx.glass.forget() end
   if rag then rag.forget() end
   if goreCtx.convulse then goreCtx.convulse.forget() end
+  if goreCtx.struggle then goreCtx.struggle.forget() end
   if physfix then physfix.forget() end
 end
 local function adopt(ctx)
@@ -4014,6 +4187,10 @@ local function game_tick(ctx)
     if goreCtx.convulse then
       local ok2, err2 = pcall(goreCtx.convulse.tick, screen.photoOn or screen.vtPhoto or screen.photoLive or screen.stopped)
       if not ok2 then log("convulse: " .. tostring(err2)) end
+    end
+    if goreCtx.struggle then
+      local ok3, err3 = pcall(goreCtx.struggle.tick, screen.photoOn or screen.vtPhoto or screen.photoLive or screen.stopped)
+      if not ok3 then log("struggle: " .. tostring(err3)) end
     end
   elseif screen.padKeys then screen.padKeys, screen.padWas = nil, nil end
   -- and a cut's stages, a frame each (on the poll below the piece came off 350 ms after the blow)

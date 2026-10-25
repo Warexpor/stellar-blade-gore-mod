@@ -34,18 +34,28 @@ __declspec(dllimport) HANDLE WINAPI CreateFileW(const u16 *, u32, u32, void *, u
 __declspec(dllimport) int WINAPI WriteFile(HANDLE, const void *, u32, u32 *, void *);
 __declspec(dllimport) int WINAPI CloseHandle(HANDLE);
 
-// readable for n bytes from p (committed, readable, not a guard page); the last region asked about is kept
+// readable for n bytes from p (committed, readable, not a guard page); the last region asked about is kept, for the
+// first thread to ask alone (the game thread: tables.lua's scans run on one of their own, and a pair written by one
+// thread as the other read it would pass a region neither asked about)
 static u64 rd_lo, rd_hi;
-static int readable(u64 p, u64 n)
+static volatile u32 rd_tid;
+__declspec(dllimport) u32 WINAPI GetCurrentThreadId(void);
+static int readable_to(u64 p, u64 n, u64 *end)
 {
     if (p < 0x10000 || p > 0x7ffffffeffffull || (p & 3)) return 0;
-    if (p >= rd_lo && p + n <= rd_hi) return 1;
+    u32 tid = GetCurrentThreadId();
+    if (!rd_tid) __atomic_compare_exchange_n(&rd_tid, &(u32){ 0 }, tid, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    int mine = rd_tid == tid;
+    if (mine && p >= rd_lo && p + n <= rd_hi) { *end = rd_hi; return 1; }
     MBI m;
     if (!VirtualQuery((const void *)p, &m, sizeof m)) return 0;
     if (m.state != 0x1000 || (m.prot & 0x101) || !(m.prot & 0xee)) return 0;
-    rd_lo = (u64)m.base; rd_hi = rd_lo + m.size;
-    return p + n <= rd_hi;
+    u64 lo = (u64)m.base, hi = lo + m.size;
+    if (mine) { rd_lo = lo; rd_hi = hi; }
+    *end = hi;
+    return p + n <= hi;
 }
+static int readable(u64 p, u64 n) { u64 end; return readable_to(p, n, &end); }
 // for sbslice.c (its "o" command)
 int mem_readable(u64 p, u64 n) { return readable(p, n); }
 // every 8-aligned place in the process's private read-write memory holding needle, up to max of them (a probe: what
@@ -112,8 +122,9 @@ int mem_scan_set(u64 addr, int esz, u64 *hits, int max)
 // how many bytes from p are readable, up to max
 static u64 readable_len(u64 p, u64 max)
 {
-    if (!readable(p, 4)) return 0;
-    return rd_hi - p < max ? rd_hi - p : max;
+    u64 end;
+    if (!readable_to(p, 4, &end)) return 0;
+    return end - p < max ? end - p : max;
 }
 static void stats_write_file(const u16 *path, const char *s)
 {

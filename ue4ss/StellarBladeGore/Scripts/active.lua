@@ -288,7 +288,8 @@ local function impact(mesh, g, dir, boost, whole)
   local tw = g.twist or 90
   if tw > 0 then
     local w = vec(0, 0, (math.random() < 0.5 and -1 or 1) * tw * (0.6 + 0.4 * math.random()))
-    for _, bone in ipairs(TWIST) do try(function() mesh:AddAngularImpulseInDegrees(w, FName(bone), true) end) end
+    -- (added to the angular velocity: AddAngularImpulseInDegrees as a velocity change did nothing in game)
+    for _, bone in ipairs(TWIST) do try(function() mesh:SetPhysicsAngularVelocityInDegrees(w, true, FName(bone)) end) end
     out = out .. string.format(", twist %.0f deg/s", w.Z)
   end
   return out
@@ -677,12 +678,22 @@ function M.weapon_cut(mesh, at, n, blocked)
     end
     cross_at()
     local ends = wc.ends or 0.08
-    if blocked and ax and not (reach and reach <= (wc.reach or 80) and t >= ends and t <= 1 - ends) then
-      local d = sub(ax.b, ax.a)
-      local l = len(d)
-      if l > 1 then
-        local u = vec(d.X / l, d.Y / l, d.Z / l)
-        local tt = math.max(0.3, math.min(0.7, dot(sub(at, ax.a), u) / l))
+    local d = ax and sub(ax.b, ax.a)
+    local l = d and len(d) or 0
+    local u = l > 1 and vec(d.X / l, d.Y / l, d.Z / l)
+    -- a plane lying along the sword (within ~37 deg of its length) slices it lengthwise: one half a sliver off the
+    -- grip, the other the whole sword still (playtest: "the blade part AND the full untouched sword")
+    local along = u and math.abs(dot(n, u)) < (wc.across or 0.6)
+    -- (a blocked blow always breaks it on the bare blade: its own crossing landed at 0.22, in the frame over the grip;
+    -- and so does any blow crossing it off the blade: at 0.40-0.45 the blade came off whole, tip and all, where the
+    -- frame ends, and lay beside the hilt as a whole sword, playtest)
+    local br = wc.breakAt or { 0.55, 0.68 }
+    local off = t and (t < br[1] or t > (br[2] or br[1]))
+    if u and (blocked or ((along or off) and reach and reach <= (wc.reach or 80))) then
+      do
+        -- (on the bare blade: at 0.3 it broke through the open frame over the grip, and both halves looked like a
+        -- sword with a hilt, playtest)
+        local tt = math.max(br[1], math.min(br[2] or br[1], dot(sub(at, ax.a), u) / l))
         -- mostly along the sword (a clean break across it), leaning the way the blade's plane lies
         local k = dot(n, u)
         local p = vec(n.X - u.X * k, n.Y - u.Y * k, n.Z - u.Z * k)
@@ -771,7 +782,8 @@ function M.weapon_cut(mesh, at, n, blocked)
           -- (the half on no prop bone has nothing to go back onto)
           for _, dd in ipairs(dropped) do if addr(dd.comp) == ab then dd.parent = nil end end
           out[#out + 1] = string.format("%s split at %.2f along it, %.0f cm from the hit%s: %s%s", nm, t, reach,
-            forced and " (she blocked: broken across its middle)" or blocked and " (she blocked)" or "", r, d)
+            forced and (blocked and " (she blocked: broken across its blade)" or along and " (plane along it: broken across its blade)"
+              or " (crossed it off its blade: broken across its blade)") or "", r, d)
         end
       end
     end
@@ -1067,7 +1079,9 @@ function M.start(pawn, mesh, kind, dir)
   else
     parts[#parts + 1] = impact(mesh, g, dir)
   end
-  if not plain then parts[#parts + 1] = tone_start(pawn, mesh, g) end
+  -- (not on a quiet one, from an animated fall's end pose: her animation goes on to a standing pose under it, and
+  -- the tone would pull her towards that)
+  if not plain and kind ~= "quiet" then parts[#parts + 1] = tone_start(pawn, mesh, g) end
   if kind == "death" and not plain then
     parts[#parts + 1] = grip_start(mesh, g)
     parts[#parts + 1] = drop_weapons(pawn, mesh, g, function(w) return not gripped[addr(w) or 0] end)
@@ -1147,6 +1161,11 @@ local function where(comps)
   return out
 end
 
+-- convulse.lua or struggle.lua still to move her (their M.due)
+local function moving()
+  local cv, sg = ctx.convulse, ctx.struggle
+  return (cv and cv.due and cv.due()) or (sg and sg.due and sg.due()) or false
+end
 local function sleep(comp)
   local n = 0
   for _, b in ipairs(bodies(comp)) do
@@ -1311,6 +1330,19 @@ local function clamp_spin()
   end
 end
 
+-- how far p is over whatever is under it (a visibility trace down to 10 m, her own actor ignored): nil with nothing
+-- there (a floor that doesn't block the trace too: taken as unknown, left alone)
+function M.over_floor(pawn, p)
+  local ks = try(function() return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary") end)
+  if not (valid(ks) and p) then return nil end
+  local hit = {}
+  local ok = try(function()
+    return ks:LineTraceSingle(pawn, vec(p.X, p.Y, p.Z + 5), vec(p.X, p.Y, p.Z - 1000), 0, false, { pawn }, 0, hit, true,
+      { R = 1, G = 0, B = 0, A = 1 }, { R = 0, G = 1, B = 0, A = 1 }, 0)
+  end)
+  local z = ok and try(function() return (hit.ImpactPoint or hit.Location).Z end)
+  return z and p.Z - z or nil
+end
 local function settle(dt)
   local st = cfg().settle or {}
   local comps = { run.mesh }
@@ -1345,6 +1377,13 @@ local function settle(dt)
     drift = math.huge
   end
   if run.asleep then
+    -- (kept awake for her last movements: asleep once they are over)
+    if run.awake and not moving() then
+      run.awake = nil
+      local n = 0
+      for _, c in ipairs(comps) do if valid(c) then n = n + sleep(c) end end
+      log(string.format("her last movements are over: %d bodies asleep at %.1f s", n, run.t))
+    end
     if top > (st.wake or 60) then
       run.asleep, run.still = false, 0
       log(string.format("woken (%.0f cm/s, %s)", top, tostring(which)))
@@ -1381,15 +1420,40 @@ local function settle(dt)
       run.t, tostring(which), top, wc or 0, drift == math.huge and -1 or drift, tostring(far), win, tostring(wb), wt, wi))
   end
   if run.still < (st.time or 0.5) then return end
+  -- not up in the air: still there (slowed at the top of a fall, held by something that let go) she was put to sleep
+  -- and hung there (0.4.0 report: killed in mid-air, hung in the air). Woken and left to fall, checked again later
+  local pel = try(function() local l = run.mesh:GetSocketLocation(FName("Bip001-Pelvis")); return vec(l.X, l.Y, l.Z) end)
+  local over = pel and M.over_floor(run.pawn or try(function() return run.mesh:GetOwner() end), pel)
+  if over and over > (st.air or 60) then
+    run.still = 0
+    for _, c in ipairs(comps) do if valid(c) then try(function() c:WakeAllRigidBodies() end) end end
+    if not run.airSaid then
+      run.airSaid = true
+      log(string.format("not settled at %.1f s: her pelvis is %.0f cm over the floor, woken to fall", run.t, over))
+    end
+    return
+  end
   run.asleep = true
   tone_stop()
   local n = 0
-  for _, c in ipairs(comps) do if valid(c) then n = n + sleep(c) end end
+  -- her convulsions or struggle still to come: stopped but left awake. A body put to sleep took the turns they gave
+  -- it (read back at once) and never moved (playtest: an arm's centre of mass 0.1 cm over a 164 deg/s swing)
+  run.awake = moving() or nil
+  for _, c in ipairs(comps) do
+    if valid(c) then
+      if run.awake then
+        stop_all(c)
+        n = n + #bodies(c)
+      else
+        n = n + sleep(c)
+      end
+    end
+  end
   -- settling again after a twitch: once is enough in the log
   if run.settled then return end
   run.settled = true
-  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies asleep, %d spins slowed to the cap, %d flung bodies slowed, %d launched", run.t, top,
-    drift == math.huge and -1 or drift, n, run.clamped or 0, run.flung or 0, run.launched or 0))
+  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies %s, %d spins slowed to the cap, %d flung bodies slowed, %d launched", run.t, top,
+    drift == math.huge and -1 or drift, n, run.awake and "stopped, kept awake for her last movements" or "asleep", run.clamped or 0, run.flung or 0, run.launched or 0))
   if run.rolls then log("rolled about the bone since the start (deg): " .. roll_report(run.mesh, run.rolls)) end
 end
 
@@ -1562,6 +1626,13 @@ function M.on_cut(mesh, bone)
     end
     local r = valid(pawn) and drop_weapons(pawn, mesh, cfg(), in_hand) or ""
     if r ~= "" then log("cut " .. b .. r) end
+  end
+  -- a cut on her settled body (a hit after her death): woken and let settle again, or the piece took its throw asleep
+  -- or stopped and barely moved (playtest: an arm off 1 s before she settled, "no push")
+  if run and valid(run.mesh) and (run.asleep or run.settled) then
+    try(function() run.mesh:WakeAllRigidBodies() end)
+    run.asleep, run.settled, run.awake, run.still = false, nil, nil, 0
+    log("woken for a cut (" .. b .. ")")
   end
   if not (run and valid(run.pac)) then return end
   drive(run.pac, bone, 0, cfg().tone or {})

@@ -742,6 +742,386 @@ local function smooth_tick()
   if n > 0 then log(string.format("smoothAnim %s: %d characters' animation %s", tostring(on), n, on and "updated every frame" or "back to the engine's rate")) end
 end
 
+-- after her death the enemies around her keep at her (tune.enemies.afterDeath, off by default): for `time` s their
+-- blackboards keep her as their target (the object keys that held her while she lived, else the ones named Target),
+-- and the trees' target searches (SBBTTask_SbDetectTarget) take a dead target too (bDead) and drop it only once it is
+-- destroyed (TargetCancel Destroy, 2: ZeroHP, 0, dropped her the moment she died and they never came at her, playtest;
+-- SB keeps its targets off the blackboards, whose keys are its ints, floats, vectors and bools), the patrol's searches
+-- too (SbMoveToHome), and the trees' checks on the target's life (SbIsAlive) swapped (they still never came, playtest:
+-- "target alive" guards their attacks), put back as the game had them when the time is up or she gets up. How far the trees go on attacking a dead target is the game's: the log
+-- says what was kept and set ("after death: ...")
+local aft = { keys = {}, next = 0, tasks = nil, sw = {}, anims = {} }
+function M.after_keys(bb)
+  local out = {}
+  try(function()
+    local asset = bb.BlackboardAsset
+    local guard = 0
+    while asset and asset:IsValid() and guard < 8 do
+      guard = guard + 1
+      asset.Keys:ForEach(function(_, e)
+        local en = e:get()
+        local kt = en.KeyType
+        local cls = kt and kt:IsValid() and kt:GetClass():GetFName():ToString() or ""
+        if cls:find("Object", 1, true) then out[#out + 1] = en.EntryName:ToString() end
+      end)
+      asset = asset.Parent
+    end
+  end)
+  return out
+end
+function M.after_bb(o)
+  local ctl = try(function() return o.Controller end)
+  local bb = ctl and valid(ctl) and try(function() return ctl.Blackboard end)
+  return bb and valid(bb) and bb or nil
+end
+-- their swings at her body (afterDeath.swing): the trees above bring them to her and keep her their target, but the
+-- game's skills never fire at a dead target (playtest: an enemy followed her body and never swung). So an enemy within
+-- swingReach cm of her body turns to her and plays one of its attacks itself, the AnimSequence its tree's skills are
+-- named after (SbUseSkill's SkillName, in the Animation folder next to its mesh; not the dodges, get-ups, starts or
+-- cautions), on its mesh in place of its animation Blueprint (PlayAnimation), which is given back when it ends. Its
+-- trees stop it at its attack range (an enemy walked round her body, never within 260 cm, playtest), so it lunges in
+-- to `lunge` cm off her body over the swing's first third. Its weapon then cuts her through the hits after death
+-- (main.lua). No damage: the game has her dead
+local SKIP_ANIM = { "Evasion", "Dodge", "StandUp", "Getup", "GetUp", "BattleStart", "Caution", "Step", "Spawn", "Idle", "Dead",
+  "Die", "Result_", "Hit_", "Turn", "Run", "Walk", "Move", "Wait", "Guard", "Grab", "Phase", "Jump", "Groggy", "Down",
+  "Entrance", "RootMotion", "_RM" }
+-- an animation of its own loaded (one it played) counts when its name says it is an attack: the skill names didn't
+-- match the Sawshark's (M_Sawshark_S01_RightSwing ...), so none was found and it never swung (playtest)
+local ATTACK_WORDS = { "Attack", "Swing", "Slash", "Combo", "Dash", "Grinder", "Claw", "Thrust", "Stab", "Smash",
+  "Strike", "Punch", "Kick", "Bite", "Rampage", "Chain", "Cut", "Slam", "Shot", "Spin", "Charge" }
+local function skipped(nm)
+  for _, w in ipairs(SKIP_ANIM) do if nm:find(w, 1, true) then return true end end
+  return false
+end
+local function attacky(nm)
+  if skipped(nm) then return false end
+  for _, w in ipairs(ATTACK_WORDS) do if nm:find(w, 1, true) then return true end end
+  return false
+end
+-- the monsters' attack animations loaded now (the ones they played or have ready), by folder: paths only, nothing held
+function aft.scan_anims()
+  aft.loaded = {}
+  local nl = 0
+  for _, an in ipairs(try(function() return FindAllOf("AnimSequence") end) or {}) do
+    local p = valid(an) and try(function() return an:GetPathName() end) or ""
+    local folder, nm = p:match("^(/Game/Art/Character/Monster/[^/]+/)Animation/([^/%.]+)%.")
+    if folder and attacky(nm) then
+      aft.loaded[folder] = aft.loaded[folder] or {}
+      table.insert(aft.loaded[folder], p)
+      nl = nl + 1
+    end
+  end
+  return nl
+end
+local ANIM_CLS
+-- its attacks, found a few at a time: the skill names are every loaded tree's, and a load of each in one go (most
+-- aren't its own: the load fails) would stall the game; the loaded ones (after_scan) are only looked up
+local function attack_anims(mesh)
+  local sk = try(function() return mesh.SkeletalMesh end)
+  local path = valid(sk) and try(function() return sk:GetPathName() end) or ""
+  local folder = path:match("^(/Game/Art/Character/Monster/[^/]+/)")
+  if not folder then
+    aft.badPath = aft.badPath or {}
+    if not aft.badPath[path] then
+      aft.badPath[path] = true
+      log(string.format("after death: its mesh %s is in no monster folder: no attacks of its own", path))
+    end
+    return {}, true
+  end
+  local f = aft.anims[folder]
+  if not f then
+    f = { out = {}, todo = {}, seen = {} }
+    -- none of its own loaded at the last look (it came after): looked for again now, once a folder
+    if not (aft.loaded and aft.loaded[folder]) then
+      local t0 = os.clock()
+      local nl = aft.scan_anims()
+      aft.loaded[folder] = aft.loaded[folder] or {}
+      log(string.format("after death: %s: attack animations loaded looked up again: %d of its own, %d in all, %.0f ms",
+        folder, #aft.loaded[folder], nl, (os.clock() - t0) * 1000))
+    end
+    for _, p in ipairs((aft.loaded or {})[folder] or {}) do f.todo[#f.todo + 1] = { path = p, loaded = true } end
+    for nm in pairs(aft.skills or {}) do
+      if not skipped(nm) then f.todo[#f.todo + 1] = { path = folder .. "Animation/" .. nm .. "." .. nm } end
+    end
+    aft.anims[folder] = f
+    if #f.todo == 0 then log(string.format("after death: %s attacks of its own: nothing to look for", folder)) end
+  end
+  if #f.todo == 0 then return f.out, true end
+  ANIM_CLS = ANIM_CLS or StaticFindObject("/Script/Engine.AnimSequence")
+  local loads = 0
+  while #f.todo > 0 and loads < 2 do
+    local t = table.remove(f.todo, 1)
+    local nm = t.path:match("([^/%.]+)%.[^/]*$") or t.path
+    if not f.seen[nm] then
+      local a = try(function() return StaticFindObject(t.path) end)
+      if not valid(a) and not t.loaded and LoadAsset and ctx.may_load and ctx.may_load() then
+        loads = loads + 1
+        a = try(function() return LoadAsset(t.path) end)
+      end
+      if valid(a) and try(function() return a:IsA(ANIM_CLS) end) then
+        f.seen[nm] = true
+        f.out[#f.out + 1] = { a = a, name = nm }
+      end
+    end
+  end
+  if #f.todo == 0 then
+    local n = {}
+    for _, x in ipairs(f.out) do n[#n + 1] = x.name end
+    log(string.format("after death: %s attacks of its own: %s", folder, #n > 0 and table.concat(n, ", ") or "none found"))
+  end
+  return f.out, #f.todo == 0
+end
+local function swing_back(e)
+  if valid(e.mesh) then try(function() e.mesh:SetAnimationMode(0) end) end
+end
+local function swings_tick(pawn, c)
+  if c.swing == false then return end
+  local her = valid(pawn) and try(function() return pawn.Mesh end)
+  local body = valid(her) and bone_loc(her, "Bip001-Spine1")
+  if not body then return end
+  local now, me = os.clock(), addr(pawn)
+  local reach, near, nearCls = c.swingReach or 450, nil, nil
+  for _, ch in ipairs(ctx.live_chars()) do
+    local a = ch.addr
+    local e = known[a]
+    local sw = aft.sw[a]
+    if sw and sw.till and now >= sw.till then
+      swing_back(sw)
+      sw.till, sw.next, sw.lunge = nil, now + 0.6 + math.random() * 1.4, nil
+    end
+    -- the lunge: slid along the floor to `lunge` cm off her body over the swing's first third (swept: walls stop it)
+    if sw and sw.lunge and valid(ch.obj) then
+      local l = sw.lunge
+      local k = math.min(1, (now - l.t0) / l.dur)
+      try(function()
+        ch.obj:K2_SetActorLocation({ X = l.from.X + (l.to.X - l.from.X) * k, Y = l.from.Y + (l.to.Y - l.from.Y) * k,
+          Z = l.from.Z }, true, {}, false)
+      end)
+      if k >= 1 then sw.lunge = nil end
+    end
+    if a ~= me and not (e and e.dead) and not (ctx.ignored and ctx.ignored(ch.cls)) then
+      local at = try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+      local d = at and len(vec(body.X - at.X, body.Y - at.Y, 0))
+      if d and (not near or d < near) then near, nearCls = d, ch.cls end
+      local mesh = d and d < reach and not (sw and (sw.till or now < (sw.next or 0))) and try(function() return ch.obj.Mesh end)
+      if valid(mesh) then
+        local list, done = attack_anims(mesh)
+        local pick = #list > 0 and list[math.random(#list)]
+        if pick then
+          local yaw = math.deg(math.atan(body.Y - at.Y, body.X - at.X))
+          try(function() ch.obj:K2_SetActorRotation({ Pitch = 0, Yaw = yaw, Roll = 0 }, false) end)
+          local ok = try(function() mesh:PlayAnimation(pick.a, false); return true end)
+          local len_s = try(function() return pick.a:GetPlayLength() end) or 1.5
+          local lunge
+          local stop = c.lunge or 120
+          if ok and d > stop then
+            local k = (d - stop) / d
+            lunge = { from = at, to = { X = at.X + (body.X - at.X) * k, Y = at.Y + (body.Y - at.Y) * k }, t0 = now,
+              dur = math.max(0.15, math.min(len_s, 4) / 3) }
+          end
+          aft.sw[a] = { mesh = mesh, till = ok and now + math.min(len_s, 4) or nil, next = now + 3, lunge = lunge }
+          aft.swings = (aft.swings or 0) + 1
+          if aft.swings <= 6 then
+            log(string.format("after death: %s %x swings %s at her body %.0f cm off%s (%.1f s)%s", ch.cls, a, pick.name, d,
+              lunge and string.format(", lunging %.0f cm in", d - stop) or "", len_s, ok and "" or ": NOT played"))
+          end
+        elseif done then
+          aft.sw[a] = { next = now + 5 }
+        end
+      end
+    end
+  end
+  -- the nearest enemy's distance to her body, each second for the first 8 (no swing: how near they came)
+  aft.near = aft.near or { n = 0, next = 0 }
+  if aft.near.n < 8 and now >= aft.near.next then
+    aft.near.n, aft.near.next = aft.near.n + 1, now + 1
+    log(string.format("after death: nearest enemy to her body: %s", near and string.format("%s %.0f cm (swings within %.0f)", nearCls, near, reach) or "none"))
+  end
+end
+local function swings_stop()
+  local n = 0
+  for _, sw in pairs(aft.sw) do if sw.till then swing_back(sw); n = n + 1 end end
+  aft.sw, aft.swings, aft.near = {}, 0, nil
+  return n
+end
+
+-- the trees' nodes looked up ahead (after_scan), not in the death's frame: four full object scans there took 195 ms,
+-- a hitch with every death (playtest). Looked up while she lives with no enemy within scanClear cm of her (a level
+-- just loaded, enemies streamed in far off) whenever an enemy of a class not around at the last look turns up, and in
+-- the death only when none of the nodes looked up lives on. Each kept (keep) and asked at once, its index read while
+-- it surely lives
+local function after_scan(why, classes)
+  local t0 = os.clock()
+  local s = { det = {}, alive = {}, classes = classes or {} }
+  for _, cls in ipairs({ "SBBTTask_SbDetectTarget", "SBBTTask_SbMoveToHome" }) do
+    for _, t in ipairs(try(function() return FindAllOf(cls) end) or {}) do
+      if valid(t) and try(function() return t.bEnemy end) == true
+        and (cls ~= "SBBTTask_SbMoveToHome" or try(function() return t.bDetectTarget end) == true) then
+        s.det[#s.det + 1] = ctx.keep(t)
+      end
+    end
+  end
+  for _, d in ipairs(try(function() return FindAllOf("SBBTDecorator_SbIsAlive") end) or {}) do
+    if valid(d) and try(function() return d.ActorType end) == 1 then s.alive[#s.alive + 1] = ctx.keep(d) end
+  end
+  -- (the skill names only: strings, nothing held)
+  aft.skills = {}
+  for _, t in ipairs(try(function() return FindAllOf("SBBTTask_SbUseSkill") end) or {}) do
+    try(function() t.SkillName:ForEach(function(_, e) aft.skills[e:get():ToString()] = true end) end)
+  end
+  aft.anims = {}
+  local nl = aft.scan_anims()
+  local all = {}
+  for _, k in ipairs(s.det) do all[#all + 1] = k end
+  for _, k in ipairs(s.alive) do all[#all + 1] = k end
+  for i = 1, #all, 64 do ctx.alive_ask({ table.unpack(all, i, math.min(i + 63, #all)) }) end
+  local nsk = 0
+  for _ in pairs(aft.skills) do nsk = nsk + 1 end
+  aft.scan = s
+  log(string.format("after death: trees looked up (%s): %d target searches, %d target alive checks, %d skills, %d attack animations loaded, in %.0f ms",
+    why, #s.det, #s.alive, nsk, nl, (os.clock() - t0) * 1000))
+end
+
+function M.after_tick(pawn)
+  local c = ctx.tune.enemyAfterDeath == true and cfg().afterDeath or {} -- (parked: tune.enemyAfterDeath)
+  local since = ctx.dead_since and ctx.dead_since()
+  local on = c.enabled == true and since and os.clock() - since < (c.time or 10)
+  if not on then
+    if aft.tasks then
+      -- the target searches put back (only the ones still alive)
+      local list = {}
+      for _, k in ipairs(aft.tasks) do list[#list + 1] = k end
+      local back = 0
+      for i = 1, #list, 64 do
+        local part = { table.unpack(list, i, math.min(i + 63, #list)) }
+        if ctx.alive_ask(part) then
+          for _, k in ipairs(part) do
+            if k.alive and valid(k.obj) then
+              for f, v in pairs(aft.undo[k] or {}) do try(function() k.obj[f] = v end) end
+              back = back + 1
+            end
+          end
+        end
+      end
+      local sws, stopped = aft.swings or 0, swings_stop()
+      log(string.format("after death: over (%s), %d decision nodes put back, blackboards kept on her %d times, %d swings at her body (%d cut short)",
+        since and "time up" or "she is up", back, aft.sets or 0, sws, stopped))
+      aft.tasks, aft.sets, aft.undo = nil, 0, nil
+    end
+    if c.enabled ~= true or since then return end
+    -- while she lives: which of the near enemies' object keys hold her, every 2 s; and the trees looked up again
+    -- once an enemy of a new class is around and none is near her
+    if os.clock() < aft.next then return end
+    aft.next = os.clock() + 2
+    local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
+    local me = addr(pawn)
+    local classes, fresh, close = {}, false, false
+    for _, ch in ipairs(ctx.live_chars()) do
+      if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
+        local at = try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+        classes[ch.cls] = true
+        if not (aft.scan and aft.scan.classes[ch.cls]) then fresh = true end
+        if her and at and len(sub(at, her)) < (c.scanClear or 1500) then close = true end
+        local bb = her and at and len(sub(at, her)) < (c.reach or 3000) and M.after_bb(ch.obj)
+        if bb then
+          local mine = {}
+          for _, nm in ipairs(M.after_keys(bb)) do
+            local v = try(function() return bb:GetValueAsObject(FName(nm)) end)
+            if v and addr(v) == me then mine[#mine + 1] = nm end
+          end
+          if #mine > 0 then aft.keys[ch.addr] = mine end
+        end
+      end
+    end
+    if fresh and not close and next(classes) then after_scan("new enemies around", classes) end
+    return
+  end
+  if not aft.tasks then
+    aft.tasks, aft.sets, aft.undo = {}, 0, {}
+    local t0 = os.clock()
+    -- the nodes looked up ahead (after_scan), still alive: else looked up now (a hitch, but rare)
+    local function live(list)
+      local out = {}
+      for i = 1, #list, 64 do
+        local part = { table.unpack(list, i, math.min(i + 63, #list)) }
+        if ctx.alive_ask(part) then
+          for _, k in ipairs(part) do if k.alive and valid(k.obj) then out[#out + 1] = k end end
+        end
+      end
+      return out
+    end
+    local det, alv = {}, {}
+    if aft.scan then det, alv = live(aft.scan.det), live(aft.scan.alive) end
+    local ahead = #det + #alv > 0
+    if not ahead then
+      after_scan("in her death: none looked up ahead lives", aft.scan and aft.scan.classes)
+      det, alv = aft.scan.det, aft.scan.alive
+    end
+    -- a node changed, its fields as they were kept (put back through its index when the time is up)
+    local function change(k, set)
+      local o, was = k.obj, {}
+      for f, v in pairs(set) do
+        local old = try(function() return o[f] end)
+        if old ~= nil and old ~= v and try(function() o[f] = v; return true end) then was[f] = old end
+      end
+      if not next(was) then return false end
+      aft.tasks[#aft.tasks + 1], aft.undo[k] = k, was
+      return true
+    end
+    -- the trees' target searches (and the patrol's, SbMoveToHome with bDetectTarget) take a dead target, and drop it
+    -- only once it is destroyed (ESBAIDetectTargetCancel: ZeroHP 0, Despawn 1, Destroy 2)
+    local nd, cancels = 0, {}
+    for _, k in ipairs(det) do
+      local tc = try(function() return k.obj.TargetCancel end)
+      if tc then cancels[tostring(tc)] = (cancels[tostring(tc)] or 0) + 1 end
+      if change(k, { bDead = true, TargetCancel = 2 }) then nd = nd + 1 end
+    end
+    -- the checks on the target's life (SbIsAlive, ActorType Target 1; ESBBTDecoratorAliveCheckType: Alive 0, Dead 1)
+    -- swapped: "target alive" holds while she lies dead, "target dead" (their walk off) doesn't
+    local na = 0
+    for _, k in ipairs(alv) do
+      local ct = try(function() return k.obj.CheckType end)
+      if (ct == 0 or ct == 1) and change(k, { CheckType = 1 - ct }) then na = na + 1 end
+    end
+    local cs = {}
+    for k, v in pairs(cancels) do cs[#cs + 1] = k .. "x" .. v end
+    local nk = 0
+    for _ in pairs(aft.keys) do nk = nk + 1 end
+    log(string.format("after death: enemies keep at her for %.0f s: %d target searches take the dead now (TargetCancel was %s), %d target alive checks swapped, %d enemies had her on their blackboards (%s, %.0f ms)",
+      c.time or 10, nd, #cs > 0 and table.concat(cs, " ") or "-", na, nk, ahead and "trees looked up ahead" or "trees looked up now",
+      (os.clock() - t0) * 1000))
+  end
+  swings_tick(pawn, c)
+  if os.clock() < aft.next then return end
+  aft.next = os.clock() + 0.25
+  local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
+  local me = addr(pawn)
+  for _, ch in ipairs(ctx.live_chars()) do
+    if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
+      local e = known[ch.addr]
+      local at = not (e and e.dead) and try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+      local bb = her and at and len(sub(at, her)) < (c.reach or 3000) and M.after_bb(ch.obj)
+      if bb then
+        local names = aft.keys[ch.addr]
+        if not names then
+          names = {}
+          for _, nm in ipairs(M.after_keys(bb)) do if nm:find("Target", 1, true) then names[#names + 1] = nm end end
+          aft.keys[ch.addr] = names
+          if #names > 0 then log(string.format("after death: %s %x had no key on her, kept on %s", ch.cls, ch.addr, table.concat(names, ", "))) end
+        end
+        for _, nm in ipairs(names) do
+          local v = try(function() return bb:GetValueAsObject(FName(nm)) end)
+          if not v or addr(v) ~= me then
+            try(function() bb:SetValueAsObject(FName(nm), pawn) end)
+            aft.sets = (aft.sets or 0) + 1
+            if (aft.sets or 0) <= 5 then log(string.format("after death: %s %x dropped her off %s (%s): set again", ch.cls, ch.addr, nm, v and "something else" or "empty")) end
+          end
+        end
+      end
+    end
+  end
+end
+
 -- every tick of hers (main.lua), pawn and mesh hers
 -- tm: main.lua's slow tick marker (the enemies' step was 47-174 ms now and then, playtest)
 function M.tick(pawn, mesh, tm)
@@ -749,6 +1129,8 @@ function M.tick(pawn, mesh, tm)
   n = n + 1
   down_tick()
   tm("enemies attack-down")
+  M.after_tick(pawn)
+  tm("enemies after death")
   if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end
   tm("enemies dev reads")
   smooth_tick()
@@ -838,6 +1220,7 @@ end
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()
   known, mine, expect, hand = {}, {}, {}, {}
+  aft.keys, aft.tasks = {}, nil
   down.done, down.next, down.pending = {}, 0, {}
   freed = false
 end

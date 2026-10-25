@@ -20,7 +20,8 @@
 --   * ragdoll: the bodies are moved as they lie (active.lua wakes her quietly and lets her settle again after)
 --   * an animated death (her fall's held end pose): a forearm, hand, calf or foot simulates for its twitch, held to
 --     the pose by a drive (weak during the twitch, strong after it) with its gravity off, then blended back into the
---     animation. Her back and head stay as the fall left them; she gasps with her face only.
+--     animation. Her back and head stay as the fall left them; she gasps with her face only. Only with animBody:
+--     by default an animated death keeps its pose and only her face and voice move
 -- Nothing moves while the game or photo mode is paused.
 
 local M = {}
@@ -33,6 +34,7 @@ local function add(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
 local function sub(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
 local function scale(a, k) return vec(a.X * k, a.Y * k, a.Z * k) end
 local function dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+local function len(a) return math.sqrt(dot(a, a)) end
 local function cross(a, b) return vec(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X) end
 local function norm(a)
   local l = math.sqrt(dot(a, a))
@@ -55,6 +57,18 @@ for _, s in ipairs({ "L", "R" }) do
   J[b .. "Thigh"] = { "Bip001-Pelvis", b .. "Calf" }
   J[b .. "Calf"] = { b .. "Thigh", b .. "Foot" }
   J[b .. "Foot"] = { b .. "Calf", b .. "Toe0" }
+end
+-- the bodies below a bone that turn with it, down the limb: an upper arm turned alone dragged its forearm and hand,
+-- which outweigh it about the shoulder, and they held it still (playtest: 0 deg over a 171 deg/s swing)
+local DOWN = { ["Bip001-Spine1"] = { "Bip001-Spine2", "Bip001-Neck", "Bip001-Head" },
+  ["Bip001-Spine2"] = { "Bip001-Neck", "Bip001-Head" }, ["Bip001-Neck"] = { "Bip001-Head" } }
+for _, s in ipairs({ "L", "R" }) do
+  local b = "Bip001-" .. s .. "-"
+  DOWN[b .. "Clavicle"] = { b .. "UpperArm", b .. "Forearm", b .. "Hand" }
+  DOWN[b .. "UpperArm"] = { b .. "Forearm", b .. "Hand" }
+  DOWN[b .. "Forearm"] = { b .. "Hand" }
+  DOWN[b .. "Thigh"] = { b .. "Calf", b .. "Foot" }
+  DOWN[b .. "Calf"] = { b .. "Foot" }
 end
 -- an animated death: the bones that may simulate for a twitch (each with what simulates with it), and the cuts that
 -- leave such a chain a piece of its own (it simulates already, and is never put back on the animation)
@@ -129,7 +143,38 @@ local function split(mesh)
   return g and g.cuts_on and select(2, g.cuts_on(mesh)) == true
 end
 local function still(mesh) return headless(mesh) or split(mesh) end
+-- cut across the waist (Spine1, gore.lua's torso cut): her hips and legs are a corpse's, only the upper body moves
+-- (playtest: her legs kicked and her hips jerked with the gasps)
+local LOWER = { ["Bip001-Pelvis"] = true, ["Bip001-Spine"] = true }
+for _, s in ipairs({ "L", "R" }) do
+  for _, b in ipairs({ "Thigh", "Calf", "Foot", "Toe0" }) do LOWER["Bip001-" .. s .. "-" .. b] = true end
+end
+local function lower(comp, b)
+  local r = rag()
+  return LOWER[b] and r and r.severed(comp, "Bip001-Spine1") or false
+end
 local function loc(comp, b) return try(function() local v = comp:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end) end
+local function cen(comp, b) return try(function() local v = comp:GetCenterOfMass(FName(b)); return vec(v.X, v.Y, v.Z) end) end
+local function wvel(comp, b) return try(function() local v = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(v.X, v.Y, v.Z) end) end
+-- a change of a body's turn (deg/s, added to its angular velocity), its centre of mass moved round the joint with it
+-- (w x r): turned about its middle alone, the joint dragged it back (playtest: an arm swing turned 0 deg). The bodies
+-- below it on her (DOWN, up to a cut) turn with it about the same joint, unless alone (a parent's push back)
+local function turn(comp, b, w, alone)
+  try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(b)) end)
+  if b == "Bip001-Pelvis" then return end
+  local at = loc(comp, b)
+  if not at then return end
+  local wr, r = scale(w, math.pi / 180), rag()
+  local c = cen(comp, b)
+  if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FName(b)) end) end
+  if alone then return end
+  for _, x in ipairs(DOWN[b] or {}) do
+    if r and (r.severed(comp, x) or not r.live(comp, x)) then break end
+    try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(x)) end)
+    local cx = cen(comp, x)
+    if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FName(x)) end) end
+  end
+end
 local function xaxis(comp, b)
   return try(function()
     local q = comp:GetSocketTransform(FName(b), 0).Rotation
@@ -278,6 +323,7 @@ local function pulse(comp, f, b, to, amp, dur, at, anim, trem, hz, ax, swing)
   if not (J[b] and valid(comp)) then return false end
   if not swing and not arms_on() and arm_bone(b) then return false end
   if r and r.severed(comp, b) then return false end -- a piece's root: nothing to turn it against
+  if lower(comp, b) then return false end
   if anim then
     -- (a hand or foot in a forearm's or calf's chain keeps that chain simulating till it is done)
     local open
@@ -298,8 +344,12 @@ local function pulse(comp, f, b, to, amp, dur, at, anim, trem, hz, ax, swing)
     trem = trem, hz = hz, ph = math.random() * 2 * math.pi }
   return a
 end
-local function pulses_tick(now)
-  local keep = {}
+-- Each pulse steers its bone's turn against its parent, along its axis, to the speed it asks for now (closed loop, at
+-- most accel deg/s^2): only the change of the asked speed added each tick, gravity took the lot on an arm lifted off
+-- the floor (about 1500 deg/s^2 there) and the swings showed none (playtest). Pulses on one bone in the same tick add up
+local function pulses_tick(now, dt)
+  local keep, seen = {}, {}
+  local cap = (cfg().accel or 6000) * math.max(dt or 0, 1 / 120)
   for _, p in ipairs(st.pulses) do
     if now >= p.at and valid(p.comp) then
       local x = math.min(1, (now - p.at) / p.dur)
@@ -312,6 +362,20 @@ local function pulses_tick(now)
         p.started = true
         try(function() p.comp:WakeRigidBody(FName(p.b)) end)
       end
+      -- (its turn against its parent read once a tick per bone; T: what this tick's pulses on it asked so far, A: what
+      -- they added)
+      local key = tostring(try(function() return p.comp:GetAddress() end)) .. p.b
+      local sb = seen[key]
+      if not sb then
+        local wb, wp = wvel(p.comp, p.b), wvel(p.comp, p.p)
+        sb = { rel = wb and sub(wb, wp or vec(0, 0, 0)) or vec(0, 0, 0), T = vec(0, 0, 0), A = vec(0, 0, 0) }
+        seen[key] = sb
+      end
+      local d = v + dot(sb.T, p.a) - dot(add(sb.rel, sb.A), p.a)
+      d = math.max(-cap, math.min(cap, d))
+      -- (steer off, the default: each tick's change of speed added, as the neck's struggle was made and played well)
+      if cfg().steer ~= true then d = dv end
+      sb.T, sb.A = add(sb.T, scale(p.a, v)), add(sb.A, scale(p.a, d))
       -- a swing's upper arm: how far it really turned, logged at its end (a right arm's crawl showed no movement,
       -- playtest)
       if p.meter then
@@ -325,8 +389,11 @@ local function pulses_tick(now)
         end
         if x >= 1 then log(string.format("%s: turned at most %.0f deg (peak %.0f deg/s asked)", p.meter, p.most or -1, p.amp)) end
       end
-      try(function() p.comp:AddAngularImpulseInDegrees(scale(p.a, dv), FName(p.b), true) end)
-      if p.k > 0 then try(function() p.comp:AddAngularImpulseInDegrees(scale(p.a, -dv * p.k), FName(p.p), true) end) end
+      -- (added to the angular velocity: AddAngularImpulseInDegrees as a velocity change did nothing in game, the
+      -- arm swings showed none, playtest; struggle.lua's step-to-step check found none of it kept)
+      turn(p.comp, p.b, scale(p.a, d))
+      -- (the parent pushed back for the change asked, not for what gravity took)
+      if p.k > 0 then turn(p.comp, p.p, scale(p.a, -dv * p.k), true) end
       if x < 1 then keep[#keep + 1] = p end
     elseif now < p.at then
       keep[#keep + 1] = p
@@ -505,6 +572,61 @@ local function sound(kind, k, always)
   return string.format(", %s at %.2f", name, vol)
 end
 
+-- a gasp's jolt (tune.convulse.jolt): her body jerking slightly as she gasps, by linear velocity on her bodies (set
+-- turns never visibly moved her, playtest; a linear push does). One push up on every body at once threw her whole
+-- body up stiff, a hop (playtest), so it is a short pulse now: each body's upward speed steered along a half sine
+-- over `rise` s (its own speed read and only the vertical set: gravity and the floor don't eat it), lifting the chest
+-- `lift` cm, the rest less and a little later the farther from it (the head lagging and tipping back, the hips and
+-- arms barely), then let go to fall back on its own. A ragdoll only: an animated death holds its end pose
+-- (bone = { share of the chest's lift, delay s })
+local JOLT = { ["Bip001-Spine2"] = { 1, 0 }, ["Bip001-Spine1"] = { 0.9, 0 }, ["Bip001-Spine"] = { 0.55, 0.01 },
+  ["Bip001-Neck"] = { 0.6, 0.03 }, ["Bip001-Head"] = { 0.3, 0.05 }, ["Bip001-L-Clavicle"] = { 0.6, 0.02 },
+  ["Bip001-R-Clavicle"] = { 0.6, 0.02 }, ["Bip001-L-UpperArm"] = { 0.25, 0.04 }, ["Bip001-R-UpperArm"] = { 0.25, 0.04 },
+  ["Bip001-Pelvis"] = { 0.15, 0.02 } }
+local function jolt(k)
+  local j, r = cfg().jolt or {}, rag()
+  if j.enabled == false or (ctx.animated and ctx.animated()) then return "" end
+  local v = r and r.view()
+  local comp = v and v.mesh
+  if not valid(comp) then return "" end
+  local T = math.max(j.rise or 0.14, 0.05)
+  local lift = (j.lift or 2.5) * k * rnd(0.85, 1.15)
+  -- (the half sine's peak speed for that lift over T)
+  local peak = lift * math.pi / (2 * T)
+  local sx, sy = rnd(-1, 1) * 0.15, rnd(-1, 1) * 0.15
+  try(function() comp:WakeAllRigidBodies() end)
+  st.jolts = {}
+  for b, f in pairs(JOLT) do
+    if r.live(comp, b) and not r.severed(comp, b) and not lower(comp, b) then
+      st.jolts[#st.jolts + 1] = { comp = comp, b = FName(b), at = st.t + f[2], T = T * (1 + f[2] * 4), peak = peak * f[1], vx = 0, vy = 0 }
+    end
+  end
+  if #st.jolts == 0 then st.jolts = nil; return "" end
+  st.joltSide = { sx, sy }
+  r.twitch(0.8)
+  return string.format(", her body jerking %.1f cm up over %.2f s", lift, T)
+end
+local function jolt_tick()
+  local js = st.jolts
+  if not js then return end
+  local r, live = rag(), 0
+  for _, e in ipairs(js) do
+    local tt = st.t - e.at
+    if tt >= 0 and not e.done and valid(e.comp) then
+      local s = tt < e.T and math.sin(math.pi * tt / e.T) or 0
+      local z, x, y = e.peak * s, e.peak * s * st.joltSide[1], e.peak * s * st.joltSide[2]
+      try(function()
+        local cur = e.comp:GetPhysicsLinearVelocity(e.b)
+        e.comp:SetPhysicsLinearVelocity(vec(cur.X + x - e.vx, cur.Y + y - e.vy, s > 0 and math.max(cur.Z, z) or cur.Z), false, e.b)
+      end)
+      e.vx, e.vy = x, y
+      if tt >= e.T then e.done = true end
+    end
+    if not e.done then live = live + 1 end
+  end
+  if live == 0 then st.jolts = nil elseif r then r.twitch(0.3) end
+end
+
 -- her body still, her face alone (tune.convulse.body off): winces with a moan, gasps, a swallow, tics on one side, her
 -- jaw trembling, her eyelids fluttering; strong and close together at first, then fewer and smaller
 -- how long they run: her face alone is shorter (tune.convulse.faceAgonal, faceDuration)
@@ -541,7 +663,7 @@ local function face_event(x)
       if snd ~= "" then
         st.gasped = x
         face("gasp", s * rnd(0.8, 1.1), now, rnd(0.6, 0.9))
-        what = "gasp" .. snd
+        what = "gasp" .. snd .. jolt(s * (0.6 + 0.4 * I))
       end
     elseif r < 0.6 then
       local snd = sound("moan", 0.6 + 0.4 * I, true)
@@ -592,7 +714,7 @@ local function face_event(x)
         face("lids", 0.3 * s, now + 0.3, 0.5)
         st.next = x + rnd(0.8, 1.2)
         st.events = st.events + 1
-        return "her last gasp" .. snd, 0
+        return "her last gasp" .. snd .. jolt(s * ((cfg().jolt or {}).last or 1.3)), 0
       end
     end
     local y = (x - agonal) / math.max(total - agonal, 1)
@@ -672,10 +794,14 @@ end
 -- forearm's chain simulates for it, the upper arm stays on the fall's pose)
 local SWING_WAYS = { "up", "up", "front", "out", "in" }
 local SWING_BACK = { up = "down", front = "back", out = "in", ["in"] = "out" }
-function swing_on()
+function swing_on() -- (the local declared above face_event)
   local a = cfg().armSwing
+  if ctx.tune.deathMoves ~= true then return false end -- (parked: tune.deathMoves)
   return type(a) == "table" and a.enabled ~= false
 end
+-- struggle.lua has her limbs (a hand on a stump, her legs pushing): only her face and neck move here meanwhile
+local function struggling() return ctx.struggle and ctx.struggle.busy() end
+local function rising() return ctx.struggle and ctx.struggle.rising() end
 local function swing_event(late, anim)
   local c, a = cfg(), cfg().armSwing
   local r = rag()
@@ -703,7 +829,7 @@ local function swing_event(late, anim)
   local s = (c.strength or 1.0) * (late and (a.late or 0.6) or 1.0)
   local tt = a.time or { 0.7, 1.2 }
   local dur = rnd(tt[1], tt[2] or tt[1])
-  local amp = (a.speed or 300) * s * rnd(0.85, 1.15)
+  local amp = (a.speed or 150) * s * rnd(0.85, 1.15)
   local now, n = os.clock(), 0
   -- now and then a crawl's stroke instead, as if dragging herself away: the arm reaching past her head with the elbow
   -- straightening, then pulling back down along her with the elbow bending and the hand clawing; the next one most
@@ -753,10 +879,21 @@ local function swing_event(late, anim)
   return string.format("%s arm swings %s over %.1f s%s", sd == "L" and "left" or "right", way, dur, back), span
 end
 
+-- struggle.lua's try to sit up: the strain on her face over dur, and a moan with it. What played, for its log line
+function M.effort(dur, k)
+  if not st then return "" end
+  face("strain", k or 1, os.clock(), dur)
+  return sound("moan", 0.8 + 0.4 * (k or 1), true)
+end
+
 -- the next event, by how far into her convulsions she is: x seconds since they began
 local function next_event(x, anim)
+  -- (with animBody off an animated death's end pose holds: her face only, but for a waist cut's upper body, flying
+  -- in the ragdoll while her legs play the fall: its arms and head still move, playtest)
+  local only = anim and not cfg().animBody
+  if only and not simulating(st.mesh, "Bip001-Spine2") then return face_event(x) end
   -- (never the first either)
-  if swing_on() and (st.moaned ~= nil or still(st.mesh)) and not (x >= span() and not st.lastGasp)
+  if swing_on() and not struggling() and (st.moaned ~= nil or still(st.mesh)) and not (x >= span() and not st.lastGasp)
     and math.random() < (cfg().armSwing.chance or 0.35) * (x >= span() and 0.5 or 1) then
     local what, dur = swing_event(x >= span(), anim)
     if what then
@@ -766,7 +903,7 @@ local function next_event(x, anim)
     end
   end
   -- (never the first: that one is a wince or spasm with its moan)
-  if neck_on() and st.moaned ~= nil and not still(st.mesh) and not (x >= span() and not st.lastGasp)
+  if neck_on() and not rising() and st.moaned ~= nil and not still(st.mesh) and not (x >= span() and not st.lastGasp)
     and math.random() < (cfg().neck.chance or 0.3) * (x >= span() and 0.5 or 1) then
     local what, dur = neck_event(x >= span(), anim)
     if what then
@@ -775,7 +912,7 @@ local function next_event(x, anim)
       return what, 1
     end
   end
-  if cfg().body == false then return face_event(x) end
+  if only or cfg().body == false or struggling() then return face_event(x) end
   local c = cfg()
   local agonal, total = c.agonal or 4, c.duration or 8
   local s = c.strength or 1.0
@@ -894,7 +1031,8 @@ function M.tick(paused)
     if not st.noRun then st.noRun = true; log("no ragdoll run (tune.active off?): none") end
     return
   end
-  pulses_tick(now)
+  pulses_tick(now, dt)
+  if not anim then jolt_tick() end
   if anim then chains_tick(now) end
   local c = cfg()
   if not st.onset then
@@ -919,6 +1057,12 @@ function M.tick(paused)
     if what and c.log ~= false then log(string.format("%.1f s: %s%s", x, what, c.body == false and "" or string.format(" (%d muscles)", n or 0))) end
   end
 end
+
+-- her convulsions still to come or running on a ragdoll (active.lua keeps her bodies awake for them)
+function M.due() return st ~= nil and not st.done and not (ctx.animated and ctx.animated()) end
+
+-- her animated fall has come to rest and the convulsions began (struggle.lua turns a maimed one into a ragdoll then)
+function M.resting() return st ~= nil and st.onset ~= nil end
 
 -- she got up, or the death ended: whatever is simulating for a twitch goes back on the animation
 function M.stop()
