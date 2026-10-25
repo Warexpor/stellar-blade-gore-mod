@@ -33,10 +33,14 @@ return {
                                -- most; costs some CPU with many on screen)
   menuPad = { "Gamepad_LeftShoulder", "Gamepad_RightShoulder", "Gamepad_LeftThumbstick" }, -- the settings menu (F3) on
                                -- the controller: all held (false: none)
+  keys = {},                   -- the mod's keys by action (keys.lua has them and their defaults), e.g. { split = "Ctrl+F11" };
+                               -- "None" unbinds one. The F3 menu's Keys tab sets them
   menuPadIcons = "playstation", -- the menu's controller key icons: "playstation" or "xbox"
   deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
                                -- seconds into the death, "key" only on Shift+F4 (or holdPad). Shift+F4 shows it early,
                                -- and hides it again (the death held) once it is up
+  hideHud = true,              -- the rest of the HUD (HP bar, skills, minimap, notices) hidden through a death, back as
+                               -- she is up again; the death and revive screens keep to deathScreen
   keepFresh = 2,               -- s: a character or widget seen as it spawned is checked alive (sbslice "G") this soon, or
                                -- never held (characters are found again with FindAllOf)
   reviveAt = 7,                -- the death screen (and the revive item's) is held hidden this many seconds into the death
@@ -44,6 +48,8 @@ return {
                                -- which the game turns down while she is dead
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
                                -- after her pelvis a step a tick and the camera stuttered after her (playtest 38)
+  capsuleUnstick = true,       -- as she gets up, her capsule (dragged after her body unswept) is swept from where she
+                               -- went limp to where it is, stopping at walls: revived, she stood inside one (Nexus)
   cameraStill = true,          -- at a death the view holds still where it is till she gets up: the game moves her pawn
                                -- after the ragdoll and the view rode it, jerking after her body (playtest 41)
   cameraMouse = 3,             --   the held view turns this many degrees a unit of mouse input, all the way round, up and
@@ -57,6 +63,7 @@ return {
   cameraRange = 1500,          --   no further than this many cm from where it started
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
                                -- shows the death screen, or hides it again (false: none)
+  holdPadFor = 1.0,           -- seconds both are held before it counts (a quick press of both in a fight came by accident)
   uvClean = true,              -- with Ultra Violence on, its blood comes off her at a respawn (it keeps it through one
                                -- on its own): she reads as swimming for 1.2 s as she gets up, its water clear
   deathSkip = true,            -- Esc on her death fast forwards the game to its death screen instead of the wait
@@ -78,10 +85,10 @@ return {
                                --   does nothing while she is alive, so the script starts it)
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
                                -- F9 rolls the cuts only, F10 marks, F11 splits
-      limb = 50,               --   the arm or thigh nearest the hit comes off
-      head = 30,               --   beheaded (the face goes with the head, the neck gets a stump)
-      torso = 12,              --   cut in half at the waist
-      split = 8,               --   cut in half top to bottom; rolled first on every death, whatever the blade
+      limb = 42,               --   the arm or thigh nearest the hit comes off
+      head = 25,               --   beheaded (the face goes with the head, the neck gets a stump)
+      torso = 15,              --   cut in half at the waist
+      split = 18,              --   cut in half top to bottom; rolled first on every death, whatever the blade
       moreLimbs = 0.35,        --   a limb cut takes another nearest limb with this chance, and a third with it again
     },                         --   (0.35: 35 % two or more, 12 % three)
     bladeFollow = 0.6,         -- share of deaths with a blade seen that the blade decides; the rest roll the odds above
@@ -95,6 +102,8 @@ return {
     bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
     deathSplit = true,         -- a blade down her length at death splits her (false: the limbs it crosses come off
                                --   instead, else the odds above; F11 and F5 still split)
+    armsOverSplit = 0.6,       -- share of splits (rolled, or a blade down her length) whose blade crossed both arms
+                               --   within multiCut's reach that take both arms instead (the split won nearly always)
     splitArms = true,          -- the arms such a blade crosses within multiCut's reach cm of the hit (an arm raised to
                                --   block) come off first, then the split; each half takes the cut arm whose shoulder
                                --   it keeps (false: they stay whole on their half)
@@ -135,7 +144,8 @@ return {
                                --   else its weapon bones by name, else its hands), sampled every tick while she
                                --   lives; false: a made-up swing
     swingReach = 500,          --   cm: the enemies followed are the nearest this close
-    swingFollow = 3,           --   how many of them, each with its own trail (the killing swing: the blade that swept nearest her)
+    swingKeep = 2.5,           --   one followed stays followed (its trail kept) out to this many times swingReach
+    swingFollow = 3,          --   how many of them, each with its own trail (the killing swing: the blade that swept nearest her)
     swingWindow = 0.6,         --   seconds of its weapon kept; the step in them whose blade swept nearest her is the killing swing
     swingMinSpeed = 300,       --   cm/s it must reach to count (slower: the made-up swing)
     swingSpeedPull = 30,       --   cm nearer a step counts at swingSpeedFull and up (the fast strike over a slow brush)
@@ -154,8 +164,11 @@ return {
                                --   moves on: an arm raised to block had swung away and only her body was cut)
     attackerIgnore = { "Drone", "CH_P_", "AirborneSquad" }, -- class names (parts) never taken for her killer: her drone, playable characters, the passive angels
     legRagdoll = true,         -- a leg cut on her own death fall switches to the ragdoll first (she can't fall on it)
-    headRagdoll = true,        -- a beheading on it too (false: her body plays the fall on headless)
+    headRagdoll = false,       -- a beheading on it too, always (false: headRagdollChance of the time, else her body
+    headRagdollChance = 0.6,   --   plays the fall on headless)
     armRagdoll = false,        -- an arm cut on it too (false: she falls on, the arm drops)
+    armRagdollChance = 0.4,    -- with armRagdoll off: the share of arm cuts on her fall that ragdoll her anyway, her legs
+                               --   still on (each arm rolled: both off, likelier)
     deathFace = {              -- a dead face held on her face mesh's morph targets from `at` s into a death, faded in
       enabled = true,          --   over `fade` s, until she gets up (the game's own death face was gone 1 s in and
       at = 0.3,                --   her eyes stayed open). Shift+F7 shows the moods in turn, 6 s each
@@ -226,10 +239,11 @@ return {
         } },
         { name = "dread", weight = 3, mirror = true, morphs = { -- died frightened: one eye half shut, the other
                                --   staring, brows up and uneven, the mouth twisted (pulled down and aside on one side,
-                               --   the lip up on the other, the jaw off to it); mirror: either side, per death
-          { "upLid_down_L", "eyeBlinkLeft", 0.55, from = 0.35, over = 6 },
-          { "loLid_up_L", 0.25 },
-          { "squint_left", 0.2 },
+                               --   the lip up on the other, the jaw off to it); mirror: either side, per death. (The
+                               --   half-shut lid at 0.55 with the lower lid and squint up read as shut, playtest)
+          { "upLid_down_L", "eyeBlinkLeft", 0.3, from = 0.2, over = 6 },
+          { "loLid_up_L", 0.1 },
+          { "squint_left", 0.08 },
           { "upLid_down_R", "eyeBlinkRight", 0.0 },
           { "upLid_up_R", 0.2, from = 0.45, over = 6 },
           { "loLid_up_R", 0.0 },
@@ -516,12 +530,27 @@ return {
     faceJitter = 0.3,          --   each face movement's morphs scaled by up to this share either way (no two alike)
     faceOpen = 1.8,            --   how far her mouth drops open: times the morphs pulling it down (jaw_open, lowerLip_down,
                                --   wholeMouth_down); at 1 a gasp dropped her chin barely 1.4 cm, a wince's 0.5 cm
+    faceIn = 0.8,              --   s the face's movements ease in over from the first one (it snapped from the death face
+                               --   into a full wince as she came to lie still, playtest)
     startMax = 2,              -- s after her death they begin at the latest (else once she lies still); the first
                                --   spasm always has a moan
+    animStartMax = 6,          -- the same for an animated fall, once its pelvis and head are both still (at 2 s the
+                               --   neck's struggle took the head of a fall still playing and snapped it)
     settleAfter = 0.4,         -- s a ragdoll is kept awake after a movement, before it may settle again
     log = true,                -- a line per movement
     arms = false,              -- her arms jerk too (curls, hand and forearm twitches, the shoulders on a gasp); off:
                                --   they looked like the ragdoll glitching
+    armSwing = {               -- her arm swinging (also with body off, beheaded or split): lifting slowly from the
+      enabled = true,          --   shoulder and falling back, the elbow a beat later, the hand turning after it; now
+      chance = 0.35,           --   and then back the other way. Share of her movements that are one (later: half)
+      speed = 300,             --   deg/s at the shoulder's peak (the elbow 0.5-0.8 of it; 150 showed nothing, playtest)
+      time = { 0.7, 1.2 },     --   s each swing takes, speeding up and slowing down smoothly
+      hand = 0.5,              --   the hand's turn, times speed
+      back = 0.4,              --   share that swing back the other way before dropping
+      crawl = 0.35,            --   share that are a crawl's stroke instead: reaching past her head, then dragging back
+                               --   with the elbow bending and the hand clawing (the next most likely the other arm)
+      late = 0.6,              --   size after her last gasp
+    },
     voice = {                  -- her voice along, quiet: a breath with each gasp, now and then a moan with a spasm
       enabled = true,          --   (never once beheaded, never over her death cry)
       volume = 1.0,            --   times both below (settings.lua's convulse.voice.volume)
@@ -545,6 +574,8 @@ return {
       tremor = 55,             --   deg/s of the shaking over it, `hz` times a second, half of it crossways
       hz = { 7, 11 },
       jerk = 170,              --   deg/s of each jerk after it gives out (2-4, a quarter second apart, weakening)
+      animScale = 0.35,        --   all of that in an animated death: its head simulates alone off an animated neck, nothing
+                               --   holding it in her neck's range, and at full strength it bent ~70 deg, a snapped neck
     },
     anim = {                   -- an animated death: the limb twitching simulates, held to her pose by a drive
       weak = 40,               --   its strength while the twitch runs
@@ -560,6 +591,8 @@ return {
                                -- hold its end pose; cuts happen on it, the cut piece falls by physics. A waist cut,
                                -- a split, heavy hits, explosions, airborne and ledge deaths stay ragdolls. false =
                                -- every death a ragdoll (the death shows' own key still fires, just not muted)
+    deathFreeze = true,        -- an animated death's pose held from its start till the cut is chosen, and through a
+                               -- split till it ragdolls (she turned round in her fall before the cut came)
     animatedPool = false,      -- an animated death picks its fall at random from her death show's own and 8 made
                                -- from her knockdown falls (the knockdown itself is untouched); false = her own only
     massScale = 1.0,           -- times the built-in human masses (~60 kg); the outfits ship 100 kg chest bodies
@@ -674,6 +707,7 @@ return {
     push = 0,                  -- cm/s every enemy death's ragdoll is pushed along the blow on top of the game's throw
     pushUp = 0.2,              --   upward share of it
     pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: it drops on the spot; 2: twice as far)
+    capFade = 1.5,             -- seconds a dissolving corpse's caps and bone stubs shrink away over (0: gone at once)
     maxCorpses = 6,            -- cut corpses at once; past it a kill is left whole (each holds caps, effects and its
                                -- kind's collapsed helpers, which bend every live enemy of that kind near the cut)
     corpseHits = {             -- her swings through a corpse cut it again
@@ -681,7 +715,8 @@ return {
       reach = 35,              -- cm her swing's plane passes from one of its parts...
       blade = 130,             --   ...within this many cm of her hand (her sword's reach)
       max = 4,                 -- per corpse
-      from = 0.4,              -- seconds after the kill (the killing swing itself)
+      from = 0.6,              -- seconds after the kill (the killing swing itself)
+      gap = 0.5,               -- seconds between two of its hits (one cut a swing)
       cutChance = 0.7,         -- else a hit mark
     },
     spawnDistance = 450,       -- F5 / the window: cm in front of her, in a row spawnSpread cm apart, facing her

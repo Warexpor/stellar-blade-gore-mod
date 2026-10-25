@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.4.0. See the [changelog](CHANGELOG.md).
+Version 0.4.1. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,13 +10,13 @@ Version 0.4.0. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.4.0.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.4.1.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death, her death face and voice;
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.4.0`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.4.1`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -49,7 +49,10 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again. |
 | `gore.throw` | 250 | How fast a cut-off piece flies off, cm a second (`0`: it just drops). |
 | `active.animated` | `true` | Light deaths play her own fall animation, and only the cut-off pieces fall by physics; heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway. `false`: every death is a full ragdoll. |
-| `gore.headRagdoll` / `legRagdoll` / `armRagdoll` | `true` / `true` / `false` | A beheading, a leg cut or an arm cut during her animated fall turns it into a full ragdoll (`false`: she falls on without it). |
+| `gore.headRagdoll` / `legRagdoll` / `armRagdoll` | `false` / `true` / `false` | A beheading, a leg cut or an arm cut during her animated fall turns it into a full ragdoll (`false`: she falls on without it). |
+| `gore.armRagdollChance` | `0.4` | With `armRagdoll` off, the chance an arm cut during her animated fall ragdolls her anyway (each arm rolled). |
+| `gore.headRagdollChance` | `0.6` | With `headRagdoll` off, the chance a beheading during her animated fall ragdolls her (the rest play the fall on headless). |
+| `gore.armsOverSplit` | `0.6` | When a split's blade crossed both her arms, the chance it takes both arms instead of splitting her. |
 | `active.push` | `1.0` | How hard the killing blow throws her body, times the default (`0`: no push of the mod's). |
 | `convulse.enabled` | `true` | After her death her face winces, gasps, sobs, quivers and twitches for a while (a different face every death), fading out, with quiet breaths and moans (beheaded or split down her length by a vertical slash: her face stays still, no gasps, no voice). `convulse.body = true` makes her body spasm too. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
@@ -57,11 +60,13 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `convulse.face` | `true` | Her face moving after her death (`false`: it stays as the death face left it). |
 | `convulse.voice.enabled` | `true` | The quiet breaths and moans after her death (`false`: silent). |
 | `convulse.voice.volume` | `1.0` | How loud those breaths and moans are, times the default (`0.5`: half). |
+| `convulse.armSwing.enabled` | `true` | Her arms moving slowly after her death: an arm lifting and falling back, or reaching past her head and dragging back as if crawling away (`false`: they lie still). |
 | `convulse.neck.enabled` | `true` | Her neck straining after her death: her head trying to lift or turn, shaking with the effort, dropping back, then sharp jerks (`false`: her head lies still). |
 | `active.stiffness` | `1.0` | How stiff her ragdoll is: `0` limp as a sack, `1` as made, `2`-`3` she keeps her shape as she falls and lies. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
+| `hideHud` | `true` | The HUD (HP bar, skills, minimap, notices) is hidden through her death and comes back when she is up again. The death screen still follows `deathScreen`. |
 | `reviveAt` | 7 | Seconds into her death the screen comes up with `"delay"`. |
-| `holdPad` | D-pad down + R1 | Shift+F4 on the controller (`false`: none). |
+| `holdPad` | D-pad down + R1 | Shift+F4 on the controller, both held for `holdPadFor` (1 s) (`false`: none). |
 | `menuPadIcons` | `"playstation"` | The settings menu's controller key icons: `"playstation"` or `"xbox"` (also in the menu). |
 | `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster. It slides smoothly after her body till you fly it, and stops short of walls. |
 | `cameraMouse` / `cameraStick` | 3 / 150 | Its mouse and stick speed. |
@@ -79,6 +84,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `dev` | `false` | Test keys, the enemy spawner and the glass cannon mode (see below). |
 
 In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the world goes on (she doesn't move), Q/E (LB/RB) switch the tab, Up/Down picks, Left/Right changes, R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over ("Reset to settings.lua" deletes it).
+
+Every key of the mod can be changed in the menu's Keys tab: Enter on an action, then press the new key, with Ctrl, Shift or Alt if you like (Backspace cancels). A key another action had is swapped onto the old one. In `settings.lua` it's `keys = { split = "Ctrl+F11", menu = "F2" }` (UE4SS's key names: `F1`-`F12`, `A`-`Z`, `ZERO`-`NINE`, `NUM_ZERO`-`NUM_NINE`, `INS`, `DEL`, `HOME`, `END`, `PAGE_UP`, `PAGE_DOWN`; `"None"` unbinds one). The actions: `menu`, `reload`, `hold`, `photo`, and the test keys `slice`, `split`, `mark`, `ragdoll`, `recover`, `face`, `death`, `blade`, `spawn`, `nextEnemy`, `spawner`, `kill`, `glass`. Another mod on the same key (a body slider's menu on F11) still gets it too, so move ours off it.
 
 Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 
@@ -110,11 +117,11 @@ With `dev = true` in `settings.lua`:
 | Ctrl+F6 | Kill the enemy nearest her |
 | Shift+F8 | Glass cannon mode: the shield takes the hits, then one hit kills |
 
-With Ultra Violence installed, F9 and F11 are Alt+F9 and Alt+F11 (it has its menu, outfit blood and blood stages on F9-F11).
+These are the defaults; the F3 menu's Keys tab changes them. With Ultra Violence installed, F9, F10 and F11 default to Alt+F9, Alt+F10 and Alt+F11 (it has its menu, outfit blood and blood stages on F9-F11).
 
 F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own).
 
-Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 (`holdPad`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body (and holds the death, as Shift+F4 does); the game's own photo mode key works with pieces cut off her too (she holds still in it while alive). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
+Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 held for a second (`holdPad`, `holdPadFor`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body (and holds the death, as Shift+F4 does); the game's own photo mode key works with pieces cut off her too (she holds still in it while alive). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
 
 ## Building from source
 

@@ -9,10 +9,10 @@ return {
     --   enabled = true,          -- a hit she lives through leaves a slash of blood on her skin (healing fades it)
     -- },
     death = {                  -- relative odds of what her death does when the blow doesn't decide it
-      limb = 50,               --   an arm or leg off
-      head = 30,               --   beheaded
-      torso = 12,              --   cut in half at the waist
-      split = 8,               --   cut in half top to bottom (whatever the blow; a blade down her length splits too)
+      limb = 42,               --   an arm or leg off
+      head = 25,               --   beheaded
+      torso = 15,              --   cut in half at the waist
+      split = 18,              --   cut in half top to bottom (whatever the blow; a blade down her length splits too)
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
     bladeFollow = 0.6,         -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
@@ -25,10 +25,11 @@ return {
       enabled = true,          -- enemies swinging at her body after she died cut it again
     },
     throw = 250,               -- cm/s a cut-off piece flies off with (0: it just drops)
-    headRagdoll = true,        -- a beheading during her animated fall makes her a full ragdoll (false: the body plays
-                               -- the fall on headless)
+    headRagdoll = false,       -- a beheading during her animated fall always makes her a full ragdoll (false: the
+    headRagdollChance = 0.6,   --   share of beheadings that do, 0-1; the rest play the fall on headless)
     legRagdoll = true,         -- a leg cut does too
     armRagdoll = false,        -- an arm cut does too (false: she falls on, the arm drops)
+    armRagdollChance = 0.4,    --   with it off: the share of arm cuts that ragdoll her anyway (0-1)
     voice = {
       enabled = true,          -- her own death cry (false: the game's death voice only)
       -- sounds = { "vo_eve_die_01", "vo_eve_die_fall_01" },  -- which recordings (default: vo_eve_die_01-05); names
@@ -70,8 +71,10 @@ return {
   deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 7 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
                                -- hides it again once it is up (she stays down till you press it again)
+  hideHud = true,             -- the HUD (HP bar, skills, minimap) hidden through a death, back as she is up again
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
                                -- shows the death screen or hides it again; key names as UE's Gamepad_* (false: none)
+  holdPadFor = 1.0,           -- seconds both are held before it counts (a quick press of both in a fight came by accident)
   holdDown = true,             -- knocked down, she stays down till you dodge or jump (false: she gets up on her own)
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill

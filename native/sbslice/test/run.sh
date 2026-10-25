@@ -134,6 +134,11 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
     jobs+=("real split CH_P_EVE_10|POSED=|CH_P_EVE_10" "real split CH_P_EVE_10 (posed)|POSED=1|CH_P_EVE_10"
            "real split CH_P_EVE_10, correctives driven|DRIVEN=1|CH_P_EVE_10" "real split CH_P_EVE_09, correctives driven|DRIVEN=1|CH_P_EVE_09")
   fi
+  # a split after her right arm came off, late in a session: the watch had seen every helper of the copy's side move,
+  # and her left leg on the copy lay flattened on the plane, a third leg (playtest). Also with every helper moved
+  on split && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30.uasset ]] &&
+    jobs+=("real split CH_P_EVE_30 after the right arm, the copy's side moved|FLIP=1 ARMSPLIT=R ARMAT=0.38 BESIDE=2 SIDEMOVED=R|CH_P_EVE_30"
+           "real split CH_P_EVE_30 after the right arm, every helper moved|FLIP=1 ARMSPLIT=R ARMAT=0.38 BESIDE=2 ALLMOVED=1|CH_P_EVE_30")
   # a waist cut once the watch has seen every helper move (playtest 30, InnerSuit after an arm and the head came off):
   # a moved helper still takes each side's seam, none stays on its old weights stretched between the halves
   on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit.uasset ]] &&
@@ -210,6 +215,19 @@ if on enemy; then
       jobs+=("enemy ${m#*/} ${cut,,}|ENEMY=1 $cut=1 PKG=vanilla/SB/Content/Art/Character/Monster/$m|${m#*/}|$(cd "$EV" && pwd)")
     done
   done
+  # the playtest's corpses, cut after cut (SEQ): a statue's head, arm, waist, thigh and other arm, a skull's thigh, calf
+  # and both arms; every piece flung after each, nothing more may stretch where it shows
+  m=CH_M_NA_40/CH_M_NA_40
+  [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] &&
+    jobs+=("enemy CH_M_NA_40 cut after cut|ENEMY=1 SEQ=Bip001-Head:0.7,Bip001-L-UpperArm:0.3,Bip001-Spine1:0.3,Bip001-L-Thigh:0.41,Bip001-R-UpperArm:0.4 PKG=vanilla/SB/Content/Art/Character/Monster/$m|CH_M_NA_40|$(cd "$EV" && pwd)")
+  # its arm along a tilted blade: the seam sits on its weights at the shoulder, far off the plane, and its point stays
+  # in that rim's middle (projected onto the tilted plane: 20 cm down the stump)
+  [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] && for t in 20 40 -30; do
+    jobs+=("enemy CH_M_NA_40 arm along a $t-degree blade|ENEMY=1 SEQ=Bip001-L-UpperArm:0.3:$t PKG=vanilla/SB/Content/Art/Character/Monster/$m|CH_M_NA_40|$(cd "$EV" && pwd)")
+  done
+  m=CH_M_NA_17/CH_M_NA_17_1
+  [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] &&
+    jobs+=("enemy CH_M_NA_17_1 cut after cut|ENEMY=1 SEQ=Bip001-L-Thigh:0.86,Bip001-R-Calf:0.4,Bip001-L-UpperArm:0.9,Bip001-R-UpperArm:0.65 PKG=vanilla/SB/Content/Art/Character/Monster/$m|CH_M_NA_17_1|$(cd "$EV" && pwd)")
 fi
 if (( ${#jobs[@]} )); then
   RES=$(mktemp -d)

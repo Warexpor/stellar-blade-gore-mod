@@ -48,6 +48,67 @@ static int readable(u64 p, u64 n)
 }
 // for sbslice.c (its "o" command)
 int mem_readable(u64 p, u64 n) { return readable(p, n); }
+// every 8-aligned place in the process's private read-write memory holding needle, up to max of them (a probe: what
+// else points at a data table's row). Returns how many were found
+int mem_scan(u64 needle, u64 *hits, int max)
+{
+    int n = 0;
+    u64 p = 0x10000;
+    MBI m;
+    while (p < 0x7ffffffeffffull && n < max && VirtualQuery((const void *)p, &m, sizeof m)) {
+        u64 base = (u64)m.base, size = m.size;
+        if (m.state == 0x1000 && m.type == 0x20000 && (m.prot == 0x04) && size) {
+            const u64 *q = (const u64 *)base, *e = (const u64 *)(base + size);
+            for (; q < e && n < max; q++) if (*q == needle) hits[n++] = (u64)q;
+        }
+        if (base + size <= p) break;
+        p = base + size;
+    }
+    return n;
+}
+// the same for a 4-byte value, 4-aligned
+int mem_scan32(u32 needle, u64 *hits, int max)
+{
+    int n = 0;
+    u64 p = 0x10000;
+    MBI m;
+    while (p < 0x7ffffffeffffull && n < max && VirtualQuery((const void *)p, &m, sizeof m)) {
+        u64 base = (u64)m.base, size = m.size;
+        if (m.state == 0x1000 && m.type == 0x20000 && (m.prot == 0x04) && size) {
+            const u32 *q = (const u32 *)base, *e = (const u32 *)(base + size);
+            for (; q < e && n < max; q++) if (*q == needle) hits[n++] = (u64)q;
+        }
+        if (base + size <= p) break;
+        p = base + size;
+    }
+    return n;
+}
+// the same for a TSet's header holding an element at addr: a qword p <= addr, addr - p a multiple of esz, followed
+// by Num <= Max with addr inside Max elements, as many allocation bits as elements and a hash size a power of two
+int mem_scan_set(u64 addr, int esz, u64 *hits, int max)
+{
+    int n = 0;
+    u64 p = 0x10000;
+    MBI m;
+    while (p < 0x7ffffffeffffull && n < max && VirtualQuery((const void *)p, &m, sizeof m)) {
+        u64 base = (u64)m.base, size = m.size;
+        if (m.state == 0x1000 && m.type == 0x20000 && (m.prot == 0x04) && size >= 80) {
+            const u64 *q = (const u64 *)base, *e = (const u64 *)(base + size - 80);
+            for (; q < e && n < max; q++) {
+                u64 v = *q;
+                if (v > addr || addr - v > (u64)esz * 0x100000 || (addr - v) % (u64)esz) continue;
+                int num = ((const int *)q)[2], mx = ((const int *)q)[3];
+                if (num <= 0 || mx < num || (u64)mx * esz <= addr - v) continue;
+                int nbits = ((const int *)q)[10], maxbits = ((const int *)q)[11], hsize = ((const int *)q)[18];
+                if (nbits != num || maxbits < nbits || hsize <= 0 || (hsize & (hsize - 1))) continue;
+                hits[n++] = (u64)q;
+            }
+        }
+        if (base + size <= p) break;
+        p = base + size;
+    }
+    return n;
+}
 // how many bytes from p are readable, up to max
 static u64 readable_len(u64 p, u64 max)
 {

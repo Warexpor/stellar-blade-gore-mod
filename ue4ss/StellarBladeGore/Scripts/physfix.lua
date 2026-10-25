@@ -536,11 +536,29 @@ function M.check(pawn, mesh, live)
     if not live and state and state.borrowed and valid(state.pa) and (state.lost or 0) < 10
       and os.clock() - (state.lostAt or -1e9) >= 2
       and not (valid(now) and try(function() return now:GetAddress() == state.pa:GetAddress() end)) then
-      local ok = try(function() mesh:SetPhysicsAsset(state.pa, true); return true end)
       state.lost, state.lostAt = (state.lost or 0) + 1, os.clock()
+      -- another asset put on her (the game's outfit apply, an outfit mod): hers from now on, checked and fixed once
+      -- like a new outfit, not fought every 2 s with ours (bodies re-made each time: a hitch, Nexus report). Three
+      -- times an outfit at most: one that keeps swapping is left with whatever it has
+      if valid(now) then
+        M.adopted[addr] = (M.adopted[addr] or 0) + 1
+        if M.adopted[addr] <= 3 then
+          log(string.format("outfit %s was given %s (ours was %s): taken, checked again", name(sk), name(now), name(state.pa)))
+          seenMesh, state, M.seen[addr] = nil, nil, nil
+        else
+          state.lost = 10
+          log(string.format("outfit %s keeps getting another physics asset (%s now): left to it", name(sk), name(now)))
+        end
+        return
+      end
+      -- none at all: the mesh asset's own field put back too (the override alone was dropped again)
+      local onMesh = try(function() return mesh.SkeletalMesh.PhysicsAsset end)
+      if not valid(onMesh) then try(function() sk.PhysicsAsset = state.pa end) end
+      local ok = try(function() mesh:SetPhysicsAsset(state.pa, true); return true end)
       if state.lost <= 3 or state.lost == 10 or not ok then
-        log(string.format("outfit %s lost the physics asset it was given: %s%s", name(sk), ok and "given again" or "NOT given again",
-          state.lost == 10 and " (another mod keeps its own: left to it)" or ""))
+        log(string.format("outfit %s lost the physics asset it was given (the mesh's own %s): %s%s", name(sk),
+          valid(onMesh) and name(onMesh) or "none", ok and "given again" or "NOT given again",
+          state.lost == 10 and " (left as it is from now)" or ""))
       end
     end
     return
@@ -922,6 +940,7 @@ function M.piece_collision(mesh, pa, roots, base)
 end
 
 M.seen = {} -- SkeletalMesh address -> { name, state }: meshes checked in this level
+M.adopted = {} -- SkeletalMesh address -> times it was given another asset than ours (check)
 
 -- recovery: the locks go (the mesh's bodies are re-made by the game anyway)
 function M.stop()
@@ -938,7 +957,7 @@ end
 
 -- a reloaded level: everything held is gone (the assets' changed defaults stay with them)
 function M.forget()
-  locks, seenMesh, state, M.seen = {}, nil, nil, {}
+  locks, seenMesh, state, M.seen, M.adopted = {}, nil, nil, {}, {}
 end
 
 return M

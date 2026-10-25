@@ -35,6 +35,7 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #define FlushInstructionCache FlushInstructionCache_
 #define GetCurrentProcess GetCurrentProcess_
 #define GetTickCount64 GetTickCount64_
+#define GetCurrentThreadId GetCurrentThreadId_
 #define AddVectoredExceptionHandler AddVectoredExceptionHandler_
 #define DllMain DllMain_
 #define SBSLICE_HOSTED
@@ -61,11 +62,13 @@ int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (v
 #undef FlushInstructionCache
 #undef GetCurrentProcess
 #undef GetTickCount64
+#undef GetCurrentThreadId
 #undef AddVectoredExceptionHandler
 static char lastres[8192];
 HANDLE CreateThread_(void *a, u64 b, u32(WINAPI *c)(void *), void *d, u32 e, u32 *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return 0; }
 void Sleep_(u32 x) { (void)x; }
 u64 GetTickCount64_(void) { return 0; }
+u32 GetCurrentThreadId_(void) { return 1; }
 void *AddVectoredExceptionHandler_(u32 f, long(WINAPI *h)(void *)) { (void)f; (void)h; return 0; }
 HANDLE CreateFileW_(const u16 *p, u32 a, u32 b, void *c, u32 d, u32 e, HANDLE f) { (void)p;(void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return (HANDLE)1; }
 int ReadFile_(HANDLE h, void *b, u32 n, u32 *g, void *o) { (void)h;(void)b;(void)n;(void)o; *g = 0; return 1; }

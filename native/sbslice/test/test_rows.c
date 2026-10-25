@@ -1,10 +1,14 @@
 // Linux harness for the data table row commands (D, N, A in sbslice.c) on a made-up UDataTable: a row map of four
-// rows (TSet layout as UE 4.27's, hash size 8), rows with an FString, a TArray<FName> and a TArray of structs holding
+// rows (TSet layout and FName hash as UE 4.26's, hash size 8), rows with an FString, a TArray<FName> and a TArray of structs holding
 // an FString. Checks: A adds a copy of a row (its heap fields in buffers of its own) that the hash finds, into a full
 // sparse array and into a free slot; A on a name already there answers exists; D sets an FString; N swaps names in a
-// TArray<FName>. Run: ./test/run.sh rows
+// TArray<FName>; M adds a new row to the game's alias -> ID and ID -> alias maps (int keys hashed by value), checked
+// against the table first. Run: ./test/run.sh rows
 #include "host.h"
 int mem_readable(u64 p, u64 n) { (void)n; return p >= 0x10000; }
+int mem_scan(u64 v, u64 *h, int m) { (void)v; (void)h; (void)m; return 0; }
+int mem_scan32(u32 v, u64 *h, int m) { (void)v; (void)h; (void)m; return 0; }
+int mem_scan_set(u64 a, int e, u64 *h, int m) { (void)a; (void)e; (void)h; (void)m; return 0; }
 static void *gm_malloc(u64 self, u64 n, u32 al) { (void)self; (void)al; return calloc(1, n); }
 static void gm_free(u64 self, void *p) { (void)self; free(p); }
 static u64 gm_vt[16], gm_obj[2];
@@ -41,7 +45,7 @@ static row_t *find(u32 idx, u32 num)
 {
     int *hash = *S64(64) ? (int *)*S64(64) : S32(56);
     elem_t *e = (elem_t *)*S64(0);
-    for (int i = hash[(idx + num) & (*S32(72) - 1)]; i >= 0; i = e[i].next)
+    for (int i = hash[fname_hash(idx, num) & (*S32(72) - 1)]; i >= 0; i = e[i].next)
         if (e[i].idx == idx && e[i].num == num) return (row_t *)e[i].row;
     return 0;
 }
@@ -63,7 +67,7 @@ int main(void)
     for (int i = 0; i < 8; i++) hash[i] = -1;
     for (int i = 0; i < n; i++) {
         e[i].idx = 10 + i; e[i].num = 0; e[i].row = (u64)mkrow(100 + i, "Show/A", 50 + i);
-        e[i].hidx = (int)((e[i].idx + e[i].num) & 7); e[i].next = hash[e[i].hidx]; hash[e[i].hidx] = i;
+        e[i].hidx = (int)(fname_hash(e[i].idx, e[i].num) & 7); e[i].next = hash[e[i].hidx]; hash[e[i].hidx] = i;
         bits[0] |= 1u << i;
     }
     *S64(0) = (u64)e; *S32(8) = n; *S32(12) = n;
@@ -109,7 +113,7 @@ int main(void)
     ed[0].hidx = (keep + 1) & 7;
     snprintf(cmd, sizeof cmd, "%llx,%llx,a,0,16,0,3c;8:2", (unsigned long long)(u64)table, (unsigned long long)(u64)rs);
     send(row_add_cmd, cmd);
-    check(!strcmp(lastres, "err row map hash differs"), lastres);
+    check(!strncmp(lastres, "err row map hash differs", 24), lastres);
     ed[0].hidx = keep;
     // D: the FString of row 13 set, then set again (same)
     snprintf(cmd, sizeof cmd, "%llx,%llx,d,0,8;CH_P_EVE_01/Ragdoll/EveRD_Step2", (unsigned long long)(u64)table, (unsigned long long)(u64)rs);
@@ -125,6 +129,53 @@ int main(void)
     snprintf(cmd, sizeof cmd, "%llx,%llx,d,0,8;x", (unsigned long long)(u64)table, (unsigned long long)(u64)rs + 8);
     send(row_str_cmd, cmd);
     check(!strcmp(lastres, "err not its row struct"), lastres);
+    // M: the game's alias -> ID (FName key, int) and ID -> alias (int key, FName) maps, elements of 20, hash size 8
+    {
+        typedef struct __attribute__((packed)) { u32 idx, num; int id, next, hidx; } aelem_t;
+        typedef struct __attribute__((packed)) { int id; u32 idx, num; int next, hidx; } ielem_t;
+        static unsigned char am[80], im[80];
+        aelem_t *ae = calloc(4, sizeof *ae);
+        ielem_t *ie = calloc(4, sizeof *ie);
+        int *ah = calloc(8, 4), *ih = calloc(8, 4);
+        u32 *ab = calloc(1, 4), *ib = calloc(1, 4);
+        for (int i = 0; i < 8; i++) ah[i] = ih[i] = -1;
+        u32 nm4[4] = { 10, 11, 13, 0x15 };
+        for (int i = 0; i < 4; i++) {
+            int id = (int)find(nm4[i], 0)->id;
+            ae[i].idx = nm4[i]; ae[i].id = id; ae[i].hidx = (int)(fname_hash(nm4[i], 0) & 7); ae[i].next = ah[ae[i].hidx]; ah[ae[i].hidx] = i;
+            ie[i].id = id; ie[i].idx = nm4[i]; ie[i].hidx = id & 7; ie[i].next = ih[ie[i].hidx]; ih[ie[i].hidx] = i;
+            ab[0] |= 1u << i; ib[0] |= 1u << i;
+        }
+        unsigned char *ms[2] = { am, im };
+        void *ds[2] = { ae, ie }; u32 *bs[2] = { ab, ib }; int *hs[2] = { ah, ih };
+        for (int k = 0; k < 2; k++) {
+            *(u64 *)ms[k] = (u64)ds[k]; *(int *)(ms[k] + 8) = 4; *(int *)(ms[k] + 12) = 4;
+            *(u64 *)(ms[k] + 32) = (u64)bs[k]; *(int *)(ms[k] + 40) = 4; *(int *)(ms[k] + 44) = 32;
+            *(int *)(ms[k] + 48) = -1; *(int *)(ms[k] + 52) = 0;
+            *(u64 *)(ms[k] + 64) = (u64)hs[k]; *(int *)(ms[k] + 72) = 8;
+        }
+        find(0x14, 0)->id = 300;
+        // ID at row offset 0x2c (row_t.id)
+        snprintf(cmd, sizeof cmd, "%llx,%llx,%llx,%llx,b,14,2c", (unsigned long long)(u64)am, (unsigned long long)(u64)im,
+            (unsigned long long)(u64)table, (unsigned long long)(u64)rs);
+        send(game_cmd, cmd);
+        check(!strcmp(lastres, "ok ids added 300"), lastres);
+        const char *err;
+        u64 a = tset_find((u64)am, 20, 0, 0x14, 0), b = tset_find((u64)im, 20, 1, 300, 0);
+        check(a && *(int *)(a + 8) == 300, "the alias map has it");
+        check(b && *(u32 *)(b + 4) == 0x14, "the ID map has it");
+        check(tset_ok((u64)am, 20, 0, &err) && tset_ok((u64)im, 20, 1, &err), "both maps hash as before");
+        for (int i = 0; i < 4; i++) check(tset_find((u64)am, 20, 0, nm4[i], 0) != 0, "the old aliases still found");
+        send(game_cmd, cmd);
+        check(!strcmp(lastres, "ok ids exists 300"), lastres);
+        // a source whose ID in the map isn't its row's: refused
+        // (through the map: the add grew it into a new array)
+        *(int *)(tset_find((u64)am, 20, 0, 11, 0) + 8) = 999;
+        snprintf(cmd, sizeof cmd, "%llx,%llx,%llx,%llx,b,15,2c", (unsigned long long)(u64)am, (unsigned long long)(u64)im,
+            (unsigned long long)(u64)table, (unsigned long long)(u64)rs);
+        send(game_cmd, cmd);
+        check(!strncmp(lastres, "err the alias map's ID", 22), lastres);
+    }
     printf(fails ? "FAIL\n" : "PASS\n");
     return fails != 0;
 }

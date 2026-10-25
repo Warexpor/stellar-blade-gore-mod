@@ -31,6 +31,7 @@ __declspec(dllimport) int WINAPI VirtualProtect(void *, u64, u32, u32 *);
 __declspec(dllimport) int WINAPI FlushInstructionCache(HANDLE, const void *, u64);
 __declspec(dllimport) HANDLE WINAPI GetCurrentProcess(void);
 __declspec(dllimport) u64 WINAPI GetTickCount64(void);
+__declspec(dllimport) u32 WINAPI GetCurrentThreadId(void);
 __declspec(dllimport) void *WINAPI AddVectoredExceptionHandler(u32, long(WINAPI *)(void *));
 
 int _fltused = 0;
@@ -234,6 +235,7 @@ static const u32 *ib_indices(u64 ib, int ni, index_get_fn get)
 // each frame pm = g * anchor now * the sink's own pose now inverted
 static struct { u64 mesh, comp, also[2]; int bone, down, proj, carry, anchor; float m[16], at[3], ap[3], pm[16], g[16]; } sinks[MAX_SINKS];
 #define SINK_IN 2.0f // cm a sink's collapse point sits inside its own side of the cut
+#define SINK_DEEP 6.0f // cm it sits at most past the plane (a sink bone far off: moved in along the normal)
 #define SINK_REUSE_CM 8.0f // an earlier cut's sink serves a seam whose joint is this close to where it collapses
 static int nsinks;
 
@@ -317,6 +319,10 @@ static const short *keep_to_on;
 #define NECK_BAND 2.5f  // cm under the plane where the kept head's other half of the neck closes into a point
 #define NECK_IN 0.5f    // cm under the plane that point sits (on the neck axis), under the neck's lid
 #define NECK_SINK 30    // btype of a sink that collapses into the neck
+// the kept neck's far side (past the split's plane) shaved at a curve: kept no deeper than neck_shave cm at its foot,
+// rising to the whole neck neck_shave_h cm up it; the shaved skin closes into the neck like the far side under the
+// neck plane. Whole, the neck stood out past the cut edge in a sharp step (playtest). 0: whole
+static float neck_shave = 0.0f, neck_shave_h = 8.0f;
 static u64 head_comp;
 static int head_mode, head_bone;
 static float head_pw[3], head_nw[3];
@@ -384,7 +390,19 @@ static char *put_v(char *o, const char *name, const float *v, float k)
     return o;
 }
 
-static void skin_result(const char *msg) { write_file(CUTRES, msg); }
+// a scan run on a thread of its own (async_cmd): its answer kept here for "&?", not written over the game thread's
+static volatile u32 async_tid;
+static char async_out[24 * 200 + 128];
+static void skin_result(const char *msg)
+{
+    if (async_tid && GetCurrentThreadId() == async_tid) {
+        int i = 0;
+        for (; msg[i] && i < (int)sizeof async_out - 1; i++) async_out[i] = msg[i];
+        async_out[i] = 0;
+        return;
+    }
+    write_file(CUTRES, msg);
+}
 
 // what one cut works on
 typedef struct {
@@ -1152,12 +1170,17 @@ typedef struct {
     const unsigned char *moved;               // MODE_CUT: bones the watch saw moving while she played
     const short *gov;                         // MODE_CUT with bodies sent: each bone's body (itself or an ancestor)
     int refbody[2];                           // the body each side's stump rides: B's parent's, B's
+    const unsigned char *nosink_still;        // MODE_SIDE: nosink without the watch, for a half that finds nothing else
+    int widen;                                // side_sink tries nosink_still too
 } sink_args;
 
 // bodies between two bodies up the hierarchy (0 the same, 1 one is the other's parent body), at most 3
 static int body_hops(const cut_ctx *c, const short *gov, int x, int y)
 {
-    if (x < 0 || y < 0) return 0;
+    // (a bone under no body at all never moves in a ragdoll: a statue's root, Base, at its feet, took an arm cut's
+    // seam as the stump's own body and stretched it 1.9 m to the floor, playtest)
+    if (y < 0) return 0;
+    if (x < 0) return 3;
     for (int k = 0; k < 2; k++) {
         int a = k ? y : x, to = k ? x : y;
         for (int h = 0; a >= 0 && h < 3; h++) {
@@ -1400,11 +1423,21 @@ static int side_sink_pass(const sink_args *a, int s, const float *target, int wa
 static int side_sink(sink_args *a, int s, const float *target, int want, int wider)
 {
     int band = a->band, best = -2;
-    for (int dr = 0; dr < 2 && best < 0; dr++) {
-        a->band = band;
-        best = side_sink_pass(a, s, target, want, dr);
-        if (best < 0 && wider) { a->band = wider; best = side_sink_pass(a, s, target, want, dr); }
+    // widen: then with the helpers the watch saw move allowed, a last resort (a section with nothing else): it watches
+    // the whole session, and after a few deaths every
+    // helper of her right side had moved once. The copy found no point for her left leg, which flattened onto the
+    // plane, a third leg (playtest, a split after an arm cut); with all of them seen, no split at all (harness)
+    const unsigned char *ns = a->nosink;
+    for (int w = 0; w < 2 && best < 0; w++) {
+        if (w && (!a->widen || !a->nosink_still || a->nosink_still == ns)) break;
+        a->nosink = w ? a->nosink_still : ns;
+        for (int dr = 0; dr < 2 && best < 0; dr++) {
+            a->band = band;
+            best = side_sink_pass(a, s, target, want, dr);
+            if (best < 0 && wider) { a->band = wider; best = side_sink_pass(a, s, target, want, dr); }
+        }
     }
+    a->nosink = ns;
     a->band = band;
     return best;
 }
@@ -1437,6 +1470,13 @@ static int find_sink(const sink_args *a, int s, int sd)
     for (int i = 1; i < nb; i++) {
         if (!c->inmap[(u64)s * nb + i] || a->limb[i] != sd || i == a->b || i == a->parent_b) continue;
         if (a->nosink && a->nosink[i]) continue;
+        // nor any bone B hangs from: a statue's root (Base, at its feet, never simulated) took a waist cut's and an
+        // arm cut's seam, stretched 1.3 m down to the floor in its ragdoll (playtest)
+        {
+            int up = 0;
+            for (int x = parent_of(c, a->b), g = 0; x >= 0 && x < nb && g < MAX_BONES && !up; x = parent_of(c, x), g++) up = x == i;
+            if (up) continue;
+        }
         // nothing reuses a flattening sink
         if (is_proj_sink(c, i)) continue;
         // an earlier cut's sink pulls its skin to that cut's opening: free only for a seam right there. The second
@@ -1778,7 +1818,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int variable = *(unsigned char *)(sw + SW_VARIABLE) && lookup;
     u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
     int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
-    int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0, unbanded = 0;
+    int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0, unbanded = 0, widened = 0;
     for (int s = 0; s < c.nsec; s++) {
         u64 sec = secs + (u64)s * 0xe8;
         int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
@@ -1806,6 +1846,15 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             float q2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - h * h; // squared distance from the axis
             // mostly on a kept accessory chain: on the body, wherever it lies (its edge on the arm too)
             if (mode == MODE_CUT) side[v] = (sub > 0 && (h > 0 || hang > 127) && kept <= 127) || with > 127;
+            // wholly on an earlier cut's sink: collapsed already, a triangle of only such vertices starts no seam of
+            // this cut (vkind 9, MODE_CUT only). A statue's thigh seam lay on a lump helper of its upper body; the
+            // waist cut after it took the collapsed thigh's triangles for its own seam and drew the cut-off leg's
+            // opening 72 cm up to its plane. (One with skin still showing does: a cape's edge by the arm's seam)
+            if (mode == MODE_CUT) {
+                int all = o->weights[0] > 0;
+                for (u32 i = 0; i < cn && all; i++) if (o->weights[i] && !own_sink(&c, o->bones[i])) all = 0;
+                if (all) vkind[v] = 9;
+            }
             else if (mode == MODE_WHOLE) side[v] = 1;
             else if (mode == MODE_PLANE) side[v] = h > 0 && (sub > 0 || (r2 > 0 && q2 < r2));
             else side[v] = 0;
@@ -1824,13 +1873,24 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 vkind[v] = wg > 127 ? 2 : wk > 127 ? 0 : wd > 127 || h <= -SHEET_FAR / tm[8] ? 3 : h <= 0 ? 1 : 0;
                 if (hmode && wg <= 127 && wk <= 127 && wd <= 127) {
                     float e[3] = { x[0] - p2[0], x[1] - p2[1], x[2] - p2[2] }, h2 = e[0] * n2[0] + e[1] * n2[1] + e[2] * n2[2];
-                    int inr = e[0] * e[0] + e[1] * e[1] + e[2] * e[2] - h2 * h2 < (h2 > neckmid ? neckr2 : baser2);
+                    float rad2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2] - h2 * h2;
+                    int inr = rad2 < (h2 > neckmid ? neckr2 : baser2);
                     int head = (inr && h2 > 0) || wh > 127;
+                    // the shave (neck_shave): how deep past the plane the neck is kept this far up it (smoothstep)
+                    int shaved = 0;
+                    if (hmode == HEAD_KEEP && head && wh <= 127 && h <= 0 && h2 > 0 && neck_shave_h > 0) {
+                        float u = h2 * tm[8] / neck_shave_h;
+                        if (u < 1) {
+                            float k = u * u * (3 - 2 * u);
+                            shaved = -h * tm[8] > neck_shave + (NECK_R - neck_shave) * k;
+                        }
+                    }
+                    if (shaved) head = 0;
                     if (head || (inr && h <= 0 && h2 > -NECK_BAND / tm[8]))
                         for (u32 i = 0; i < cn; i++) if (o->weights[i] && o->bones[i] < nb) headused[o->bones[i]] = 1;
                     if (hmode == HEAD_KEEP) {
                         if (head) vkind[v] = 0;
-                        else if (inr && h <= 0 && h2 > -NECK_BAND / tm[8]) vkind[v] = 4;
+                        else if (shaved || (inr && h <= 0 && h2 > -NECK_BAND / tm[8])) vkind[v] = 4;
                     } else if (head) vkind[v] = 4;
                 }
                 vroot[v] = (unsigned char)(top < 0 ? 0 : top);
@@ -1849,14 +1909,17 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         for (int i = 0; i + 2 < ni; i += 3) {
             u32 a = ix[i], e = ix[i + 1], f = ix[i + 2];
             if (a >= (u32)nv || e >= (u32)nv || f >= (u32)nv) continue;
+            if (vkind[a] == 9 && vkind[e] == 9 && vkind[f] == 9) continue;
             if (side[a] != side[e] || side[a] != side[f]) seam[a] = seam[e] = seam[f] = 1;
         }
 
     // sinks, per section and side, near the joint (PLANE: the plane point)
     sink_args sa = { &c, limb, stable, haschild, usage, b, parent_b, mode, { p[0], p[1], p[2] }, { p[0], p[1], p[2] }, { n[0], n[1], n[2] },
-                     ns, gonebone, keepbone, mode == MODE_SIDE ? onplane : 0, mode == MODE_SIDE ? secs : 0, btype, 0, 0, -1, 0, -1, 0, 0, { -1, -1 } };
+                     ns, gonebone, keepbone, mode == MODE_SIDE ? onplane : 0, mode == MODE_SIDE ? secs : 0, btype, 0, 0, -1, 0, -1, 0, 0, { -1, -1 }, 0, 0 };
     if (mode == MODE_CUT) { const float *t = pose_of(&c, b); if (t) { sa.joint[0] = t[4]; sa.joint[1] = t[5]; sa.joint[2] = t[6]; } }
     if (mode == MODE_CUT && nmoved) sa.moved = wmoved;
+    // (never a driven bone: physics throws it about, and the skin sunk on it stretched with it)
+    if (mode == MODE_SIDE) sa.nosink_still = nsd;
     static short gov[MAX_BONES];
     if (mode == MODE_CUT && nosink_mesh == c.sm && nbodies) {
         for (int i = 0; i < nb; i++) { int pa = parent_of(&c, i); gov[i] = hasbody[i] ? (short)i : pa >= 0 && pa < i ? gov[pa] : -1; }
@@ -2258,6 +2321,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             int k = vband[v0];
             sa.carryk = sa.rideof ? k : -1;
             int got = side_sink(&sa, s, bandc[k], 1, 0);
+            if (got < 0) { sa.widen = 1; got = side_sink(&sa, s, bandc[k], 1, 0); sa.widen = 0; }
             sa.carryk = -1;
             if (got >= 0) { secband[(u64)s * SPLIT_BANDS + k] = got; unbanded++; }
         }
@@ -2277,10 +2341,43 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 for (int j = 0; j < MAX_LIMB_ROOTS && k < 0; j++) k = secroot[(u64)s * MAX_LIMB_ROOTS + j];
                 for (int j = 0; j < nbands && k < 0; j++) k = secfar[(u64)s * SPLIT_BANDS + j];
                 if (k < 0) k = secneck[s];
+                // still none: one the watch saw move. Flattened, a whole leg lay on the plane, a third leg on the
+                // copy (playtest: after a few deaths every helper of her right side had moved once)
+                if (k < 0 && secroot[(u64)s * MAX_LIMB_ROOTS + r] != -3) {
+                    const float *t = pose_of(&c, gone_roots[r]);
+                    float target[3] = { t ? t[4] : 0, t ? t[5] : 0, t ? t[6] : 0 };
+                    float h = (target[0] - p[0]) * n[0] + (target[1] - p[1]) * n[1] + (target[2] - p[2]) * n[2];
+                    for (int j = 0; j < 3; j++) target[j] -= h * n[j];
+                    sa.band = -1; sa.widen = 1;
+                    k = t ? side_sink(&sa, s, target, 2 + r, sa.rideof ? ANY_BAND : 0) : -1;
+                    sa.widen = 0;
+                    secroot[(u64)s * MAX_LIMB_ROOTS + r] = k >= 0 ? k : -3;
+                    if (k >= 0) widened++;
+                }
                 if (k >= 0) { vsink[v] = k; continue; }
             }
             if (vkind[v] == 4 && secneck[s] >= 0) { vsink[v] = secneck[s]; continue; }
             if (vkind[v] == 3 && secfar[(u64)s * SPLIT_BANDS + k0] >= 0) { vsink[v] = secfar[(u64)s * SPLIT_BANDS + k0]; continue; }
+            // deep skin of a section with no point in its band nor a sheet anywhere (CH_P_EVE_29's section 4, 519
+            // vertices, stood on both halves of every split, harness): any other point of the section (it shows
+            // nothing), else one the watch saw move
+            if (vkind[v] == 3) {
+                int k = -1, has_band = 0;
+                for (int j = 0; j < nbands; j++) has_band |= secband[(u64)s * SPLIT_BANDS + j] >= 0;
+                if (!has_band) {
+                    for (int j = 0; j < nbands && k < 0; j++) k = secfar[(u64)s * SPLIT_BANDS + j];
+                    for (int j = 0; j < MAX_LIMB_ROOTS && k < 0; j++) k = secroot[(u64)s * MAX_LIMB_ROOTS + j];
+                    if (k < 0) k = secneck[s];
+                    if (k < 0 && secfar[(u64)s * SPLIT_BANDS + k0] != -3) {
+                        sa.band = -1; sa.widen = 1;
+                        k = side_sink(&sa, s, bandc[k0], 10 + k0, sa.rideof ? ANY_BAND : 0);
+                        sa.widen = 0;
+                        secfar[(u64)s * SPLIT_BANDS + k0] = k >= 0 ? k : -3;
+                        if (k >= 0) widened++;
+                    }
+                    if (k >= 0) { vsink[v] = k; continue; }
+                }
+            }
             for (int dk = 0; dk < nbands && vsink[v] < 0; dk++)
                 for (int sg = -1; sg <= 1 && vsink[v] < 0; sg += 2) {
                     int k = k0 + sg * dk;
@@ -2407,6 +2504,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 nseam++;
                 continue;
             }
+#ifdef SBSLICE_HOSTED
+            if (getenv("UNSUNK") && mode == MODE_SIDE) {
+                static int shown;
+                if (shown++ < 6) fprintf(stderr, "unsunk v%d sec %d kind %d band %d root %d secband %d secfar %d secneck %d\n", v, s, vkind[v], vband[v], vroot[v],
+                    secband[(u64)s * SPLIT_BANDS + vband[v]], secfar[(u64)s * SPLIT_BANDS + vband[v]], secneck[s]);
+            }
+#endif
             unsunk++;
         }
         // an earlier cut's seam vertex: already all on its sink. Only this component's: a split's copy shares the
@@ -2595,9 +2699,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     if (rimsec[r0 + r] == sec) { for (int k = 0; k < 3; k++) mc[k] += rimpos[(u64)(r0 + r) * 3 + k]; m++; }
                 if (m) {
                     for (int k = 0; k < 3; k++) mc[k] /= m;
+                    // (only a rim near the plane, else the plane point: a statue's arm seam follows its weights at the shoulder, 30 cm up
+                    // from a cut down the arm, and a tilted plane put its point 20 cm down the stump, a cone of skin)
                     float h = (mc[0] - p[0]) * n[0] + (mc[1] - p[1]) * n[1] + (mc[2] - p[2]) * n[2];
-                    for (int k = 0; k < 3; k++) at[k] = mc[k] - h * n[k];
-                    own_mid++;
+                    if (h <= SINK_DEEP && h >= -SINK_DEEP) {
+                        for (int k = 0; k < 3; k++) at[k] = mc[k] - h * n[k];
+                        own_mid++;
+                    }
                 }
             }
             float d[3] = { at[0] + n[0] * in - t[4], at[1] + n[1] * in - t[5], at[2] + n[2] * in - t[6] }, iq[4] = { -t[0], -t[1], -t[2], t[3] }, l[3];
@@ -2609,8 +2717,35 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             float h = (t[4] - p[0]) * n[0] + (t[5] - p[1]) * n[1] + (t[6] - p[2]) * n[2], want = h;
             if (sd && h < SINK_IN) want = SINK_IN;
             else if (!sd && h > -SINK_IN) want = -SINK_IN;
+            // nor deeper than SINK_DEEP: a statue's waist seam on its root (Base, 1.3 m down at its feet) drew the
+            // opening into a cone out between its legs (playtest: stretched faces on enemies)
+            else if (sd && h > SINK_DEEP) want = SINK_DEEP;
+            else if (!sd && h < -SINK_DEEP) want = -SINK_DEEP;
+            // nor outside the opening's rim: put in its middle (a lurker's waist seam on a fur tentacle's helper 60 cm
+            // off to its side drew the opening out to it, playtest). A point inside the rim stays where it was
+            float side_d[3] = { 0, 0, 0 };
+            if (mode == MODE_CUT) {
+                float mc[3] = { 0, 0, 0 }, rr = 0;
+                int m = 0, r0 = sd ? nrim[0] : 0;
+                for (int r = 0; r < nrim[sd]; r++)
+                    if (round_p || rimsec[r0 + r] == sec) { for (int k = 0; k < 3; k++) mc[k] += rimpos[(u64)(r0 + r) * 3 + k]; m++; }
+                if (m) {
+                    for (int k = 0; k < 3; k++) mc[k] /= m;
+                    for (int r = 0; r < nrim[sd]; r++) {
+                        if (!(round_p || rimsec[r0 + r] == sec)) continue;
+                        const float *x = rimpos + (u64)(r0 + r) * 3;
+                        float e[3] = { x[0] - mc[0], x[1] - mc[1], x[2] - mc[2] }, eh = e[0] * n[0] + e[1] * n[1] + e[2] * n[2];
+                        float e2 = 0; for (int k = 0; k < 3; k++) { float q = e[k] - eh * n[k]; e2 += q * q; }
+                        if (e2 > rr) rr = e2;
+                    }
+                    float o[3] = { t[4] - mc[0], t[5] - mc[1], t[6] - mc[2] }, oh = o[0] * n[0] + o[1] * n[1] + o[2] * n[2], ol = 0;
+                    for (int k = 0; k < 3; k++) { side_d[k] = o[k] - oh * n[k]; ol += side_d[k] * side_d[k]; }
+                    if (ol > rr) { for (int k = 0; k < 3; k++) side_d[k] = -side_d[k]; if (want == h) want = h + 1e-4f; }
+                    else for (int k = 0; k < 3; k++) side_d[k] = 0;
+                }
+            }
             if (want != h) {
-                float d[3] = { (want - h) * n[0], (want - h) * n[1], (want - h) * n[2] }, iq[4] = { -t[0], -t[1], -t[2], t[3] }, l[3];
+                float d[3] = { (want - h) * n[0] + side_d[0], (want - h) * n[1] + side_d[1], (want - h) * n[2] + side_d[2] }, iq[4] = { -t[0], -t[1], -t[2], t[3] }, l[3];
                 quat_rot(iq, d, l);
                 for (int k = 0; k < 3; k++) sinks[nsinks].at[k] = t[8 + k] != 0 ? l[k] / t[8 + k] : 0;
                 moved_sinks++;
@@ -2694,6 +2829,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     o = put(o, " vanished="); o = put_int(o, vanished);
     o = put(o, " unsunk="); o = put_int(o, unsunk);
     if (unbanded) { o = put(o, " unbanded="); o = put_int(o, unbanded); }
+    if (widened) { o = put(o, " widened="); o = put_int(o, widened); }
     o = put(o, " reweighted="); o = put_int(o, moved);
     o = put(o, " stuck="); o = put_int(o, stuck);
     if (ncarry) { o = put(o, " carried="); o = put_int(o, carried); o = put(o, " carrier="); o = put_int(o, cbone); }
@@ -4271,14 +4407,16 @@ static int kept_pair(const u64 *keep, int nkeep, int a, int b)
 static void table_cmd(u64 pa, int nbodies, const u64 *keep, int nkeep)
 {
     if (pa < 0x10000 || nbodies < 2 || nbodies > 4096) { skin_result("err bad asset"); return; }
-    if (!mem_readable(pa, PT_SCAN + 80)) { skin_result("err asset unreadable"); return; }
     // the first one from the asset's start: the scan reaches past its end, where the next asset in memory may keep a
-    // table of its own (CH_P_EVE_08's, playtest 38). Once found, every asset's is at that offset (one class)
+    // table of its own (CH_P_EVE_08's, playtest 38). Once found, every asset's is at that offset (one class). Only
+    // what is read is asked readable: an asset near the end of its pages failed the whole scan's check once the table's
+    // place was known, and her bodies collided with each other (a cut-off leg thrown off her, playtest)
+    if (!mem_readable(pa, (known_at >= 0 ? (u64)known_at : 0x28) + 80)) { skin_result("err asset unreadable"); return; }
     int at = -1, variant = -1;
     if (known_at >= 0) {
         if (pair_set(pa + known_at, nbodies) == known_variant) at = known_at, variant = known_variant;
     } else {
-        for (int off = 0x28; off < PT_SCAN && at < 0; off += 8) {
+        for (int off = 0x28; off < PT_SCAN && at < 0 && mem_readable(pa + off, 80); off += 8) {
             int v = pair_set(pa + off, nbodies);
             if (v >= 0) at = off, variant = v;
         }
@@ -4612,6 +4750,14 @@ static void row_cmd(const u64 *f, int k)
 // ---- data table rows edited in place (a table in our pak overrode every other mod's: Nexus reports of outfits gone
 // with a moveset mod, a shop mod's purchase crashing). Shared by D, R and N below:
 //   find the row map's element for the FName (index, number); 0 when there is none
+// the hash a TMap<FName, ...> files a name under: UE 4.26's FNameEntryHandle hash (its block and offset spread
+// apart) plus the number. Not the index plus the number: every one of the effect table's 4227 rows failed that check
+// in game (Down_Eve never made since 0.4.0), and 40 of 40 sampled match this
+static u32 fname_hash(u32 idx, u32 num)
+{
+    u32 block = idx >> 16, off = idx & 0xffff;
+    return (block << 19) + block + (off << 16) + off + (off >> 4) + num;
+}
 static u64 rowmap_find(u64 table, u64 rs, u32 idx, u32 num, const char **err)
 {
     *err = 0;
@@ -4695,6 +4841,84 @@ static void row_names_cmd(const u16 *txt, int len)
     skin_result(msg);
 }
 
+// "Y<value>" or "Y<table>,<row struct>,<name index>,<name number>" (the row's data pointer): where the value sits in
+// private read-write memory, with the 4 qwords before and after each (a probe for the game's own lookups of a data
+// table's rows). Answer "ok <value> hits N: <at> <8 qwords> | ..."
+int mem_scan(u64 needle, u64 *hits, int max); // stats.c
+static char *put_hex(char *o, u64 v);
+int mem_scan_set(u64 addr, int esz, u64 *hits, int max); // stats.c
+static void scan_cmd(const u16 *txt, int len)
+{
+    static u64 hits[24];
+    static char out[24 * 200 + 64];
+    u64 f[4] = { 0 }, needle;
+    if (len > 0 && txt[0] == 'd') {
+        // "Yd<value>": a 4-byte value, with the 4 qwords before and after each (from its own 8-aligned qword)
+        int mem_scan32(u32 needle, u64 *hits, int max);
+        int n = mem_scan32((u32)parse_hex(txt + 1, len - 1), hits, 24);
+        char *o = put(out, "ok hits ");
+        o = put_int(o, n);
+        o = put(o, ":");
+        for (int i = 0; i < n; i++) {
+            o = put(o, i ? " | " : " ");
+            o = put_hex(o, hits[i]);
+            u64 b = hits[i] & ~7ull;
+            for (int k = -4; k <= 4; k++) {
+                u64 a = b + (u64)(k * 8);
+                *o++ = ' ';
+                o = mem_readable(a, 8) ? put_hex(o, *(u64 *)a) : put(o, "?");
+            }
+        }
+        *o = 0;
+        skin_result(out);
+        return;
+    }
+    if (len > 0 && txt[0] == 'h') {
+        // "Yh<element>,<element size>": TSet headers holding that element, with the 10 qwords from each
+        if (parse_fields(txt + 1, len - 1, f, 2) < 2) { skin_result("err fields"); return; }
+        int n = mem_scan_set(f[0], (int)f[1], hits, 24);
+        char *o = put(out, "ok sets ");
+        o = put_int(o, n);
+        o = put(o, ":");
+        for (int i = 0; i < n; i++) {
+            o = put(o, i ? " | " : " ");
+            o = put_hex(o, hits[i]);
+            for (int k = 0; k < 10; k++) {
+                u64 a = hits[i] + (u64)(k * 8);
+                *o++ = ' ';
+                o = mem_readable(a, 8) ? put_hex(o, *(u64 *)a) : put(o, "?");
+            }
+        }
+        *o = 0;
+        skin_result(out);
+        return;
+    }
+    if (parse_fields(txt, len, f, 4) == 4) {
+        const char *err;
+        u64 e = rowmap_find(f[0], f[1], (u32)f[2], (u32)f[3], &err);
+        if (!e) { skin_result(err ? err : "err no such row"); return; }
+        needle = *(u64 *)(e + 8);
+    } else needle = f[0];
+    int n = mem_scan(needle, hits, 24);
+    char *o = put(out, "ok ");
+    o = put_hex(o, needle);
+    o = put(o, " hits ");
+    o = put_int(o, n);
+    o = put(o, ":");
+    for (int i = 0; i < n; i++) {
+        o = put(o, i ? " | " : " ");
+        o = put_hex(o, hits[i]);
+        for (int k = -4; k <= 4; k++) {
+            u64 a = hits[i] + (u64)(k * 8);
+            if (k == 0) continue;
+            *o++ = ' ';
+            o = mem_readable(a, 8) ? put_hex(o, *(u64 *)a) : put(o, "?");
+        }
+    }
+    *o = 0;
+    skin_result(out);
+}
+
 // a TArray at p (Data, Num, Max) given a buffer of its own: esz bytes an element, the FStrings at subs[] in each too
 static int tarray_own(u64 p, int esz, const int *subs, int nsub)
 {
@@ -4713,41 +4937,181 @@ static int tarray_own(u64 p, int esz, const int *subs, int nsub)
     return 1;
 }
 
-// "A<table>,<row struct>,<from index>,<from number>,<new index>,<new number>,<least size>;<heap fields>": a new row
-// <new> made a copy of <from>, added to the table's row map. Heap fields (FString, TArray) get buffers of their own,
-// "<offset>:<element size>[:<FString offset in an element>/...]" comma separated. The row size is the row struct's
-// PropertiesSize, found as the one int in the struct's header between <least size> and 16 bytes more followed by an
-// alignment. The map's hash must place every row as GetTypeHash(FName) = index + number does, or nothing is added.
-// Answer "ok row added <row>" or "ok row exists <row>"
+// ---- a TSet<TPair<FName, V>> at s: sparse array (data, num, max; bits inline 4 or heap, num bits, max bits; first
+// free, free count), hash (inline 1 or heap), hash size. Elements of esz bytes: the key, the value, then the hash
+// chain's next index and the element's hash slot (the data table's row map, 24; the game's alias -> ID map, 20)
+// a key's hash: an FName's (fname_hash), or an int's own value (ik: a TMap<int32, ...>, the key's 4 bytes then the
+// value's, as aligned)
+static u32 key_hash(const u32 *e, int ik) { return ik ? e[0] : fname_hash(e[0], e[1]); }
+static int key_is(const u32 *e, int ik, u32 idx, u32 num) { return ik ? e[0] == idx : e[0] == idx && e[1] == num; }
+// whether it reads as one, every used element filed under its key's FName hash; err says why not (the hash check
+// told with how many differ and the first few's name and slot)
+static int tset_ok(u64 s, int esz, int ik, const char **err)
+{
+    *err = 0;
+    if (s < 0x10000 || !mem_readable(s, 80)) { *err = "err bad map"; return 0; }
+    u64 data = *(u64 *)s;
+    int num = *(int *)(s + 8), max = *(int *)(s + 12);
+    u32 *bits = *(u64 *)(s + 32) ? *(u32 **)(s + 32) : (u32 *)(s + 16);
+    int nbits = *(int *)(s + 40), maxbits = *(int *)(s + 44);
+    int *hash = *(u64 *)(s + 64) ? *(int **)(s + 64) : (int *)(s + 56);
+    int hsize = *(int *)(s + 72);
+    if (num < 1 || max < num || num > (1 << 20) || !data || (data & 3) || !mem_readable(data, (u64)num * esz)
+        || !mem_readable((u64)bits, (u64)(num + 31) / 32 * 4)) { *err = "err bad row map"; return 0; }
+    if (hsize <= 0 || hsize > (1 << 22) || (hsize & (hsize - 1)) || !mem_readable((u64)hash, (u64)hsize * 4) || nbits != num
+        || maxbits < nbits) { *err = "err row map layout"; return 0; }
+    int bad = 0, used = 0;
+    static char hm[1200];
+    char *ho = put(hm, "err row map hash differs:");
+    for (int i = 0; i < num; i++) {
+        if (!(bits[i >> 5] >> (i & 31) & 1)) continue;
+        used++;
+        const u32 *e = (const u32 *)(data + (u64)i * esz);
+        if (*(const int *)((const char *)e + esz - 4) == (int)(key_hash(e, ik) & (u32)(hsize - 1))) continue;
+        if (bad++ < 40) {
+            ho = put(ho, " "); ho = put_int(ho, (int)e[0]); ho = put(ho, "/"); ho = put_int(ho, (int)e[1]);
+            ho = put(ho, "->"); ho = put_int(ho, *(const int *)((const char *)e + esz - 4));
+        }
+    }
+    if (bad) {
+        ho = put(ho, " ("); ho = put_int(ho, bad); ho = put(ho, " of "); ho = put_int(ho, used); ho = put(ho, ", hash size ");
+        ho = put_int(ho, hsize); ho = put(ho, ")"); *ho = 0;
+        *err = hm;
+        return 0;
+    }
+    return 1;
+}
+// the element keyed (idx, num), or 0 (s checked with tset_ok)
+static u64 tset_find(u64 s, int esz, int ik, u32 idx, u32 num)
+{
+    u64 data = *(u64 *)s;
+    int n = *(int *)(s + 8);
+    u32 *bits = *(u64 *)(s + 32) ? *(u32 **)(s + 32) : (u32 *)(s + 16);
+    for (int i = 0; i < n; i++) {
+        if (!(bits[i >> 5] >> (i & 31) & 1)) continue;
+        const u32 *e = (const u32 *)(data + (u64)i * esz);
+        if (key_is(e, ik, idx, num)) return (u64)e;
+    }
+    return 0;
+}
+// a new element keyed (idx, num) holding the vsz bytes at val (s checked with tset_ok, the key not in it): a free
+// slot, else one more at the end (the arrays grown in the engine's memory; the old ones are left, a reader on another
+// thread may be walking them). Returns it, or 0 out of memory
+static u64 tset_add(u64 s, int esz, int ik, u32 idx, u32 num, const void *val, int vsz)
+{
+    u64 data = *(u64 *)s;
+    int n = *(int *)(s + 8), max = *(int *)(s + 12);
+    u32 *bits = *(u64 *)(s + 32) ? *(u32 **)(s + 32) : (u32 *)(s + 16);
+    int nbits = *(int *)(s + 40), maxbits = *(int *)(s + 44);
+    int firstfree = *(int *)(s + 48), nfree = *(int *)(s + 52);
+    int *hash = *(u64 *)(s + 64) ? *(int **)(s + 64) : (int *)(s + 56);
+    int hsize = *(int *)(s + 72);
+    int at;
+    if (nfree > 0 && firstfree >= 0 && firstfree < n) {
+        at = firstfree;
+        int next = *(int *)(data + (u64)at * esz + 4);
+        *(int *)(s + 48) = next;
+        *(int *)(s + 52) = nfree - 1;
+        if (nfree > 1 && next >= 0 && next < n) *(int *)(data + (u64)next * esz) = -1;
+    } else {
+        if (n == max) {
+            int nmax = max + 16;
+            unsigned char *nd = (unsigned char *)ue_malloc((u64)nmax * esz);
+            if (!nd) return 0;
+            for (u64 i = 0; i < (u64)n * esz; i++) nd[i] = ((const unsigned char *)data)[i];
+            data = (u64)nd;
+            *(u64 *)s = data;
+            *(int *)(s + 12) = nmax;
+        }
+        if (nbits == maxbits) {
+            int nmaxb = (maxbits + 32 + 31) & ~31;
+            u32 *nb = (u32 *)ue_malloc((u64)nmaxb / 8);
+            if (!nb) return 0;
+            for (int i = 0; i < nmaxb / 32; i++) nb[i] = i < (maxbits + 31) / 32 ? bits[i] : 0;
+            bits = nb;
+            *(u32 **)(s + 32) = nb;
+            *(int *)(s + 44) = nmaxb;
+        }
+        at = n;
+        *(int *)(s + 8) = n + 1;
+        *(int *)(s + 40) = nbits + 1;
+    }
+    unsigned char *e = (unsigned char *)(data + (u64)at * esz);
+    int ksz = ik ? 4 : 8;
+    ((u32 *)e)[0] = idx;
+    if (!ik) ((u32 *)e)[1] = num;
+    for (int i = 0; i < vsz; i++) e[ksz + i] = ((const unsigned char *)val)[i];
+    int hi = (int)(key_hash((const u32 *)e, ik) & (u32)(hsize - 1));
+    *(int *)(e + esz - 8) = hash[hi];
+    *(int *)(e + esz - 4) = hi;
+    bits[at >> 5] |= 1u << (at & 31);
+    hash[hi] = at;
+    return (u64)e;
+}
+
+// heap fields of a row as A and M take them: "<offset>:<element size>[:<FString offset in an element>/...]" comma
+// separated, from txt[i]
 #define MAX_HEAP_FIELDS 64
+typedef struct { int off[MAX_HEAP_FIELDS], esz[MAX_HEAP_FIELDS], sub[MAX_HEAP_FIELDS][4], nsub[MAX_HEAP_FIELDS], n; } HeapFields;
+static int heap_parse(const u16 *txt, int i, int len, HeapFields *h)
+{
+    h->n = 0;
+    while (i < len && txt[i] && h->n < MAX_HEAP_FIELDS) {
+        u64 v[6] = { 0 };
+        int k = 0;
+        u64 x = 0;
+        for (; i < len && txt[i] && txt[i] != ','; i++) {
+            int d = hexval(txt[i]);
+            if (d >= 0) { x = x << 4 | (u64)d; continue; }
+            if ((txt[i] == ':' || txt[i] == '/') && k < 5) { v[k++] = x; x = 0; continue; }
+            return 0;
+        }
+        if (k < 6) v[k++] = x;
+        if (k < 2) return 0;
+        h->off[h->n] = (int)v[0]; h->esz[h->n] = (int)v[1]; h->nsub[h->n] = k - 2;
+        for (int s = 2; s < k; s++) h->sub[h->n][s - 2] = (int)v[s];
+        h->n++;
+        if (i < len && txt[i] == ',') i++;
+    }
+    return 1;
+}
+// the row struct's size: its PropertiesSize, the one int in its header between least and 16 bytes more followed by
+// an alignment; 0 when not found once
+static int row_size(u64 rs, int least)
+{
+    int size = 0, found = 0;
+    if (!mem_readable(rs, 0xa0)) return 0;
+    for (int at = 0x30; at <= 0x90; at += 4) {
+        int v = *(int *)(rs + at), al = *(int *)(rs + at + 4);
+        if (v >= least && v <= least + 16 && !(v & 3) && (al == 4 || al == 8 || al == 16)) { size = v; found++; }
+    }
+    return found == 1 && size > 0 && size <= 0x4000 ? size : 0;
+}
+// a copy of the size bytes at src in the engine's memory, its heap fields given buffers of their own; 0 on failure
+static u64 row_copy(u64 src, int size, const HeapFields *h)
+{
+    for (int i = 0; i < h->n; i++) if (h->off[i] < 0 || h->off[i] + 16 > size) return 0;
+    if (!mem_readable(src, (u64)size)) return 0;
+    unsigned char *row = (unsigned char *)ue_malloc((u64)size);
+    if (!row) return 0;
+    for (int i = 0; i < size; i++) row[i] = ((const unsigned char *)src)[i];
+    for (int i = 0; i < h->n; i++)
+        if (!tarray_own((u64)row + h->off[i], h->esz[i], h->sub[i], h->nsub[i])) return 0;
+    return (u64)row;
+}
+
+// "A<table>,<row struct>,<from index>,<from number>,<new index>,<new number>,<least size>;<heap fields>": a new row
+// <new> made a copy of <from>, added to the table's row map. Heap fields (FString, TArray) get buffers of their own
+// (heap_parse). The row size is the row struct's (row_size). The map's hash must place every row as UE 4.26's
+// GetTypeHash(FName) does (fname_hash), or nothing is added. Answer "ok row added <row>" or "ok row exists <row>"
 static void row_add_cmd(const u16 *txt, int len)
 {
     int semi = 0;
     while (semi < len && txt[semi] && txt[semi] != ';') semi++;
     u64 f[7] = { 0 };
     if (parse_fields(txt, semi, f, 7) < 7) { skin_result("err fields"); return; }
-    // the heap fields
-    int hoff[MAX_HEAP_FIELDS], hesz[MAX_HEAP_FIELDS], hsub[MAX_HEAP_FIELDS][4], hn[MAX_HEAP_FIELDS], nh = 0;
-    {
-        int i = semi + 1;
-        while (i < len && txt[i] && nh < MAX_HEAP_FIELDS) {
-            u64 v[6] = { 0 };
-            int k = 0;
-            u64 x = 0;
-            for (; i < len && txt[i] && txt[i] != ','; i++) {
-                int d = hexval(txt[i]);
-                if (d >= 0) { x = x << 4 | (u64)d; continue; }
-                if ((txt[i] == ':' || txt[i] == '/') && k < 5) { v[k++] = x; x = 0; continue; }
-                skin_result("err heap fields"); return;
-            }
-            if (k < 6) v[k++] = x;
-            if (k < 2) { skin_result("err heap fields"); return; }
-            hoff[nh] = (int)v[0]; hesz[nh] = (int)v[1]; hn[nh] = k - 2;
-            for (int s = 2; s < k; s++) hsub[nh][s - 2] = (int)v[s];
-            nh++;
-            if (i < len && txt[i] == ',') i++;
-        }
-    }
+    static HeapFields hf;
+    if (!heap_parse(txt, semi + 1, len, &hf)) { skin_result("err heap fields"); return; }
     const char *err;
     u64 have = rowmap_find(f[0], f[1], (u32)f[4], (u32)f[5], &err);
     if (err) { skin_result(err); return; }
@@ -4759,84 +5123,86 @@ static void row_add_cmd(const u16 *txt, int len)
     }
     u64 src = rowmap_find(f[0], f[1], (u32)f[2], (u32)f[3], &err);
     if (!src) { skin_result(err ? err : "err no source row"); return; }
-    u64 srow = *(u64 *)(src + 8);
-    // the row struct's size
-    u64 rs = f[1];
-    int size = 0, found = 0;
-    if (!mem_readable(rs, 0xa0)) { skin_result("err bad row struct"); return; }
-    for (int at = 0x30; at <= 0x90; at += 4) {
-        int v = *(int *)(rs + at), al = *(int *)(rs + at + 4);
-        if (v >= (int)f[6] && v <= (int)f[6] + 16 && !(v & 3) && (al == 4 || al == 8 || al == 16)) { size = v; found++; }
-    }
-    if (found != 1 || size <= 0 || size > 0x4000 || !mem_readable(srow, (u64)size)) { skin_result("err row size"); return; }
-    for (int h = 0; h < nh; h++) if (hoff[h] < 0 || hoff[h] + 16 > size) { skin_result("err heap field past the row"); return; }
-    // the map: TSet<TPair<FName, uint8*>> = sparse array (data, num, max; bits inline 4 or heap, num bits, max bits;
-    // first free, free count), hash (inline 1 or heap), hash size
+    int size = row_size(f[1], (int)f[6]);
+    if (!size || !mem_readable(*(u64 *)(src + 8), (u64)size)) { skin_result("err row size"); return; }
     u64 s = f[0] + DT_ROWMAP;
-    u64 data = *(u64 *)s;
-    int num = *(int *)(s + 8), max = *(int *)(s + 12);
-    u32 *bits = *(u64 *)(s + 32) ? *(u32 **)(s + 32) : (u32 *)(s + 16);
-    int nbits = *(int *)(s + 40), maxbits = *(int *)(s + 44);
-    int firstfree = *(int *)(s + 48), nfree = *(int *)(s + 52);
-    int *hash = *(u64 *)(s + 64) ? *(int **)(s + 64) : (int *)(s + 56);
-    int hsize = *(int *)(s + 72);
-    if (hsize <= 0 || (hsize & (hsize - 1)) || !mem_readable((u64)hash, (u64)hsize * 4) || nbits != num || maxbits < nbits) {
-        skin_result("err row map layout");
+    if (!tset_ok(s, DT_ELEM, 0, &err)) { skin_result(err); return; }
+    u64 row = row_copy(*(u64 *)(src + 8), size, &hf);
+    if (!row) { skin_result("err heap field copy"); return; }
+    if (!tset_add(s, DT_ELEM, 0, (u32)f[4], (u32)f[5], &row, 8)) { skin_result("err no memory"); return; }
+    o = put(msg, "ok row added "); hex64(o, row); o[16] = 0;
+    skin_result(msg);
+}
+
+// ---- the game's own lookups of the effect table, made from it at load: alias -> ID, a TMap<FName, int32>, and ID ->
+// alias, a TMap<int32, FName> (elements of 20 both). Down_Eve in the table alone was in neither: a knockdown chained
+// into it stood her straight up, no getup (playtest). Found by where a row's name (Y) and ID (Yd) sit in memory, their
+// headers by Mh / Mi.
+// "Mh<element>,<element size>" (FName keys) or "Mi..." (int keys): the header of the TSet holding that element
+// (mem_scan_set's candidates, the first that reads as one: tset_ok). Answer "ok set <header>", else each candidate
+// and why not
+static void game_set_cmd(const u64 *f, int ik)
+{
+    static u64 hits[64];
+    int n = mem_scan_set(f[0], (int)f[1], hits, 64);
+    static char msg[2400];
+    char *o = put(msg, "err no set of ");
+    o = put_int(o, n);
+    o = put(o, " candidates:");
+    for (int i = 0; i < n; i++) {
+        const char *e2;
+        int ok = tset_ok(hits[i], (int)f[1], ik, &e2);
+        if (ok && tset_find(hits[i], (int)f[1], ik, ((const u32 *)f[0])[0], ((const u32 *)f[0])[1]) == f[0]) {
+            o = put(msg, "ok set ");
+            *put_hex(o, hits[i]) = 0;
+            skin_result(msg);
+            return;
+        }
+        if (i < 16) {
+            o = put(o, " "); o = put_hex(o, hits[i]); o = put(o, " ");
+            o = put(o, ok ? "not in it" : e2 && e2[0] == 'e' ? e2 + 4 : "?");
+        }
+    }
+    *o = 0;
+    skin_result(msg);
+}
+// "M<alias map>,<ID map>,<table>,<row struct>,<from index>,<new index>,<ID offset>": <new> added to both with its row's
+// ID, once <from> reads in them as its row (its ID under its alias, its alias under its ID). Answer "ok ids added <ID>"
+// or "ok ids exists <ID>"
+static void game_add_cmd(const u64 *f, int k)
+{
+    const char *err;
+    if (k < 7) { skin_result("err fields"); return; }
+    if (!tset_ok(f[0], 20, 0, &err) || !tset_ok(f[1], 20, 1, &err)) { skin_result(err); return; }
+    u64 se = rowmap_find(f[2], f[3], (u32)f[4], 0, &err), ne = se ? rowmap_find(f[2], f[3], (u32)f[5], 0, &err) : 0;
+    if (!se || !ne) { skin_result(err ? err : "err no such row"); return; }
+    u64 srow = *(u64 *)(se + 8), nrow = *(u64 *)(ne + 8);
+    if (f[6] > 0x4000 || (f[6] & 3) || !mem_readable(srow + f[6], 4) || !mem_readable(nrow + f[6], 4)) { skin_result("err bad row"); return; }
+    int sid = *(int *)(srow + f[6]), id = *(int *)(nrow + f[6]);
+    u64 ia = tset_find(f[0], 20, 0, (u32)f[4], 0), ib = tset_find(f[1], 20, 1, (u32)sid, 0);
+    if (!ia || *(int *)(ia + 8) != sid) { skin_result("err the alias map's ID for the source isn't its row's"); return; }
+    if (!ib || *(u32 *)(ib + 4) != (u32)f[4] || *(u32 *)(ib + 8) != 0) { skin_result("err the ID map's alias for the source isn't it"); return; }
+    u64 na = tset_find(f[0], 20, 0, (u32)f[5], 0), nb = tset_find(f[1], 20, 1, (u32)id, 0);
+    if (nb && *(u32 *)(nb + 4) != (u32)f[5]) { skin_result("err its ID is another row's in the ID map"); return; }
+    char msg[64], *o;
+    int added = 0;
+    if (na) *(int *)(na + 8) = id;
+    else if (tset_add(f[0], 20, 0, (u32)f[5], 0, &id, 4)) added++;
+    else { skin_result("err no memory"); return; }
+    u32 nm[2] = { (u32)f[5], 0 };
+    if (!nb) { if (tset_add(f[1], 20, 1, (u32)id, 0, nm, 8)) added++; else { skin_result("err no memory"); return; } }
+    o = put(msg, added ? "ok ids added " : "ok ids exists "); *put_int(o, id) = 0;
+    skin_result(msg);
+}
+static void game_cmd(const u16 *txt, int len)
+{
+    static u64 gf[8];
+    for (int i = 0; i < 8; i++) gf[i] = 0;
+    if (len > 0 && (txt[0] == 'h' || txt[0] == 'i')) {
+        if (parse_fields(txt + 1, len - 1, gf, 2) < 2) skin_result("err fields"); else game_set_cmd(gf, txt[0] == 'i');
         return;
     }
-    for (int i = 0; i < num; i++) {
-        if (!(bits[i >> 5] >> (i & 31) & 1)) continue;
-        const u32 *e = (const u32 *)(data + (u64)i * DT_ELEM);
-        if ((int)e[5] != (int)((e[0] + e[1]) & (u32)(hsize - 1))) { skin_result("err row map hash differs"); return; }
-    }
-    // the row: a copy with buffers of its own
-    unsigned char *row = (unsigned char *)ue_malloc((u64)size);
-    if (!row) { skin_result("err no memory"); return; }
-    for (int i = 0; i < size; i++) row[i] = ((const unsigned char *)srow)[i];
-    for (int h = 0; h < nh; h++)
-        if (!tarray_own((u64)row + hoff[h], hesz[h], hsub[h], hn[h])) { skin_result("err heap field copy"); return; }
-    // a slot in the sparse array: a free one, else one more at the end (its arrays grown in the engine's memory)
-    int idx;
-    if (nfree > 0 && firstfree >= 0 && firstfree < num) {
-        idx = firstfree;
-        int next = *(int *)(data + (u64)idx * DT_ELEM + 4);
-        *(int *)(s + 48) = next;
-        *(int *)(s + 52) = nfree - 1;
-        if (nfree > 1 && next >= 0 && next < num) *(int *)(data + (u64)next * DT_ELEM) = -1;
-    } else {
-        if (num == max) {
-            int nmax = max + 16;
-            unsigned char *nd = (unsigned char *)ue_malloc((u64)nmax * DT_ELEM);
-            if (!nd) { skin_result("err no memory"); return; }
-            for (u64 i = 0; i < (u64)num * DT_ELEM; i++) nd[i] = ((const unsigned char *)data)[i];
-            // (the old elements are left: a reader on another thread may be walking them)
-            data = (u64)nd;
-            *(u64 *)s = data;
-            *(int *)(s + 12) = nmax;
-        }
-        if (nbits == maxbits) {
-            int nmaxb = (maxbits + 32 + 31) & ~31;
-            u32 *nb = (u32 *)ue_malloc((u64)nmaxb / 8);
-            if (!nb) { skin_result("err no memory"); return; }
-            for (int i = 0; i < nmaxb / 32; i++) nb[i] = i < (maxbits + 31) / 32 ? bits[i] : 0;
-            bits = nb;
-            *(u32 **)(s + 32) = nb;
-            *(int *)(s + 44) = nmaxb;
-        }
-        idx = num;
-        *(int *)(s + 8) = num + 1;
-        *(int *)(s + 40) = nbits + 1;
-    }
-    u32 *e = (u32 *)(data + (u64)idx * DT_ELEM);
-    e[0] = (u32)f[4]; e[1] = (u32)f[5];
-    *(u64 *)(e + 2) = (u64)row;
-    int hi = (int)(((u32)f[4] + (u32)f[5]) & (u32)(hsize - 1));
-    e[4] = (u32)hash[hi];
-    e[5] = (u32)hi;
-    bits[idx >> 5] |= 1u << (idx & 31);
-    hash[hi] = idx;
-    o = put(msg, "ok row added "); hex64(o, (u64)row); o[16] = 0;
-    skin_result(msg);
+    game_add_cmd(gf, parse_fields(txt, len, gf, 7));
 }
 
 // the command running on the game thread now (its first letters), and since when (ms): the worker thread tells a
@@ -4867,6 +5233,50 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
     exec_slice_cmd(context, stack, result);
 #endif
 }
+// "&<command>": one of the memory scans (Y, Yd, Mh, Mi: read only, each a pass over all the game's private memory,
+// about 0.5 s) on a thread of its own, the game going on meanwhile: tables.lua's four held one frame 2.2 s at the
+// level's start (playtest). Answer "ok started" or "err busy". "&?": "busy" while it runs, then "done <its answer>"
+static volatile int async_busy, async_have;
+static u16 async_txt[256];
+static int async_len;
+static void scan_cmd(const u16 *txt, int len);
+static void game_cmd(const u16 *txt, int len);
+static u32 WINAPI async_main(void *arg)
+{
+    (void)arg;
+    async_tid = GetCurrentThreadId();
+    if (async_txt[0] == 'Y') scan_cmd(async_txt + 1, async_len - 1); else game_cmd(async_txt + 1, async_len - 1);
+    async_tid = 0;
+    async_have = 1;
+    __atomic_store_n(&async_busy, 0, __ATOMIC_SEQ_CST);
+    return 0;
+}
+static void async_cmd(const u16 *txt, int len)
+{
+    if (len > 0 && txt[0] == '?') {
+        if (__atomic_load_n(&async_busy, __ATOMIC_SEQ_CST)) { skin_result("busy"); return; }
+        if (!async_have) { skin_result("err none"); return; }
+        static char out[sizeof async_out + 8];
+        char *o = put(out, "done ");
+        for (int i = 0; async_out[i]; i++) *o++ = async_out[i];
+        *o = 0;
+        skin_result(out);
+        return;
+    }
+    if (async_busy) { skin_result("err busy"); return; }
+    if (len < 1 || len > 255 || !(txt[0] == 'Y' || (txt[0] == 'M' && len > 1 && (txt[1] == 'h' || txt[1] == 'i')))) {
+        skin_result("err not a scan");
+        return;
+    }
+    for (int i = 0; i < len; i++) async_txt[i] = txt[i];
+    async_txt[len] = 0;
+    async_len = len;
+    async_have = 0;
+    async_out[0] = 0;
+    async_busy = 1;
+    if (!CreateThread(0, 0, async_main, 0, 0, 0)) { async_busy = 0; skin_result("err no thread"); return; }
+    skin_result("ok started");
+}
 static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
 {
     (void)context; (void)result;
@@ -4876,6 +5286,7 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
     int len = *(int *)(p + 0x20);
     float *dir = (float *)(p + 0x28);
     if (!txt || len < 2) return;
+    if (txt[0] == '&') { async_cmd(txt + 1, len - 1); return; }
     // "H[comp,comp,...]": hold stump seams on their rim bones. No answer file — her tick sends it every frame, and a
     // command's result file is what made per-frame calls stutter. comps still alive; none means every cut
     if (txt[0] == 'H') {
@@ -4906,6 +5317,8 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
     if (txt[0] == 'D') { row_str_cmd(txt + 1, len - 1); return; }
     if (txt[0] == 'N') { row_names_cmd(txt + 1, len - 1); return; }
     if (txt[0] == 'A') { row_add_cmd(txt + 1, len - 1); return; }
+    if (txt[0] == 'M') { game_cmd(txt + 1, len - 1); return; }
+    if (txt[0] == 'Y') { scan_cmd(txt + 1, len - 1); return; }
     if (txt[0] == 'd') {
         u64 df[6] = { 0, 0, 0, 0, 0, 0 };
         row_cmd(df, parse_fields(txt + 1, len - 1, df, 6));

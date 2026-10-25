@@ -423,7 +423,9 @@ local function try_cut(pawn, a, e)
     r.pel = pel
   end
   local got = ctx.gore.enemy_cut(a, e.obj, e.mesh, r.h, r.kind, e.kind.face)
-  if not got and not ctx.gore.busy() and r.kind ~= "mark" then
+  -- (a corpse hit cuts along her blade or not at all: the fallback took the nearest limb wherever it was, the right
+  -- arm off its flying chest for a swing through its cut-off left arm, playtest)
+  if not got and not ctx.gore.busy() and r.kind ~= "mark" and not r.blade_only then
     -- nothing came off that way: the next kind (a limb, the head, across the waist), each once, near where it was
     -- struck and flying the way the blow went
     r.tried = r.tried or {}
@@ -448,15 +450,39 @@ end
 -- her swing passing through a corpse: cut again (corpseHits). Her sword reaches past her hand: a part within reach cm
 -- of the swing's plane and blade cm of her hand is struck (her hand alone within 35 cm of a lying corpse's part
 -- almost never was)
+-- whether bone is off the corpse's body: it or a bone it hangs from was cut off (off: gore.enemy_off). Its parent
+-- bones are asked once per enemy
+local function cut_off(e, bone, off)
+  e.parents = e.parents or {}
+  for _ = 1, 24 do
+    if not bone or bone == "None" then return false end
+    if off[bone] then return true end
+    local up = e.parents[bone]
+    if up == nil then
+      up = try(function() return e.mesh:GetParentBone(FName(bone)):ToString() end) or false
+      e.parents[bone] = up
+    end
+    bone = up or nil
+  end
+  return false
+end
+
 local function corpse_hit(pawn, a, e)
   local ch = cfg().corpseHits or {}
-  if ch.enabled == false or e.want or e.hits >= (ch.max or 4) or os.clock() - e.t < (ch.from or 0.4) then return end
-  local sw = her_swing(pawn, math.max(e.lastSwing or 0, e.t + (ch.from or 0.4), os.clock() - (cfg().swingWindow or 0.5)))
+  if ch.enabled == false or e.want or e.hits >= (ch.max or 4) or os.clock() - e.t < (ch.from or 0.6) then return end
+  -- one cut a swing: an arc sampled every frame struck a corpse three times in a second, on top of the killing
+  -- swing's own cuts (playtest), and none while one is still opening
+  if os.clock() - (e.hitAt or -1e9) < (ch.gap or 0.5) then return end
+  local _, opening = ctx.gore.enemy_cuts(a)
+  if opening then return end
+  local sw = her_swing(pawn, math.max(e.lastSwing or 0, e.t + (ch.from or 0.6), os.clock() - (cfg().swingWindow or 0.5)))
   if not sw then return end
   local reach, blade = ch.reach or 35, ch.blade or 130
+  -- the parts still on its body: a cut-off arm lying by it was struck, and something else cut off (playtest)
+  local gone = ctx.gore.enemy_off(a)
   local bd, bl, bb
   for _, p in ipairs(PARTS) do
-    local l = part_at(e.mesh, p)
+    local l = not cut_off(e, p[1], gone) and part_at(e.mesh, p)
     if l then
       local off = math.abs(dot(sub(l, sw.at), sw.n))
       local d = len(sub(l, sw.at))
@@ -464,12 +490,12 @@ local function corpse_hit(pawn, a, e)
     end
   end
   if not bl then return end
-  e.lastSwing = sw.t
+  e.lastSwing, e.hitAt = sw.t, os.clock()
   e.hits = e.hits + 1
   local k = dot(sub(bl, sw.at), sw.n)
   local loc = vec(bl.X - k * sw.n.X, bl.Y - k * sw.n.Y, bl.Z - k * sw.n.Z)
   local cut = math.random() <= (ch.cutChance or 0.7)
-  e.want = { t = os.clock(), kind = cut and "limb" or "mark", loc = loc, what = "corpse hit",
+  e.want = { t = os.clock(), kind = cut and "limb" or "mark", loc = loc, what = "corpse hit", blade_only = cut,
     pel = bone_loc(e.mesh, "Bip001-Pelvis"),
     src = string.format("%s at %.0f cm/s, %.0f cm off %s", sw.how, sw.speed, bd, bb),
     h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb } }
@@ -609,19 +635,47 @@ local function down_tick()
     end)
     if not ok then log("enemies: knockdown checks not watched: " .. tostring(err)) end
   end
-  if not down.scanned then down.scanned = true; attack_down(mode); return end
+  -- the first scan through the same queue, DOWN_MS a tick: the level's every decorator at once was a 1.4-2.2 s freeze
+  -- (playtest). Only their addresses are taken here, each one's index asked in its batch below: asked all in this
+  -- tick, 64 to an sbslice call through its answer file, the scan still held one tick 2.1 s (playtest)
+  if not down.scanned then
+    down.scanned = true
+    local t0, now = os.clock(), os.clock()
+    local n = 0
+    for _, d in ipairs(decorators()) do
+      local k = ctx.keep(d)
+      if k then down.pending[#down.pending + 1] = { k = k, t = now }; n = n + 1 end
+    end
+    log(string.format("%d knockdown checks to look at, found in %.0f ms", n, (os.clock() - t0) * 1000))
+    return
+  end
   -- the new ones a few at a time, at most DOWN_MS a tick: a fight's worth loading at once (an enemy's whole tree) was
-  -- 62-127 ms in one tick, at a death too (playtest). Due in order, as they were made
+  -- 62-127 ms in one tick, at a death too (playtest). Due in order, as they were made. Each tick's batch is asked
+  -- in one sbslice call (its object array check) before any is touched: one freed in the meantime (an enemy's tree
+  -- going at her death) was read by its ActorType and crashed the game (UE4SS reading the freed object's class,
+  -- playtest). (Through held, each tick's first check asked again every decorator held in the last 3 s)
   local t0 = os.clock()
-  while #down.pending > 0 and down.pending[1].t <= t0 and os.clock() - t0 < DOWN_MS / 1000 do
-    local x = table.remove(down.pending, 1)
-    -- a new object: an address seen before was another decorator, since collected. Asked through held (sbslice's
-    -- object array check) before it is touched: one freed in that second (an enemy's tree going at her death) was
-    -- read by its ActorType and crashed the game (UE4SS reading the freed object's class, playtest)
-    local a = x.k and ctx.held(x.k) and x.k.addr
-    if a then
-      down.done[a] = nil
-      local d1, n1 = attack_down(mode, { x.k.obj }, true)
+  local batch = {}
+  while #batch < 64 and down.pending[1] and down.pending[1].t <= t0 do batch[#batch + 1] = table.remove(down.pending, 1) end
+  local ks = {}
+  for i, x in ipairs(batch) do ks[i] = x.k end
+  if #batch > 0 and not ctx.alive_ask(ks) then
+    -- (sbslice not up or not answering: the batch again next tick)
+    for i = #batch, 1, -1 do table.insert(down.pending, 1, batch[i]) end
+    return
+  end
+  -- (the budget from the answer on: the call alone can take DOWN_MS, and nothing would ever be done)
+  t0 = os.clock()
+  for i, x in ipairs(batch) do
+    if i > 1 and os.clock() - t0 >= DOWN_MS / 1000 then
+      -- (the rest next tick, asked again then)
+      for j = #batch, i, -1 do table.insert(down.pending, 1, batch[j]) end
+      break
+    end
+    local k = x.k
+    if k.alive and k.idx then
+      down.done[k.addr] = nil
+      local d1, n1 = attack_down(mode, { k.obj }, true)
       down.nd, down.nn = (down.nd or 0) + d1, (down.nn or 0) + n1
     end
   end

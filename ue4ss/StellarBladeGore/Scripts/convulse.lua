@@ -169,7 +169,8 @@ local function axis_of(comp, f, b, to, floor)
   elseif to == "rand" or not f then t = norm(vec(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)))
   else
     local side = b:find("%-R%-") and 1 or b:find("%-L%-") and -1 or (math.random() < 0.5 and 1 or -1)
-    t = ({ front = f.front, back = scale(f.front, -1), up = f.up, out = scale(f.right, side), ["in"] = scale(f.right, -side) })[to]
+    t = ({ front = f.front, back = scale(f.front, -1), up = f.up, down = scale(f.up, -1), out = scale(f.right, side),
+      ["in"] = scale(f.right, -side) })[to]
   end
   if floor and t and t.Z < -0.35 then t = scale(t, -1) end
   local a = t and norm(cross(d, t))
@@ -271,10 +272,11 @@ end
 -- ---- the movements ----
 -- one muscle on comp: bone b's far end towards `to` at amp deg/s at the peak, over dur s, from `at` (os.clock())
 -- (trem, hz: a shaking over it, deg/s either way that many times a second, about axis `ax` if given)
-local function pulse(comp, f, b, to, amp, dur, at, anim, trem, hz, ax)
+-- (swing: an arm's slow swing, which tune.convulse.arms' jerks being off doesn't stop)
+local function pulse(comp, f, b, to, amp, dur, at, anim, trem, hz, ax, swing)
   local r = rag()
   if not (J[b] and valid(comp)) then return false end
-  if not arms_on() and arm_bone(b) then return false end
+  if not swing and not arms_on() and arm_bone(b) then return false end
   if r and r.severed(comp, b) then return false end -- a piece's root: nothing to turn it against
   if anim then
     -- (a hand or foot in a forearm's or calf's chain keeps that chain simulating till it is done)
@@ -309,6 +311,19 @@ local function pulses_tick(now)
       if p.started == nil then
         p.started = true
         try(function() p.comp:WakeRigidBody(FName(p.b)) end)
+      end
+      -- a swing's upper arm: how far it really turned, logged at its end (a right arm's crawl showed no movement,
+      -- playtest)
+      if p.meter then
+        local tip = J[p.b] and J[p.b][2]
+        local at, to = loc(p.comp, p.b), tip and loc(p.comp, tip)
+        local d = at and to and norm(sub(to, at))
+        if d then
+          p.d0 = p.d0 or d
+          local deg = math.deg(math.acos(math.max(-1, math.min(1, dot(p.d0, d)))))
+          if deg > (p.most or 0) then p.most = deg end
+        end
+        if x >= 1 then log(string.format("%s: turned at most %.0f deg (peak %.0f deg/s asked)", p.meter, p.most or -1, p.amp)) end
       end
       try(function() p.comp:AddAngularImpulseInDegrees(scale(p.a, dv), FName(p.b), true) end)
       if p.k > 0 then try(function() p.comp:AddAngularImpulseInDegrees(scale(p.a, -dv * p.k), FName(p.p), true) end) end
@@ -411,6 +426,17 @@ local function face(what, amount, at, dur)
   end
   st.faces[#st.faces + 1] = { pose = p, k = amount, at = at, dur = dur }
 end
+-- a pose's amount over its time, 0..1 at x of it: a long one (a moan, a gasp) comes in over its first quarter, holds,
+-- and eases out; a half sine both ways read as a slow wide open and the same slow close (playtest), and the quarter
+-- sine it came in on before (fastest at its start) read as her face snapping as she came to lie still (playtest): an
+-- S-curve now, starting slow. Short ones (a tic, a flutter) stay a half sine
+local function envelope(x, dur)
+  if dur < 0.3 then return math.sin(math.pi * x) end
+  if x < 0.25 then local u = x / 0.25; return u * u * (3 - 2 * u) end
+  if x < 0.4 then return 1 end
+  local u = (x - 0.4) / 0.6
+  return 1 - u * u * (3 - 2 * u)
+end
 -- what the poses add now, by morph target name (nil: nothing)
 function M.face()
   if not st or #st.faces == 0 then return nil end
@@ -419,12 +445,21 @@ function M.face()
     if now < e.at + e.dur then
       keep[#keep + 1] = e
       if now >= e.at then
-        local k = e.k * math.sin(math.pi * (now - e.at) / e.dur)
+        local k = e.k * envelope((now - e.at) / e.dur, e.dur)
         for m, w in pairs(e.pose) do out[m] = (out[m] or 0) + w * k end
       end
     end
   end
   st.faces = keep
+  -- (the first ones eased in over faceIn s from her convulsions' start: the death face's still mask went straight
+  -- into a full wince as she came to lie still)
+  local fin = cfg().faceIn or 0.8
+  local x = st.onset and (st.t - st.onset) or 0
+  if fin > 0 and x < fin then
+    local u = math.max(0, x / fin)
+    local k = u * u * (3 - 2 * u)
+    for m, w in pairs(out) do out[m] = w * k end
+  end
   return out
 end
 
@@ -481,13 +516,22 @@ end
 
 -- (an open mouth goes with its sound: a gasp, a wince or sobs whose breath or moan can't play (another one too
 -- recent, the voice off) is a silent movement instead; a gasp with no breath looked like a scream with no sound)
+local swing_on
 local function face_event(x)
   local c = cfg()
   local agonal, total = span()
   local s = c.strength or 1.0
   local I = math.exp(-x / math.max(c.fade or 2, 0.1))
   local now, what = os.clock(), nil
-  if still(st.mesh) then st.next = total; return (headless(st.mesh) and "beheaded" or "split") .. ": her face stays", 0 end
+  if still(st.mesh) then
+    -- (her arms may still swing: asked again a little later, said once)
+    if swing_on() then
+      st.next = x + rnd(0.4, 1.0)
+      if st.stillSaid then return nil, 0 end
+      st.stillSaid = true
+    else st.next = total end
+    return (headless(st.mesh) and "beheaded" or "split") .. ": her face stays", 0
+  end
   if x < agonal then
     -- (the first one a wince, with its moan)
     local r = st.moaned == nil and (c.voice or {}).enabled ~= false and 0.4 or math.random()
@@ -502,7 +546,7 @@ local function face_event(x)
     elseif r < 0.6 then
       local snd = sound("moan", 0.6 + 0.4 * I, true)
       if snd ~= "" then
-        local dur = rnd(0.7, 1.2)
+        local dur = rnd(0.55, 0.9)
         face("wince", s * (0.6 + 0.4 * I) * rnd(0.85, 1.15), now, dur)
         face("moan", s * rnd(0.7, 1.0), now + 0.1, dur * 0.9)
         what = "wince" .. snd
@@ -595,6 +639,9 @@ local function neck_event(late, anim)
   end
   local f = frame(comp)
   local s = (c.strength or 1.0) * (late and 0.6 or 1.0)
+  -- (an animated death's head simulates alone off her animated neck: no ragdoll's neck range held it, and the full
+  -- strain and jerks bent it ~70 deg after she landed, a snapped neck, playtest)
+  if anim then s = s * (tonumber(nk.animScale) or 0.35) end
   local way = NECK_WAYS[math.random(#NECK_WAYS)]
   local tt, hh = nk.strainTime or { 0.7, 1.3 }, nk.hz or { 7, 11 }
   local dur, hz = rnd(tt[1], tt[2] or tt[1]), rnd(hh[1], hh[2] or hh[1])
@@ -618,8 +665,106 @@ local function neck_event(late, anim)
   return string.format("neck strains %s for %.1f s, shaking at %.0f Hz, then %d jerk%s", way, dur, hz, n, n == 1 and "" or "s"), span
 end
 
+-- her arm swinging (tune.convulse.armSwing, also with body off): the whole arm lifting slowly from the shoulder and
+-- falling back, the elbow following a beat later and the hand turning after it, each a smooth rise and fall of speed
+-- over most of a second; now and then it swings back the other way before it drops. Not arms' jerks, which looked like
+-- the ragdoll glitching (playtest); later ones weaker. An animated death's arm moves from the elbow only (its
+-- forearm's chain simulates for it, the upper arm stays on the fall's pose)
+local SWING_WAYS = { "up", "up", "front", "out", "in" }
+local SWING_BACK = { up = "down", front = "back", out = "in", ["in"] = "out" }
+function swing_on()
+  local a = cfg().armSwing
+  return type(a) == "table" and a.enabled ~= false
+end
+local function swing_event(late, anim)
+  local c, a = cfg(), cfg().armSwing
+  local r = rag()
+  -- an arm still on her: no cut at its clavicle, upper arm, forearm or hand (a cut-off arm's bodies still simulate on
+  -- her mesh: its swing moved the arm lying apart on the floor, and she showed none, playtest), on the comp given or
+  -- on the half of a split it is on
+  local function arm_comp(sd2)
+    local bb = "Bip001-" .. sd2 .. "-"
+    local function on(m)
+      if not (r and r.live(m, bb .. "UpperArm") and r.live(m, bb .. "Forearm")) then return false end
+      for _, x in ipairs({ "Clavicle", "UpperArm", "Forearm" }) do if r.severed(m, bb .. x) then return false end end
+      return true
+    end
+    if anim then return (valid(st.mesh) and not (r and (r.severed(st.mesh, bb .. "UpperArm") or r.severed(st.mesh, bb .. "Forearm")
+      or r.severed(st.mesh, bb .. "Clavicle")))) and st.mesh or nil end
+    local v = r and r.view()
+    for _, m in ipairs(v and v.comps or {}) do if on(m) then return m end end
+  end
+  local sd = side()
+  local comp = arm_comp(sd)
+  if not comp then sd = sd == "L" and "R" or "L"; comp = arm_comp(sd) end
+  if not comp then return nil end
+  local b = "Bip001-" .. sd .. "-"
+  local f = frame(comp)
+  local s = (c.strength or 1.0) * (late and (a.late or 0.6) or 1.0)
+  local tt = a.time or { 0.7, 1.2 }
+  local dur = rnd(tt[1], tt[2] or tt[1])
+  local amp = (a.speed or 300) * s * rnd(0.85, 1.15)
+  local now, n = os.clock(), 0
+  -- now and then a crawl's stroke instead, as if dragging herself away: the arm reaching past her head with the elbow
+  -- straightening, then pulling back down along her with the elbow bending and the hand clawing; the next one most
+  -- likely the other arm
+  if math.random() < (a.crawl or 0.35) then
+    if st.crawled then sd = st.crawled == "L" and (math.random() < 0.75 and "R" or "L") or (math.random() < 0.75 and "L" or "R") end
+    local pick = arm_comp(sd)
+    if not pick then sd = sd == "L" and "R" or "L"; pick = arm_comp(sd) end
+    if not pick then return nil end
+    b = "Bip001-" .. sd .. "-"
+    comp, f = pick, frame(pick)
+    if pulse(comp, f, b .. "UpperArm", "up", amp, dur, now, anim, nil, nil, nil, true) then
+      n = n + 1
+      st.pulses[#st.pulses].meter = (sd == "L" and "left" or "right") .. " arm's reach"
+    end
+    if pulse(comp, f, b .. "Forearm", "back", amp * 0.6 * (anim and 1.4 or 1), dur * 0.8, now + dur * 0.15, anim, nil, nil, nil, true) then n = n + 1 end
+    if n == 0 then return nil end
+    local t, d2 = now + dur + rnd(0.05, 0.2), dur * rnd(0.9, 1.2)
+    pulse(comp, f, b .. "UpperArm", "down", amp * rnd(0.7, 0.9), d2, t, anim, nil, nil, nil, true)
+    pulse(comp, f, b .. "Forearm", "front", amp * 0.7 * (anim and 1.4 or 1), d2 * 0.9, t + d2 * 0.1, anim, nil, nil, nil, true)
+    pulse(comp, f, b .. "Hand", "front", amp * (a.hand or 0.5), d2 * 0.6, t + d2 * 0.2, anim, nil, nil, nil, true)
+    st.crawled = sd
+    local span = t + d2 - now
+    if not anim and r then r.twitch(span + (c.settleAfter or 0.4)) end
+    return string.format("%s arm reaches out and drags back, over %.1f s", sd == "L" and "left" or "right", span), span
+  end
+  local way = SWING_WAYS[math.random(#SWING_WAYS)]
+  if pulse(comp, f, b .. "UpperArm", way, amp, dur, now, anim, nil, nil, nil, true) then
+    n = n + 1
+    st.pulses[#st.pulses].meter = (sd == "L" and "left" or "right") .. " arm's swing " .. way
+  end
+  local bend = math.random() < 0.6 and "front" or "back"
+  if pulse(comp, f, b .. "Forearm", bend, amp * rnd(0.5, 0.8) * (anim and 1.4 or 1), dur * rnd(0.8, 1.0),
+    now + dur * rnd(0.1, 0.25), anim, nil, nil, nil, true) then n = n + 1 end
+  if pulse(comp, f, b .. "Hand", "rand", amp * (a.hand or 0.5), dur * 0.7, now + dur * 0.3, anim, nil, nil, nil, true) then n = n + 1 end
+  if n == 0 then return nil end
+  local span, back = dur * 1.25, ""
+  if math.random() < (a.back or 0.4) then
+    local t = now + dur + rnd(0.1, 0.3)
+    local d2 = dur * rnd(0.8, 1.0)
+    if pulse(comp, f, b .. "UpperArm", SWING_BACK[way], amp * rnd(0.5, 0.7), d2, t, anim, nil, nil, nil, true)
+      or pulse(comp, f, b .. "Forearm", bend == "front" and "back" or "front", amp * 0.5, d2, t, anim, nil, nil, nil, true) then
+      span, back = t + d2 - now, ", and back"
+    end
+  end
+  if not anim and r then r.twitch(span + (c.settleAfter or 0.4)) end
+  return string.format("%s arm swings %s over %.1f s%s", sd == "L" and "left" or "right", way, dur, back), span
+end
+
 -- the next event, by how far into her convulsions she is: x seconds since they began
 local function next_event(x, anim)
+  -- (never the first either)
+  if swing_on() and (st.moaned ~= nil or still(st.mesh)) and not (x >= span() and not st.lastGasp)
+    and math.random() < (cfg().armSwing.chance or 0.35) * (x >= span() and 0.5 or 1) then
+    local what, dur = swing_event(x >= span(), anim)
+    if what then
+      st.events = st.events + 1
+      st.next = x + dur * 0.6 + rnd(0.3, 0.8) * (x >= span() and 1.5 or 1)
+      return what, 1
+    end
+  end
   -- (never the first: that one is a wince or spasm with its moan)
   if neck_on() and st.moaned ~= nil and not still(st.mesh) and not (x >= span() and not st.lastGasp)
     and math.random() < (cfg().neck.chance or 0.3) * (x >= span() and 0.5 or 1) then
@@ -709,20 +854,23 @@ function M.to_ragdoll()
 end
 
 -- has she come to rest? A ragdoll once active.lua settled her; her animated fall once her pelvis stopped moving
+-- (an animated fall waits for its pelvis and head both, up to animStartMax: started at startMax (2 s), the head of a
+-- fall still playing 3-5 s in was taken by the neck's struggle and snapped mid animation, playtest)
 local function at_rest(anim)
   local c = cfg()
-  if st.t >= (c.startMax or 2) then return true end
+  if st.t >= (anim and (c.animStartMax or 6) or (c.startMax or 2)) then return true end
   if not anim then
     local v = rag() and rag().view()
     return v ~= nil and v.settled == true
   end
   if st.t < 1.0 then return false end
-  local p = loc(st.mesh, "Bip001-Pelvis")
-  if not p then return false end
-  table.insert(st.trail, { t = st.t, p = p })
+  local p, hd = loc(st.mesh, "Bip001-Pelvis"), loc(st.mesh, "Bip001-Head")
+  if not (p and hd) then return false end
+  table.insert(st.trail, { t = st.t, p = p, h = hd })
   while #st.trail > 1 and st.trail[2].t <= st.t - 0.5 do table.remove(st.trail, 1) end
   local o = st.trail[1]
-  return st.t - o.t >= 0.45 and math.sqrt(dot(sub(p, o.p), sub(p, o.p))) < 1.0
+  local function moved(a, b) return math.sqrt(dot(sub(a, b), sub(a, b))) end
+  return st.t - o.t >= 0.45 and moved(p, o.p) < 1.0 and moved(hd, o.h) < 1.0
 end
 
 function M.tick(paused)
@@ -768,7 +916,7 @@ function M.tick(paused)
   end
   if x >= st.next then
     local what, n = next_event(x, anim)
-    if c.log ~= false then log(string.format("%.1f s: %s%s", x, what, c.body == false and "" or string.format(" (%d muscles)", n or 0))) end
+    if what and c.log ~= false then log(string.format("%.1f s: %s%s", x, what, c.body == false and "" or string.format(" (%d muscles)", n or 0))) end
   end
 end
 

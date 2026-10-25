@@ -409,9 +409,17 @@ local function ease_start(pawn, mesh, hand, at)
     local cls = StaticFindObject("/Script/Engine.SkeletalMeshComponent")
     for _, c in ipairs(pawn:K2_GetComponentsByClass(cls)) do cand[#cand + 1] = c end
   end)
+  -- never a weapon's asset: a sword with a hand bone of its own had it eased too, and its handle half stretched a
+  -- face to her hand, flashing, once the break dropped it (playtest)
+  local arms = {}
+  local function arm(w) local sm = valid(w) and try(function() return w.SkeletalMesh:GetAddress() end); if sm then arms[sm] = true end end
+  for _, w in ipairs(weapons(pawn)) do arm(w) end
+  for _, d in ipairs(dropped) do arm(d.comp) end
   local by = {} -- asset address -> its pick
   for _, c in ipairs(cand) do
     local a = addr(c)
+    local sa = a and try(function() return c.SkeletalMesh:GetAddress() end)
+    if sa and arms[sa] then a = nil end
     local i = a and not seen[a] and try(function() return c:GetBoneIndex(FName(hand)) end)
     if a then seen[a] = true end
     local sm = i and i >= 0 and try(function() return c.SkeletalMesh:GetAddress() end)
@@ -509,7 +517,13 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
         local at = vec(wl.X + f.X * o.X + r.X * o.Y + u.X * o.Z, wl.Y + f.Y * o.X + r.Y * o.Y + u.Y * o.Z,
           wl.Z + f.Z * o.X + r.Z * o.Y + u.Z * o.Z)
         box:K2_SetWorldLocationAndRotation(at, w:K2_GetComponentRotation(), false, {}, true)
-        box:SetBoxExtent(vec(math.max(b.e.X, 1.5), math.max(b.e.Y, 1.5), math.max(b.e.Z, 1.5)), false)
+        -- its thinnest side flattened to 1.5 cm: the bounds' 6 cm (the guard's) stood a dropped sword on its edge,
+        -- a box that thick resting as well on it as flat (playtest)
+        local ex = { math.max(b.e.X, 1.5), math.max(b.e.Y, 1.5), math.max(b.e.Z, 1.5) }
+        local thin = 1
+        for i = 2, 3 do if ex[i] < ex[thin] then thin = i end end
+        ex[thin] = 0.75
+        box:SetBoxExtent(vec(ex[1], ex[2], ex[3]), false)
         box:SetHiddenInGame(true, false)
         -- Pawn: not her capsule (or the player's); PhysicsBody: it lands on her as well as the floor
         box:SetCollisionProfileName(FName("PhysicsActor"), true)
@@ -558,7 +572,11 @@ local function grip_start(mesh, g)
       if d and d < 30 and (not best or d < best) and not severed[b] then hand, best = b, d end
     end
     local a = addr(w)
-    if hand and a and not gripped[a] then
+    -- (one let go of already, a sword broken on her guard: the ragdoll that came after took its tip half off the floor
+    -- into her hand, playtest)
+    local gone = false
+    for _, d in ipairs(dropped) do if addr(d.comp) == a then gone = true end end
+    if hand and a and not gripped[a] and not gone then
       local o = { comp = w, hand = hand, parent = try(function() return w:GetAttachParent() end),
         socket = try(function() return w:GetAttachSocketName() end),
         loc = try(function() local v = w.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
@@ -701,8 +719,8 @@ function M.weapon_cut(mesh, at, n, blocked)
         local tm = try(function() return w:K2_GetComponentToWorld() end)
         if tm then try(function() b:K2_SetWorldTransform(tm, false, {}, true) end) end
         try(function() b:SetMasterPoseComponent(w, true) end)
-        try(function() w:SetForcedLOD(1) end)
-        try(function() b:SetForcedLOD(1) end)
+        gore.lod0(w, true)
+        gore.lod0(b, true)
         -- its pose frozen as it is cut (the copy follows it): the sword's gears, panels and blade segments go on
         -- animating, and the flat cut faces and the collapsed ends are made in this pose, so both halves showed most
         -- of the sword with its ends bent off to where the moved bones went (playtest)
@@ -710,7 +728,7 @@ function M.weapon_cut(mesh, at, n, blocked)
         local r = gore.command(string.format("e%x,%x,0", w:GetAddress(), b:GetAddress()), pa, pn)
         if r:sub(1, 2) ~= "ok" then
           try(function() w.bNoSkeletonUpdate = false end)
-          try(function() w:SetForcedLOD(0) end)
+          gore.lod0(w, false)
           try(function() b:K2_DestroyComponent(b) end)
           out[#out + 1] = nm .. ": " .. r
         else
@@ -771,7 +789,7 @@ local function splits_back()
       if valid(sp.w) then gore.command(string.format("x%x,0", sp.w:GetAddress())) end
       if valid(sp.b) then gore.command(string.format("x%x,0", sp.b:GetAddress())) end
     end
-    if valid(sp.w) then try(function() sp.w:SetForcedLOD(0); sp.w.bNoSkeletonUpdate = false end) end
+    if valid(sp.w) and gore then gore.lod0(sp.w, false); try(function() sp.w.bNoSkeletonUpdate = false end) end
     if valid(sp.b) then try(function() sp.b:K2_DestroyComponent(sp.b) end) end
     n = n + 1
   end
@@ -1551,6 +1569,7 @@ end
 
 -- restart: the ragdoll starts again in the same death, her weapons stay as the blow left them
 function M.stop(pawn, restart)
+  M.photo_hold(false)
   if run and run.held and valid(run.mesh) then gravity(run.mesh, true) end
   if run then run.held = nil end
   if not restart then
@@ -1561,6 +1580,9 @@ function M.stop(pawn, restart)
     if ng > 0 then log(string.format("%d weapons back from her grip onto their sockets", ng)) end
     local nw = #dropped > 0 and weapons_back() or nil
     if nw then log(string.format("%d weapons back on their sockets", nw)) end
+    -- a split's copy: gore destroys it as she gets up. Kept here, the next death's hand easing (an animated fall's
+    -- sword cut, before any start cleared it) read the freed copy: crash in UE4SS (playtest, the death after a split)
+    extra = {}
   end
   if not run then return end
   tone_stop()
@@ -1614,8 +1636,44 @@ function M.hold_still()
   return n
 end
 
+-- photo mode opening on a death (P): her tick stops while it is on, so hold_still never ran there, and the one
+-- physics step photo mode let through as it opened lifted her upper body 4 cm (playtest: her head 4 cm off once it
+-- was on, 15 ms of the game's time gone). Photo mode makes its own pawn as it opens, and her bodies blocked pawns. So
+-- before it opens: every body stopped and put to sleep (settled or not: a twitch had woken her), and her meshes
+-- ignore pawns till it closes (on false: the responses put back)
+M.photoHeld = nil
+function M.photo_hold(on)
+  if not on then
+    local h = M.photoHeld
+    M.photoHeld = nil
+    for _, e in ipairs(h or {}) do
+      if valid(e.c) then try(function() e.c:SetCollisionResponseToChannel(2, e.r) end) end
+    end
+    return h and #h or 0
+  end
+  if not run or M.photoHeld then return 0 end
+  local comps = { run.mesh }
+  for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  M.photoHeld = {}
+  for _, c in ipairs(comps) do
+    if valid(c) then
+      try(function() c:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
+      try(function() c:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
+      if not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
+      local r = try(function() return c:GetCollisionResponseToChannel(2) end)
+      if r and r ~= 0 then
+        try(function() c:SetCollisionResponseToChannel(2, 0) end)
+        M.photoHeld[#M.photoHeld + 1] = { c = c, r = r }
+      end
+    end
+  end
+  run.asleep = true
+  return #comps
+end
+
 -- a new Eve (the level reloaded): drop what was held from the old one without touching it
 function M.forget()
+  M.photoHeld = nil
   layouts = {}
   run, speeds, dropped, extra, gripped, splits = nil, {}, {}, {}, {}, {}
   severed, severedOn = {}, nil

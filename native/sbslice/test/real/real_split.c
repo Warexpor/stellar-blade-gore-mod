@@ -288,6 +288,19 @@ static int in_head(int v, const float *x)
     for (int i = 0; i < 8; i++) if (vo.weights[i] && headbones[vo.bones[i]]) w += vo.weights[i];
     return w > 127;
 }
+// the kept neck's far side shaved away (sbslice's neck_shave): past the split plane (hgt under 0) deeper than the
+// shave allows that far up the neck, and not mostly on the head's bones
+static int in_shave(int v, const float *x, float hgt)
+{
+    if (hgt > 0 || neck_shave_h <= 0) return 0;
+    float e[3] = { x[0] - hp2[0], x[1] - hp2[1], x[2] - hp2[2] }, h2 = e[0] * hn2[0] + e[1] * hn2[1] + e[2] * hn2[2];
+    float u = h2 / neck_shave_h;
+    if (h2 <= 0 || u >= 1) return 0;
+    skin_info vo; orig_info(v, &vo);
+    int w = 0;
+    for (int i = 0; i < 8; i++) if (vo.weights[i] && headbones[vo.bones[i]]) w += vo.weights[i];
+    return w <= 127 && -hgt > neck_shave + (NECK_R - neck_shave) * u * u * (3 - 2 * u);
+}
 // an opening's outline from a cut's answer ("<tag>p=x,y,z;..."), in the cut plane's 2D frame: simple, and its area
 static int outline_of(const char *res, const char *tag, float (*uv)[2], int max, const float *n, float *area)
 {
@@ -388,10 +401,12 @@ static void base_nosink(void)
     nbodies = 0;
     for (int i = 0; i < NB; i++) {
         hasbody[i] = 0;
-        if (env_on("ENEMY") || env_on("NOBODIES")) continue;
+        // (an enemy: its main Bip001 bones only, as gore.lua reads them off its physics asset; ENEMYNOBODIES=1: none, as before)
+        if ((env_on("ENEMY") && (env_on("ENEMYNOBODIES") || strncmp(bname[i], "Bip001", 6))) || env_on("NOBODIES")) continue;
         for (int k = 0; k < (int)(sizeof BODIES / sizeof *BODIES); k++) if (!strcmp(bname[i], BODIES[k])) { hasbody[i] = 1; nbodies++; }
     }
 }
+static int is_sink_bone2(int b) { for (int i = 0; i < nsinks; i++) if (sinks[i].bone == b) return 1; return 0; }
 static int narm_sinks; // the arm cut's (the first ones)
 static float *saved_inv; // the inverse binds at the "S" before the split (ARMSPLIT)
 static int is_sink_bone(int b) { for (int i = 0; i < narm_sinks; i++) if (sinks[i].bone == b) return 1; return 0; }
@@ -408,6 +423,13 @@ static void set_nosink(void)
     // ALLMOVED=1: every helper moved while she played (a longer watch in game saw them all move). A waist cut found no
     // sink for one side then and left its seam on the old weights, stretched between the halves (playtest 30)
     if (env_on("ALLMOVED")) for (int i = 0; i < NB; i++) if (strncmp(bname[i], "Bip001", 6)) watch_dt[i] = 1e30f;
+    // SIDEMOVED=L|R: every helper of that side and the middle moved (a long session: the copy keeping her right side
+    // found no point for her left leg, and it lay flattened on the plane, a third leg, playtest)
+    if (getenv("SIDEMOVED")) {
+        char o[4] = "-?-"; o[1] = getenv("SIDEMOVED")[0];
+        for (int i = 0; i < NB; i++)
+            if (strncmp(bname[i], "Bip001", 6) && (strstr(bname[i], o) || (!strstr(bname[i], "-L-") && !strstr(bname[i], "-R-")))) watch_dt[i] = 1e30f;
+    }
 }
 
 // gore.lua's limb roots: a limb or head cut keeps its sinks off every other limb (OLDNOSINK=1: as before, any). As
@@ -502,6 +524,9 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: real_split <mesh.bin> [obj prefix]\n"); return 2; }
     load(argv[1]);
+    // SHAVE=<cm> [SHAVEH=<cm>]: the kept neck's far side shaved (sbslice's neck_shave, neck_shave_h)
+    if (getenv("SHAVE")) neck_shave = (float)atof(getenv("SHAVE"));
+    if (getenv("SHAVEH")) neck_shave_h = (float)atof(getenv("SHAVEH"));
     void *m = mmap(0, 0x7100000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
     exe = (u64)m;
     gm_install();
@@ -650,6 +675,136 @@ int main(int argc, char **argv)
     }
     int spine1 = bone("Bip001-Spine1"), pelvis = bone("Bip001-Pelvis"), head = bone("Bip001-Head");
     if (spine1 < 0 || pelvis < 0 || head < 0) { fprintf(stderr, "no Bip001 spine\n"); return 1; }
+    // SEQ=<bone>:<at>[:<tilt deg>],...: cuts one after another as an enemy's corpse takes them (the killing swing's
+    // and its corpse hits), each square to its bone (tilted about a side axis) at <at> between the bone and its next
+    // Bip001 joint (the head: from the neck), collapsed; the limbs cut before that hang under it go with it (drop
+    // roots, gore.lua's "goes with"). After each, every piece cut so far is flung its own way: no more triangles may
+    // stretch where they show than in the bind pose
+    if (getenv("SEQ")) {
+        int cutb[16], ncut = 0, bad = 0, base_vis = -1;
+        float seq_ext = 0;
+        skin_probe((u64)comp_a, 0, 0);
+        { int st = 0, sh = 0; sscanf(lastres, "ok stretched=%d", &st); char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &sh); base_vis = st - sh;
+          printf("seq bind: %.200s\n", lastres); }
+        if (getenv("SEQNAMES")) for (const char *q = getenv("SEQNAMES"); *q; ) { int i = atoi(q); if (i >= 0 && i < NB) printf("bone %d %s (parent %s)\n", i, bname[i], bparent[i] >= 0 ? bname[bparent[i]] : "-"); while (*q && *q != ',') q++; if (*q) q++; }
+        char buf[512]; snprintf(buf, sizeof buf, "%s", getenv("SEQ"));
+        for (char *tok = strtok(buf, ","); tok && ncut < 16; tok = strtok(0, ",")) {
+            char nm[96]; float at = 0.4f, tilt = 0;
+            char *c1 = strchr(tok, ':');
+            if (c1) { *c1 = 0; at = (float)atof(c1 + 1); char *c2 = strchr(c1 + 1, ':'); if (c2) tilt = (float)atof(c2 + 1); }
+            snprintf(nm, sizeof nm, "%s", tok);
+            int b = bone(nm);
+            if (b < 0) { printf("FAIL: no %s\n", nm); return 1; }
+            int ishead = !strcmp(nm, "Bip001-Head"), torso = !strncmp(nm, "Bip001-Spine", 12);
+            int a0 = ishead ? bparent[b] : b, a1 = -1;
+            if (ishead) a1 = b;
+            else for (int i = 0; i < NB; i++) if (bparent[i] == b && !strncmp(bname[i], "Bip001", 6) && (a1 < 0 || !strncmp(bname[i], "Bip001-Spine", 12) || !strncmp(bname[i], "Bip001-Neck", 11))) a1 = i;
+            if (a1 < 0) { printf("FAIL: %s has no Bip001 child\n", nm); return 1; }
+            float *pa = space + a0 * 12 + 4, *pb = space + a1 * 12 + 4, pt[3], nn[3], l = 0;
+            for (int k = 0; k < 3; k++) { pt[k] = pa[k] + (pb[k] - pa[k]) * at; nn[k] = pb[k] - pa[k]; l += nn[k] * nn[k]; }
+            for (int k = 0; k < 3; k++) nn[k] /= __builtin_sqrtf(l);
+            if (tilt != 0) {
+                float ref[3] = { 0, 0, 1 }; if (__builtin_fabsf(nn[2]) > 0.9f) { ref[0] = 1; ref[2] = 0; }
+                float u[3] = { nn[1] * ref[2] - nn[2] * ref[1], nn[2] * ref[0] - nn[0] * ref[2], nn[0] * ref[1] - nn[1] * ref[0] }, ul = 0;
+                for (int k = 0; k < 3; k++) ul += u[k] * u[k];
+                float tl = tilt * 3.14159265f / 180, w[3];
+                for (int k = 0; k < 3; k++) u[k] /= __builtin_sqrtf(ul);
+                w[0] = u[1] * nn[2] - u[2] * nn[1]; w[1] = u[2] * nn[0] - u[0] * nn[2]; w[2] = u[0] * nn[1] - u[1] * nn[0];
+                for (int k = 0; k < 3; k++) nn[k] = nn[k] * __builtin_cosf(tl) + w[k] * __builtin_sinf(tl);
+            }
+            set_nosink();
+            if (torso) { nbodies = 0; memset(hasbody, 0, sizeof hasbody); for (int i = 0; i < NB; i++) if (limb_of(i) >= 0) nosink[i] = 1; }
+            else other_limbs_nosink(b);
+            limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0;
+            for (int j = 0; j < ncut; j++) { int in = 0; for (int x = cutb[j]; x >= 0; x = bparent[x]) if (x == b) in = 1; if (in && cutb[j] != b) drop_roots[ndrop++] = cutb[j]; }
+            static skin_info *seqprev; static float *seqx;
+            if (!seqprev) { seqprev = malloc(sizeof(skin_info) * (size_t)NV); seqx = malloc(12 * (size_t)NV); }
+            if (ov_a) { memcpy(seqprev, ov_a, sizeof(skin_info) * (size_t)NV); for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, seqx + 3 * (size_t)v); }
+            int had_ov = ov_a != 0;
+            skin_cut((u64)comp_a, 0, b, pt, nn, MODE_CUT, 0, 0, -1);
+            printf("seq %s at %.2f tilt %.0f (drops %d): %.220s\n", nm, at, tilt, ndrop, lastres);
+            if (getenv("SEQON") && had_ov) {
+                int on = bone(getenv("SEQON")), shown = 0;
+                for (int v = 0; v < NV && shown < 4; v++) {
+                    int w = 0, w0 = 0; for (int i = 0; i < MAX_INF; i++) { if (ov_a[v].weights[i] && ov_a[v].bones[i] == on) w = 1; if (seqprev[v].weights[i] && seqprev[v].bones[i] == on) w0 = 1; }
+                    if (!w || w0) continue;
+                    float *x = seqx + 3 * (size_t)v, h = (x[0] - pt[0]) * nn[0] + (x[1] - pt[1]) * nn[1] + (x[2] - pt[2]) * nn[2];
+                    printf("  v%d %.1f cm past the plane, was on:", v, h);
+                    for (int i = 0; i < MAX_INF; i++) if (seqprev[v].weights[i]) printf(" %s %d%s", bname[seqprev[v].bones[i]], seqprev[v].weights[i], is_sink_bone2(seqprev[v].bones[i]) ? "(sink)" : "");
+                    printf("\n"); shown++;
+                }
+            }
+            if (getenv("SEQNAMES")) for (const char *q = getenv("SEQNAMES"); *q; ) {
+                int i = atoi(q);
+                if (i >= 0 && i < NB) { float *x = space + i * 12 + 4, d = (x[0] - pt[0]) * nn[0] + (x[1] - pt[1]) * nn[1] + (x[2] - pt[2]) * nn[2];
+                    float r2 = 0; for (int k = 0; k < 3; k++) { float e = x[k] - pt[k] - d * nn[k]; r2 += e * e; }
+                    printf("  %s: %.1f cm past the plane, %.1f cm off its axis\n", bname[i], d, __builtin_sqrtf(r2)); }
+                while (*q && *q != ',') q++; if (*q) q++; }
+            if (strncmp(lastres, "ok", 2)) { printf("FAIL: the cut failed\n"); return 1; }
+            // the opening's size (its ellipse's half axes, both sides): a fan of skin to its middle reaches across it
+            float ext = 0;
+            for (int k = 0; k < 2; k++) {
+                char *e0 = strstr(lastres, k ? " le=" : " be="); float e[3] = { 0, 0, 0 };
+                if (e0 && sscanf(e0 + 4, "%f,%f,%f", e, e + 1, e + 2) == 3) for (int j = 0; j < 3; j++) if (e[j] > ext) ext = e[j];
+            }
+            if (ext > seq_ext) seq_ext = ext;
+            skin_collapse();
+            cutb[ncut++] = b;
+            skin_probe((u64)comp_a, 0, 0);
+            { int st = 0, sh = 0; sscanf(lastres, "ok stretched=%d", &st); char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &sh);
+              printf("seq still after %s (openings up to %.0f cm across): %.200s\n", nm, 2 * seq_ext, lastres); if (st - sh > base_vis) base_vis = st - sh;
+              // and nothing reaches far out of an opening with nothing moved (CH_M_NA_40's waist seam on its root,
+              // Base: 1.37 m down to its feet)
+              float lg = 0; char *l0 = strstr(lastres, "longest="); if (l0) sscanf(l0, "longest=%f", &lg);
+              if (lg > 2 * seq_ext + 15) { printf("FAIL: a triangle stretches %.0f cm after %s, nothing moved (openings up to %.0f cm across)\n", lg, nm, 2 * seq_ext); bad = 1; } }
+            // every piece flung its own way: each bone with the deepest cut root over it
+            float *saved = malloc(48 * NB); memcpy(saved, space, 48 * NB);
+            for (int i = 0; i < NB; i++) {
+                int own = -1;
+                for (int x = i; x >= 0 && own < 0; x = bparent[x]) for (int j = 0; j < ncut; j++) if (cutb[j] == x) own = j;
+                if (own < 0) continue;
+                float ang = 0.35f + 0.3f * own, q[4] = { __builtin_sinf(ang) * (own & 1 ? 0 : 1), __builtin_sinf(ang) * (own & 1 ? 1 : 0), 0, __builtin_cosf(ang) };
+                float *t = saved + i * 12, *o = space + i * 12, nq[4], r[3], *piv = saved + cutb[own] * 12 + 4, rel[3];
+                qmul(q, t, nq); memcpy(o, nq, 16);
+                for (int k = 0; k < 3; k++) rel[k] = t[4 + k] - piv[k];
+                quat_rot(q, rel, r);
+                o[4] = piv[0] + r[0] + 30 + 15 * own; o[5] = piv[1] + r[1] - 20 * own; o[6] = piv[2] + r[2] - 25;
+            }
+            if (getenv("SEQFROM")) {
+                int fb = bone(getenv("SEQFROM")), hist[MAX_BONES] = { 0 }, n = 0;
+                for (int v = 0; v < NV; v++) {
+                    skin_info vo; orig_info(v, &vo); int tb = vo.bones[0], tw = 0;
+                    for (int i = 0; i < 8; i++) if (vo.weights[i] > tw) { tw = vo.weights[i]; tb = vo.bones[i]; }
+                    if (tb != fb) continue;
+                    n++;
+                    for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) hist[ov_a[v].bones[i]] += ov_a[v].weights[i];
+                }
+                printf("  %d first on %s now on:", n, getenv("SEQFROM"));
+                for (int i = 0; i < NB; i++) if (hist[i]) printf(" %s %d%s", bname[i], hist[i] / 255, hasbody[i] ? "(body)" : "");
+                printf("\n");
+            }
+            if (getenv("SEQON")) {
+                int on = bone(getenv("SEQON")), hist[MAX_BONES] = { 0 };
+                for (int v = 0; v < NV; v++) {
+                    int w = 0; for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && ov_a[v].bones[i] == on) w = 1;
+                    if (!w) continue;
+                    skin_info vo; orig_info(v, &vo); int tb = vo.bones[0], tw = 0;
+                    for (int i = 0; i < 8; i++) if (vo.weights[i] > tw) { tw = vo.weights[i]; tb = vo.bones[i]; }
+                    hist[tb]++;
+                }
+                for (int i = 0; i < NB; i++) if (hist[i]) printf("  on %s: %d first on %s\n", getenv("SEQON"), hist[i], bname[i]);
+            }
+            if (getenv("SEQSINKS")) for (int i = 0; i < nsinks; i++) printf("  sink %s at %.1f,%.1f,%.1f anchor %s proj %d down %d carry %d\n", bname[sinks[i].bone], sinks[i].at[0], sinks[i].at[1], sinks[i].at[2], sinks[i].anchor >= 0 ? bname[sinks[i].anchor] : "-", sinks[i].proj, sinks[i].down, sinks[i].carry);
+            sink_hold(0, 0); // (gore.lua's "H" every frame)
+            skin_probe((u64)comp_a, 0, 0);
+            int st = 0, sh = 0; sscanf(lastres, "ok stretched=%d", &st); { char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &sh); }
+            printf("seq flung after %s: %.260s\n", nm, lastres);
+            if (st - sh > base_vis) { printf("FAIL: %d more triangles stretch, visible, with the pieces flung\n", st - sh - base_vis); bad = 1; }
+            memcpy(space, saved, 48 * NB); free(saved);
+        }
+        printf("%s\n", bad ? "FAIL" : "PASS");
+        return bad;
+    }
     // LIMB=1: a plain cut of the left upper arm (0.4 down it, square to it) on any mesh, an enemy's say: every vertex the
     // vanilla skin puts mostly on the forearm's subtree goes with the arm, none with no weight on the arm stays on it
     if (env_on("LIMB")) {
@@ -1854,6 +2009,8 @@ int main(int argc, char **argv)
     for (int k = 0; k < 3; k++) n[k] -= axis[k] * d;
     float ln = __builtin_sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
     for (int k = 0; k < 3; k++) n[k] /= ln;
+    // FLIP=1: the plane's other way round, the head's side swapped (a right arm cut, then her half keeping her left)
+    if (env_on("FLIP")) for (int k = 0; k < 3; k++) n[k] = -n[k];
     // ACROSS=1: the blade level through Spine1 (a cut across the waist; the half with the head keeps the front)
     if (env_on("ACROSS")) for (int k = 0; k < 3; k++) n[k] = axis[k];
     // LOW=<cm>: that far up the spine from the pelvis instead (with ACROSS: a waist split low enough to break her spine
@@ -2248,7 +2405,7 @@ int main(int argc, char **argv)
                 if (h && heads && fold_head(&vo, head)) { float y[3], *cur = refinv; refinv = refinv0; skin_v(&vo, v, y); refinv = cur; mv = dist3(x, y); }
             }
             // (not an accessory chain's: it goes whole with its side, a shoulder's gear reaching the neck too)
-            int hd = heads && !tied_to_kept(h, v) && !tied_to_gone(h, v) && in_head(v, p0);
+            int hd = heads && !tied_to_kept(h, v) && !tied_to_gone(h, v) && in_head(v, p0) && !in_shave(v, p0, h ? -hgt : hgt);
             if (hd) { skin_info vo; orig_info(v, &vo); int wc = 0; for (int i = 0; i < 8; i++) if (vo.weights[i] && chain[vo.bones[i]]) wc += vo.weights[i]; if (wc > 127) hd = 0; }
             head_all += hd;
             if (!vanished_in(&o[v], h ? (u64)comp_b : (u64)comp_a)) {

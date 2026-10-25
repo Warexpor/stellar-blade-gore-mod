@@ -22,3 +22,4 @@ FlushInstructionCache
 GetCurrentProcess
 GetTickCount64
 AddVectoredExceptionHandler
+GetCurrentThreadId

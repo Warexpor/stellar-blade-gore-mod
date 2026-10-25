@@ -4,6 +4,7 @@
 -- changes it, R / Y (Triangle) puts the tab back to settings.lua, Enter / A presses a button, Backspace / B or the key again closes it. A change applies at once; on
 -- closing, the changed values are saved to menu.lua (path = value), which wins over settings.lua, and the settings
 -- are read again (the enemies' and the death table's are made over from them). "Reset to settings.lua" deletes it.
+-- The Keys tab (keys.lua): Enter on a row, then the new key, which another action had is swapped onto its old one.
 local M = {}
 local ctx, log, try, valid
 
@@ -49,7 +50,8 @@ M.ROWS = {
   { section = "Death" },
   { key = "deathScreen", label = "Death Screen", kind = "list", values = { "game", "delay", "key" },
     names = { game = "Instant", delay = "Delayed", key = "Shift+F4" },
-    help = "When the death screen appears. Instant: as the game shows it. Delayed: after Death Screen Delay. Shift+F4: only when you press Shift+F4 (D-pad down + R1), which also brings it up early or hides it again." },
+    help = "When the death screen appears. Instant: as the game shows it. Delayed: after Death Screen Delay. Shift+F4: only when you press Shift+F4 (or hold D-pad down + R1 for a second), which also brings it up early or hides it again." },
+  { key = "hideHud", label = "Hide HUD on Death", kind = "bool", help = "Hides the HUD (HP bar, skills, minimap, notices) through a death, so the body lies on a clean screen. The death screen still comes up as Death Screen says. Off: the HUD stays up, as in the game." },
   { key = "reviveAt", label = "Death Screen Delay", kind = "num", min = 1, max = 60, step = 1, unit = " s", help = "Seconds into a death before the death screen (and the revive item screen) shows. Only used with Death Screen set to Delayed." },
   { key = "gore.voice.enabled", label = "Death Scream", kind = "bool", help = "Eve cries out, from her own voice recordings, the moment she dies. Off: only the game's own death voice." },
   { key = "gore.deathFace.enabled", label = "Death Expression", kind = "bool", help = "Holds a lifeless expression on her face for the whole death, her eyes closing. Off: the game's own face, which goes blank about a second in with her eyes open." },
@@ -59,9 +61,11 @@ M.ROWS = {
   { key = "convulse.voice.volume", label = "   Breathing Volume", kind = "num", min = 0, max = 3, step = 0.1, help = "Volume of those breaths and moans (1: default, 0: silent)." },
   { key = "convulse.neck.enabled", label = "   Neck Movement", kind = "bool", help = "Her head strains to lift or turn, shakes with the effort, drops back, then jerks a few times. Not once she is beheaded." },
   { key = "active.animated", label = "Animated Death Falls", kind = "bool", help = "Standing and light-hit deaths play Eve's own fall animation and hold its end pose; cut pieces still fall by physics. Heavy hits, explosions, mid-air deaths and splits are ragdolls. Off: every death is a full ragdoll." },
-  { key = "gore.headRagdoll", label = "   Ragdoll When Beheaded", kind = "bool", help = "A beheading during an animated fall switches her to a full ragdoll. Off: the headless body plays the fall to the end." },
+  { key = "gore.headRagdoll", label = "   Ragdoll When Beheaded", kind = "bool", help = "A beheading during an animated fall always switches her to a full ragdoll. Off: the chance below decides." },
+  { key = "gore.headRagdollChance", label = "   Beheading Ragdoll Chance", kind = "num", min = 0, max = 1, step = 0.1, help = "With Ragdoll When Beheaded off: the chance a beheading during an animated fall ragdolls her. The rest play the fall on headless." },
   { key = "gore.legRagdoll", label = "   Ragdoll When Leg Cut", kind = "bool", help = "A leg cut during an animated fall switches her to a full ragdoll. Off: she plays the fall to the end without the leg." },
   { key = "gore.armRagdoll", label = "   Ragdoll When Arm Cut", kind = "bool", help = "An arm cut during an animated fall switches her to a full ragdoll. Off: she plays the fall on and the arm drops away." },
+  { key = "gore.armRagdollChance", label = "   Arm Cut Ragdoll Chance", kind = "num", min = 0, max = 1, step = 0.1, help = "With Ragdoll When Arm Cut off: the chance an arm cut during an animated fall ragdolls her anyway (each arm rolled, so both off is likelier). 0: she always plays the fall on." },
   { key = "active.push", label = "Death Push", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "How hard the killing blow throws Eve's body, on top of the game's own throw (1: default, 0: the game's alone, 2: twice the default)." },
   { key = "active.stiffness", label = "Ragdoll Stiffness", kind = "num", min = 0, max = 3, step = 0.25, help = "Muscle tone in her ragdoll as she falls. 0: limp from the start, 1: default (firm, going limp as she lands), 2-3: she holds her shape longer." },
   { section = "Enemies" },
@@ -101,6 +105,19 @@ M.state = { open = false, sel = 2, top = 1, ui = nil, held = {}, changed = {}, t
 
 function M.init(c)
   ctx, log, try, valid = c, c.log, c.try, c.valid
+  -- the Keys tab (keys.lua's actions), before Mod
+  if ctx.keys and not M.keysAdded then
+    M.keysAdded = true
+    local at = #M.ROWS + 1
+    for i, r in ipairs(M.ROWS) do if r.section == "Mod" then at = i; break end end
+    local rows = { { section = "Keys" } }
+    for _, a in ipairs(ctx.keys.ACTIONS) do
+      rows[#rows + 1] = { key = "keys." .. a.id, id = a.id, label = a.label, kind = "key",
+        help = a.help .. " Enter, then press the new key (Ctrl, Shift and Alt can go with it); Backspace cancels. A key another action had is swapped with this one's." }
+    end
+    for k, r in ipairs(rows) do table.insert(M.ROWS, at + k - 1, r) end
+    M.TABS = nil
+  end
 end
 
 -- a setting by its dotted path in the live tune table, and set
@@ -177,6 +194,10 @@ local function save()
 end
 
 local function value_text(row)
+  if row.kind == "key" then
+    if M.state.capture and M.state.capture.id == row.id then return "Press a key..." end
+    return ctx.keys.show(ctx.keys.binding(row.id))
+  end
   local v = get(row.key)
   if row.kind == "bool" then return v and "On" or "Off" end
   if row.kind == "list" then return (row.names and row.names[v]) or tostring(v) end
@@ -205,6 +226,10 @@ end
 
 -- ---- the widgets ----
 local function build()
+  -- each stage logged first (the log is flushed a line at a time): a crash in the game's code here leaves no Lua
+  -- error, only the last stage reached
+  local function stage(what) log("menu: making it: " .. what) end
+  stage("game instance")
   local function cls(p)
     local c = StaticFindObject(p)
     if not valid(c) then error("no class " .. p) end
@@ -221,13 +246,18 @@ local function build()
     if size.X > 0 and size.Y > 0 and scale > 0 then K = math.min(size.X / 1920, size.Y / 1080) / scale end
   end)
   if K < 0.5 or K > 4 then K = 1.0 end
+  -- fonts and icons only as found in memory, never loaded: LoadAsset from her tick is the likely crash of
+  -- 0.4.0's F3 for players whose game hadn't loaded them yet (reported: every time). Not found: a
+  -- TextBlock's own font, a key cap for an icon
   local function load_font(path)
     local f = StaticFindObject(path)
-    if not valid(f) then f = try(function() return LoadAsset(path) end) end
     return valid(f) and f or nil
   end
+  stage("fonts")
   local fallback = load_font(M.FONT)
   local mid, bold = load_font(M.FONT_MID) or fallback, load_font(M.FONT_BOLD) or fallback
+  log(string.format("menu: fonts found: %s %s %s", fallback and "yes" or "no", load_font(M.FONT_MID) and "yes" or "no",
+    load_font(M.FONT_BOLD) and "yes" or "no"))
   -- the viewport's height in layout units (the backdrop covers it)
   local VH, VW = 1080, 1920
   try(function()
@@ -236,6 +266,7 @@ local function build()
     if size.Y > 0 and scale > 0 then VH = size.Y / scale / K end
     if size.X > 0 and scale > 0 then VW = size.X / scale / K end
   end)
+  stage("widgets")
   local stamp = string.format("%d%04d", os.time(), math.random(0, 9999))
   local w = StaticConstructObject(cls("/Script/UMG.UserWidget"), gi, FName("SBGore_Menu_" .. stamp))
   local tree = StaticConstructObject(cls("/Script/UMG.WidgetTree"), w, FName("SBGore_MenuTree"))
@@ -342,7 +373,6 @@ local function build()
   -- used; the controller's as menuPadIcons says). An icon that doesn't load is a white key cap with its text
   local function icon(path, x, y, sz)
     local tex = StaticFindObject(M.ICONS .. path .. "." .. path:match("[^/]+$"))
-    if not valid(tex) then tex = try(function() return LoadAsset(M.ICONS .. path .. "." .. path:match("[^/]+$")) end) end
     if not valid(tex) then return nil end
     local im = box(x, y, sz, sz, 1, 1, 1, 1)
     if not try(function() im:SetBrushFromTexture(tex, false); return true end) then
@@ -376,8 +406,24 @@ local function build()
     end
     return out
   end
+  stage("key icons")
   ui.keys = {}
-  for set, list in pairs(M.HINTS) do ui.keys[set] = hints(list) end
+  -- the keyboard's Exit is the menu's key as bound (a key cap with its name when the game has no icon for it)
+  local mk = ctx.keys and ctx.keys.binding("menu") or "F3"
+  ui.menuKey = mk
+  for set, list in pairs(M.HINTS) do
+    if set == "kb" and ctx.keys then
+      local l = {}
+      for i, h in ipairs(list) do l[i] = h end
+      local mods, key = ctx.keys.parse(mk)
+      local k = key and ctx.keys.BY_ENUM[key]
+      local plain = k and next(mods) == nil
+      l[#l] = { { "PC/KeyIcon_KeyBoard_" .. (plain and k.fkey or "None") }, "Exit", ctx.keys.show(mk) }
+      list = l
+    end
+    ui.keys[set] = hints(list)
+  end
+  stage("on screen")
   try(function() w:SetVisibility(3) end) -- not hit-testable: the game keeps the mouse
   w:AddToViewport(960)
   return ui
@@ -407,7 +453,9 @@ local function render()
     show_all(r.focus, on)
     local lab, val = row and row.label or "", row and row.key and value_text(row) or ""
     try(function() r.lab:SetText(FText(lab)); r.val:SetText(FText(val)) end)
-    show(r.la, on and val ~= ""); show(r.ra, on and val ~= "")
+    -- (no arrows on a key: Enter takes a new one)
+    local arrows = on and val ~= "" and row.kind ~= "key"
+    show(r.la, arrows); show(r.ra, arrows)
     if on then
       tint(r.lab, 0.022, 0.025, 0.05); tint(r.val, 0.022, 0.025, 0.05)
       tint(r.la, 0.02, 0.32, 0.9); tint(r.ra, 0.02, 0.32, 0.9)
@@ -466,6 +514,11 @@ function M.open(pawn)
   local s = M.state
   if s.open then return end
   local ok = s.ui and valid(s.ui.w) and try(function() return s.ui.w:IsInViewport() end)
+  -- (made again for a menu key rebound since: its Exit hint)
+  if ok and ctx.keys and s.ui.menuKey ~= ctx.keys.binding("menu") then
+    try(function() s.ui.w:RemoveFromParent() end)
+    ok = false
+  end
   if not ok then
     local built, ui = pcall(build)
     if not built then log("menu: couldn't be made: " .. tostring(ui)); return end
@@ -476,12 +529,20 @@ function M.open(pawn)
   s.open, s.held, s.changed, s.swallow = true, {}, {}, true
   if not selectable(s.sel) then s.sel = 2 end
   pause(pawn, true)
+  log("menu: making it: first draw")
   render()
   log("menu: opened")
+end
+local function capture_end()
+  M.state.capture = nil
+  if ctx.keys then ctx.keys.capture = nil end
+  -- (the key just taken, still down, isn't a press in the menu)
+  M.state.swallow = true
 end
 function M.close(pawn)
   local s = M.state
   if not s.open then return end
+  if s.capture then capture_end() end
   s.open = false
   if s.ui and valid(s.ui.w) then try(function() s.ui.w:SetVisibility(1) end) end
   pause(pawn, false)
@@ -508,7 +569,7 @@ end
 local function step(dir)
   local s = M.state
   local row = M.ROWS[s.sel]
-  if not row or not row.key then return end
+  if not row or not row.key or row.kind == "key" then return end
   local v = get(row.key)
   if row.kind == "bool" then v = not (v == true)
   elseif row.kind == "list" then
@@ -540,7 +601,29 @@ local function press(pawn)
     if ctx.reload_tune then ctx.reload_tune() end
     log("menu: back to settings.lua (menu.lua deleted)")
     render()
-  elseif row.kind == "bool" or row.kind == "list" then step(1) end
+  elseif row.kind == "bool" or row.kind == "list" then step(1)
+  elseif row.kind == "key" and ctx.keys then
+    -- the next key pressed (keys.lua hands it here instead of to its action)
+    s.capture = { id = row.id, key = row.key, t = os.clock() }
+    ctx.keys.capture = function(combo)
+      local c = s.capture
+      capture_end()
+      if not c then return end
+      local old = ctx.keys.binding(c.id)
+      local others = ctx.keys.on_combo(combo, c.id)
+      set(c.key, combo)
+      s.changed[c.key] = true
+      local swapped = {}
+      for _, a in ipairs(others) do
+        set("keys." .. a.id, old)
+        s.changed["keys." .. a.id] = true
+        swapped[#swapped + 1] = a.label
+      end
+      log(string.format("menu: %s on %s%s", c.id, combo, #swapped > 0 and (" (" .. table.concat(swapped, ", ") .. " moved to " .. old .. ")") or ""))
+      render()
+    end
+    render()
+  end
 end
 -- the tab's rows back to settings.lua's values (R / Y / Triangle), applied at once; menu.lua drops them on closing
 local function reset_tab()
@@ -553,7 +636,8 @@ local function reset_tab()
     local row = M.ROWS[i]
     if row.key then
       local v = get_in(base, row.key)
-      if v ~= nil and v ~= get(row.key) then
+      -- (a key unset in settings.lua goes back to its default: unset here too)
+      if (v ~= nil or row.kind == "key") and v ~= get(row.key) then
         set(row.key, v); s.changed[row.key] = true; n = n + 1
         if row.apply then applies[row.apply] = true end
       end
@@ -603,6 +687,17 @@ function M.tick(pawn)
   end
   if not s.open then return end
   local now = os.clock()
+  -- waiting for a key to bind: only Backspace / B (cancel) is read, and it gives up after 10 s
+  if s.capture then
+    local back = false
+    for _, k in ipairs(M.KEYS.back) do if down(k) then back = true end end
+    if back or now - s.capture.t > 10 then
+      log("menu: key not changed (" .. (back and "cancelled" or "no key in 10 s") .. ")")
+      capture_end()
+      render()
+    end
+    return
+  end
   for what, names in pairs(M.KEYS) do
     local on = false
     local pad

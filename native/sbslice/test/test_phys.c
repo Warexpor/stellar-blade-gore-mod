@@ -14,6 +14,10 @@ int mem_readable(u64 p, u64 n)
     for (int i = 0; i < nrd; i++) if (p >= rd[i].p && p + n <= rd[i].p + rd[i].n) return 1;
     return 0;
 }
+// (the memory scans of stats.c, for the Y and M commands: nothing to scan here)
+int mem_scan(u64 v, u64 *h, int m) { (void)v; (void)h; (void)m; return 0; }
+int mem_scan32(u32 v, u64 *h, int m) { (void)v; (void)h; (void)m; return 0; }
+int mem_scan_set(u64 a, int e, u64 *h, int m) { (void)a; (void)e; (void)h; (void)m; return 0; }
 static void *gm_out[256]; static int ngm, nfreed;
 static void *gm_malloc(u64 self, u64 n, u32 al) { (void)self; (void)al; void *p = calloc(1, n); gm_out[ngm++] = p; readable_add(p, n); return p; }
 static void gm_free(u64 self, void *p) { (void)self; for (int i = 0; i < ngm; i++) if (gm_out[i] == p) { gm_out[i] = 0; nfreed++; return; } fprintf(stderr, "FAIL: GMalloc freed %p it never gave\n", p); _exit(1); }
