@@ -3682,9 +3682,11 @@ end
 -- off her head: with her mesh frozen the head stayed but the hair flew to her neck (playtest). Only what was ticking
 -- is stopped, and started again.
 -- Photo mode (photo): her mesh stopped ticking took its poses and expressions with it (reported), so there it ticks on
--- and the pieces cut off her lie on a copy of her mesh instead (gore.hide_pieces), till photo mode closes
+-- and the pieces cut off her lie on a copy of her mesh instead (gore.hide_pieces), till photo mode closes. Alive only:
+-- in a death her mesh stops as before (on a copy her cut-off head went back onto her neck, 0.4.3 playtest)
 function screen.freeze(pawn, mesh, why, photo)
   if not valid(mesh) or try(function() return mesh:IsSimulatingPhysics(PELVIS) end) then return end
+  if photo and (goreCtx.dead_since() or screen.hpZero) then photo = nil end
   if photo and gore and gore.hide_pieces then
     if gore.pieceHid then return end
     if screen.frozenMesh then screen.unfreeze(mesh) end
