@@ -77,6 +77,7 @@ return {
                                -- (heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway, and every
                                -- death with gore.enabled false); false:
                                -- every death a full ragdoll
+    fallRagdoll = true,        -- a fall damage death is a ragdoll (false: her animated fall, when it is one)
     push = 1.0,                -- how hard the killing blow throws her body, times the default (0: no push of ours)
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
                                -- she falls and lies (a stiffer, more held-together body)

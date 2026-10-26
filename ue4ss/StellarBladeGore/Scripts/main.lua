@@ -3750,6 +3750,13 @@ local function animated_death(pawn, mesh, push)
     log(string.format("death: airborne %.2f s before it, the ragdoll instead", os.clock() - hm.airT))
     return false
   end
+  -- fall damage: the game kills her on the ground after a high drop with the stand death (Landing_Height_Damage,
+  -- the higher one's P_Eve_Dead_Falling is a ragdoll already), and she played her animated fall where she landed
+  if a.fallRagdoll ~= false and hm.land and os.clock() - hm.land.t < (a.landWindow or 2) then
+    log(string.format("death: %.2f s after landing from a %.0f cm drop (fall damage), the ragdoll instead",
+      os.clock() - hm.land.t, hm.land.drop))
+    return false
+  end
   -- nor with her feet off the floor while her movement doesn't say falling (killed in mid-air, it was already off):
   -- the fall played where she died, up in the air, and she hung there (0.4.0 report)
   local feet = try(function() local l = mesh:K2_GetComponentLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
@@ -4415,8 +4422,14 @@ local function tick()
     hm.low_arm(pawn, mesh)
     hm.yaw, hm.yawT = try(function() return pawn:K2_GetActorRotation().Yaw end), os.clock()
     -- falling or flying (an air combo) on this tick alive: a death in the next moment is a ragdoll (animated_death)
+    local z = try(function() return pawn:K2_GetActorLocation().Z end)
     if try(function() local cm = pawn.CharacterMovement; return cm:IsFalling() or cm.MovementMode == 5 end) then
       hm.airT = os.clock()
+      if z then hm.airTop = math.max(hm.airTop or z, z) end
+    elseif hm.airTop then
+      -- landed: the drop from the top of the fall, for a fall damage death on the ground (animated_death)
+      if z and hm.airTop - z >= ((tune.active or {}).landDrop or 400) then hm.land = { t = os.clock(), drop = hm.airTop - z } end
+      hm.airTop = nil
     end
     tp.mark("lethal")
   elseif active and ((tune.gore or {}).afterHits or {}).enabled ~= false and (tune.gore or {}).enabled ~= false

@@ -726,6 +726,9 @@ return {
                                -- hold its end pose; cuts happen on it, the cut piece falls by physics. A waist cut,
                                -- a split, heavy hits, explosions, airborne and ledge deaths stay ragdolls. false =
                                -- every death a ragdoll (the death shows' own key still fires, just not muted)
+    fallRagdoll = true,        -- a fall damage death is a ragdoll (false: the stand death's animated fall, as the game)
+    landDrop = 400,            -- a death within landWindow s of landing from a drop of this many cm is a ragdoll: the
+    landWindow = 2.0,          -- game's fall damage kills her on the ground with the stand death (Landing_Height_Damage)
     deathFreeze = true,        -- an animated death's pose held from its start till the cut is chosen, and through a
                                -- split till it ragdolls (she turned round in her fall before the cut came)
     animatedPool = false,      -- an animated death picks its fall at random from her death show's own and 8 made

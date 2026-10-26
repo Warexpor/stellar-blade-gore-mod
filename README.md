@@ -52,7 +52,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
 | `gore.lowArm.enabled` | `false` | A hit that leaves her under a quarter of her HP cuts her left arm off, and she fights on without it (once a life; it grows back with her HP full again, or at her next life). F3 → Lose Arm at Low HP. |
 | `gore.throw` | 250 | How fast a cut-off piece flies off, cm a second (`0`: it just drops). |
-| `active.animated` | `true` | Light deaths play her own fall animation, and only the cut-off pieces fall by physics; heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway. `false`: every death is a full ragdoll. |
+| `active.animated` | `true` | Light deaths play her own fall animation, and only the cut-off pieces fall by physics; heavy hits, explosions, falls and fall damage, waist cuts and splits are ragdolls anyway. `false`: every death is a full ragdoll. |
+| `active.fallRagdoll` | `true` | A fall damage death is a ragdoll: a drop that kills her once she has landed played her animated stand death. F3 → Fall Damage Ragdoll. |
 | `gore.headRagdoll` / `legRagdoll` / `armRagdoll` | `false` / `true` / `false` | A beheading, a leg cut or an arm cut during her animated fall turns it into a full ragdoll (`false`: she falls on without it). |
 | `gore.armRagdollChance` | `0.4` | With `armRagdoll` off, the chance an arm cut during her animated fall ragdolls her anyway (each arm rolled). |
 | `gore.headRagdollChance` | `0.6` | With `headRagdoll` off, the chance a beheading during her animated fall ragdolls her (the rest play the fall on headless). |
