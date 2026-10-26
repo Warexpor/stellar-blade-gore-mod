@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.4.2"
+local VERSION = "0.4.3"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -3680,9 +3680,21 @@ function screen.time_stopped(pawn, gs)
 end
 -- her mesh (and hair) stop ticking / tick again. Her hair's meshes run their own animation (and SBHair its own sim)
 -- off her head: with her mesh frozen the head stayed but the hair flew to her neck (playtest). Only what was ticking
--- is stopped, and started again
-function screen.freeze(pawn, mesh, why)
-  if screen.frozenMesh or not valid(mesh) or try(function() return mesh:IsSimulatingPhysics(PELVIS) end) then return end
+-- is stopped, and started again.
+-- Photo mode (photo): her mesh stopped ticking took its poses and expressions with it (reported), so there it ticks on
+-- and the pieces cut off her lie on a copy of her mesh instead (gore.hide_pieces), till photo mode closes
+function screen.freeze(pawn, mesh, why, photo)
+  if not valid(mesh) or try(function() return mesh:IsSimulatingPhysics(PELVIS) end) then return end
+  if photo and gore and gore.hide_pieces then
+    if gore.pieceHid then return end
+    if screen.frozenMesh then screen.unfreeze(mesh) end
+    local np = gore.hide_pieces(pawn, mesh, true)
+    if gore.pieceHid and gore.pieceHid.face then pcall(screen.head_hook, mesh) end
+    log(string.format("photo mode (%s) with %d piece(s) off her alive: her mesh ticks on (poses, expressions), the pieces on their copy till it closes",
+      why, np))
+    return
+  end
+  if screen.frozenMesh then return end
   try(function() mesh:SetComponentTickEnabled(false) end)
   -- (photo mode updates her bones itself with her tick off, playtest: the skeleton update is skipped too)
   try(function() mesh.bNoSkeletonUpdate = true end)
@@ -3701,6 +3713,11 @@ function screen.freeze(pawn, mesh, why)
     why, #screen.frozenHair))
 end
 function screen.unfreeze(mesh)
+  if gore and gore.pieceHid then
+    pcall(screen.head_end)
+    local np, nr = gore.hide_pieces(nil, nil, false)
+    log(string.format("photo mode over: %d piece(s) back on her, with %d part(s) riding them; their copy gone", np, nr))
+  end
   local fz = screen.frozenMesh
   if not fz then return end
   screen.frozenMesh = nil
@@ -3743,7 +3760,7 @@ function screen.photo_widget(o, cls, pawn_made)
   end
   ;(pawn_made and log or lg.v)(string.format("photo mode %s made: %s%s", pawn_made and "pawn" or "widget", cls, cut and "" or " (no piece off her)"))
   if cut then
-    screen.freeze(pawn, mesh, "photo mode's " .. (pawn_made and "pawn " or "widget ") .. cls)
+    screen.freeze(pawn, mesh, "photo mode's " .. (pawn_made and "pawn " or "widget ") .. cls, true)
     screen.photoHold = os.clock() + screen.PHOTO_HOLD
   end
 end
@@ -3756,17 +3773,102 @@ local function photo_widget_up()
   end
   return false
 end
+-- photo mode with her head cut off, on the piece's copy (gore.hide_pieces): her face took its expression from her
+-- body's animation curves, and posed by the copy (no animation) it went blank and ignored photo mode's expressions and
+-- look at the camera (playtest). Her tick doesn't run in photo mode, but her animation does, so its Blueprint update is
+-- hooked (once, on the game thread) and each frame her body's curves for the face's morphs are set on the face. Her
+-- hair on the head is reset to it for a few frames after each pose change: the pose brings its own hair snapshot,
+-- which threw it back where her head would be (playtest)
+screen.head = { hooked = nil, tried = false, cur = nil }
+function screen.head_hook(mesh)
+  local hd = screen.head
+  if hd.hooked or hd.tried then return end
+  hd.tried = true
+  local paths = {}
+  for _, inst in ipairs({ try(function() return mesh:GetAnimInstance() end), try(function() return mesh:GetPostProcessInstance() end) }) do
+    local full = valid(inst) and try(function() return inst:GetClass():GetFullName() end)
+    local path = full and full:match("^%S+%s+(.+)$")
+    if path then paths[#paths + 1] = path .. ":BlueprintUpdateAnimation" end
+  end
+  for _, p in ipairs(paths) do
+    if valid(try(function() return StaticFindObject(p) end)) then
+      local ok = pcall(RegisterHook, p, function()
+        local ok2, err = pcall(screen.head_tick)
+        if not ok2 and not hd.err then hd.err = true; log("photo mode head: " .. tostring(err)) end
+      end)
+      if ok then hd.hooked = p; break end
+    end
+  end
+  log("photo mode: a cut-off head follows photo mode's face settings " .. (hd.hooked and "through " .. hd.hooked
+    or "never: no Blueprint update of hers to hook (" .. table.concat(paths, ", ") .. ")"))
+end
+function screen.head_tick()
+  local h = gore and gore.pieceHid
+  local hd = screen.head
+  local pawn = cachedPawn
+  if not (h and valid(h.face) and valid(pawn)) then
+    if hd.cur then screen.head_end() end
+    return
+  end
+  local cur = hd.cur
+  if not cur then
+    local anim = try(function() return pawn.Mesh:GetAnimInstance() end)
+    if not valid(anim) then return end
+    local set = dface.names(h.face)
+    cur = { face = h.face, anim = anim, names = {}, fn = {}, vals = {}, reset = 0, hair = {}, n = 0 }
+    for nm, _ in pairs(set) do cur.names[#cur.names + 1] = nm; cur.fn[#cur.fn + 1] = FName(nm) end
+    local sk = StaticFindObject("/Script/Engine.SkeletalMeshComponent")
+    for _, r in ipairs(h.riders or {}) do
+      if valid(r.c) and try(function() return r.c:IsA(sk) end) then cur.hair[#cur.hair + 1] = r.c end
+    end
+    for _, k in ipairs(h.posed or {}) do cur.hair[#cur.hair + 1] = k end
+    hd.cur = cur
+    log(string.format("photo mode: the cut-off head's face takes her body's curves (%d morphs), %d part(s) of her hair reset on a pose change",
+      #cur.names, #cur.hair))
+  end
+  local set = 0
+  for i, f in ipairs(cur.fn) do
+    local v = try(function() return cur.anim:GetCurveValue(f) end) or 0
+    if math.abs(v - (cur.vals[i] or 0)) > 0.002 then
+      cur.vals[i] = v
+      try(function() cur.face:SetMorphTarget(f, v, false) end)
+      set = set + 1
+    end
+  end
+  cur.n = cur.n + 1
+  if set > 0 and not cur.said then cur.said = true; log(string.format("photo mode: the cut-off head's face moved (%d morphs)", set)) end
+  local sig = tostring(try(function() return pawn.PoseName_PhotoMode:ToString() end)) .. "/" ..
+    tostring(try(function() return pawn.bChangedPose_PhotoMode end))
+  if cur.sig and sig ~= cur.sig then
+    cur.reset = 10
+    log("photo mode: her pose changed (" .. sig .. "): the hair on her cut-off head reset to it")
+  end
+  cur.sig = sig
+  if cur.reset > 0 then
+    cur.reset = cur.reset - 1
+    for _, k in ipairs(cur.hair) do if valid(k) then try(function() k:ForceClothNextUpdateTeleportAndReset() end) end end
+  end
+end
+-- the face's morphs set from her curves back off as photo mode closes (her body's curves drive it again)
+function screen.head_end()
+  local cur = screen.head.cur
+  screen.head.cur = nil
+  if not cur or not valid(cur.face) then return end
+  for i, f in ipairs(cur.fn) do
+    if (cur.vals[i] or 0) ~= 0 then try(function() cur.face:SetMorphTarget(f, 0, true) end) end
+  end
+end
 function screen.photo_freeze(pawn, mesh)
   local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
   local paused = valid(gs) and try(function() return gs:IsGamePaused(pawn) end)
   screen.view(pawn, gs)
   local stopped = screen.time_stopped(pawn, gs)
   local widget = photo_widget_up()
-  paused = paused or stopped or widget or screen.vtPhoto or screen.photoOn or screen.photoLive
-    or os.clock() < (screen.photoHold or 0)
+  local photo = widget or screen.vtPhoto or screen.photoOn or screen.photoLive or os.clock() < (screen.photoHold or 0)
+  paused = paused or stopped or photo
   if paused then
     screen.freeze(pawn, mesh, screen.vtPhoto and "photo mode's view" or widget and "photo mode's widget"
-      or (screen.photoOn or screen.photoLive) and "photo mode" or stopped and "the game's clock stopped" or "paused")
+      or (screen.photoOn or screen.photoLive) and "photo mode" or stopped and "the game's clock stopped" or "paused", photo)
   else
     screen.unfreeze(mesh)
     -- (where her head is the last frame before a pause, for the log as photo mode opens: the 0.5 s poll's was off by
@@ -3790,8 +3892,15 @@ function screen.photo_unhide(pawn)
     screen.liveNext = now + 0.5
     -- the manager's +0x84 went back to 0 a second after photo mode opened on her alive (playtest): photo mode is
     -- also told by the player's pawn or the camera's view target being photo mode's own
-    local st = gore.photo_state() or ""
+    local st = gore.photo_state(pawn) or ""
     local m84 = tonumber(st:match(" 84=(%-?%d+)"))
+    -- (hidden with photo mode's own option: left so)
+    screen.ownHide = st:match(" own=1") ~= nil
+    -- (her caps and stubs, actors of their own, hidden and shown with her)
+    if gore.photo_hide and screen.ownHide ~= (gore.photoHid ~= nil) then
+      local n = gore.photo_hide(pawn, screen.ownHide)
+      log(string.format("photo mode %s her: %d cap(s) and stub(s) with her", screen.ownHide and "hides" or "shows", n))
+    end
     local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
     local cls = function(o) return valid(o) and (try(function() return o:GetClass():GetFName():ToString() end) or "?") or "none" end
     local pp = valid(gs) and cls(try(function() return gs:GetPlayerPawn(pawn, 0) end)) or "?"
@@ -3809,8 +3918,11 @@ function screen.photo_unhide(pawn)
   local on = screen.vtPhoto or screen.photoOn or screen.photoLive
   if not on then
     if screen.unhide then screen.unhide_end(pawn) end
+    screen.ownHide = nil
+    if gore and gore.photoHid then gore.photo_hide(pawn, false) end
     return
   end
+  if screen.ownHide then return end
   local u = screen.unhide
   if not u then u = screen.unhide_start(pawn) end
   local mesh = try(function() return pawn.Mesh end)
@@ -3831,6 +3943,8 @@ function screen.photo_unhide(pawn)
   local seen = {}
   for _, c in ipairs(comps) do
     local a = valid(c) and c:GetAddress()
+    -- (what rode a piece cut off her, hidden while photo mode is on: gore.hide_pieces)
+    if a and gore and gore.pieceHid and gore.pieceHid.set[a] then a = nil end
     if a and not seen[a] then
       seen[a] = true
       local name = function() return try(function() return c:GetName() end) or "?" end
@@ -3937,7 +4051,7 @@ function screen.photo_guard(pawn, mesh)
   if screen.stillTill and rag and rag.hold_still then
     if os.clock() < screen.stillTill then rag.hold_still() else screen.stillTill = nil end
   end
-  screen.watchFreeze = screen.frozenMesh ~= nil or (gore.cuts_on(mesh)) > 0
+  screen.watchFreeze = screen.frozenMesh ~= nil or gore.pieceHid ~= nil or (gore.cuts_on(mesh)) > 0
   if not screen.watchFreeze then screen.clock, screen.stopped = nil, nil end
   if screen.photoOn then return screen.photo_watch(pawn, mesh) end
   local a = mesh:GetAddress()

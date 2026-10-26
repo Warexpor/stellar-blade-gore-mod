@@ -1172,6 +1172,29 @@ function M.pool_take(pawn, kind, at)
   if at then try(function() e.a:K2_SetActorLocation(at, false, {}, true) end) end
   return e
 end
+-- photo mode's own hide option hides her actor, and with it every part of her, but not her caps and stubs: actors of
+-- their own, on her bones, they stayed floating where her stumps were (reported). Hidden along with her (on), and
+-- what was hidden here shown again (off); an enemy's are left alone
+M.photoHid = nil
+function M.photo_hide(pawn, on)
+  if on then
+    if M.photoHid or not valid(pawn) then return 0 end
+    local pa, hid = addr(pawn), {}
+    for _, a in ipairs(caps) do
+      if valid(a) and try(function() return a.bHidden end) == false
+        and addr(try(function() return a:GetAttachParentActor() end)) == pa then
+        try(function() a:SetActorHiddenInGame(true) end)
+        hid[#hid + 1] = a
+      end
+    end
+    M.photoHid = hid
+    return #hid
+  end
+  local hid = M.photoHid
+  M.photoHid = nil
+  for _, a in ipairs(hid or {}) do if valid(a) then try(function() a:SetActorHiddenInGame(false) end) end end
+  return hid and #hid or 0
+end
 -- one more made, while either pool is short (a level reload leaves them gone: dropped as they're found so)
 function M.pool_fill(pawn)
   for _, kind in ipairs({ "lid", "plain" }) do
@@ -1468,9 +1491,10 @@ function M.core(pawn, mesh, o, bone, rides, t, spine)
       if not bn.gold[t.tris[i]] then for k = 0, 2 do src[#src + 1] = t.tris[i + k] end end
     end
   end
-  -- (and along the limb or spine, not square to the cut: a slanted cut tipped the bone with it, playtest. Within 50
-  -- degrees of the cut's normal; the frame's x and y squared to it)
-  if o.axis and dot(o.axis, z) > 0.64 then
+  -- (and along the limb or spine, not square to the cut: a slanted cut tipped the bone with it, playtest. Within 80
+  -- degrees of the cut's normal; the frame's x and y squared to it. Within 50 a steep cut across a hanging arm left
+  -- the bone standing along the cut's normal, straight down the stump, playtest)
+  if o.axis and dot(o.axis, z) > 0.17 then
     local za = o.axis
     local xa = norm(sub(x, scale(za, dot(x, za))))
     if xa then
@@ -2832,8 +2856,9 @@ local function stage_cut(q)
     q.rideB = (nm and nm ~= "None") and nm or q.parent or q.bone
   end
   q.rideL = q.c.face_result and q.bone or ride("lb", q.bone)
-  -- (and the spine bones the stubs look for her back on: back_on)
-  q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL, q.parent or q.bone, q.bone, "Bip001-Spine1" } } })
+  -- (and the spine bones the stubs look for her back on: back_on, and the cut bone's far end: the stump bone's axis)
+  local far = PARTS[q.bone] and PARTS[q.bone].to
+  q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL, q.parent or q.bone, q.bone, "Bip001-Spine1", far } } })
   q.caps, q.kinds, q.stubs = {}, {}, {}
   return true
 end
@@ -2884,9 +2909,12 @@ function M.stage_caps(q)
       if q.ob and q.ob.z then q.ob.boneAt = M.stub_centre(q.mesh, q.ob, norm(q.ob.z), q.parent or q.bone, true) end
       if q.ol and q.ol.z then q.ol.boneAt = M.stub_centre(q.mesh, q.ol, norm(q.ol.z), q.bone, true) end
     end
-    -- (the cut bone's own direction, for the bone in the stump: out of each opening)
+    -- (the cut bone's own direction, for the bone in the stump: out of each opening. As noted at the cut, where the
+    -- openings are: read live a tick later, a falling arm had moved on)
     local part = PARTS[q.bone]
-    local ja, jb = part and bone_loc(q.mesh, part.from or q.bone), part and part.to and bone_loc(q.mesh, part.to)
+    local ps = q.posed and q.posed[addr(q.mesh)] or {}
+    local function at(b) return b and (ps[b] and ps[b].t or bone_loc(q.mesh, b)) end
+    local ja, jb = part and at(part.from or q.bone), part and at(part.to)
     local axis = ja and jb and norm(vec(jb.X - ja.X, jb.Y - ja.Y, jb.Z - ja.Z))
     for _, o in ipairs({ q.ob or false, q.ol or false }) do
       if o and o.z and axis then
@@ -4723,6 +4751,137 @@ function M.cut_parts(mesh)
   for _, c in ipairs(cuts) do if c.addr == a and PARTS[c.bone] then out[#out + 1] = c.bone end end
   return out
 end
+-- photo mode with a piece off her alive: her mesh used to stop ticking (its animation pulled the piece back onto her,
+-- physics being paused), and photo mode's poses and expressions never showed (reported). Now the piece goes onto a
+-- copy of her mesh as photo mode opens: her cut weights ("y"), her pose with every bone but the piece's scaled to
+-- nothing ("P"), not ticking or simulating, so it lies where it fell. On her the piece's bones are hidden (her face's
+-- too with a head), and what rides them (caps, stubs, bleeds, accessories on their sockets) moves onto the copy's same
+-- bone, where it sits as it did. Her mesh poses on. As photo mode closes it all goes back and the copy is destroyed.
+-- Returns how many pieces went onto the copy, and what rode them
+M.pieceHid = nil
+function M.hide_pieces(pawn, mesh, on)
+  local h = M.pieceHid
+  if not on then
+    M.pieceHid = nil
+    if not h then return 0, 0 end
+    for _, r in ipairs(h.riders) do
+      if valid(r.c) and valid(h.mesh) then try(function() r.c:K2_AttachToComponent(h.mesh, r.socket, 0, 0, 0, false) end) end
+    end
+    if valid(h.face) and valid(h.mesh) then
+      try(function() h.face:SetMasterPoseComponent(h.mesh, true) end)
+      command(string.format("Q%x", addr(h.face)))
+    end
+    for _, k in ipairs(h.posed or {}) do
+      if valid(k) and valid(h.mesh) then try(function() k:SetMasterPoseComponent(h.mesh, true) end) end
+    end
+    for _, e in ipairs(h.bones) do if valid(e.c) then try(function() e.c:UnHideBoneByName(FName(e.b)) end) end end
+    for _, c in ipairs(h.hidden) do if valid(c) then try(function() c:SetVisibility(true, false) end) end end
+    for _, c in ipairs(h.copies) do
+      local a = addr(c)
+      for i = #clones, 1, -1 do if addr(clones[i]) == a then table.remove(clones, i) end end
+      if a then forced[a] = nil end
+      if valid(c) then try(function() c:K2_DestroyComponent(c) end) end
+    end
+    return #h.roots, #h.riders
+  end
+  if h then return #h.roots, #h.riders end
+  local roots = M.cut_parts(mesh)
+  if #roots == 0 then return 0, 0 end
+  local idx = {}
+  for _, b in ipairs(roots) do
+    local i = try(function() return mesh:GetBoneIndex(FName(b)) end)
+    if i and i >= 0 then idx[#idx + 1] = string.format("%x", i) end
+  end
+  if #idx == 0 then return 0, 0 end
+  local c = clone_of(pawn, mesh)
+  if not c then log("photo mode: no copy for the piece cut off her"); return 0, 0 end
+  h = { mesh = mesh, roots = roots, copies = { c }, bones = {}, riders = {}, hidden = {} }
+  M.pieceHid = h
+  try(function() c.bNoSkeletonUpdate = true end)
+  place_like(c, mesh)
+  local y = command(string.format("y%x,0,%x", addr(mesh), addr(c)))
+  local p = command(string.format("P%x,%x,%s", addr(mesh), addr(c), table.concat(idx, ",")))
+  if y:sub(1, 9) ~= "ok copied" or p:sub(1, 8) ~= "ok piece" then
+    log(string.format("photo mode: the piece's copy failed (weights %s, pose %s): her mesh poses with the piece hidden", y, p))
+    for i = #clones, 1, -1 do if addr(clones[i]) == addr(c) then table.remove(clones, i) end end
+    try(function() c:K2_DestroyComponent(c) end)
+    h.copies = {}
+    c = nil
+  else
+    try(function() c:SetHiddenInGame(false, false) end)
+  end
+  local face = face_of(pawn, mesh)
+  local head = false
+  for _, b in ipairs(roots) do head = head or b == "Bip001-Head" end
+  -- a head takes her own face along, posed by the copy (a copy of the face lost her face's look and expression and
+  -- its borrowed neck bone, playtest): its bones follow the copy's by name, the borrowed ones made to again ("Q")
+  local fq
+  if head and c and valid(face) and try(function() face:SetMasterPoseComponent(c, true); return true end) then
+    h.face = face
+    fq = command(string.format("Q%x", addr(face)))
+  end
+  for _, b in ipairs(roots) do
+    for _, m in ipairs({ mesh, not h.face and face or nil }) do
+      if valid(m) and try(function() return m:GetBoneIndex(FName(b)) end) ~= -1
+        and try(function() m:HideBoneByName(FName(b), 0); return true end) then
+        h.bones[#h.bones + 1] = { c = m, b = b }
+      end
+    end
+  end
+  local function under(s)
+    if head and (s:find("Hair") or s:find("Head") or s:find("Face") or s:find("Ear")) then return true end
+    local bone = try(function() return mesh:GetSocketBoneName(FName(s)):ToString() end) or s
+    for _, b in ipairs(roots) do
+      if bone == b or try(function() return mesh:BoneIsChildOf(FName(bone), FName(b)) end) == true then return true end
+    end
+    return false
+  end
+  local kids = {}
+  try(function() mesh.AttachChildren:ForEach(function(_, e) kids[#kids + 1] = e:get() end) end)
+  local fa = addr(face)
+  for _, k in ipairs(kids) do
+    local a = valid(k) and addr(k)
+    local socket = a and a ~= fa and try(function() return k:GetAttachSocketName() end)
+    local s = socket and try(function() return socket:ToString() end)
+    if s and s ~= "None" and under(s) then
+      -- (KeepRelative: the copy's bone is where hers was, the piece's place)
+      if c and try(function() k:K2_AttachToComponent(c, socket, 0, 0, 0, false); return true end) then
+        h.riders[#h.riders + 1] = { c = k, socket = socket }
+      elseif try(function() return k:IsVisible() end) == true and try(function() k:SetVisibility(false, false); return true end) then
+        h.hidden[#h.hidden + 1] = k
+      end
+    end
+  end
+  -- (her hair rides the head's sockets on her mesh, or her face, which goes along.) Her ponytail is posed by her body
+  -- (SBPonytail: no animation of its own, its master her mesh): it followed her posing head back onto her neck
+  -- (playtest), so it is posed by the copy meanwhile, as is any other hair part her body poses
+  h.posed = {}
+  if head and c then
+    local hairs = hair_of(pawn)
+    for _, nm in ipairs({ "SBHair", "SBPonytail", "SBPonytailShort" }) do hairs[#hairs + 1] = try(function() return pawn[nm] end) end
+    local me, seen = addr(mesh), {}
+    for _, k in ipairs(hairs) do
+      local a = valid(k) and addr(k)
+      local master = a and try(function() return k.MasterPoseComponent:Get() end)
+      if a and not seen[a] and master and addr(master) == me
+        and try(function() k:SetMasterPoseComponent(c, true); return true end) then
+        h.posed[#h.posed + 1] = k
+      end
+      if a then seen[a] = true end
+    end
+  end
+  -- (what is hidden here, for main.lua's showing her again up close to leave alone)
+  h.set = {}
+  for _, k in ipairs(h.hidden) do local a = addr(k); if a then h.set[a] = true end end
+  log(string.format("photo mode: %s cut off her %s (weights %s, pose %s%s), %d part(s) riding it moved over, %d hidden",
+    table.concat(roots, ", "), c and "on a copy of her mesh" or "hidden", y, p, fq and ", her face along: " .. fq or "",
+    #h.riders + #h.posed, #h.hidden))
+  local names = {}
+  for _, r in ipairs(h.riders) do names[#names + 1] = (name_of(r.c)) .. "@" .. (try(function() return r.socket:ToString() end) or "?") end
+  for _, k in ipairs(h.posed) do names[#names + 1] = name_of(k) .. " (posed)" end
+  if #names > 0 then log("photo mode: onto the copy: " .. table.concat(names, ", ")) end
+  return #roots, #h.riders
+end
 function M.slice(pawn, mesh, hit, why, kind) return start(pawn, mesh, hit, why, kind or "limb") end
 -- a rolled limb cut's further limbs (tune.gore.death.moreLimbs): each one more with that chance, at most two more,
 -- queued after it; each takes the arm or thigh nearest the hit not cut yet and flies the way the first one did
@@ -6239,10 +6398,12 @@ end
 
 -- photo mode entered directly (the key never reaches it in a death, and the game's check says no to her dead)
 -- (her mesh shielded from photo mode's collision switch, which ended her ragdoll: sbslice.dll's photo_shield)
--- photo mode's manager as it is now ("ok photo state: mgr 38=.. 84=.. ...", 84 not 0 while photo mode is on)
-function M.photo_state()
+-- photo mode's manager as it is now ("ok photo state: mgr 38=.. 84=.. ...", 84 not 0 while photo mode is on); with her
+-- actor, " own=1" too while photo mode's own option hides her
+function M.photo_state(actor)
   if native.state ~= "ready" then return "sbslice " .. native.state end
-  return command("f3")
+  local a = actor and addr(actor)
+  return command(a and string.format("f3%x", a) or "f3")
 end
 function M.photo_open(mesh)
   if native.state ~= "ready" then return "sbslice " .. native.state end
@@ -6281,7 +6442,7 @@ function M.state() return native.state end
 function M.forget()
   spawned, bleeds, caps, cuts, forced, clones, rehomed = {}, {}, {}, {}, {}, {}, {}
   later, hung, queued, skinned, hid = {}, {}, {}, {}, {}
-  M.held, M.held_sword, M.blocking = {}, nil, nil
+  M.held, M.held_sword, M.blocking, M.pieceHid, M.photoHid = {}, nil, nil, nil, nil
   bleed_logged = false
   pending, collision_saved, self_saved, copy_watch, limb_watch = nil, nil, nil, nil, nil
   enemy.owned, enemy.cur, enemy.faced, enemy.faded, enemy.shrink = setmetatable({}, { __mode = "k" }), nil, {}, {}, {}

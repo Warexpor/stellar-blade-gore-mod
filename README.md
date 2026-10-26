@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.4.2. See the [changelog](CHANGELOG.md).
+Version 0.4.3. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,13 +10,13 @@ Version 0.4.2. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.4.2.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.4.3.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death, her death face and voice;
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.4.2`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.4.3`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -122,7 +122,7 @@ These are the defaults; the F3 menu's Keys tab changes them. Its last two rows a
 
 F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own).
 
-Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 held for a second (`holdPad`, `holdPadFor`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body (and holds the death, as Shift+F4 does); the game's own photo mode key works with pieces cut off her too (she holds still in it while alive). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
+Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 held for a second (`holdPad`, `holdPadFor`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body (and holds the death, as Shift+F4 does); the game's own photo mode key works with pieces cut off her too (while she lives, what was cut off stays where it fell and its poses and expressions apply to her; its hide option hides her caps and stubs too). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). F6 reloads the settings whether dev is on or not. On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
 
 ## Building from source
 

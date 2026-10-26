@@ -1,5 +1,9 @@
 # To do
 
+## 0.4.3
+
+- Photo mode with her head cut off alive: its hair (ponytail or head hair, not told apart yet) snaps towards her body on a pose change, though it rides the piece's copy and its cloth is reset for 10 frames after the change (a pose seems to bring its own hair snapshot, `PonytailSnapshotDataPtr` / `HairSnapshotDataPtr`). Expressions show on the head only in part (its brows, from her face curves) and look at the camera not at all: most of both are facial bones under her head, which the copy doesn't move. Copying them over each frame (sbslice `Z`, tried and rolled back) is the lead.
+
 ## 0.4.2
 
 - Steeply leaned arm and leg cuts (25-45 deg along the blade): the stump cap misses part of the ring on many outfits (the 0.4.1 outfit sweep: most of its ~2,990 failing cuts, all failing on 0.4.0 too). The skin's layers are told apart by how far round the bone's point on the cut each section goes (`core_classify`, 11 of 16 directions), and on a leaned cut that point lies near the oval opening's edge. Measuring round the rim points' mean instead fixed some but broke ~300 others (far rims of capes and straps skew the mean), so it was reverted; it needs a centre that ignores loose pieces.

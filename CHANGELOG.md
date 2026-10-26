@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Photo mode's poses and expressions apply again with a piece cut off her alive (Lose Arm at Low HP, F9): her mesh stopped ticking while photo mode was on, so the arm on the floor wasn't pulled back onto her by her animation, and nothing photo mode asked of her body or face showed (reported). Her mesh now ticks on, and the cut-off part moves onto a copy of her mesh as photo mode opens (her cut skin, her pose with only the piece's bones kept, not ticking), so it stays where it fell with its caps, stubs and bleeds while she poses; its bones on her are hidden meanwhile. All of it goes back as photo mode closes (sbslice `P`). A cut-off head takes her face, hair and ponytail along; its face takes her body's face curves each frame (through her animation's update, which photo mode lets run), so an expression shows on it only in part (its brows), and look at the camera doesn't reach it. Its hair can still snap towards her body on a pose change.
+- Photo mode's hide option hides her caps and stubs with her, and showing her shows them again (reported): actors of their own on her bones, they stayed floating where her stumps were.
+- The bone in a limb's stump runs along the limb on a steep cut too (playtest): past 50 degrees off square it stood along the cut's normal, straight down a hanging arm's stump. It follows the limb up to 80 degrees now, from where the limb was at the cut.
+- Photo mode can hide the drone (and Eve) again (reported): the patch that keeps photo mode's camera from hiding her up close (`photoUnhide`) also took out photo mode's own hide option. That reason is left to the game now, and showing her again up close leaves her hidden when photo mode's option hides her.
+
 ## 0.4.2
 
 - Lose Arm at Low HP (`gore.lowArm.enabled`, off by default, in F3 → Gore): a hit that leaves her under a quarter of her HP cuts her left arm off where she stands, and she fights on without it. Once a life: it grows back once her HP is full again, or at her next life (`below` in `tune.lua` sets the mark).

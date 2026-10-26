@@ -3164,6 +3164,60 @@ static void copy_pose(u64 src, u64 dst)
     skin_result(msg);
 }
 
+// "P<src>,<dst>,<root>,...": src's pose onto dst (as "p"), every bone outside the roots' subtrees scaled to nothing, so
+// dst shows only the parts cut off src (each root a cut part's bone index). Photo mode with a piece off her alive:
+// her mesh poses on, and the piece lies on this copy, which neither ticks nor simulates, so the pose stays as written
+// and is drawn from it when the copy's render state is made. Answer "ok piece <bones kept> of <bones>"
+#define MAX_PIECE_ROOTS 8
+static void piece_pose(u64 src, u64 dst, const u64 *roots, int nr)
+{
+    u64 sm = *(u64 *)(dst + SC_SKELETAL_MESH);
+    const unsigned char *bi = sm ? *(const unsigned char **)(sm + SM_REF_BONE_INFO) : 0;
+    int nb = sm ? *(int *)(sm + SM_REF_BONE_INFO + 8) : 0;
+    if (!bi || nb <= 0 || nb > MAX_BONES) { skin_result("err no skeleton"); return; }
+    if (sm != *(u64 *)(src + SC_SKELETAL_MESH)) { skin_result("err not the same mesh"); return; }
+    static unsigned char keep[MAX_BONES];
+    int kept = 0;
+    for (int b = 0; b < nb; b++) {
+        keep[b] = 0;
+        for (int j = b, d = 0; j >= 0 && d < MAX_BONES && !keep[b]; j = *(const int *)(bi + (u64)j * 0xc + 8), d++)
+            for (int r = 0; r < nr; r++) if ((u64)j == roots[r]) keep[b] = 1;
+        kept += keep[b];
+    }
+    if (!kept) { skin_result("err no root bone"); return; }
+    // and the piece's collapse bones: a held sink whose anchor is a piece bone (a head's neck skin collapses onto a
+    // neck helper held at the head, playtest: zeroed with her body it drew the neck out from her shoulders to the
+    // head on the floor), on her mesh's asset or a master-posed part's (her face's), matched to dst's bones by name
+    int sinkb = 0;
+    for (int i = 0; i < nsinks; i++) {
+        if (sinks[i].anchor < 0 || !sinks[i].mesh) continue;
+        const unsigned char *si = *(const unsigned char **)(sinks[i].mesh + SM_REF_BONE_INFO);
+        int sn = *(int *)(sinks[i].mesh + SM_REF_BONE_INFO + 8);
+        if (!si || sinks[i].anchor >= sn || sinks[i].bone < 0 || sinks[i].bone >= sn) continue;
+        u64 an = *(const u64 *)(si + (u64)sinks[i].anchor * 0xc), bn = *(const u64 *)(si + (u64)sinks[i].bone * 0xc);
+        int ka = 0, kb = -1;
+        for (int b = 0; b < nb; b++) {
+            u64 nm = *(const u64 *)(bi + (u64)b * 0xc);
+            if (nm == an && keep[b]) ka = 1;
+            if (nm == bn) kb = b;
+        }
+        if (ka && kb >= 0 && !keep[kb]) { keep[kb] = 1; kept++; sinkb++; }
+    }
+    for (int buf = 0; buf < 2; buf++) {
+        u64 sa = src + SC_SPACE_BASES + (u64)buf * 0x10, da = dst + SC_SPACE_BASES + (u64)buf * 0x10;
+        float *sp = *(float **)sa, *dp = *(float **)da;
+        int sn = *(int *)(sa + 8), dn = *(int *)(da + 8);
+        if (!sp || !dp || sn != dn || sn != nb) { skin_result("err pose buffers differ"); return; }
+        for (int i = 0; i < sn * 12; i++) dp[i] = sp[i];
+        for (int b = 0; b < nb; b++) if (!keep[b]) dp[b * 12 + 8] = dp[b * 12 + 9] = dp[b * 12 + 10] = 0;
+    }
+    char msg[64], *o = put(msg, "ok piece ");
+    o = put_int(o, kept); o = put(o, " of "); o = put_int(o, nb);
+    o = put(o, ", "); o = put_int(o, sinkb); o = put(o, " sinks");
+    *o = 0;
+    skin_result(msg);
+}
+
 // rewrite every held seam's collapse point so it sits where the anchor (the rim's bone) puts it now. The sink bone
 // keeps being posed on its own — a twist, a corrective, a driver — and one inverse-bind matrix can't cancel that
 // unless it is recomputed from the pose about to be skinned. comps lists the components still alive (n 0: all)
@@ -4806,14 +4860,33 @@ static int photo_unshield(void)
 // reasons is set: +0x220 (hidden as photo mode opened), +0x231, +0x228 (a count), +0x22d, +0x22f (the close-range
 // one, 0x14239b2c0: the camera within SBPhotoMode_CloseRange_BoneToCamDistanceThreshold of her bone). Keeping
 // +0x22f alone from being set wasn't enough (playtest), so "f6<0|1>" NOPs the jumps of all but +0x220 (1: a subject
-// hidden before photo mode stays hidden) or puts them back (0), each one's bytes checked first. Photo mode's own
-// hide-a-subject option goes with them. Answer "ok photo close <0|1> (was <0|1>)".
+// hidden before photo mode stays hidden) and +0x22d or puts them back (0), each one's bytes checked first. +0x22d is
+// photo mode's own hide-a-subject option (written from the option's value at 0x14237f230 and 0x142380e4e): NOPped
+// with the rest, the drone and Eve could no longer be hidden (reported). Answer "ok photo close <0|1> (was <0|1>)".
 static const struct { u32 rva; unsigned char len, code[6]; } photo_jumps[] = {
     { 0x239c45b, 6, { 0x0f, 0x85, 0x89, 0x00, 0x00, 0x00 } }, // +0x231
     { 0x239c46b, 2, { 0x7f, 0x7d } },                         // +0x228
-    { 0x239c478, 2, { 0x75, 0x70 } },                         // +0x22d
     { 0x239c485, 2, { 0x75, 0x63 } },                         // +0x22f
 };
+// Her own subject's hide option, so the script's showing her again up close leaves her hidden when that is asked:
+// photo mode's subjects are a TMap<FName, subject> at manager +0x158 (elements 0x2b0 apart, the subject at +8, its
+// actor a TWeakObjectPtr at subject +8, registered while subject +0x277 is set: 0x14235fc60, 0x1423c1220). " own=<0|1>"
+// for the subject that is her actor, " own=-" when none is
+static char *photo_own(char *o, u64 mgr, u64 actor)
+{
+    o = put(o, " own=");
+    if (!RVA_WEAK_PTR_GET) return put(o, "-");
+    u64 data = mem_readable(mgr + 0x158, 0x10) ? *(u64 *)(mgr + 0x158) : 0;
+    int num = data ? *(int *)(mgr + 0x160) : 0;
+    if (num < 0 || num > 64) num = 0;
+    for (int i = 0; i < num; i++) {
+        u64 sub = data + (u64)i * 0x2b0 + 8;
+        if (!mem_readable(sub, 0x2a0) || !*(unsigned char *)(sub + 0x277)) continue;
+        if (((weak_get_fn)(exe + RVA_WEAK_PTR_GET))(sub + 8) != actor) continue;
+        return put_int(o, *(unsigned char *)(sub + 0x22d) != 0);
+    }
+    return put(o, "-");
+}
 #define PHOTO_JUMPS (int)(sizeof photo_jumps / sizeof photo_jumps[0])
 static void photo_close_cmd(int keep)
 {
@@ -4889,6 +4962,7 @@ static void photo_open(int go, u64 mesh)
     } else o = put(o, "-");
     o = put(o, " blocked="); o = put_int(o, shield_blocked);
     o = put(o, " 48="); o = put_int(o, *(int *)(mgr + 0x48));
+    if (!go && mesh) o = photo_own(o, mgr, mesh); // ("f3<actor>": her actor, not a mesh)
     if (go && !*(unsigned char *)(mgr + 0x38) && !*(int *)(mgr + 0x84)) {
         o = put(o, mesh ? (photo_shield(mesh) ? " mesh shielded" : " mesh NOT shielded") : " no mesh");
         unsigned char in = ((photo_enter_fn)(exe + RVA_PHOTO_ENTER))();
@@ -5685,6 +5759,32 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         parse_fields(txt + 1, len - 1, pf, 2);
         if (pf[0] < 0x10000 || pf[1] < 0x10000) { skin_result("err bad component"); return; }
         copy_pose(pf[0], pf[1]);
+        return;
+    }
+    if (txt[0] == 'Q') {
+        // "Q<comp>": its borrowed bones made to follow its master again (SetMasterPoseComponent rebuilt its
+        // MasterBoneMap by name): her face put onto the piece's copy in photo mode, and back on her
+        u64 comp = parse_hex(txt + 1, len - 1);
+        if (comp < 0x10000) { skin_result("err bad component"); return; }
+        int n = 0;
+        int *map = *(int **)(comp + SC_MASTER_BONE_MAP);
+        for (int i = 0; i < nremaps; i++) {
+            if (remaps[i].comp != comp || !remaps[i].applied) continue;
+            if (!map || remaps[i].index >= *(int *)(comp + SC_MASTER_BONE_MAP + 8)) continue;
+            map[remaps[i].index] = remaps[i].to;
+            n++;
+        }
+        char qm[32] = "ok remapped ";
+        *put_int(qm + 12, n) = 0;
+        skin_result(qm);
+        return;
+    }
+    if (txt[0] == 'P') {
+        u64 pf[2 + MAX_PIECE_ROOTS];
+        for (int i = 0; i < 2 + MAX_PIECE_ROOTS; i++) pf[i] = 0;
+        int k = parse_fields(txt + 1, len - 1, pf, 2 + MAX_PIECE_ROOTS);
+        if (k < 3 || pf[0] < 0x10000 || pf[1] < 0x10000) { skin_result("err want P<src>,<dst>,<root>"); return; }
+        piece_pose(pf[0], pf[1], pf + 2, k - 2);
         return;
     }
     if (txt[0] == 'm') {
