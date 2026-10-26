@@ -466,6 +466,10 @@ static void set_nosink(void)
     // ALLMOVED=1: every helper moved while she played (a longer watch in game saw them all move). A waist cut found no
     // sink for one side then and left its seam on the old weights, stretched between the halves (playtest 30)
     if (env_on("ALLMOVED")) for (int i = 0; i < NB; i++) if (strncmp(bname[i], "Bip001", 6)) watch_dt[i] = 1e30f;
+    // LOOSEMOVED=<cm>: every helper moved that far while she played, a little (a long session in game): a limb's stub
+    // still takes a carrier, the one that moved least, and the posed thigh's stump stays as posed (playtest: none, 4 of
+    // 16 directions round the opening)
+    if (getenv("LOOSEMOVED")) for (int i = 0; i < NB; i++) if (strncmp(bname[i], "Bip001", 6) && watch_dt[i] < 1e29f) watch_dt[i] = (float)atof(getenv("LOOSEMOVED")) + (i % 7) * 0.1f;
     // SIDEMOVED=L|R: every helper of that side and the middle moved (a long session: the copy keeping her right side
     // found no point for her left leg, and it lay flattened on the plane, a third leg, playtest)
     if (getenv("SIDEMOVED")) {

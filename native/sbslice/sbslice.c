@@ -274,6 +274,8 @@ static int seccarry[CARRY_SECTIONS];
 // thigh's stub (5365 vertices) all over the screen as the leg flew (twenty-fifth playtest). watch_dt: the most it
 // slid off its bind offset (cm), watch_dc: the least |cos| of half its turn off its bind rotation
 #define CARRY_WATCH 30
+#define CARRY_LOOSE_CM 8.0f    // a carrier that moved while she played, taken when none held still: this far at most
+#define CARRY_LOOSE_COS 0.99144f // cos(7.5 deg), half the angle: and turned 15 degrees at most
 static u64 watch_sm;
 static int watch_n;
 static float watch_dt[MAX_BONES], watch_dc[MAX_BONES];
@@ -2431,17 +2433,25 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // carried the shoulder's stub stiffly against the clavicle and tore it 12 cm once she bent, and a calf's stub on
     // the spine's Ab-AX3 (no free helper on the thigh) stayed behind as the thigh swung (twenty-fourth playtest);
     // with none, the stub stays on the parent as before
-    int ncarry = 0, cbone = -1;
+    int ncarry = 0, cbone = -1, carry_loose = 0, miss = -1; // miss: the least moved carrier left out, for the log
     if (mode == MODE_CUT) {
         for (int i = 0; i < nb; i++) {
             int par = parent_of(&c, i);
             carry[i] = -1;
             subb[i] = i == b || (par >= 0 && par < i && subb[par] && limb[i]);
         }
+        // (with none still all along, the one that moved least while she played, within CARRY_LOOSE_CM and
+        // CARRY_LOOSE_COS: over a long session the watch saw every helper on her spine move a little, and the stub
+        // stayed on the parent as the bind pose has it, a thigh's skin coning down past the cap from her live pose,
+        // 4 of 16 directions round the opening, playtest; the harness's POSED=1 ALLMOVED=1)
+        float lbd = 1e30f;
+        int lbone = -1;
+        miss = -1;
         for (int anc = parent_b; anc >= 0 && anc == parent_b; anc = -1) {
             float bd = 1e30f;
             for (int i = 1; i < nb; i++) {
-                if (parent_of(&c, i) != anc || limb[i] || subb[i] || (ns && ns[i]) || (nosink_mesh == c.sm && nocarry[i]) || is_sink(&c, i) || btype[i] || !stable[i]) continue;
+                // (nsm: the no-sink bones without the watch's, weighed below)
+                if (parent_of(&c, i) != anc || limb[i] || subb[i] || nsm[i] || (nosink_mesh == c.sm && nocarry[i]) || is_sink(&c, i) || btype[i] || !stable[i]) continue;
                 int taken = 0;
                 for (int k = 0; k < 2 * c.nsec && !taken; k++) taken = secsink[k] == i;
                 if (taken) continue;
@@ -2450,12 +2460,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 // turned off its bind pose against its parent, now or while she played: something drives it, and
                 // would drive the stub
                 float dt, dc;
-                if (!off_bind(&c, refpose, i, &dt, &dc) || dc < CARRY_ROT_COS || !watched_still(&c, i) || wmoved[i]) continue;
+                if (!off_bind(&c, refpose, i, &dt, &dc) || dc < CARRY_ROT_COS) continue;
                 float d0 = t[4] - sa.joint[0], d1 = t[5] - sa.joint[1], d2 = t[6] - sa.joint[2];
                 float score = (d0 * d0 + d1 * d1 + d2 * d2) * (haschild[i] ? 4.0f : 1.0f) * (1.0f + usage[i] / 200.0f);
+                if (!watched_still(&c, i) || wmoved[i]) {
+                    int seen = watch_sm == c.sm && watch_n >= CARRY_WATCH;
+                    float ls = watch_dt[i] + 100.0f * (1.0f - watch_dc[i]);
+                    if (seen && watch_dt[i] < CARRY_LOOSE_CM && watch_dc[i] >= CARRY_LOOSE_COS && ls < lbd) { lbd = ls; lbone = i; }
+                    if (seen && watch_dt[i] < 1e29f && (miss < 0 || ls < watch_dt[miss] + 100.0f * (1.0f - watch_dc[miss]))) miss = i;
+                    continue;
+                }
                 if (score < bd) { bd = score; cbone = i; }
             }
         }
+        if (cbone < 0 && lbone >= 0) { cbone = lbone; carry_loose = 1; }
         for (int s = 0; s < c.nsec && s < CARRY_SECTIONS; s++) {
             seccarry[s] = -1;
             if (cbone < 0) continue;
@@ -2889,7 +2907,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     if (widened) { o = put(o, " widened="); o = put_int(o, widened); }
     o = put(o, " reweighted="); o = put_int(o, moved);
     o = put(o, " stuck="); o = put_int(o, stuck);
-    if (ncarry) { o = put(o, " carried="); o = put_int(o, carried); o = put(o, " carrier="); o = put_int(o, cbone); }
+    if (ncarry) { o = put(o, " carried="); o = put_int(o, carried); o = put(o, " carrier="); o = put_int(o, cbone); if (carry_loose) o = put(o, "~"); }
+    else if (miss >= 0) {
+        // no carrier: the stub stays on the parent as the bind pose has it; the nearest miss, how far it moved (cm)
+        // and the cosine of its half turn (CARRY_LOOSE_COS)
+        o = put(o, " nocarrier="); o = put_int(o, miss); o = put(o, ":"); o = put_f(o, watch_dt[miss]); o = put(o, ":");
+        o = put_f(o, watch_dc[miss]);
+    }
     if (mode == MODE_CUT) { o = put(o, " watched="); o = put_int(o, watch_sm == c.sm ? watch_n : 0); }
     o = put(o, " far="); o = put_f(o, far * tm[8]);
     o = put(o, full ? " sinks(full)=" : " sinks=");

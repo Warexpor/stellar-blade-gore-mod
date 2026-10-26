@@ -8,7 +8,7 @@
 -- waist, never a split), and her swings through its corpse cut it again. The game's own monster slicer is switched
 -- off on them (tune.enemies.nativeSlice). When the corpse starts dissolving its caps and bleeds go (gore.enemy_fading);
 -- when it goes (destroyed, hidden for reuse, or up again) the rest of its gore goes with it (gore.enemy_gone).
--- Spawner (only with settings.lua's dev on): F5 spawns the kind picked (Shift+F5 picks the next) in front of her, Shift+F6 opens the spawner window
+-- Spawner (only with settings.lua's dev on): F5 spawns the kind picked (Insert picks the next) in front of her, Home opens the spawner window
 -- (sbslice.dll, native/sbslice/spawner.c), which lists the kinds and asks for spawns (and kills) through spawner.req. Spawning
 -- goes through the game's own SBNetworkPlayerController:ServerRequest_CreateActor (CharacterTable ID, position,
 -- rotation), which runs locally in single player.
@@ -132,13 +132,13 @@ function M.next_pick()
   local ks = kinds()
   if #ks == 0 then return end
   pick = pick % #ks + 1
-  log(string.format("Shift+F5: F5 now spawns %d of %d, %s (%s)", pick, #ks, ks[pick].label or ks[pick].alias, ks[pick].alias))
+  log(string.format("Insert: F5 now spawns %d of %d, %s (%s)", pick, #ks, ks[pick].label or ks[pick].alias, ks[pick].alias))
 end
 function M.toggle_window()
   local f = io.open(CMD, "w")
   if f then f:write("toggle"); f:close() end
   write_list()
-  log("Shift+F6: spawner window toggled (sbslice.dll shows it)")
+  log("Home: spawner window toggled (sbslice.dll shows it)")
 end
 
 -- while the spawner window shows, the game lets go of the mouse (the cursor shown, input to game and UI, not locked):
@@ -501,7 +501,7 @@ local function corpse_hit(pawn, a, e)
     h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb } }
 end
 
--- the spawner's Kill nearest (and Ctrl+F6): the followed character nearest her goes down as a ragdoll, which the
+-- the spawner's Kill nearest (and End): the followed character nearest her goes down as a ragdoll, which the
 -- tick takes for its death (the cut follows). The Airborne Squad are passive NPCs the player's blows don't hurt
 function M.kill_nearest(pawn)
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)

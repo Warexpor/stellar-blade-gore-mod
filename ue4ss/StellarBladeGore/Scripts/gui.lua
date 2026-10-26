@@ -45,6 +45,10 @@ M.ROWS = {
   { key = "gore.torsoLegs.enabled", label = "Waist Cut Leg Animation", kind = "bool", help = "A waist cut during an animated death fall: the legs and hips keep playing the fall while the upper body flies off as a ragdoll. Off: the whole body goes ragdoll." },
   { key = "gore.torsoLegs.rolled", label = "   Leg Animation Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance of the leg animation when no blade was tracked (0-1). A level swing uses 0.75 and a slanted one 0.35 (tune.lua)." },
   { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Enemy weapons swinging through Eve's dead body cut it again (a limb, the head or the body), up to 6 times a death. About a quarter leave only a wound." },
+  { key = "gore.smash.enabled", label = "Blunt Smash (Experimental)", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) smashes the arm, leg or head it hit: the part vanishes and the game's meat chunks burst out with blood, the stump stays. Blades still cut." },
+  { key = "gore.smash.always", label = "   Smash Every Death", kind = "bool", help = "With Blunt Smash on: every death smashes a part, whatever hit her, F6's test death too. To try the smash out." },
+  { key = "gore.laserCut", label = "Laser Cuts Along the Beam", kind = "bool", help = "A laser trap death cuts Eve along the beam that killed her: every arm, leg, her body or her head the beam's plane goes through comes off. Off: laser deaths roll the cut chances like any death with no blade seen." },
+  { key = "gore.bluntRagdoll", label = "Blunt Kills Only Ragdoll", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) cuts nothing: Eve dies a plain ragdoll, and hits after it cut nothing either. Blades still cut. Goes before Blunt Smash." },
   { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under a quarter of her HP cuts her left arm off, and she fights on without it. Once a life: it grows back when her HP is full again (a rest) or at her next life." },
   { key = "gore.throw", label = "Cut Piece Force", kind = "num", min = 0, max = 800, step = 25, unit = " cm/s", help = "Speed a piece flies off with when it wasn't cut by the killing blow, e.g. a hit after death (0: it just drops). The killing blow's pieces fly with the blow (deathThrow in tune.lua)." },
   { key = "holdDown", label = "Stay Down After Knockdown", kind = "bool", help = "When knocked down, Eve stays on the ground until you dodge or jump. Off: she gets up by herself after a second, as in the game." },
@@ -680,7 +684,7 @@ function M.open(pawn)
     try(function() s.ui.w:SetVisibility(3) end)
   end
   s.open, s.held, s.changed, s.swallow = true, {}, {}, true
-  -- (settings.lua read again: a hand edit shows here and applies without a restart, as F6 did)
+  -- (settings.lua read again: a hand edit shows here and applies without a restart, as the old Reload Settings key did)
   if ctx.reload_tune then ctx.reload_tune() end
   M.refresh()
   if not selectable(s.sel) then s.sel = 2 end

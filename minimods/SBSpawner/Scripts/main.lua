@@ -1,9 +1,9 @@
 -- SBSpawner: the Stellar Blade Gore mod's enemy spawner on its own, for a game without the gore mod.
 --   F5        spawns the kind picked, SPAWN_DISTANCE cm in front of Eve, facing her
---   Shift+F5  picks the next kind (the log and the window's toast say which)
---   Shift+F6  shows or hides the spawner window (SBSpawnerWindow's DLL): Spawn, Spawn 3, Remove all, Kill nearest
---   Ctrl+F6   kills the spawned enemy nearest her (the game's own death)
---   Ctrl+F5   removes every enemy spawned here
+--   Insert    picks the next kind (the log and the window's toast say which)
+--   Home      shows or hides the spawner window (SBSpawnerWindow's DLL): Spawn, Spawn 3, Remove all, Kill nearest
+--   End       kills the spawned enemy nearest her (the game's own death)
+--   Backspace removes every enemy spawned here
 -- Spawning goes through the game's SBNetworkPlayerController:ServerRequest_CreateActor (a CharacterTable ID, a
 -- position, a rotation), which runs locally in single player. All of it runs from Eve's own ReceiveTick (actor ticks
 -- are on the game thread: this game has no engine tick for UE4SS to hook, and ExecuteInGameThread may run on a worker).
@@ -219,10 +219,10 @@ local function bind(key, mods, id)
   if not ok then log("key " .. table.concat(mods, "+") .. (#mods > 0 and "+" or "") .. key .. " not bound") end
 end
 bind("F5", {}, "spawn")
-bind("F5", { "SHIFT" }, "next")
-bind("F5", { "CONTROL" }, "clear")
-bind("F6", { "SHIFT" }, "window")
-bind("F6", { "CONTROL" }, "kill")
+bind("INS", {}, "next")
+bind("BACKSPACE", {}, "clear")
+bind("HOME", {}, "window")
+bind("END", {}, "kill")
 
 local n = 0
 local function tick(ctx)
@@ -271,4 +271,4 @@ pcall(RegisterHook, "/Script/Engine.PlayerController:ClientRestart", function() 
 LoopAsync(1000, function() return hooked or hook("loop") end)
 
 write_list()
-log("SBSpawner " .. VERSION .. " loaded: F5 spawn, Shift+F5 next kind, Ctrl+F5 remove all, Shift+F6 window, Ctrl+F6 kill nearest")
+log("SBSpawner " .. VERSION .. " loaded: F5 spawn, Insert next kind, Backspace remove all, Home window, End kill nearest")

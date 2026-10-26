@@ -1343,6 +1343,26 @@ function M.over_floor(pawn, p)
   local z = ok and try(function() return (hit.ImpactPoint or hit.Location).Z end)
   return z and p.Z - z or nil
 end
+-- the bones looked at for hanging in the air: the pelvis, and on her body the root of each piece cut off it. A waist
+-- cut's upper half hung in the air while its pelvis lay on the stairs with her legs (Nexus report)
+local function aloft_bones(c)
+  local out = { "Bip001-Pelvis" }
+  if addr(c) == severedOn then
+    for b in pairs(severed) do if live(c, b) then out[#out + 1] = b end end
+  end
+  return out
+end
+-- the highest of those over the floor (cm) and which; nil with no floor found under any
+local function aloft(c)
+  local pawn = run.pawn or try(function() return run.mesh:GetOwner() end)
+  local top, which = nil, nil
+  for _, b in ipairs(aloft_bones(c)) do
+    local l = try(function() local x = c:GetSocketLocation(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local over = l and M.over_floor(pawn, l)
+    if over and (not top or over > top) then top, which = over, b end
+  end
+  return top, which
+end
 local function settle(dt)
   local st = cfg().settle or {}
   local comps = { run.mesh }
@@ -1422,14 +1442,19 @@ local function settle(dt)
   if run.still < (st.time or 0.5) then return end
   -- not up in the air: still there (slowed at the top of a fall, held by something that let go) she was put to sleep
   -- and hung there (0.4.0 report: killed in mid-air, hung in the air). Woken and left to fall, checked again later
-  local pel = try(function() local l = run.mesh:GetSocketLocation(FName("Bip001-Pelvis")); return vec(l.X, l.Y, l.Z) end)
-  local over = pel and M.over_floor(run.pawn or try(function() return run.mesh:GetOwner() end), pel)
+  local over, ob
+  for _, c in ipairs(comps) do
+    if valid(c) then
+      local o, b = aloft(c)
+      if o and (not over or o > over) then over, ob = o, b end
+    end
+  end
   if over and over > (st.air or 60) then
     run.still = 0
     for _, c in ipairs(comps) do if valid(c) then try(function() c:WakeAllRigidBodies() end) end end
     if not run.airSaid then
       run.airSaid = true
-      log(string.format("not settled at %.1f s: her pelvis is %.0f cm over the floor, woken to fall", run.t, over))
+      log(string.format("not settled at %.1f s: %s is %.0f cm over the floor, woken to fall", run.t, tostring(ob), over))
     end
     return
   end
@@ -1470,36 +1495,40 @@ local function hang_watch()
   run.hang = run.hang or {}
   local comps = { run.mesh }
   for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  local pawn = run.pawn or try(function() return run.mesh:GetOwner() end)
   for i, c in ipairs(comps) do
-    local z = valid(c) and try(function() return c:GetSocketLocation(FName("Bip001-Pelvis")).Z end)
-    local h = run.hang[i] or { zs = {} }
-    run.hang[i] = h
-    if z then
-      table.insert(h.zs, { t = run.t, z = z })
-      while #h.zs > 1 and h.zs[2].t <= run.t - HANG_SPAN do table.remove(h.zs, 1) end
-      local old = h.zs[1]
-      if run.t - old.t >= HANG_SPAN * 0.9 and old.z - z < HANG_DROP then
-        local pel = try(function() local l = c:GetSocketLocation(FName("Bip001-Pelvis")); return vec(l.X, l.Y, l.Z) end)
-        local over = pel and M.over_floor(run.pawn or try(function() return run.mesh:GetOwner() end), pel)
-        if over and over > (st.air or 60) then
-          if not h.said then
-            h.said = true
-            local still, n = {}, 0
-            for _, b in ipairs(bodies(c)) do
-              n = n + 1
-              if try(function() return c:IsSimulatingPhysics(FName(b)) end) ~= true then still[#still + 1] = b end
+    for _, bone in ipairs(valid(c) and aloft_bones(c) or {}) do
+      local key = i .. bone
+      local l = try(function() local x = c:GetSocketLocation(FName(bone)); return vec(x.X, x.Y, x.Z) end)
+      local h = run.hang[key] or { zs = {} }
+      run.hang[key] = h
+      if l then
+        local z = l.Z
+        table.insert(h.zs, { t = run.t, z = z })
+        while #h.zs > 1 and h.zs[2].t <= run.t - HANG_SPAN do table.remove(h.zs, 1) end
+        local old = h.zs[1]
+        if run.t - old.t >= HANG_SPAN * 0.9 and old.z - z < HANG_DROP then
+          local over = M.over_floor(pawn, l)
+          if over and over > (st.air or 60) then
+            if not h.said then
+              h.said = true
+              local still, n = {}, 0
+              for _, b in ipairs(bodies(c)) do
+                n = n + 1
+                if try(function() return c:IsSimulatingPhysics(FName(b)) end) ~= true then still[#still + 1] = b end
+              end
+              local v = lin_vel(c, bone)
+              log(string.format("%s hangs at %.1f s: %s %.0f cm over the floor, dropped %.0f cm in %.1f s, %.0f cm/s; gravity %s, %d of %d bodies not simulating%s; let go",
+                i == 1 and "her body" or "the split's copy", run.t, bone, over, old.z - z, run.t - old.t, v and len(v) or -1,
+                tostring(try(function() return c:IsGravityEnabled() end)), #still, n,
+                #still > 0 and (" (" .. table.concat(still, ",", 1, math.min(#still, 12)) .. ")") or ""))
             end
-            local v = lin_vel(c, "Bip001-Pelvis")
-            log(string.format("%s hangs at %.1f s: pelvis %.0f cm over the floor, dropped %.0f cm in %.1f s, %.0f cm/s; gravity %s, %d of %d bodies not simulating%s; let go",
-              i == 1 and "her body" or "the split's copy", run.t, over, old.z - z, run.t - old.t, v and len(v) or -1,
-              tostring(try(function() return c:IsGravityEnabled() end)), #still, n,
-              #still > 0 and (" (" .. table.concat(still, ",", 1, math.min(#still, 12)) .. ")") or ""))
+            gravity(c, true)
+            try(function() c:SetSimulatePhysics(true) end)
+            try(function() c:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
+            try(function() c:WakeAllRigidBodies() end)
+            h.zs = {}
           end
-          gravity(c, true)
-          try(function() c:SetSimulatePhysics(true) end)
-          try(function() c:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
-          try(function() c:WakeAllRigidBodies() end)
-          h.zs = {}
         end
       end
     end
@@ -1690,7 +1719,7 @@ end
 
 -- restart: the ragdoll starts again in the same death, her weapons stay as the blow left them
 function M.stop(pawn, restart)
-  M.photo_hold(false)
+  M.photo_hold(false, true)
   if run and run.held and valid(run.mesh) then gravity(run.mesh, true) end
   if run then run.held = nil end
   if not restart then
@@ -1762,13 +1791,32 @@ end
 -- was on, 15 ms of the game's time gone). Photo mode makes its own pawn as it opens, and her bodies blocked pawns. So
 -- before it opens: every body stopped and put to sleep (settled or not: a twitch had woken her), and her meshes
 -- ignore pawns till it closes (on false: the responses put back)
+-- A death still falling (P in mid-air) was left asleep up there once it closed, nothing to wake her: she hung in
+-- the air and moved a little at each P (Nexus report, on stairs). One not lying still yet gets its bodies' velocities
+-- back and is woken as it closes, as a split's hold lets go (stopping: left as it is)
 M.photoHeld = nil
-function M.photo_hold(on)
+local photoWake = nil
+function M.photo_hold(on, stopping)
   if not on then
-    local h = M.photoHeld
-    M.photoHeld = nil
+    local h, w = M.photoHeld, photoWake
+    M.photoHeld, photoWake = nil, nil
     for _, e in ipairs(h or {}) do
       if valid(e.c) then try(function() e.c:SetCollisionResponseToChannel(2, e.r) end) end
+    end
+    if w and run and not stopping then
+      local n = 0
+      for _, e in ipairs(w) do
+        if valid(e.c) then
+          for b, v in pairs(e.vel) do
+            try(function() e.c:SetPhysicsLinearVelocity(v.v, false, FName(b)) end)
+            try(function() e.c:SetPhysicsAngularVelocityInDegrees(v.w, false, FName(b)) end)
+            n = n + 1
+          end
+          try(function() e.c:WakeAllRigidBodies() end)
+        end
+      end
+      run.asleep, run.still = false, 0
+      log(string.format("photo mode closed on her before she lay still: woken, %d body velocities back", n))
     end
     return h and #h or 0
   end
@@ -1776,8 +1824,10 @@ function M.photo_hold(on)
   local comps = { run.mesh }
   for _, c in ipairs(extra) do comps[#comps + 1] = c end
   M.photoHeld = {}
+  photoWake = not run.asleep and {} or nil
   for _, c in ipairs(comps) do
     if valid(c) then
+      if photoWake then photoWake[#photoWake + 1] = { c = c, vel = velocities(c) } end
       try(function() c:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
       try(function() c:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
       if not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end

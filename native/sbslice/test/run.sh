@@ -179,6 +179,11 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
            "real thigh cut CH_P_EVE_10, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
            "real split CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 POSED=|CH_P_EVE_10")
+  # CH_P_EVE_20_TypeB's thigh posed, every helper on her spine seen moving a little over a long session: the stub still
+  # takes a carrier (the least moved) and keeps her live pose (playtest: no carrier, the skin coned down past the cap)
+  E20B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_20/CH_P_EVE_20_TypeB"
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_20/CH_P_EVE_20_TypeB.uasset ]] &&
+    jobs+=("real thigh cut CH_P_EVE_20_TypeB posed, helpers moved a little|POSED=1 LOOSEMOVED=4 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.4 $E20B|CH_P_EVE_20_TypeB")
   # CH_P_EVE_14's thigh, its leg straps (chains off the hip, along the thigh) over the plane kept on the body as gore.lua
   # does, mid-thigh and high up: its laces down the leg (14% of their vertices past the plane, on the leg's bones) are
   # cut like the body, none of the knee left on her spine (playtest screenshot: a sheet from the severed leg to her)

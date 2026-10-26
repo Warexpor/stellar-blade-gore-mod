@@ -1,4 +1,4 @@
--- Realistic glass cannon mode (tune.glassCannon, off by default; Shift+F8 turns it on and off in game). Only with
+-- Realistic glass cannon mode (tune.glassCannon, off by default; Page Down turns it on and off in game). Only with
 -- settings.lua's dev on.
 -- While her shield is up a hit takes the shield, never HP. Once it is down, any hit kills her, cut where it landed
 -- (along the weapon's swing when there was one). Her blows do damageMult times the damage.
@@ -45,10 +45,10 @@ local function toast(text)
   if f then f:write("toast\t" .. text); f:close() end
 end
 
--- Shift+F8
+-- Page Down
 function M.toggle()
   st.override = not M.enabled()
-  log("glass cannon " .. (st.override and "ON" or "OFF") .. " (Shift+F8; tune.glassCannon.enabled is the default)")
+  log("glass cannon " .. (st.override and "ON" or "OFF") .. " (Page Down; tune.glassCannon.enabled is the default)")
   toast(st.override and string.format("Glass cannon ON  (shield takes hits, then one hit kills; %gx damage)", cfg().damageMult or 8) or "Glass cannon OFF")
 end
 

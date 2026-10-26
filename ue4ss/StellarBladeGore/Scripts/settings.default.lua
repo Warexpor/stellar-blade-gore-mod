@@ -24,6 +24,14 @@ return {
     afterHits = {
       enabled = true,          -- enemies swinging at her body after she died cut it again
     },
+    -- smash = {               (parked for now)
+    --   enabled = false,         -- a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or
+    --                            -- upper body it hit to meat chunks instead of cutting it
+    --   always = false,          -- every death smashes, whatever hit her (to try it out; F6's test death too)
+    -- },
+    laserCut = true,           -- a laser trap death cuts along the beam, everything it went through (false: the odds)
+    bluntRagdoll = false,      -- a blunt killing blow (a hammer, a fist, a stomp) cuts nothing: a plain ragdoll death
+                               -- (blades still cut)
     lowArm = {
       enabled = false,         -- a hit that leaves her HP under a quarter cuts her left arm off; she fights on without
                                -- it (once a life; it grows back with her HP full again, or at her next life)
@@ -99,6 +107,6 @@ return {
                                -- off or small on screen, which can look choppy, running most (costs some CPU)
   verboseLog = false,          -- a detailed log, for a bug report when asked for one (the log is made anew each start,
                                -- the last one kept as stellarbladegore.log.old)
-  dev = false,                 -- test keys (F5, F7-F11 and their Shift/Ctrl variants), the enemy spawner, the glass
-                               -- cannon mode (Shift+F8) and the schema dump on first start; see the README
+  dev = false,                 -- test keys (F5-F11, Insert, Delete, Home, End, Page Up, Page Down), the enemy spawner, the glass
+                               -- cannon mode (Page Down) and the schema dump on first start; see the README
 }

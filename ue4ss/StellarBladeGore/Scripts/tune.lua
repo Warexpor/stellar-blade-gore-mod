@@ -174,7 +174,7 @@ return {
                                --   still on (each arm rolled: both off, likelier)
     deathFace = {              -- a dead face held on her face mesh's morph targets from `at` s into a death, faded in
       enabled = true,          --   over `fade` s, until she gets up (the game's own death face was gone 1 s in and
-      at = 0.3,                --   her eyes stayed open). Shift+F7 shows the moods in turn, 6 s each
+      at = 0.3,                --   her eyes stayed open). Page Up shows the moods in turn, 6 s each
       fade = 0.5,
       morphs = {               --   { JALI morph, its ARKit twin, weight }: the first one her face mesh has is used;
                                --   from = its weight as the face comes on, easing to weight over `over` s. These on
@@ -192,7 +192,7 @@ return {
                                --   half-closed lids)
       gaze = 0.35,             --   most her eyes drift off (up, down or aside, both the same way), picked per death
       jawSide = 0.25,          --   most her slack jaw hangs to one side
-      moods = {                --   one picked per death by weight (Shift+F7 shows them in turn); the same twice
+      moods = {                --   one picked per death by weight (Page Up shows them in turn); the same twice
                                --   running only when there is no other
         { name = "agony", weight = 3, morphs = {   -- brows knit, eyes squeezed, nose and lips pulled, slackening
           { "brow_furrow", 0.08, from = 0.6, over = 6 },
@@ -274,9 +274,40 @@ return {
         } },
       },
     },
+    laserCut = true,           -- a laser trap death is cut along the beam: every arm, leg and her body (or her head)
+    laserReach = 40,           --   its plane goes through. The beam that hit her, else one passing within laserReach cm
+                               --   of her parts; false: the death odds, as any death with no blade seen
+    bluntRagdoll = false,      -- a blunt killing blow (a hammer, a fist, a stomp: told as smash's below, smash.sharp /
+                               --   smash.blunt) cuts nothing: the death is a plain ragdoll, hits after it cut nothing
+                               --   either. Goes before smash; blades still cut
     lowArm = {                 -- a hit that leaves her HP under a quarter takes her left arm off as she fights on
       enabled = false,         --   (once a life; it grows back with her HP full again, or at her next life)
       below = 0.25,            --   the share of her HP bar under which it goes
+    },
+    smash = {                  -- (experimental) a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg
+      enabled = false,         --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
+                               --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
+      always = false,          --   every death smashes, blunt or not, F6's test death too (to try it)
+      chunks = 3,              --   meat chunks for an arm
+      chunksLeg = 4,           --   for a leg
+      chunksHead = 4,          --   for the head
+      chunksBody = 7,          --   for her upper body (smashed from the waist up)
+      sizeMin = 5,             --   cm across, the smallest chunk
+      sizeMax = 11,            --   the biggest
+      speed = 350,             --   cm/s they burst out at (half to one and a half times), along the blow and every way
+      kg = 0.3,                --   each chunk's mass
+      drips = 3,               --   chunks that drip blood as they fly and pool where they land
+      splash = false,          --   the game's meat splash effect (NS_A_MeatSplash) on top of the hit blood
+      -- material = "...",     --   the chunks' material (default: the stumps' meat, MI_A_Meat_01_1; false: the
+      --                            meshes' own, an effect material)
+      bareHands = true,        --   a bare hand, foot, knee or elbow swinging (no weapon mesh) is blunt
+      -- names (any part, any case) of what hit her, sharp checked first: the swinging enemy's weapon meshes, its
+      -- swinging bone, then the enemy's name and class. A blow from above with no weapon (a stomp) is blunt too
+      sharp = { "sword", "blade", "claw", "knife", "axe", "spear", "lance", "scythe", "saw", "sickle", "katana",
+        "dagger", "cutter", "spike", "thorn", "lion", "mite", "raven", "tachy", "gorgon", "lurker", "weaponmaster",
+        "behemoth" },
+      blunt = { "hammer", "club", "mace", "fist", "punch", "gorilla", "juggernaut", "brute", "exosuit",
+        "hunchback", "statue", "bodybag", "lump", "roadblock", "hedgeboar" },
     },
     afterHits = {              -- an enemy's weapon swinging through her once she is dead cuts her again: a limb, the
       enabled = true,          --   head or (while she is whole) her body in two along the swing, else a hit mark
@@ -858,11 +889,11 @@ return {
       { alias = "M_LurkerB", label = "Lurker B", id = 50452, bp = "/Game/Art/Character/Monster/CH_M_NA_45/Blueprints/CH_M_NA_45_Type_B_Blueprint" },
       -- the Airborne Squad (the angels of the endings): Eve's skeleton, physics and a face mesh of their own (face:
       -- cut with her rules, the face goes with the head). Passive NPCs, unhurt by her blows: the spawner's Kill nearest
-      -- (Ctrl+F6) drops them
+      -- (End) drops them
       { alias = "N_AirborneSquad", label = "Airborne Squad angel", id = 30030, face = true, bp = "/Game/Art/Character/NPC/CH_NPC_AirborneSquad/Blueprints/CH_NPC_AirborneSquad" },
     },
   },
-  glassCannon = {              -- realistic glass cannon (glass.lua); Shift+F8 turns it on and off in game (dev only)
+  glassCannon = {              -- realistic glass cannon (glass.lua); Page Down turns it on and off in game (dev only)
     enabled = false,           -- off by default
     shieldGuard = true,        -- while her shield is up a hit takes the shield, never HP; with it down any hit kills
     barDrop = 0.002,           -- her HP bar dropping more than this since the last tick is a hit with the shield down: she dies

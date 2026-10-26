@@ -28,6 +28,8 @@ M.MODS = { "Ctrl", "Shift", "Alt" }
 M.MOD_KEY = { Ctrl = "CONTROL", Shift = "SHIFT", Alt = "ALT" }
 M.MOD_FKEYS = { Ctrl = { "LeftControl", "RightControl" }, Shift = { "LeftShift", "RightShift" }, Alt = { "LeftAlt", "RightAlt" } }
 
+-- No default a key she uses alive is on Shift or Ctrl: they are the game's own (sprint, dodge...), held in a fight
+-- with the key or not. Shift+F4 (Hold the Death) is only read in a death.
 -- the actions, in the menu's order: id (tune.keys.<id>), its row's label, the default, dev (a test key: dead unless
 -- settings.lua's dev), help
 M.ACTIONS = {
@@ -39,14 +41,14 @@ M.ACTIONS = {
   { id = "mark", label = "Test: Hit Mark", def = "F10", uv = true, dev = true, help = "Developer Keys: a living hit's wound on a part of her facing the camera." },
   { id = "ragdoll", label = "Test: Ragdoll", def = "F7", dev = true, help = "Developer Keys: ragdolls her with a shove. She stays down till Test: Get Up." },
   { id = "recover", label = "Test: Get Up", def = "F8", dev = true, help = "Developer Keys: gets her up from a test ragdoll or cut." },
-  { id = "face", label = "Test: Death Face", def = "Shift+F7", dev = true, help = "Developer Keys: her death face for 6 s, the next mood each press." },
-  { id = "death", label = "Test: Death", def = "Ctrl+F5", dev = true, help = "Developer Keys: plays one of her death falls, cut as a death would be." },
-  { id = "blade", label = "Test: Blade Death", def = "Ctrl+Shift+F5", dev = true, help = "Developer Keys: ragdolls her and cuts along a made-up blade." },
+  { id = "face", label = "Test: Death Face", def = "PAGE_UP", dev = true, help = "Developer Keys: her death face for 6 s, the next mood each press." },
+  { id = "death", label = "Test: Death", def = "F6", dev = true, help = "Developer Keys: plays one of her death falls, cut as a death would be." },
+  { id = "blade", label = "Test: Blade Death", def = "DEL", dev = true, help = "Developer Keys: ragdolls her and cuts along a made-up blade." },
   { id = "spawn", label = "Test: Spawn Enemy", def = "F5", dev = true, help = "Developer Keys: spawns the enemy kind picked in front of her." },
-  { id = "nextEnemy", label = "Test: Next Enemy Kind", def = "Shift+F5", dev = true, help = "Developer Keys: picks the next enemy kind to spawn." },
-  { id = "spawner", label = "Test: Spawner Window", def = "Shift+F6", dev = true, help = "Developer Keys: opens the enemy spawner window." },
-  { id = "kill", label = "Test: Kill Nearest Enemy", def = "Ctrl+F6", dev = true, help = "Developer Keys: kills the enemy nearest her." },
-  { id = "glass", label = "Test: Glass Cannon", def = "Shift+F8", dev = true, help = "Developer Keys: glass cannon mode on and off." },
+  { id = "nextEnemy", label = "Test: Next Enemy Kind", def = "INS", dev = true, help = "Developer Keys: picks the next enemy kind to spawn." },
+  { id = "spawner", label = "Test: Spawner Window", def = "HOME", dev = true, help = "Developer Keys: opens the enemy spawner window." },
+  { id = "kill", label = "Test: Kill Nearest Enemy", def = "END", dev = true, help = "Developer Keys: kills the enemy nearest her." },
+  { id = "glass", label = "Test: Glass Cannon", def = "PAGE_DOWN", dev = true, help = "Developer Keys: glass cannon mode on and off." },
 }
 M.BY_ID = {}
 for _, a in ipairs(M.ACTIONS) do M.BY_ID[a.id] = a end
