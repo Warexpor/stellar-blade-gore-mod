@@ -49,7 +49,6 @@ M.ROWS = {
   { key = "gore.smash.always", label = "   Smash Every Death", kind = "bool", help = "With Blunt Smash on: every death smashes a part, whatever hit her, F6's test death too. To try the smash out." },
   { key = "gore.laserCut", label = "Laser Cuts Along the Beam", kind = "bool", help = "A laser trap death cuts Eve along the beam that killed her: every arm, leg, her body or her head the beam's plane goes through comes off. Off: laser deaths roll the cut chances like any death with no blade seen." },
   { key = "gore.bluntRagdoll", label = "Blunt Kills Only Ragdoll", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) cuts nothing: Eve dies a plain ragdoll, and hits after it cut nothing either. Blades still cut. Goes before Blunt Smash." },
-  { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under a quarter of her HP cuts her left arm off, and she fights on without it. Once a life: it grows back when her HP is full again (a rest) or at her next life." },
   { key = "gore.throw", label = "Cut Piece Force", kind = "num", min = 0, max = 800, step = 25, unit = " cm/s", help = "Speed a piece flies off with when it wasn't cut by the killing blow, e.g. a hit after death (0: it just drops). The killing blow's pieces fly with the blow (deathThrow in tune.lua)." },
   { key = "holdDown", label = "Stay Down After Knockdown", kind = "bool", help = "When knocked down, Eve stays on the ground until you dodge or jump. Off: she gets up by herself after a second, as in the game." },
   -- { section = "Stumps" },
@@ -79,9 +78,18 @@ M.ROWS = {
   { key = "active.stiffness", label = "Ragdoll Stiffness", kind = "num", min = 0, max = 3, step = 0.25, help = "Muscle tone in her ragdoll as she falls. 0: limp from the start, 1: default (firm, going limp as she lands), 2-3: she holds her shape longer." },
   { section = "Enemies" },
   { key = "enemies.enabled", label = "Enemy Gore", kind = "bool", help = "Cuts and blood on humanoid enemies killed within 25 m of Eve." },
+  { key = "enemies.attackDown", label = "Attacks While Down", kind = "bool", help = "Enemies keep attacking Eve while she is knocked down. Off: they wait for her to get up, as in the game." },
   { key = "enemies.cutChance", label = "   Cut Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a kill cuts something off (0-1): along your swing when you swung, else a limb, the head or a waist cut at random." },
   { key = "enemies.pushScale", label = "Death Throw", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "Scales the game's own throw of a dying enemy (1: as the game, 0: it drops on the spot, 2: twice as far). Works with Enemy Gore off too." },
   { key = "enemies.push", label = "Extra Death Push", kind = "num", min = 0, max = 1000, step = 50, unit = " cm/s", help = "Speed added to every enemy death along the blow, slightly upward, on top of Death Throw (0: none). Works with Enemy Gore off too." },
+  { section = "Gameplay" },
+  { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under Arm Comes Off Below of her HP (25% by default) cuts her left arm off, and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life." },
+  { key = "gore.lowArm.below", label = "   Arm Comes Off Below", kind = "num", min = 0.01, max = 0.9, step = 0.01, pct = true, help = "With Lose Arm at Low HP: the share of her HP a hit has to leave her under for the arm to come off (25%: a quarter). Grows Back With HP waits for at least 1% more than this." },
+  { key = "gore.lowArm.noHealGun", label = "   No Heals or Gun Without It", kind = "bool", help = "With Lose Arm at Low HP: while her left arm is off, Eve can't use heal items or shoot the gun, both done with her left hand. The game's own item blocks, lifted when the arm is back." },
+  { key = "gore.lowArm.notice", label = "   'Cannot Use' Notice", kind = "bool", help = "With No Heals or Gun Without It: her aim or heal key pressed while the arm is off shows the game's own \"Cannot use right now.\" notice, with its sound." },
+  { key = "gore.lowArm.healBack", label = "   Grows Back With HP", kind = "bool", help = "Off by default. With Lose Arm at Low HP: the arm also grows back once her HP is back up to Grows Back At, however she healed (gear that restores HP on kills or over time; heal items too with No Heals or Gun off). Off: only a camp rest or her next life bring it back." },
+  { key = "gore.lowArm.healAt", label = "   Grows Back At", kind = "num", min = 0.3, max = 1, step = 0.01, pct = true, help = "With Grows Back With HP: the share of her HP bar at which the arm grows back (90% by default)." },
+  { key = "gore.lowArm.effect", label = "Regrow Effect", kind = "bool", help = "On by default. A part cut off her alive (Lose Arm at Low HP's arm, F9's) dissolves back in with a glow when it comes back (a camp rest, Grows Back With HP). Off: it is back at once, with no effect." },
   { section = "Camera" },
   { key = "cameraStill", label = "Free Camera", kind = "bool", help = "At a death the camera stops riding her pawn and holds where it is until she gets up. Turn it with the mouse or right stick; fly it with WASD, Q/E or the left stick and triggers (Shift: faster)." },
   { key = "cameraMouse", label = "   Mouse Sensitivity", kind = "num", min = 0.5, max = 10, step = 0.5, help = "How fast the mouse turns the death camera." },
@@ -164,6 +172,7 @@ function M.init(c)
   end
   M.ALL = M.ALL or M.ROWS
   M.refresh()
+  M.prune()
 end
 
 -- a setting by its dotted path in the live tune table, and set
@@ -198,14 +207,20 @@ M.get = get
 -- the rows shown: the test keys' only with Developer Keys on (they do nothing without it). M.ALL holds every row;
 -- the selection stays on its row
 function M.refresh()
-  local s, cur = M.state, M.ROWS[M.state.sel]
+  local s, cur, first = M.state, M.ROWS[M.state.sel], M.ROWS[M.state.top]
   local dev = get("dev") == true
   local rows = {}
   for _, r in ipairs(M.ALL or M.ROWS) do if not r.dev or dev then rows[#rows + 1] = r end end
   M.ROWS, M.TABS = rows, nil
-  for i, r in ipairs(rows) do if r == cur then s.sel = i end end
+  -- (the first row shown too: kept at its old index, Developer Keys turned off scrolled the Mod tab past its own rows
+  -- and showed only its last three, playtest)
+  local top = nil
+  for i, r in ipairs(rows) do
+    if r == cur then s.sel = i end
+    if r == first then top = i end
+  end
   if s.sel > #rows then s.sel = 2 end
-  if s.top > s.sel then s.top = s.sel end
+  s.top = math.min(top or s.sel, s.sel)
 end
 
 -- menu.lua: { ["path"] = value, ... } read over the settings (main.lua's load_tune), written here
@@ -227,6 +242,7 @@ function M.overlay(t)
   end
   return n
 end
+local write_menu
 local function save()
   local saved = {}
   local ok, m = pcall(dofile, M.PATH)
@@ -235,6 +251,10 @@ local function save()
   -- (a value back at settings.lua's, a tab reset, is dropped from menu.lua)
   local base = ctx.base_tune and ctx.base_tune()
   if base then for k in pairs(M.state.changed) do if same_combo(get_in(base, k), saved[k]) then saved[k] = nil end end end
+  return write_menu(saved)
+end
+-- menu.lua written from { path = value } (nothing to write: left as it is)
+function write_menu(saved)
   local keys = {}
   for k in pairs(saved) do keys[#keys + 1] = k end
   if #keys == 0 then return true end
@@ -258,6 +278,28 @@ local function save()
   f:close()
   return true
 end
+-- a change in menu.lua whose row the menu no longer has (taken out, parked) is dropped from it, the settings read
+-- again: it went on winning over settings.lua with no row to see or turn it back (Attacks While Down, taken out of
+-- the menu once switched off in it, kept enemies waiting with settings.lua's attackDown true; playtest)
+function M.prune()
+  local ok, m = pcall(dofile, M.PATH)
+  if not ok or type(m) ~= "table" then return end
+  local known = {}
+  for _, r in ipairs(M.ALL or M.ROWS) do if r.key then known[r.key] = true end end
+  local kept, gone = {}, {}
+  for k, v in pairs(m) do
+    if type(k) == "string" and (known[k] or k:find("^keys%.")) then kept[k] = v else gone[#gone + 1] = tostring(k) end
+  end
+  if #gone == 0 then return end
+  table.sort(gone)
+  if next(kept) then
+    if not write_menu(kept) then return end
+  else
+    os.remove(M.PATH)
+  end
+  log("menu: dropped from menu.lua, no longer in the menu: " .. table.concat(gone, " ") .. " (settings.lua's values apply)")
+  if ctx.reload_tune then ctx.reload_tune() end
+end
 
 local function value_text(row)
   if row.kind == "key" then
@@ -273,6 +315,8 @@ local function value_text(row)
   if row.kind == "bool" then return v and "On" or "Off" end
   if row.kind == "list" then return (row.names and row.names[v]) or tostring(v) end
   if type(v) ~= "number" then return tostring(v) end
+  -- (a share of her HP, 0-1, shown as a percent)
+  if row.pct then return string.format("%d%%", math.floor(v * 100 + 0.5)) end
   local s = row.step < 1 and string.format("%.2f", v):gsub("0$", "") or string.format("%d", math.floor(v + 0.5))
   return s .. (row.unit or "")
 end
@@ -584,6 +628,8 @@ local function render()
   if s.top < t.first or s.top > t.last then s.top = t.first end
   if s.sel < s.top then s.top = s.sel end
   if s.sel > s.top + M.VISIBLE - 1 then s.top = s.sel - M.VISIBLE + 1 end
+  -- (and no empty rows below a tab's end while rows above are scrolled off)
+  if s.top > t.first and t.last - s.top + 1 < M.VISIBLE then s.top = math.max(t.first, t.last - M.VISIBLE + 1) end
   for k, tab in ipairs(ui.tabs) do
     local on = k == tk
     show_all(tab.focus, on)
@@ -740,6 +786,8 @@ local function step(dir)
     v = math.max(row.min, math.min(row.max, (tonumber(v) or row.min) + dir * row.step))
     v = math.floor(v / row.step + 0.5) * row.step
     if row.step >= 1 then v = math.floor(v + 0.5) end
+    -- (whole percents stored clean: 0.27, not 0.27000000000000002)
+    if row.pct then v = math.floor(v * 100 + 0.5) / 100 end
   end
   set(row.key, v)
   s.changed[row.key] = true

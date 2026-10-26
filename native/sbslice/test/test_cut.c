@@ -147,6 +147,49 @@ int main(void)
     // weights sum check
     int badsum = 0;
     for (int v = 0; v < NV; v++) { int s = 0; for (int i = 0; i < MAX_INF; i++) s += override_w[v].weights[i]; if (s != 255) badsum++; }
+    // one side out of sight (vanish_cmd, a part grown back at a camp rest), on the cut's weights with the leg moved:
+    // keep 0 hides the leg, keep 1 everything but the leg. A hidden triangle has no area left, a kept one is where the
+    // cut's weights put it, and none spans the two
+    int vanbad = 0;
+    {
+        static unsigned char cw[NV][24];
+        skin_info *cutw = override_w;
+        for (int v = 0; v < NV; v++) for (int i = 0; i < MAX_INF; i++) { cw[v][i] = (unsigned char)cutw[v].bones[i]; cw[v][12 + i] = cutw[v].weights[i]; }
+        unsigned char *swb = (unsigned char *)sw_buf;
+        *(u32 *)(swb + SW_MAX_INFLUENCES) = 12; *(u64 *)(swb + SW_DATA) = (u64)cw;
+        for (int keep = 0; keep < 2; keep++) {
+            u64 root = THIGH;
+            override_w = 0;
+            vanish_cmd((u64)comp_buf, 0, keep, &root, 1);
+            printf("vanish keep %d: %s\n", keep, lastres);
+            if (!override_w || strncmp(lastres, "ok vanish ", 10)) { vanbad = 1; continue; }
+            int hid = 0, shown = 0, wrong = 0;
+            for (int t = 0; t < nidx; t += 3) {
+                int limbv = 0;
+                float p[3][3];
+                for (int k = 0; k < 3; k++) {
+                    int v = idx[t + k], d = 0, dw = -1;
+                    for (int i = 0; i < MAX_INF; i++) if (cutw[v].weights[i] > dw) { dw = cutw[v].weights[i]; d = cutw[v].bones[i]; }
+                    limbv += d == THIGH || d == CALF || d == THIGH_HELP;
+                    skin(&override_w[v], vpos[v], p[k]);
+                    float q[3]; skin(&cutw[v], vpos[v], q);
+                    int hide = keep ? !(d == THIGH || d == CALF || d == THIGH_HELP) : (d == THIGH || d == CALF || d == THIGH_HELP);
+                    if (!hide && dist3(p[k], q) > 0.01f) wrong++;
+                }
+                float u[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] }, w2[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
+                float cx = u[1] * w2[2] - u[2] * w2[1], cy = u[2] * w2[0] - u[0] * w2[2], cz = u[0] * w2[1] - u[1] * w2[0];
+                float area = 0.5f * __builtin_sqrtf(cx * cx + cy * cy + cz * cz);
+                int hidetri = keep ? limbv < 3 : limbv > 0;
+                if (hidetri && area > 0.01f) wrong++;
+                hid += hidetri; shown += !hidetri && area > 0.01f;
+            }
+            printf("vanish keep %d: %d triangles hidden, %d shown, %d wrong\n", keep, hid, shown, wrong);
+            vanbad |= wrong || !hid || !shown;
+            free(override_w);
+        }
+        *(u32 *)(swb + SW_MAX_INFLUENCES) = 4; *(u64 *)(swb + SW_DATA) = (u64)vw;
+        override_w = cutw;
+    }
     int r1 = skin_restore(0);
     printf("restored %d, thigh_help refinv[0]=%.0f [14]=%.0f, spine_help [14]=%.0f, nsinks=%d\n", r1, refinv[THIGH_HELP*16], refinv[THIGH_HELP*16+14], refinv[SPINE_HELP*16+14], nsinks);
     // a tilted plane on the already moved pose (exercises a second cut over a posed limb)
@@ -475,7 +518,7 @@ int main(void)
         cur_idx = idx; cur_nidx = &nidx;
     }
     int fitbad = modebad || corebad || np + 1 < 20 || strap || fa < 5.7f || fa > 6.3f || fb < 3.7f || fb > 4.3f || fcx < 0.8f || fcx > 1.2f;
-    int fail = fitbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
+    int fail = fitbad || vanbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
     printf("%s\n", fail ? "FAIL" : "PASS");
     return fail;
 }

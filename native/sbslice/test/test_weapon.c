@@ -237,7 +237,35 @@ int main(void)
     relax_cmd(none, 1);
     int unrelaxed = !memcmp(refinv, refinv0, sizeof refinv);
     printf("grip eased: %d vertices off, put back %d\n", relaxbad, unrelaxed);
-    int fail = bad || flatbad || gonebad || !nflat || !ngone || rigidbad || !missed || !restored || relaxbad || !unrelaxed;
+    // an arm grown back (regrow_limb, "Z"): GRIP stands for the upper arm, BLADE for the forearm, the sword posed as
+    // above. At the start every vertex of theirs sits within REGROW_MIN of its reach from the grip's joint; halfway the
+    // grip is grown further than the blade; at the end each sits where the pose has it; "Z" alone puts the matrices back
+    int growbad = 0;
+    float gp[3] = { space[GRIP * 12 + 4], space[GRIP * 12 + 5], space[GRIP * 12 + 6] };
+    for (int pass = 0; pass < 3; pass++) {
+        u64 f[5] = { (u64)comp_a, GRIP, BLADE, 0xffff, pass == 0 ? 0 : pass == 1 ? 500 : 1000 };
+        regrow_cmd(f, 5);
+        for (int v = 0; v < RINGS * 4; v++) {
+            if (vw[v][0] != BLADE && vw[v][0] != GRIP) continue;
+            float x[3], e[3], *tb = space + vw[v][0] * 12;
+            float l[3] = { vpos[v][0] - bonex[vw[v][0]], vpos[v][1], vpos[v][2] }, r[3];
+            skin(&orig[v], vpos[v], x);
+            quat_rot(tb, l, r); e[0] = tb[4] + r[0]; e[1] = tb[5] + r[1]; e[2] = tb[6] + r[2];
+            float dx = 0, de = 0;
+            for (int k = 0; k < 3; k++) { dx += (x[k] - gp[k]) * (x[k] - gp[k]); de += (e[k] - gp[k]) * (e[k] - gp[k]); }
+            dx = __builtin_sqrtf(dx); de = __builtin_sqrtf(de);
+            if (pass == 0 && dx > de * REGROW_MIN + 0.02f) growbad++;
+            // (halfway: the grip's own vertices out to 0.5 + of their reach, the blade's less far than the pose has them)
+            if (pass == 1 && vw[v][0] == GRIP && (dx < de * 0.5f - 0.02f || dx > de + 0.02f)) growbad++;
+            if (pass == 1 && vw[v][0] == BLADE && dx > de - 0.5f) growbad++;
+            if (pass == 2) for (int k = 0; k < 3; k++) if (fabsf_(x[k] - e[k]) > 0.02f) { growbad++; break; }
+        }
+    }
+    regrow_cmd(none, 1);
+    int ungrown = !memcmp(refinv, refinv0, sizeof refinv);
+    printf("arm grown back: %d vertices off, put back %d\n", growbad, ungrown);
+    int fail = bad || flatbad || gonebad || !nflat || !ngone || rigidbad || !missed || !restored || relaxbad || !unrelaxed
+        || growbad || !ungrown;
     printf("%s\n", fail ? "FAIL" : "PASS");
     return fail;
 }

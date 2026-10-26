@@ -300,6 +300,35 @@ function M.tick()
   end
 end
 
+-- Lose Arm at Low HP: no gun while her left arm is off. Her aim is a stance (CharacterStanceTable: P_Eve_Gun and its
+-- tutorial, Black Rose and NIKKE kin, the rows held by pressing SkillCommandState_TPSMode, 43), and a stance row lists
+-- up to five actor states that rule it out (Condition_DeactiveActorState1-5: a count of any above 0 on her). Their
+-- fifth (empty on all four) gets ActorState_BlockItemUseBullet (100), the state low_block puts on her for the shots,
+-- while it is off (sbslice B). Not the skill commands that aim and fire: rows made unmeetable there still let her
+-- aim (playtest). on false puts every byte back. Answer for the log
+M.STANCE = "/Game/Local/Data/CharacterStanceTable.CharacterStanceTable"
+M.TPS_MODE, M.BLOCK_BULLET = 43, 100
+function M.gun_gate(on)
+  if not on then return ctx.gore.command("B") end
+  local dt = try(function() return StaticFindObject(M.STANCE) end)
+  if not valid(dt) then
+    try(function()
+      for _, t in ipairs(FindAllOf("DataTable") or {}) do
+        if t:GetFName():ToString() == "CharacterStanceTable" then dt = t; break end
+      end
+    end)
+  end
+  if not valid(dt) then return "err no CharacterStanceTable" end
+  local rs = try(function() return dt.RowStruct end)
+  local fs = valid(rs) and fields(rs) or {}
+  local slot, k1, k2 = fs.Condition_DeactiveActorState5, fs.Condition_PressCommandKey1, fs.Condition_PressCommandKey2
+  if not (slot and k1 and k2) then
+    return "err CharacterStanceTable without Condition_DeactiveActorState5 or Condition_PressCommandKey1/2"
+  end
+  return ctx.gore.command(string.format("B%x,%x,1,%x,%x,%x,%x,%x,%x", addr(dt), addr(rs), slot.off, M.BLOCK_BULLET,
+    k1.off, M.TPS_MODE, k2.off, M.TPS_MODE))
+end
+
 -- the revive screen's delay changed in game (the menu): Player's delays written again
 function M.redo_dead() M.done[M.DEAD] = nil; M.next = 0 end
 

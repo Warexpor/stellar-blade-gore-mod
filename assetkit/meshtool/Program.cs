@@ -5,6 +5,7 @@
 //   bones <legacy_root> <usmap> - <out_dir>           reference skeletons only, package paths on stdin, <out_dir>/<package>.json
 //   tex <legacy_root> <usmap> - <out_dir>             textures decoded, package paths on stdin: <out_dir>/<name>.raw, a
 //                                                     "<width> <height> <pixel format>" line, then the pixels
+//   json <legacy_root> <usmap> - <out_dir>            every export as JSON, package paths on stdin: <out_dir>/<name>.json
 // <package> is the path under <legacy_root> without extension, e.g. SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30
 using System.Text.Json;
 using CUE4Parse.FileProvider;
@@ -73,6 +74,22 @@ if (cmd == "tex")
         f.Write(System.Text.Encoding.ASCII.GetBytes($"{c.Width} {c.Height} {c.PixelFormat}\n"));
         f.Write(c.Data);
         Console.WriteLine($"{p} {c.Width}x{c.Height} {c.PixelFormat}");
+    }
+    return 0;
+}
+
+if (cmd == "json")
+{
+    // json <legacy_root> <usmap> - <out_dir>: every export of each package (paths on stdin) as JSON, <out_dir>/<name>.json
+    string? p;
+    Directory.CreateDirectory(outp);
+    while ((p = Console.ReadLine()) != null)
+    {
+        p = p.Trim(); if (p.Length == 0) continue;
+        var exports = provider.LoadPackage(p + ".uasset").GetExports();
+        var o = Path.Combine(outp, Path.GetFileName(p) + ".json");
+        await File.WriteAllTextAsync(o, Newtonsoft.Json.JsonConvert.SerializeObject(exports, Newtonsoft.Json.Formatting.Indented));
+        Console.WriteLine(o);
     }
     return 0;
 }

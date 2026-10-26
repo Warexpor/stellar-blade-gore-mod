@@ -34,7 +34,13 @@ return {
                                -- (blades still cut)
     lowArm = {
       enabled = false,         -- a hit that leaves her HP under a quarter cuts her left arm off; she fights on without
-                               -- it (once a life; it grows back with her HP full again, or at her next life)
+                               -- it (it dissolves back in at a camp rest, or comes back at her next life)
+      below = 0.25,            -- the share of her HP (0-1) a hit has to leave her under for it to come off
+      noHealGun = true,        -- while it is off: no heal items, no gun (both need her left hand)
+      notice = true,           -- and trying either shows the game's "Cannot use right now." with its sound
+      healBack = false,        -- it also grows back once her HP is back at healAt (0.9), however she healed
+      healAt = 0.9,
+      effect = true,           -- what comes back at a camp rest dissolves back in (false: back at once, no effect)
     },
     throw = 250,               -- cm/s a cut-off piece flies off with (0: it just drops)
     headRagdoll = false,       -- a beheading during her animated fall always makes her a full ragdoll (false: the

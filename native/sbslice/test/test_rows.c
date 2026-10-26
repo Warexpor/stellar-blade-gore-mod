@@ -1,4 +1,4 @@
-// Linux harness for the data table row commands (D, N, A in sbslice.c) on a made-up UDataTable: a row map of four
+// Linux harness for the data table row commands (D, N, A, B in sbslice.c) on a made-up UDataTable: a row map of four
 // rows (TSet layout and FName hash as UE 4.26's, hash size 8), rows with an FString, a TArray<FName> and a TArray of structs holding
 // an FString. Checks: A adds a copy of a row (its heap fields in buffers of its own) that the hash finds, into a full
 // sparse array and into a free slot; A on a name already there answers exists; D sets an FString; N swaps names in a
@@ -50,6 +50,30 @@ static row_t *find(u32 idx, u32 num)
     return 0;
 }
 
+// U: the game's system notice, its functions faked: the text from a string table, the UI manager, its logics
+static int nt_destroyed, nt_deleted, nt_calls[3], nt_bad;
+static u64 nt_textobj = 0x5eed0000, nt_ctl[2], nt_ctl_vt[2], nt_ui[16], nt_list[4], nt_ents[3][16], nt_logic[3], nt_lvt[3][16];
+static void nt_destroy(u64 c) { (void)c; nt_destroyed++; }
+static void nt_delete(u64 c, int f) { (void)c; (void)f; nt_deleted++; }
+static int wide_is(const u16 *w, const char *a) { while (*a && *w == (u16)*a) { w++; a++; } return !*a && !*w; }
+static void *nt_text(void *out, const void *table, const void *key)
+{
+    const u16 *t = *(u16 *const *)table, *k = *(u16 *const *)key;
+    if (!wide_is(t, "StringTable_UI") || *(const int *)((const char *)table + 8) != 15) nt_bad++;
+    if (!wide_is(k, "UI_GetNotice_Fail_ActiveTpsMode")) { memset(out, 0, 0x18); return out; }
+    nt_ctl[0] = (u64)nt_ctl_vt; ((int *)nt_ctl)[2] = 1; ((int *)nt_ctl)[3] = 1;
+    ((u64 *)out)[0] = nt_textobj; ((u64 *)out)[1] = (u64)nt_ctl; ((u32 *)out)[4] = 0;
+    return out;
+}
+static u64 nt_get(void) { return (u64)nt_ui; }
+static int nt_type(u64 lg) { return lg == (u64)&nt_logic[2] ? 3 : 6; }
+static unsigned char nt_event(u64 lg, void *ev)
+{
+    int i = (int)((u64 *)lg - nt_logic);
+    nt_calls[i]++;
+    if (*(u64 *)ev != 9 || *(u64 *)((char *)ev + 0x30) != nt_textobj) nt_bad++;
+    return i == 1;
+}
 int main(void)
 {
     void *m = mmap(0, 0x7100000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
@@ -175,6 +199,65 @@ int main(void)
             (unsigned long long)(u64)table, (unsigned long long)(u64)rs);
         send(game_cmd, cmd);
         check(!strncmp(lastres, "err the alias map's ID", 22), lastres);
+    }
+    // B on a table of its own, three rows with ids 100-102: rows whose id byte (0x2c) is 100 or 102 get 2 in their
+    // bytes 0x3e and 0x3f whatever they held (row 102's 0x3e held 5); row 101 doesn't match; B alone puts them back
+    {
+        static unsigned char t2[0x100];
+        static elem_t e2[3];
+        static u32 b2 = 7;
+        row_t *r[3];
+        *(u64 *)(t2 + DT_ROWSTRUCT) = (u64)rs;
+        for (int i = 0; i < 3; i++) { r[i] = mkrow(100 + i, "x", 1); e2[i].idx = 30 + i; e2[i].row = (u64)r[i]; }
+        ((unsigned char *)r[2])[0x3e] = 5;
+        *(u64 *)(t2 + 0x30) = (u64)e2; *(int *)(t2 + 0x38) = 3; *(int *)(t2 + 0x3c) = 3;
+        *(u64 *)(t2 + 0x50) = (u64)&b2; *(int *)(t2 + 0x58) = 3; *(int *)(t2 + 0x5c) = 32;
+        snprintf(cmd, sizeof cmd, "%llx,%llx,2,3e,2,3f,2,2c,64,2c,66", (unsigned long long)(u64)t2, (unsigned long long)(u64)rs);
+        static u16 w[256];
+        int n2 = 0;
+        for (; cmd[n2]; n2++) w[n2] = (u16)cmd[n2];
+        u64 gf[3 + 2 * 8 + 16];
+        int gk = parse_fields(w, n2, gf, 3 + 2 * 8 + 16);
+        unsigned char *b0 = (unsigned char *)r[0], *b1 = (unsigned char *)r[1], *bb2 = (unsigned char *)r[2];
+        unsigned char was0f = b0[0x3f], was2f = bb2[0x3f];
+        gate_cmd(gf, gk);
+        printf("gate: %s\n", lastres);
+        check(!strcmp(lastres, "ok gated 2 of 3, 0"), lastres);
+        check(b0[0x3e] == 2 && b0[0x3f] == 2, "B gates a matching row (both bytes)");
+        check(bb2[0x3e] == 2 && bb2[0x3f] == 2, "B gates a row that checked one already");
+        check(b1[0x3e] == 0, "B leaves a row that doesn't match");
+        gate_cmd(gf, gk);
+        check(!strcmp(lastres, "ok gated 2 of 3, 0") && ngated == 4, "B again gates nothing twice");
+        gate_cmd(gf, 0);
+        check(b0[0x3e] == 0 && b0[0x3f] == was0f && bb2[0x3e] == 5 && bb2[0x3f] == was2f && ngated == 0, "B alone puts them back");
+        snprintf(cmd, sizeof cmd, "%llx,%llx,0,3e,2", (unsigned long long)(u64)t2, (unsigned long long)(u64)rs);
+        for (n2 = 0; cmd[n2]; n2++) w[n2] = (u16)cmd[n2];
+        gate_cmd(gf, parse_fields(w, n2, gf, 3 + 2 * 8 + 16));
+        check(!strncmp(lastres, "err want B", 10), "B with no sets refused");
+    }
+    // U: the logics looked at from the last one down, the type-3 one skipped, the second taking it (the first never
+    // asked), the text made from StringTable_UI and let go after; a key the table hasn't: refused
+    {
+        nt_ctl_vt[0] = (u64)nt_destroy; nt_ctl_vt[1] = (u64)nt_delete;
+        for (int i = 0; i < 3; i++) {
+            nt_lvt[i][2] = (u64)nt_type; nt_lvt[i][13] = (u64)nt_event;
+            nt_logic[i] = (u64)nt_lvt[i];
+            nt_ents[i][12] = (u64)&nt_logic[i];
+            nt_list[0] = 0;
+        }
+        u64 arr[3] = { (u64)nt_ents[0], (u64)nt_ents[1], (u64)nt_ents[2] };
+        nt_ui[9] = (u64)nt_list; nt_list[2] = (u64)arr; ((int *)nt_list)[6] = 3;
+        RVA_TEXT_FROM_TABLE = (u64)nt_text - exe; RVA_UI_LOGICS = (u64)nt_get - exe;
+        send(notice_cmd, "UStringTable_UI;UI_GetNotice_Fail_ActiveTpsMode");
+        printf("notice: %s\n", lastres);
+        check(!strcmp(lastres, "ok notice 1 of 3"), lastres);
+        check(nt_calls[1] == 1 && nt_calls[0] == 0 && nt_calls[2] == 0, "U stops at the HUD notice that takes it");
+        check(!nt_bad, "U sends event 9 with the table's text");
+        check(nt_destroyed == 1 && nt_deleted == 1, "U lets the text go");
+        send(notice_cmd, "UStringTable_UI;UI_NoSuchKey");
+        check(!strcmp(lastres, "err no such text"), lastres);
+        send(notice_cmd, "UStringTable_UI");
+        check(!strncmp(lastres, "err want U", 10), lastres);
     }
     printf(fails ? "FAIL\n" : "PASS\n");
     return fails != 0;

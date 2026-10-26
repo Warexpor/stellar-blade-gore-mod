@@ -281,8 +281,26 @@ return {
                                --   smash.blunt) cuts nothing: the death is a plain ragdoll, hits after it cut nothing
                                --   either. Goes before smash; blades still cut
     lowArm = {                 -- a hit that leaves her HP under a quarter takes her left arm off as she fights on
-      enabled = false,         --   (once a life; it grows back with her HP full again, or at her next life)
+      enabled = false,         --   (once till it is back: it grows back at a camp rest, or at her next life)
       below = 0.25,            --   the share of her HP bar under which it goes
+      noHealGun = true,        --   while it is off she can't use heal items or shoot (the game's own blocks on her,
+                               --   ActorState_BlockItemUseHeal and _BlockItemUseBullet)
+      notice = true,           --   and her aim or heal key pressed meanwhile shows the game's "Cannot use right now."
+                               --   with its sound (the HUD's system notice)
+      effect = true,           --   it comes back with an effect (F3 → Regrow Effect; false: back at once, no effect)
+      dissolve = {             --   at a camp rest it dissolves back in (the game's corpse dissolve run backwards, her
+        time = 3,              --   own textures on it), over time s (false: grown back over regrow s instead)
+        glow = 10,             --   the glow it peaks at halfway (the despawn's EmissiveBright starts at 10)
+        morph = true,          --   its surface ripples in with it (the despawn's Morph)
+        maskScale = 200,       --   the dissolve pattern's scale
+      },
+      regrow = 1.5,            --   without the dissolve: s it takes to grow back out of her shoulder, the upper arm,
+                               --   then the forearm, then the hand (0: back at once)
+      restDelay = 5,           --   s at a camp's chair (its Interaction_Camp_Chair sequence) till the rest's restore
+      restWindow = 20,         --   s after she sat down out of battle (her movement mode none: the camp's seat)
+                               --   within which her HP bar full again is the rest's heal
+      healBack = false,        --   it also grows back once her HP bar is back at healAt, however it got there (gear
+      healAt = 0.9,            --   that heals on kills or over time; heal items too with noHealGun off)
     },
     smash = {                  -- (experimental) a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg
       enabled = false,         --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
@@ -499,7 +517,8 @@ return {
     poolGrow = 5,              --   seconds for a pool to reach most of its size (it keeps spreading slowly)
     poolTime = 12,             --   seconds each opening is followed
     dripEvery = 18,            --   cm between drips while it moves
-    maxDecals = 60,            --   drips and pools in all
+    maxDecals = 150,           --   drips and pools in all (at the cap the oldest drip goes, a pool only when no
+                               --   drip is left)
   },
   physfix = {                  -- physfix.lua: every outfit's ragdoll fixes, made in game (the build's outfits container
                                -- has the same ones, and isn't shipped)
@@ -727,8 +746,8 @@ return {
                                -- a split, heavy hits, explosions, airborne and ledge deaths stay ragdolls. false =
                                -- every death a ragdoll (the death shows' own key still fires, just not muted)
     fallRagdoll = true,        -- a fall damage death is a ragdoll (false: the stand death's animated fall, as the game)
-    landDrop = 400,            -- a death within landWindow s of landing from a drop of this many cm is a ragdoll: the
-    landWindow = 2.0,          -- game's fall damage kills her on the ground with the stand death (Landing_Height_Damage)
+    landDrop = 400,            -- a death within landWindow s of landing from a drop of this many cm is a ragdoll, not
+    landWindow = 2.0,          -- the animated stand death (a minor fall itself leaves her at 1 HP, as the game does)
     deathFreeze = true,        -- an animated death's pose held from its start till the cut is chosen, and through a
                                -- split till it ragdolls (she turned round in her fall before the cut came)
     animatedPool = false,      -- an animated death picks its fall at random from her death show's own and 8 made

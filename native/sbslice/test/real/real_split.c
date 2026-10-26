@@ -1262,6 +1262,17 @@ int main(int argc, char **argv)
         if (!env_on("OLDDRV") && limb_is_leg(ua)) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, limbbits) ? 2 : under_driver(i));
         skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1);
         printf("arm: %.300s\n", lastres);
+        // the piece's cap and bone ride lb=: never a helper under one of the rig's drivers, which the animation keeps
+        // pointing at her body (CH_P_EVE_30's left arm rode Ab-L-Deltoid under Dm-L-Deltoid-A, playtest)
+        {
+            const char *q = strstr(lastres, " lb=");
+            int lb = q ? atoi(q + 4) : -1;
+            if (lb >= 0 && lb < NB) {
+                printf("arm piece rides %s\n", bname[lb]);
+                for (int a = lb; a >= 0 && a != ua; a = bparent[a])
+                    if (!strncmp(bname[a], "Dm-", 3) || !strncmp(bname[a], "Dm_", 3)) { printf("FAIL: the piece rides %s, under the driver %s\n", bname[lb], bname[a]); return 1; }
+            }
+        }
         // the body cap's centre (bc=, on the rim the DLL sends, where gore.lua puts the cap): its height off the plane
         float capc[3] = { 0, 0, 0 };
         int capok = 0;

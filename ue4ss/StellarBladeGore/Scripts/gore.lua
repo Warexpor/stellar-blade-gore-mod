@@ -173,6 +173,7 @@ local caps = {}     -- cap actors (and bone stubs)
 local hung = {}     -- PhysicsConstraintComponents holding an accessory chain a limb cut kept on the body
 local trackers = {} -- bleeding openings leaving drips and pools on the floor (see pools below)
 local decals = {}   -- floor blood decal components, removed on recovery
+M.drips = {}        -- those of them that are drips (first to go at the cap)
 local no_decals = {} -- { comp, addr, was }: her meshes kept from receiving the floor blood while it is down
 local body_blood = nil -- { from = {name = value}, to, t, time, pawn }: her skin's blood layer while it is raised
 local cuts = {}     -- { mesh, addr, bone } per cut, in order
@@ -1838,6 +1839,32 @@ local function floor_decal(pawn, p, r, list, life)
   return { d = d, at = at, n = n, r = r }
 end
 
+-- at the cap (maxDecals): the oldest drip goes for the new one, a pool only when no drip is left (the oldest no
+-- opening still spreads; a moving arm stump's drips had filled the old cap of 60 and the death got no pools). Refused at the
+-- cap, a limb cut off her alive (Lose Arm at Low HP) dripped 58 times as she fought on, and her death a minute later
+-- left no blood on the floor at all (playtest). (Not a local: the chunk is at Lua's 200)
+function M.decal_room(max)
+  if #decals < max then return true end
+  local live = {}
+  for _, k in ipairs(trackers) do if k.pool and k.pool.d then live[k.pool.d] = true end end
+  for i, d in ipairs(decals) do
+    if M.drips[d] then
+      table.remove(decals, i)
+      M.drips[d] = nil
+      if valid(d) then try(function() d:K2_DestroyComponent(d) end) end
+      return true
+    end
+  end
+  for i, d in ipairs(decals) do
+    if not live[d] then
+      table.remove(decals, i)
+      if valid(d) then try(function() d:K2_DestroyComponent(d) end) end
+      return true
+    end
+  end
+  return false
+end
+
 -- the splat under a cut or a hit: a splash of the pools' blood on the floor under `at`, kept off walls as they are.
 -- The game's splat effect (NS_Hit_Flesh_Decal_Strong_01) put its own blood decal down (MI_ParBloodDecal_01, coloured
 -- by its particles), a brighter red than the pools (playtest). life: s it stays (a hit she lives through; 0: till
@@ -1845,7 +1872,7 @@ end
 function M.splat(pawn, at, life)
   if not at then return end
   local g = cfg()
-  if not life and #decals >= (g.maxDecals or 60) then return end
+  if not life and not M.decal_room(g.maxDecals or 60) then return end
   local r = (g.splatSize or 14) * (0.75 + math.random() * 0.5)
   local f, n = floor_at(pawn, at)
   if f then r = math.min(r, M.wall_room(pawn, f, n, r)) end
@@ -1907,7 +1934,7 @@ local function pools_tick()
         local off = len(vec(p.X - k.pool.at.X, p.Y - k.pool.at.Y, 0))
         if off > math.max(k.pool.r * 0.6, 15) then k.pool = nil end
       end
-      if not k.pool and k.still >= 0.3 and #decals < maxDecals and budget > 0 then
+      if not k.pool and k.still >= 0.3 and budget > 0 and M.decal_room(maxDecals) then
         -- it came to rest: a pool starts under it
         budget = budget - 1
         k.pool = floor_decal(k.pawn, p, 4, POOL_DECALS)
@@ -1920,12 +1947,13 @@ local function pools_tick()
             log(string.format("floor blood: a pool by a wall spreads %.0f cm across, not %.0f", k.pool.rmax * 2, k.rmax * 2))
           end
         end
-      elseif not k.pool and speed >= 25 and #decals < maxDecals and budget > 0 then
+      elseif not k.pool and speed >= 25 and budget > 0 then
         -- on the move: drips every so often
-        if not k.drop or len(sub(p, k.drop)) >= every then
+        if (not k.drop or len(sub(p, k.drop)) >= every) and M.decal_room(maxDecals) then
           budget = budget - 1
           k.drop = p
-          floor_decal(k.pawn, p, 2.5 + math.random() * 4, DRIP_DECALS)
+          local dr = floor_decal(k.pawn, p, 2.5 + math.random() * 4, DRIP_DECALS)
+          if dr and dr.d then M.drips[dr.d] = true end
           k.drips = (k.drips or 0) + 1
         end
       end
@@ -1965,7 +1993,7 @@ end
 local function pools_clear()
   local n = 0
   for _, d in ipairs(decals) do if valid(d) then try(function() d:K2_DestroyComponent(d) end); n = n + 1 end end
-  decals, trackers = {}, {}
+  decals, trackers, M.drips = {}, {}, {}
   for _, e in ipairs(no_decals) do
     if valid(e.comp) and addr(e.comp) == e.addr then try(function() e.comp:SetReceivesDecals(e.was ~= false) end) end
   end
@@ -3233,13 +3261,21 @@ local function stage_open(q)
       c.cap, c.capResp = cap, try(function() return cap:GetCollisionResponseToChannel(5) end) -- ECC_PhysicsBody
       try(function() cap:SetCollisionResponseToChannel(5, 0) end)
     end
+    -- and none with her hair (SBHair blocks PhysicsBody, her mesh's type now): it caught on her own bodies and the
+    -- arm on the floor and hung there in the air till her death turned its collision off (playtest)
+    local hair = c.obj ~= 5 and try(function() return q.pawn.SBHair end)
+    if valid(hair) then
+      c.hair, c.hairResp = hair, try(function() return hair:GetCollisionResponseToChannel(5) end)
+      try(function() hair:SetCollisionResponseToChannel(5, 0) end)
+    end
     collision_saved = c
-    world = string.format(", world collision on (was %s, enabled %s)%s", tostring(c.profile), tostring(c.enabled),
-      c.cap and string.format(", her capsule ignores it (was %s)", tostring(c.capResp)) or "")
+    world = string.format(", world collision on (was %s, enabled %s)%s%s", tostring(c.profile), tostring(c.enabled),
+      c.cap and string.format(", her capsule ignores it (was %s)", tostring(c.capResp)) or "",
+      c.hair and string.format(", her hair ignores it (was %s)", tostring(c.hairResp)) or "")
     -- the piece weighs what a body part weighs, not the outfit's 100 kg chest and 80 kg cape links (active.lua does
     -- this for ragdolls)
     if ctx.on_piece then
-      local m = try(function() return ctx.on_piece(q.pawn, q.mesh) end)
+      local m = try(function() return ctx.on_piece(q.pawn, q.mesh, q.bone) end)
       if m then world = world .. ", " .. m end
     end
   end
@@ -5191,6 +5227,20 @@ function M.hide_pieces(pawn, mesh, on)
   -- (what is hidden here, for main.lua's showing her again up close to leave alone)
   h.set = {}
   for _, k in ipairs(h.hidden) do local a = addr(k); if a then h.set[a] = true end end
+  -- where each piece is on her as it goes onto the copy: it hung in the air over her in photo mode's poses, strands
+  -- down to her shoulder (playtest, not known yet whether her bodies or the copy put it there)
+  local at = {}
+  for _, b in ipairs(roots) do
+    local l = try(function() local v = mesh:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end)
+    local pv = try(function() local v = mesh:GetSocketLocation(FName("Bip001-Pelvis")); return vec(v.X, v.Y, v.Z) end)
+    local over = l and ctx.rag and ctx.rag.over_floor and ctx.rag.over_floor(pawn, l)
+    local sim = try(function() return mesh:IsSimulatingPhysics(FName(b)) end)
+    local awake = try(function() return mesh:IsAnyRigidBodyAwake() end)
+    at[#at + 1] = string.format("%s at %s, %s cm over the floor, %s cm from her pelvis, simulating %s (awake any %s)", b, v3(l),
+      over and string.format("%.0f", over) or "?", (l and pv) and string.format("%.0f", len(vec(l.X - pv.X, l.Y - pv.Y, l.Z - pv.Z))) or "?",
+      tostring(sim), tostring(awake))
+  end
+  if #at > 0 then log("photo mode: the piece on her: " .. table.concat(at, "; ")) end
   log(string.format("photo mode: %s cut off her %s (weights %s, pose %s%s), %d part(s) riding it moved over, %d hidden",
     table.concat(roots, ", "), c and "on a copy of her mesh" or "hidden", y, p, fq and ", her face along: " .. fq or "",
     #h.riders + #h.posed, #h.hidden))
@@ -6493,6 +6543,7 @@ local function cleanup_eve(pawn, mesh, theirs)
     end)
   end
   if c and valid(c.cap) and c.capResp then step("capsule", function() c.cap:SetCollisionResponseToChannel(5, c.capResp) end) end
+  if c and valid(c.hair) and c.hairResp then step("hair", function() c.hair:SetCollisionResponseToChannel(5, c.hairResp) end) end
   later = {}
   if valid(mesh) then
     step("lod", function() M.lod0(mesh, false) end)
@@ -6540,6 +6591,141 @@ function M.cleanup(pawn, mesh)
   merge(queued, t.queued); merge(hid, t.hid)
   pending = pending or theirs_pending
   if not ok then error(err, 0) end
+end
+
+-- ---- a part dissolving back in (main.lua's camp rest) ----
+-- The cut stays on while it comes back: on each mesh of hers it is on (her body, her face with a head) the part's
+-- bodies stop simulating, so its bones are on her pose again, and the part goes out of sight on her (sbslice "V",
+-- keep 0: its vertices onto a collapsed sink; another mod's copies of her mesh take those weights). A copy of the mesh
+-- on her pose, the cut's weights with everything but the part out of sight ("V", keep 1), wears the game's corpse
+-- dissolve (MI_DeadMaterial_*, MA_DeadMaterial_01: the despawn show runs Dissolve 0 -> 1, Morph 0 -> 1 and
+-- EmissiveBright 10 -> 0) with each slot's own textures (BaseColor, BaseNormalTex, ORM), run backwards
+-- (M.ghost_set). Her own materials can't dissolve: MA_Skin_EVE is opaque and cooked. At the end the cut is undone
+-- (M.cleanup, which destroys the copy with its other clones). Returns the state, or nil and why
+M.REGROW_MAT = "/Game/Art/FX/Char/Monster/Common/Dead/MI_DeadMaterial_LurkerA_01.MI_DeadMaterial_LurkerA_01"
+-- a material's texture parameters up its parents (an instance's own first)
+function M.ghost_params(mat)
+  local out, m = {}, mat
+  for _ = 1, 8 do
+    if not valid(m) then break end
+    try(function() m.TextureParameterValues:ForEach(function(_, e)
+      local p = e:get()
+      local n = p.ParameterInfo.Name:ToString()
+      if out[n] == nil and valid(p.ParameterValue) then out[n] = p.ParameterValue end
+    end) end)
+    m = try(function() return m.Parent end)
+  end
+  return out
+end
+-- by one of names, else by the texture's own name ending in one of ends (not a parameter named with skip)
+function M.ghost_pick(t, names, ends, skip)
+  for _, n in ipairs(names) do if t[n] then return t[n], n end end
+  for n, x in pairs(t) do
+    local low = n:lower()
+    local bad = false
+    for _, s in ipairs(skip) do bad = bad or low:find(s, 1, true) ~= nil end
+    local tn = not bad and (try(function() return x:GetFName():ToString() end) or ""):lower()
+    if tn then for _, e in ipairs(ends) do if tn:sub(-#e) == e then return x, n end end end
+  end
+  return nil
+end
+M.GHOST_SKIP = { "micro", "detail", "blood", "flake", "noise", "pattern", "cosmetic", "stocking", "mask", "dirt" }
+function M.ghost_begin(pawn, mesh, parts, path)
+  local mat = load_obj(path or M.REGROW_MAT)
+  if not mat then return nil, "no dissolve material" end
+  local meshes, seen, want = {}, {}, { face = true }
+  for _, p in ipairs(parts) do want[p] = true end
+  -- (her own cuts of these parts only: not an enemy's, a split's copy or a failed one)
+  for _, c in ipairs(cuts) do
+    if want[c.bone] and not owner_of(c) and valid(c.mesh) and addr(c.mesh) == c.addr and not seen[c.addr] then
+      seen[c.addr] = true
+      meshes[#meshes + 1] = c.mesh
+    end
+  end
+  local g = { list = {}, mids = {}, t0 = os.clock() }
+  local function fail(why) M.ghost_end(g); return nil, why end
+  for _, m in ipairs(meshes) do
+    local roots = {}
+    for _, p in ipairs(parts) do
+      local i = try(function() return m:GetBoneIndex(FName(p)) end)
+      if i and i >= 0 then roots[#roots + 1] = string.format("%x", i) end
+    end
+    if #roots > 0 then
+      -- (her pose on the part again: it lay where it fell)
+      for _, p in ipairs(parts) do try(function() m:SetAllBodiesBelowSimulatePhysics(FName(p), false, true) end) end
+      local c = clone_of(pawn, m)
+      if not c then return fail("no copy of " .. name_of(m)) end
+      local e = { mesh = m, copy = c, hid = {} }
+      g.list[#g.list + 1] = e
+      local y = command(string.format("y%x,0,%x", addr(m), addr(c)))
+      if y:sub(1, 9) ~= "ok copied" then return fail("weights on the copy: " .. y) end
+      try(function() c:SetMasterPoseComponent(m, true) end)
+      local vc = command(string.format("V%x,0,1,%s", addr(c), table.concat(roots, ",")))
+      local vm = command(string.format("V%x,0,0,%s", addr(m), table.concat(roots, ",")))
+      if vc:sub(1, 9) ~= "ok vanish" or vm:sub(1, 9) ~= "ok vanish" then return fail("vanish: copy " .. vc .. ", hers " .. vm) end
+      -- (another mod's copies of her mesh on her pose: her weights now)
+      M.copies_sync(m, true)
+      -- sections where nothing could be hidden, whole
+      local function hide(comp, r, list)
+        for mi, si in (r:match(" mats (%S+)") or ""):gmatch("(%d+)/(%d+)") do
+          if try(function() comp:ShowMaterialSection(tonumber(mi), tonumber(si), false, 0); return true end) and list then
+            list[#list + 1] = mi .. "/" .. si
+          end
+        end
+      end
+      hide(c, vc)
+      hide(m, vm, e.hid)
+      local nm = try(function() return c:GetNumMaterials() end) or 0
+      local looks = {}
+      for i = 0, nm - 1 do
+        local src = try(function() return m:GetMaterial(i) end)
+        local mid = try(function() return c:CreateDynamicMaterialInstance(i, mat, FName("None")) end)
+        if valid(mid) then
+          g.mids[#g.mids + 1] = mid
+          local t = M.ghost_params(src)
+          local base, bn = M.ghost_pick(t, { "BaseColor", "Base Color", "BaseColorTex", "Basecolor_Texture", "Albedo", "Diffuse" }, { "_a", "_d", "_bc", "_basecolor", "_albedo" }, M.GHOST_SKIP)
+          local nrm, nn = M.ghost_pick(t, { "BaseNormal", "BaseNormalTex", "Normal", "NormalTex", "Normal_Texture" }, { "_n", "_normal" }, M.GHOST_SKIP)
+          local orm, on = M.ghost_pick(t, { "ORM", "AORM_Texture", "ORM_Tex" }, { "_orm", "_arm" }, M.GHOST_SKIP)
+          if base then try(function() mid:SetTextureParameterValue(FName("BaseColor"), base); mid:SetTextureParameterValue(FName("EmissiveTex"), base) end) end
+          if nrm then try(function() mid:SetTextureParameterValue(FName("BaseNormalTex"), nrm) end) end
+          if orm then try(function() mid:SetTextureParameterValue(FName("ORM"), orm) end) end
+          looks[#looks + 1] = string.format("%d %s<%s %s %s>", i, valid(src) and try(function() return src:GetFName():ToString() end) or "?", bn or "-", nn or "-", on or "-")
+        end
+      end
+      log(string.format("regrow: %s dissolving back in on a copy of %s (roots %s): copy %s, hers %s; textures %s%s", table.concat(parts, ", "),
+        name_of(m), table.concat(roots, ","), vc, vm, table.concat(looks, "; "), #e.hid > 0 and ", sections hidden whole on her " .. table.concat(e.hid, ",") or ""))
+      M.ghost_set(g, 0)
+      try(function() c:SetComponentTickEnabled(true) end)
+      try(function() c:SetHiddenInGame(false, false) end)
+    end
+  end
+  if #g.list == 0 then return nil, "no mesh of hers has the parts' bones" end
+  return g
+end
+-- x: 0 nothing of it, 1 all of it (tune.gore.lowArm.dissolve: glow, the EmissiveBright it peaks at halfway)
+function M.ghost_set(g, x)
+  local d = type((cfg().lowArm or {}).dissolve) == "table" and cfg().lowArm.dissolve or {}
+  local e = x * x * (3 - 2 * x)
+  local glow = (tonumber(d.glow) or 10) * 4 * x * (1 - x)
+  for _, mid in ipairs(g.mids) do
+    if valid(mid) then try(function()
+      mid:SetScalarParameterValue(FName("Dissolve"), 1 - e)
+      mid:SetScalarParameterValue(FName("Morph"), (d.morph == false) and 0 or 1 - e)
+      mid:SetScalarParameterValue(FName("EmissiveBright"), glow)
+      mid:SetScalarParameterValue(FName("DissolveMaskScale"), tonumber(d.maskScale) or 200)
+    end) end
+  end
+end
+-- the copies gone and her sections shown again (the cut itself: M.cleanup)
+function M.ghost_end(g)
+  for _, e in ipairs(g.list) do
+    if #e.hid > 0 and valid(e.mesh) then try(function() e.mesh:ShowAllMaterialSections(0) end) end
+    local a = addr(e.copy)
+    for i = #clones, 1, -1 do if addr(clones[i]) == a then table.remove(clones, i) end end
+    if a then forced[a] = nil end
+    if valid(e.copy) then try(function() e.copy:K2_DestroyComponent(e.copy) end) end
+  end
+  g.list, g.mids = {}, {}
 end
 
 -- ---- enemies (enemies.lua) ----
@@ -6781,7 +6967,7 @@ function M.forget()
   -- Its values from before the death are put back through the new one, on her first tick)
   M.blood_restore = body_blood and body_blood.from or M.blood_restore
   body_blood, stub_dims = nil, nil
-  decals, trackers, no_decals = {}, {}, {}
+  decals, trackers, no_decals, M.drips = {}, {}, {}, {}
   M.mk.list = {}
   -- the pool's cap and stub actors and the split copies were the old level's: asking them anything read freed memory
   M.pool.lid, M.pool.plain = {}, {}

@@ -153,13 +153,13 @@ local function real_mass(mesh, bone)
   if not (ctx.tune.gore or {}).probes then return 0 end
   return try(function() return mesh:GetBoneMass(FName(bone), false) end) or 0
 end
-local function set_masses(mesh, g, keep)
+local function set_masses(mesh, g, keep, only)
   local before, after, acc, accBefore, n = 0, 0, 0, 0, 0
   local readMain, readAcc = 0, 0
   local main = {}
   local cap, share, floor = g.accessoryMaxKg or 0.8, g.accessoryShare or 0.15, g.accessoryMinKg or 0.05
   local list, groups = {}, {}
-  for _, bone in ipairs(bodies(mesh)) do
+  for _, bone in ipairs(only or bodies(mesh)) do
     local m = mass(mesh, bone)
     if m and m > 0 then
       list[#list + 1] = { bone = bone, m = m }
@@ -206,13 +206,13 @@ end
 -- engine's default 3600 deg/s by M.stop
 local SPIN_DEFAULT = 3600
 -- split: a split's half, capped at spin.splitMain / spin.splitEnds instead
-local function cap_spin(comp, g, max, split)
+local function cap_spin(comp, g, max, split, only)
   local s = g.spin or {}
   if s.enabled == false then return "" end
   local n = 0
   local main, ends = s.main or 720, s.ends or 360
   if split then main, ends = s.splitMain or 360, s.splitEnds or 240 end
-  for _, b in ipairs(bodies(comp)) do
+  for _, b in ipairs(only or bodies(comp)) do
     local w = max or ((MASS[b] and not ENDS[b]) and main or ends)
     if try(function() comp:SetPhysicsMaxAngularVelocityInDegrees(w, false, FName(b)); return true end) then n = n + 1 end
   end
@@ -248,6 +248,16 @@ local function on_her(comp, b)
     if r == b or try(function() return comp:BoneIsChildOf(FName(b), FName(r)) end) then return false end
   end
   return true
+end
+-- the bodies a run moves, masses and puts to sleep: a piece cut off a living Eve, only the piece's. The rest of her
+-- is the game's, simulating too where it is hair or jiggle: CH_P_EVE_30's ponytail (Ab-TL-HairB01-09), re-massed
+-- with the piece and put to sleep as it settled, hung where it was as she moved on and in photo mode's poses, till
+-- her death (playtest)
+local function own(comp)
+  if not (run and run.piece and addr(comp) == addr(run.mesh)) then return bodies(comp) end
+  local out = {}
+  for _, b in ipairs(bodies(comp)) do if not on_her(comp, b) then out[#out + 1] = b end end
+  return out
 end
 
 -- dir: the blow's direction (horizontal is enough), or nil. whole: also launch her whole body along it (deaths):
@@ -1094,11 +1104,14 @@ end
 
 -- a piece cut off her while she stands (gore, F9): no ragdoll runs, so give her bodies their human masses now; put
 -- back by M.stop like a ragdoll's (a ragdoll that starts meanwhile takes over)
-function M.piece(pawn, mesh)
+function M.piece(pawn, mesh, bone)
   local g = cfg()
   if g.enabled == false or run then return nil end
+  -- (the piece's bone known before its joint breaks: own() picks its bodies by it)
+  if bone then M.broken(mesh, bone) end
   run = { mesh = mesh, t = 0, masses = {}, piece = true, still = 0 }
-  local r = set_masses(mesh, g, run) .. cap_spin(mesh, g)
+  local only = own(mesh)
+  local r = set_masses(mesh, g, run, only) .. cap_spin(mesh, g, nil, nil, only)
   log("piece: " .. r)
   return r
 end
@@ -1168,7 +1181,7 @@ local function moving()
 end
 local function sleep(comp)
   local n = 0
-  for _, b in ipairs(bodies(comp)) do
+  for _, b in ipairs(own(comp)) do
     if try(function() comp:PutRigidBodyToSleep(FName(b)); return true end) then n = n + 1 end
   end
   return n
@@ -1192,6 +1205,13 @@ local function gravity(comp, on)
   for _, b in ipairs(bodies(comp)) do try(function() comp:SetEnableBodyGravity(on, FName(b)) end) end
 end
 local function stop_all(comp)
+  if run and run.piece then
+    for _, b in ipairs(own(comp)) do
+      try(function() comp:SetPhysicsLinearVelocity(vec(0, 0, 0), false, FName(b)) end)
+      try(function() comp:SetPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false, FName(b)) end)
+    end
+    return
+  end
   try(function() comp:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
   try(function() comp:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
 end
@@ -1346,7 +1366,8 @@ end
 -- the bones looked at for hanging in the air: the pelvis, and on her body the root of each piece cut off it. A waist
 -- cut's upper half hung in the air while its pelvis lay on the stairs with her legs (Nexus report)
 local function aloft_bones(c)
-  local out = { "Bip001-Pelvis" }
+  -- (her pelvis only simulating: a living Eve's stands, and was "77 cm over the floor, woken to fall" by a piece's run)
+  local out = live(c, "Bip001-Pelvis") and { "Bip001-Pelvis" } or {}
   if addr(c) == severedOn then
     for b in pairs(severed) do if live(c, b) then out[#out + 1] = b end end
   end
@@ -1451,7 +1472,10 @@ local function settle(dt)
   end
   if over and over > (st.air or 60) then
     run.still = 0
-    for _, c in ipairs(comps) do if valid(c) then try(function() c:WakeAllRigidBodies() end) end end
+    for _, c in ipairs(comps) do
+      if valid(c) and run.piece then for _, b in ipairs(own(c)) do try(function() c:WakeRigidBody(FName(b)) end) end
+      elseif valid(c) then try(function() c:WakeAllRigidBodies() end) end
+    end
     if not run.airSaid then
       run.airSaid = true
       log(string.format("not settled at %.1f s: %s is %.0f cm over the floor, woken to fall", run.t, tostring(ob), over))
@@ -1588,7 +1612,8 @@ function M.tick(dt)
     run.probe = run.probe + 1
   end
   -- a piece cut off a living Eve settles too: lying on the floor it shook and spun like her ragdoll did before the
-  -- settle check (fifteenth playtest's waist cut); only its own bodies simulate, so only they are watched
+  -- settle check (fifteenth playtest's waist cut); only its own bodies are watched and put to sleep (own: her hair
+  -- and jiggle simulate too)
   if cfg().buzzLog and run.t <= 2.0 and not run.piece then
     local comps = { run.mesh }
     for _, c in ipairs(extra) do comps[#comps + 1] = c end
@@ -1759,6 +1784,8 @@ function M.view()
   return { mesh = run.mesh, comps = comps, t = run.t, settled = run.settled }
 end
 M.MASS = MASS
+-- the bones of her bodies (main.lua: her hair's simulated ones, set up again with the cloth)
+M.bodies = bodies
 -- a bone a cut took off (the root of the piece): nothing left to turn it against
 function M.severed(mesh, bone) return addr(mesh) == severedOn and severed[bone] == true end
 -- a body that simulates and that the half still shows
@@ -1779,7 +1806,7 @@ function M.hold_still()
   for _, c in ipairs(extra) do comps[#comps + 1] = c end
   for _, c in ipairs(comps) do
     if valid(c) then
-      if not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
+      if run.piece or not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
       n = n + 1
     end
   end
@@ -1828,9 +1855,8 @@ function M.photo_hold(on, stopping)
   for _, c in ipairs(comps) do
     if valid(c) then
       if photoWake then photoWake[#photoWake + 1] = { c = c, vel = velocities(c) } end
-      try(function() c:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
-      try(function() c:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
-      if not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
+      stop_all(c)
+      if run.piece or not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
       local r = try(function() return c:GetCollisionResponseToChannel(2) end)
       if r and r ~= 0 then
         try(function() c:SetCollisionResponseToChannel(2, 0) end)

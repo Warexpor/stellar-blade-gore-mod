@@ -76,6 +76,12 @@ static u64 RVA_PHOTO_ENTER = 0x22a98b0;                           // photo mode 
 static u64 RVA_PHOTO_GATE = 0x231c400;                            // and its gates
 static u64 RVA_UI_STACK = 0x212f940;                              // the open UI list
 static u64 RVA_FTEXT_CTOR = 0x285d510;                            // FText::FText(FString &&) (the F3 menu's text)
+static u64 RVA_ACTORS_GETTER = 0x1a97c40;                         // the game's native actors' manager (state_cmd)
+static u64 RVA_OBJECTS_GETTER = 0x1a97cb0;                        // the one whose +0x48 maps an FGuid to its UObject
+static u64 RVA_OBJECT_BY_GUID = 0x201b1e0;                        // (that map, const FGuid *) -> UObject * or 0
+static u64 RVA_APPLY_STATE = 0x1a638c0;                           // ApplyActorState(native actor, state, add, clear)
+static u64 RVA_TEXT_FROM_TABLE = 0x262d320;                       // (FText *, table, key): /Game/Local/Localize/<table>'s text
+static u64 RVA_UI_LOGICS = 0x1a978c0;                             // the game's UI manager: +0x48 its logics (notice_cmd)
 #define INVALID_HANDLE ((HANDLE)(long long)-1)
 
 static u64 exe;
@@ -2643,15 +2649,32 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // the bone each side's opening rides: the one carrying most of that side's rim (sinks collapse, so not those).
     // A thigh's body side rides the hip's twist helpers, which follow the leg, not the pelvis the stump hangs off
     // (the stub on the pelvis slid to the edge of the stump as she moved, fifteenth playtest)
+    // The piece's never rides a helper under one of the rig's drivers (nocarry without a body of its own): the
+    // animation keeps pointing the driver at her body, and the left arm's cap and bone, on Ab-L-Deltoid under
+    // Dm-L-Deltoid-A, stood straight down off the arm lying at 45 degrees (playtest). Its weight goes to the bone
+    // above the topmost driver (the upper arm). Only on her (an enemy's every bone is nocarry) with her bodies sent
     int ride_bone[2] = { -1, -1 };
     if (mode == MODE_CUT || mode == MODE_PLANE) {
+        int undrive = nosink_mesh == c.sm && nbodies > 0;
+        if (undrive) {
+            int all = 1;
+            for (int i = 0; i < nb && all; i++) if (!nocarry[i]) all = 0;
+            undrive = !all;
+        }
         for (int pass = 0; pass < 2; pass++) {
             for (int i = 0; i < nb; i++) usage[i] = 0;
             for (int v = 0; v < nv; v++) {
                 if (!rim[v] || side[v] != pass) continue;
                 for (int i = 0; i < MAX_INF; i++) {
                     int bb = out[v].bones[i];
-                    if (out[v].weights[i] && bb < nb && !is_sink(&c, bb)) usage[bb] += out[v].weights[i];
+                    if (!out[v].weights[i] || bb >= nb || is_sink(&c, bb)) continue;
+                    if (pass && undrive) {
+                        int to = bb, guard = 0;
+                        for (int j = bb; j >= 0 && j != b && guard < nb; j = parent_of(&c, j), guard++)
+                            if (nocarry[j] && !hasbody[j]) to = parent_of(&c, j);
+                        if (to >= 0 && to < nb) bb = to;
+                    }
+                    usage[bb] += out[v].weights[i];
                 }
             }
             int top = 0;
@@ -3196,8 +3219,8 @@ static void copy_pose(u64 src, u64 dst)
     skin_result(msg);
 }
 
-// "P<src>,<dst>,<root>,...": src's pose onto dst (as "p"), every bone outside the roots' subtrees scaled to nothing, so
-// dst shows only the parts cut off src (each root a cut part's bone index). Photo mode with a piece off her alive:
+// "P<src>,<dst>,<root>,...": src's pose onto dst (as "p"), every bone outside the roots' subtrees scaled to nothing on
+// the nearest root, so dst shows only the parts cut off src (each root a cut part's bone index). Photo mode with a piece off her alive:
 // her mesh poses on, and the piece lies on this copy, which neither ticks nor simulates, so the pose stays as written
 // and is drawn from it when the copy's render state is made. Answer "ok piece <bones kept> of <bones>"
 #define MAX_PIECE_ROOTS 8
@@ -3241,7 +3264,23 @@ static void piece_pose(u64 src, u64 dst, const u64 *roots, int nr)
         int sn = *(int *)(sa + 8), dn = *(int *)(da + 8);
         if (!sp || !dp || sn != dn || sn != nb) { skin_result("err pose buffers differ"); return; }
         for (int i = 0; i < sn * 12; i++) dp[i] = sp[i];
-        for (int b = 0; b < nb; b++) if (!keep[b]) dp[b * 12 + 8] = dp[b * 12 + 9] = dp[b * 12 + 10] = 0;
+        // (and moved onto the nearest piece's root: scaled to nothing where it stood, skin weighted to several of
+        // her bones still spanned them, a crumpled patch of her suit inside her. The copy keeps the pose photo mode
+        // opened on, so once she crouched it hung in the air over her, playtest. On the root it sits in the stump)
+        for (int b = 0; b < nb; b++) {
+            if (keep[b]) continue;
+            const float *bt = sp + b * 12 + 4;
+            int best = -1;
+            float bd = 0;
+            for (int r = 0; r < nr; r++) {
+                if (roots[r] >= (u64)nb) continue;
+                const float *rt = sp + roots[r] * 12 + 4;
+                float d = (bt[0] - rt[0]) * (bt[0] - rt[0]) + (bt[1] - rt[1]) * (bt[1] - rt[1]) + (bt[2] - rt[2]) * (bt[2] - rt[2]);
+                if (best < 0 || d < bd) { best = (int)roots[r]; bd = d; }
+            }
+            if (best >= 0) for (int x = 0; x < 3; x++) dp[b * 12 + 4 + x] = sp[best * 12 + 4 + x];
+            dp[b * 12 + 8] = dp[b * 12 + 9] = dp[b * 12 + 10] = 0;
+        }
     }
     char msg[64], *o = put(msg, "ok piece ");
     o = put_int(o, kept); o = put(o, " of "); o = put_int(o, nb);
@@ -4084,6 +4123,316 @@ static void relax_cmd(const u64 *f, int k)
         float a = (float)(f[i + 2] > 1000 ? 1000 : f[i + 2]) / 1000.0f;
         relax_hand(f[i], (int)f[i + 1], a);
     }
+}
+
+// ---- an arm grown back ("Z<comp>,<root>,<joint>,<joint>,<permille>[,...]" every frame while it grows; "Z" alone puts
+// every matrix back) -------------------------------------------------------------------------------------------------
+// Lose Arm at Low HP's arm back at a camp rest: the cut undone, the arm grows out of her shoulder, the upper arm first,
+// then the forearm, then the hand (each joint scaled about itself from REGROW_MIN to full, the later ones starting
+// later), over her pose as the skinning reads it: each bone in the root's subtree gets invBind * Posed * T * Posed^-1,
+// T its joints' scalings, its own deepest first, so the skinning's Posed leaves the vertex where T puts it. Through the
+// inverse bind matrices as the grip's ease (F) does: the asset is shared, so each one is kept and put back ("Z", "r").
+// No answer file: her tick sends it every frame
+#define MAX_REGROW 512
+#define REGROW_MIN 0.02f
+static struct { u64 mesh; int bone; float m[16]; } regrown[MAX_REGROW];
+static int nregrown;
+static int regrow_restore(void)
+{
+    int n = 0;
+    for (int i = 0; i < nregrown; i++) {
+        float *ri = *(float **)(regrown[i].mesh + SM_REF_BASES_INV);
+        int num = *(int *)(regrown[i].mesh + SM_REF_BASES_INV + 8);
+        if (!ri || regrown[i].bone >= num) continue;
+        for (int k = 0; k < 16; k++) ri[(u64)regrown[i].bone * 16 + k] = regrown[i].m[k];
+        n++;
+    }
+    nregrown = 0;
+    return n;
+}
+// joint j's scale at t (0..1): each grows over 0.6 of the time, 0.2 after the one above it, eased in and out
+static float regrow_scale(float t, int j)
+{
+    float u = (t - 0.2f * (float)j) / 0.6f;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    return REGROW_MIN + (1.0f - REGROW_MIN) * u * u * (3.0f - 2.0f * u);
+}
+// returns the bones it set, or -1 when the component or the root joint wasn't readable
+static int regrow_limb(u64 comp, const int *joint, float t)
+{
+    static int namemap[MAX_BONES];
+    static signed char lvl[MAX_BONES]; // the deepest joint at or above the bone (0 the root), -1 outside the subtree
+    cut_ctx c;
+#ifndef SBSLICE_HOSTED
+    if (!mem_readable(comp, SC_SPACE_READ + 8)) return -1;
+#endif
+    if (!pose_ctx(comp, &c, namemap) || joint[0] < 0 || joint[0] >= c.nb) return -1;
+    // each joint's scaling about where it is posed now, and every level's T (its own joint's first)
+    float sm[3][16], tl[3][16];
+    int nj = 0;
+    for (int j = 0; j < 3; j++) {
+        if (joint[j] < 0 || joint[j] >= c.nb) break;
+        const float *tj = pose_of(&c, joint[j]);
+        if (!tj) break;
+        float s = regrow_scale(t, j);
+        for (int k = 0; k < 16; k++) sm[j][k] = 0;
+        sm[j][0] = sm[j][5] = sm[j][10] = s;
+        for (int k = 0; k < 3; k++) sm[j][12 + k] = tj[4 + k] * (1.0f - s);
+        sm[j][15] = 1;
+        if (j == 0) for (int k = 0; k < 16; k++) tl[0][k] = sm[0][k];
+        else mat_mul(sm[j], tl[j - 1], tl[j]);
+        nj++;
+    }
+    if (!nj) return -1;
+    int set = 0;
+    // (a bone comes after its parent in a reference skeleton)
+    for (int b = 0; b < c.nb; b++) {
+        int p = parent_of(&c, b);
+        lvl[b] = b == joint[0] ? 0 : p >= 0 && p < b ? lvl[p] : -1;
+        for (int j = 1; j < nj && lvl[b] >= 0; j++) if (b == joint[j]) lvl[b] = (signed char)j;
+        if (lvl[b] < 0) continue;
+        // not a bone a cut holds (a sink), nor one the grip's ease has
+        int held = 0;
+        for (int i = 0; i < nsinks && !held; i++) held = sinks[i].mesh == c.sm && sinks[i].bone == b;
+        for (int i = 0; i < nrelaxed && !held; i++) held = relaxed[i].mesh == c.sm && relaxed[i].bone == b;
+        if (held) continue;
+        const float *tb = pose_of(&c, b);
+        if (!tb) continue;
+        int r = -1;
+        for (int i = 0; i < nregrown; i++) if (regrown[i].mesh == c.sm && regrown[i].bone == b) { r = i; break; }
+        float *ri = c.refinv + (u64)b * 16;
+        if (r < 0) {
+            if (nregrown >= MAX_REGROW) continue;
+            r = nregrown++;
+            regrown[r].mesh = c.sm; regrown[r].bone = b;
+            for (int k = 0; k < 16; k++) regrown[r].m[k] = ri[k];
+        }
+        float mp[16], mi[16], m1[16], m2[16];
+        tm_mat(tb, mp);
+        tm_inv_mat(tb, mi);
+        mat_mul(regrown[r].m, mp, m1);
+        mat_mul(m1, tl[lvl[b]], m2);
+        mat_mul(m2, mi, ri);
+        set++;
+    }
+    return set;
+}
+// the first frame (every entry at 0 permille) answers "ok regrow <bones set per entry, -1 unreadable>" for the log;
+// the frames after don't (an answer file each frame)
+static void regrow_cmd(const u64 *f, int k)
+{
+    if (k < 5 || f[0] < 0x10000) { regrow_restore(); return; }
+    char msg[256], *o = put(msg, "ok regrow");
+    int first = 1;
+    for (int i = 0; i + 4 < k; i += 5) {
+        if (f[i + 4]) first = 0;
+        int got = -1;
+        if (f[i] >= 0x10000) {
+            int joint[3];
+            for (int j = 0; j < 3; j++) joint[j] = f[i + 1 + j] >= 0xffff ? -1 : (int)f[i + 1 + j];
+            float t = (float)(f[i + 4] > 1000 ? 1000 : f[i + 4]) / 1000.0f;
+            got = regrow_limb(f[i], joint, t);
+        }
+        if (o - msg < (int)sizeof msg - 16) { o = put(o, " "); o = put_int(o, got); }
+    }
+    *o = 0;
+    if (first) skin_result(msg);
+}
+
+// ---- one side of a cut out of sight ("V<comp>,<lod>,<keep>,<root>[,<root>...]") ----------------------------------
+// A part grown back at a camp rest dissolves in on a copy of her mesh (the game's corpse dissolve run backwards): on
+// her the part goes out of sight (keep 0), on the copy everything but the part (keep 1), both on her pose, while the
+// cut is still on. comp's weights as the GPU skins them (the cut's override) are rewritten: a vertex whose strongest
+// bone is in a root's subtree is the part's, and each one hidden goes whole onto one collapsed sink of its section, the
+// hidden side's if it has one. The cut's seam triangles are lines between its two sinks already, and stay lines (each
+// side of them on one point). A section with no collapsed sink borrows one of the mesh's into its BoneMap ("r" gives
+// it back with the sinks); where none can be borrowed its hidden vertices stay as they were. Weights the engine got
+// with nothing at all (every weight 0) would go onto the section's first bone, so nothing is hidden that way.
+// Answer "ok vanish <hidden> kept <kept> on <sinks used> borrowed <n> stuck <vertices> mats <material>/<section>,...",
+// mats the sections with hidden vertices that stayed and nothing kept (to hide whole: ShowMaterialSection), "-" none
+#define SEC_MATERIAL 0x0               // uint16 MaterialIndex
+static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
+{
+    u64 sm = *(u64 *)(comp + SC_SKELETAL_MESH);
+    if (!sm) { skin_result("err no mesh"); return; }
+    const unsigned char *bi = *(const unsigned char **)(sm + SM_REF_BONE_INFO);
+    int nb = *(int *)(sm + SM_REF_BONE_INFO + 8);
+    if (!bi || nb <= 0 || nb > MAX_BONES) { skin_result("err no skeleton"); return; }
+    u64 rd = *(u64 *)(comp + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(comp + SC_MESH_OBJECT) + 0x40) : *(u64 *)(sm + SM_RENDER_DATA);
+    if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
+    u64 ld = ((u64 *)*(u64 *)rd)[lod];
+    u64 secs = *(u64 *)(ld + LOD_SECTIONS);
+    int nsec = *(int *)(ld + LOD_SECTIONS + 8);
+    int nv = 0;
+    const char *e = read_weights(comp, lod, 0, &nv);
+    if (e) { skin_result(e); return; }
+    skin_info *w = (skin_info *)cut_scratch(0, (u64)nv * sizeof(skin_info));
+    unsigned char *inmap = cut_scratch(1, (u64)(nsec > 0 ? nsec : 1) * nb);
+    if (!w || !inmap) { skin_result("err out of memory"); return; }
+    if ((e = read_weights(comp, lod, w, &nv)) != 0) { skin_result(e); return; }
+    static unsigned char part[MAX_BONES], col[MAX_BONES];
+    int any = 0;
+    for (int b = 0; b < nb; b++) {
+        int p = *(const int *)(bi + (u64)b * 0xc + 8);
+        part[b] = p >= 0 && p < b ? part[p] : 0;
+        for (int r = 0; r < nr; r++) if (roots[r] == (u64)b) part[b] = 1;
+        any |= part[b];
+        col[b] = 0;
+    }
+    if (!any) { skin_result("err no root bone"); return; }
+    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == sm && sinks[i].down && sinks[i].bone > 0 && sinks[i].bone < nb) col[sinks[i].bone] = 1;
+    // the active bones as the cut finds them, for a borrow
+    for (int i = 0; i < MAX_BONES; i++) bactive[i] = 0;
+    for (int s = 0; s < nsec; s++) {
+        u64 arr = secs + (u64)s * 0xe8 + SEC_BONE_MAP;
+        unsigned short *bmap = *(unsigned short **)arr;
+        int n0 = *(int *)(arr + 8);
+        for (int k = 0; k < n0; k++) if (bmap[k] < nb) inmap[(u64)s * nb + bmap[k]] = 1;
+        for (int i = 0; i < nbmfix; i++) if (bmfix[i].arr == arr && bmfix[i].num < n0) n0 = bmfix[i].num;
+        for (int k = 0; k < n0; k++)
+            for (int j = bmap[k]; j >= 0 && j < nb && !bactive[j]; j = *(const int *)(bi + (u64)j * 0xc + 8)) bactive[j] = 1;
+    }
+    int nact = 0;
+    for (int i = 0; i < nb; i++) nact += bactive[i];
+    act_pushed = 0;
+    find_active(ld, nb, nact);
+    int hidden = 0, kept = 0, used = 0, borrowed = 0, stuck = 0;
+    static unsigned char usedb[MAX_BONES];
+    for (int i = 0; i < nb; i++) usedb[i] = 0;
+    char mats[160], *mo = mats;
+    *mo = 0;
+    for (int s = 0; s < nsec; s++) {
+        u64 sec = secs + (u64)s * 0xe8;
+        int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
+        // the section's collapse point: the hidden side's sink, else any of its sinks, else one borrowed
+        int hb = -1, hany = -1;
+        for (int b = 1; b < nb; b++) {
+            if (!col[b] || !inmap[(u64)s * nb + b]) continue;
+            if ((part[b] != 0) == (keep == 0)) { hb = b; break; }
+            if (hany < 0) hany = b;
+        }
+        if (hb < 0) hb = hany;
+        int sh = 0, sk = 0, ss = 0;
+        for (int v = base; v < base + cnt && v < nv; v++) {
+            int d = -1, dw = -1;
+            for (int i = 0; i < MAX_INF; i++) if (w[v].weights[i] > dw && w[v].bones[i] >= 0 && w[v].bones[i] < nb) { dw = w[v].weights[i]; d = w[v].bones[i]; }
+            if (d < 0 || dw <= 0) { sk++; continue; }
+            int hide = keep ? !part[d] : part[d];
+            if (!hide) { sk++; continue; }
+            if (hb < 0) {
+                // (a borrow only once the section is known to need one)
+                int best = -1;
+                for (int b = 1; b < nb && best < 0; b++) if (col[b] && (part[b] != 0) == (keep == 0)) best = b;
+                for (int b = 1; b < nb && best < 0; b++) if (col[b]) best = b;
+                if (best >= 0 && borrow_bone(secs, s, best, inmap, nb)) { hb = best; borrowed++; }
+                else hb = -2;
+            }
+            if (hb < 0) { ss++; continue; }
+            for (int i = 0; i < MAX_INF; i++) { w[v].bones[i] = 0; w[v].weights[i] = 0; }
+            w[v].bones[0] = hb; w[v].weights[0] = 255;
+            if (!usedb[hb]) { usedb[hb] = 1; used++; }
+            sh++;
+        }
+        hidden += sh; kept += sk; stuck += ss;
+        if (ss && !sk && mo - mats < (int)sizeof mats - 8) {
+            if (mo != mats) *mo++ = ',';
+            mo = put_int(mo, *(unsigned short *)(sec + SEC_MATERIAL));
+            *mo++ = '/';
+            mo = put_int(mo, s);
+        }
+    }
+    tarray arr = { w, nv, nv };
+    ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(comp, lod, &arr);
+    char msg[320], *o = put(msg, "ok vanish ");
+    o = put_int(o, hidden); o = put(o, " kept "); o = put_int(o, kept);
+    o = put(o, " on "); o = put_int(o, used); o = put(o, " borrowed "); o = put_int(o, borrowed);
+    o = put(o, " stuck "); o = put_int(o, stuck); o = put(o, " mats "); o = put(o, mo != mats ? mats : "-");
+    *o = 0;
+    skin_result(msg);
+}
+
+// ---- a character's actor states ("a<actor>,<state>,<op>"): the game's own blocks (ESBActorState) -------------------
+// Lose Arm at Low HP: no heals (ActorState_BlockItemUseHeal, 67) and no shots (ActorState_BlockItemUseBullet, 100)
+// while her left arm is off. The game keeps a character's states on a native actor of its own, not on the UObject: a
+// TMap<int32 state, int32 count> at +0x560, counted up and down by ApplyActorState(actor, state, add, clear)
+// (FSBActorApplyState::Execute calls it; a character whose +0x2600 is 3-5 takes no add or take-off, only a clear).
+// The native actors are a manager's TMap<int32 GUID, actor *> (its getter's object +0xc8: elements of 24 bytes at
+// +0x98, their count at +0xa0); each names its UObject by an FGuid at +0x4a4, which the game's FGuid -> UObject map
+// (another getter's object +0x48) turns back into her pawn. op 1 adds one, 0 takes one off, 2 reads, 3 clears to 0.
+// Answer "ok state <state> <count> -> <count> life <+0x2600> of <native actors looked through>"
+typedef u64 (*mgr_get_fn)(void);
+typedef u64 (*guid_obj_fn)(u64 map, const void *guid);
+typedef void (*apply_state_fn)(u64 actor, int state, unsigned char add, unsigned char clear);
+#define NA_STATES 0x560
+#define NA_LIFE 0x2600
+#define NA_GUID 0x4a4
+static int state_count(u64 a, int s)
+{
+    u64 m = a + NA_STATES;
+    int num = *(int *)(m + 8);
+    if (num == *(int *)(m + 0x34)) return 0;
+    u64 hp = *(u64 *)(m + 0x40), hash = hp ? hp : m + 0x38, data = *(u64 *)m;
+    int hsz = *(int *)(m + 0x48);
+    if (hsz <= 0 || !mem_readable(hash, (u64)hsz * 4) || !mem_readable(data, (u64)num * 16)) return 0;
+    int i = *(int *)(hash + (u64)((hsz - 1) & s) * 4);
+    for (int n = 0; i >= 0 && i < num && n < 256; n++) {
+        if (*(int *)(data + (u64)i * 16) == s) return *(int *)(data + (u64)i * 16 + 4);
+        i = *(int *)(data + (u64)i * 16 + 8);
+    }
+    return 0;
+}
+static u64 na_pawn, na_actor;
+static int na_seen;
+static u64 native_actor(u64 pawn)
+{
+    na_seen = 0;
+    if (!RVA_ACTORS_GETTER || !RVA_OBJECTS_GETTER || !RVA_OBJECT_BY_GUID) return 0;
+    u64 og = ((mgr_get_fn)(exe + RVA_OBJECTS_GETTER))();
+    u64 omap = og && mem_readable(og + 0x48, 8) ? *(u64 *)(og + 0x48) : 0;
+    if (!omap || !mem_readable(omap, 0xa0)) return 0;
+    guid_obj_fn by_guid = (guid_obj_fn)(exe + RVA_OBJECT_BY_GUID);
+    if (na_pawn == pawn && na_actor && mem_readable(na_actor, NA_LIFE + 4) && by_guid(omap, (const void *)(na_actor + NA_GUID)) == pawn)
+        return na_actor;
+    na_pawn = na_actor = 0;
+    u64 ag = ((mgr_get_fn)(exe + RVA_ACTORS_GETTER))();
+    u64 mgr = ag && mem_readable(ag + 0xc8, 8) ? *(u64 *)(ag + 0xc8) : 0;
+    if (!mgr || !mem_readable(mgr, 0xd0)) return 0;
+    u64 data = *(u64 *)(mgr + 0x98);
+    int num = *(int *)(mgr + 0xa0);
+    if (num <= 0 || num > 65536 || !mem_readable(data, (u64)num * 24)) return 0;
+    for (int i = 0; i < num; i++) {
+        u64 y = *(u64 *)(data + (u64)i * 24 + 8);
+        if (y < 0x10000 || (y & 7) || !mem_readable(y, NA_LIFE + 4)) continue;
+        const u32 *g = (const u32 *)(y + NA_GUID);
+        if (!(g[0] | g[1] | g[2] | g[3])) continue;
+        na_seen++;
+        if (by_guid(omap, g) == pawn) { na_pawn = pawn; na_actor = y; return y; }
+    }
+    return 0;
+}
+static void state_cmd(const u64 *f, int k)
+{
+    if (k < 3 || f[0] < 0x10000) { skin_result("err want a<actor>,<state>,<op>"); return; }
+    if (!RVA_APPLY_STATE) { skin_result("err actor states not found in this game build"); return; }
+    int s = (int)f[1], op = (int)f[2];
+    if (s <= 0 || s > 0x400 || op < 0 || op > 3) { skin_result("err bad state or op"); return; }
+    u64 a = native_actor(f[0]);
+    if (!a) {
+        char em[64], *o = put(em, "err no native actor for it (of ");
+        o = put_int(o, na_seen); o = put(o, ")");
+        *o = 0;
+        skin_result(em);
+        return;
+    }
+    int before = state_count(a, s);
+    if (op != 2) ((apply_state_fn)(exe + RVA_APPLY_STATE))(a, s, op == 1, op == 3);
+    int after = state_count(a, s);
+    char msg[96], *o = put(msg, "ok state ");
+    o = put_int(o, s); o = put(o, " "); o = put_int(o, before); o = put(o, " -> "); o = put_int(o, after);
+    o = put(o, " life "); o = put_int(o, *(int *)(a + NA_LIFE));
+    o = put(o, " of "); o = put_int(o, na_seen);
+    *o = 0;
+    skin_result(msg);
 }
 
 // ---- a weapon's real size ("W<comp>,<lod>"): its vertices' box in its mesh's space, "ok W minx,miny,minz,maxx,..." --
@@ -5067,6 +5416,135 @@ static void row_cmd(const u64 *f, int k)
     skin_result("err no such row");
 }
 
+// ---- the game's own system notice ("U<table>;<key>"): the line the HUD shows (with its sound, ui_SystemNotice_Cue,
+// played by WB_MainHUD_SystemNoticeSlot) when a thing can't be used now. The game's aim refused shows
+// UI_GetNotice_Fail_ActiveTpsMode of StringTable_UI ("Cannot use right now.") so: its text made from the string table
+// (the player's language), then the event (type 9, the text at +0x30) handed to the UI logics from the last one down
+// till the HUD's system notice (logic type 6, ESBUILogicType_HUDSystemNotice; vtable +0x10 its type) takes it (vtable
+// +0x68 true). Game thread only (a command). Answer "ok notice <taken 0|1> of <logics>" or "err <why>"
+typedef void *(*text_from_table_fn)(void *out, const void *table, const void *key);
+typedef int (*logic_type_fn)(u64 logic);
+typedef unsigned char (*logic_event_fn)(u64 logic, void *ev);
+// a TSharedRef's hold let go (FText's text data): the object freed at its last strong one, the controller at its last weak
+static void shared_release(u64 ctl)
+{
+    if (!ctl || !mem_readable(ctl, 16)) return;
+    if (__atomic_fetch_sub((int *)(ctl + 8), 1, __ATOMIC_ACQ_REL) != 1) return;
+    u64 vt = *(u64 *)ctl;
+    ((void (*)(u64))*(u64 *)vt)(ctl);
+    if (__atomic_fetch_sub((int *)(ctl + 12), 1, __ATOMIC_ACQ_REL) == 1) ((void (*)(u64, int))*(u64 *)(vt + 8))(ctl, 1);
+}
+static void notice_cmd(const u16 *txt, int len)
+{
+    if (!RVA_TEXT_FROM_TABLE || !RVA_UI_LOGICS) { skin_result("err the game's notice not found in this game build"); return; }
+    // FString { TCHAR *Data; int Num (with its terminator); int Max }: the table's and the key's, ours (it copies them)
+    u16 tb[64], kb[128];
+    int i = 1, nt = 0, nk = 0;
+    while (i < len && txt[i] && txt[i] != ';' && nt < 63) tb[nt++] = txt[i++];
+    if (i >= len || txt[i] != ';' || !nt) { skin_result("err want U<table>;<key>"); return; }
+    i++;
+    while (i < len && txt[i] && nk < 127) kb[nk++] = txt[i++];
+    if (!nk) { skin_result("err want U<table>;<key>"); return; }
+    tb[nt] = kb[nk] = 0;
+    struct { u16 *data; int num, max; } table = { tb, nt + 1, nt + 1 }, key = { kb, nk + 1, nk + 1 };
+    u64 ui = ((getter_fn)(exe + RVA_UI_LOGICS))();
+    u64 list = ui && mem_readable(ui + 0x48, 8) ? *(u64 *)(ui + 0x48) : 0;
+    if (!list || !mem_readable(list + 0x10, 12)) { skin_result("err no UI logics"); return; }
+    // the event: its type, then nothing but the text at +0x30 (FText { object, controller, u32 flags })
+    unsigned char ev[0x50] = { 0 };
+    *(u64 *)ev = 9;
+    ((text_from_table_fn)(exe + RVA_TEXT_FROM_TABLE))(ev + 0x30, &table, &key);
+    u64 ctl = *(u64 *)(ev + 0x38);
+    if (!*(u64 *)(ev + 0x30) || !ctl) { skin_result("err no such text"); return; }
+    int n = *(int *)(list + 0x18), taken = 0;
+    u64 data = *(u64 *)(list + 0x10);
+    if (n > 0 && n < 4096 && mem_readable(data, (u64)n * 8)) {
+        for (int j = n - 1; j >= 0 && !taken; j--) {
+            u64 e = *(u64 *)(data + (u64)j * 8);
+            u64 lg = e && mem_readable(e + 0x60, 8) ? *(u64 *)(e + 0x60) : 0;
+            u64 vt = lg && mem_readable(lg, 8) ? *(u64 *)lg : 0;
+            if (!vt || !mem_readable(vt + 0x68, 8)) continue;
+            if (((logic_type_fn)*(u64 *)(vt + 0x10))(lg) != 6) continue;
+            taken = ((logic_event_fn)*(u64 *)(vt + 0x68))(lg, ev) != 0;
+        }
+    }
+    // (the HUD copies the text it keeps; a string it filled in, freed as the game does)
+    shared_release(ctl);
+    if (*(u64 *)(ev + 0x20)) ue_free(*(void **)(ev + 0x20));
+    char msg[48], *o = put(msg, "ok notice ");
+    o = put_int(o, taken); o = put(o, " of "); o = put_int(o, n);
+    *o = 0;
+    skin_result(msg);
+}
+
+// ---- data table rows gated ("B<table>,<row struct>,<sets>,<off>,<value>[,...],<match off>,<match value>[,...]"; "B"
+// alone puts every byte back) ---------------------------------------------------------------------------------------
+// Lose Arm at Low HP: no gun while her left arm is off. Her aim is a stance (CharacterStanceTable rows pressed with
+// SkillCommandState_TPSMode), and a stance row lists actor states that rule it out (Condition_DeactiveActorState1-5,
+// counted at 0x1ba9f1e): the gun's rows get the shots' block state there (tables.lua gun_gate). Each of the <sets>
+// (offset, value) pairs is written on every row whose byte at a match offset holds its value; the old bytes kept
+// here. Answer "ok gated <rows> of <rows looked at>, <left alone: no room>"
+#define MAX_GATED 512
+static struct { u64 at; unsigned char was; } gated[MAX_GATED];
+static int ngated;
+static int gated_has(u64 at)
+{
+    for (int g = 0; g < ngated; g++) if (gated[g].at == at) return 1;
+    return 0;
+}
+static void gate_cmd(const u64 *f, int k)
+{
+    if (k < 1 || f[0] < 0x10000) {
+        int n = 0;
+        for (int i = 0; i < ngated; i++) if (mem_readable(gated[i].at & ~3ull, 4)) { *(unsigned char *)gated[i].at = gated[i].was; n++; }
+        ngated = 0;
+        char msg[32] = "ok ungated ";
+        *put_int(msg + 11, n) = 0;
+        skin_result(msg);
+        return;
+    }
+    int sets = k > 2 ? (int)f[2] : 0, m0 = 3 + 2 * sets;
+    if (sets < 1 || sets > 8 || k < m0 + 2 || (k - m0) % 2) {
+        skin_result("err want B<table>,<row struct>,<sets>,<off>,<value>[,...],<match off>,<match value>[,...]");
+        return;
+    }
+    if (!mem_readable(f[0], DT_ROWMAP + 0x40) || *(u64 *)(f[0] + DT_ROWSTRUCT) != f[1]) { skin_result("err bad table"); return; }
+    u64 s = f[0] + DT_ROWMAP, data = *(u64 *)s;
+    int num = *(int *)(s + 8), max = *(int *)(s + 12), nbits = *(int *)(s + 40);
+    if (num < 1 || max < num || num > (1 << 20) || nbits < num || !data || (data & 7) || !mem_readable(data, (u64)num * DT_ELEM)) {
+        skin_result("err bad row map");
+        return;
+    }
+    u64 bits = *(u64 *)(s + 32) ? *(u64 *)(s + 32) : s + 16;
+    if (!mem_readable(bits, (u64)(num + 31) / 32 * 4)) { skin_result("err bad row map bits"); return; }
+    u64 hi = 0;
+    for (int j = 3; j < m0; j += 2) if (f[j] > hi) hi = f[j];
+    for (int j = m0; j + 1 < k; j += 2) if (f[j] > hi) hi = f[j];
+    if (hi > 0x4000) { skin_result("err bad offset"); return; }
+    int done = 0, seen = 0, left = 0;
+    for (int i = 0; i < num; i++) {
+        if (!(((const u32 *)bits)[i >> 5] >> (i & 31) & 1)) continue;
+        u64 row = *(const u64 *)(data + (u64)i * DT_ELEM + 8);
+        if (!row || !mem_readable(row, hi + 1)) continue;
+        seen++;
+        // (a row gated before counts as one: its match bytes may be among the ones written)
+        int mine = gated_has(row + f[3]), match = mine;
+        for (int j = m0; j + 1 < k && !match; j += 2) match = *(const unsigned char *)(row + f[j]) == (unsigned char)f[j + 1];
+        if (!match) continue;
+        if (!mine && ngated + sets > MAX_GATED) { left++; continue; }
+        for (int j = 3; j < m0 && !mine; j += 2) {
+            unsigned char *at = (unsigned char *)(row + f[j]);
+            gated[ngated].at = (u64)at; gated[ngated].was = *at; ngated++;
+            *at = (unsigned char)f[j + 1];
+        }
+        done++;
+    }
+    char msg[64], *o = put(msg, "ok gated ");
+    o = put_int(o, done); o = put(o, " of "); o = put_int(o, seen); o = put(o, ", "); o = put_int(o, left);
+    *o = 0;
+    skin_result(msg);
+}
+
 // ---- data table rows edited in place (a table in our pak overrode every other mod's: Nexus reports of outfits gone
 // with a moveset mod, a shop mod's purchase crashing). Shared by D, R and N below:
 //   find the row map's element for the FName (index, number); 0 when there is none
@@ -5751,7 +6229,7 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         if (len > 1) parse_fields(txt + 1, len - 1, rf, 1);
         char msg[32] = "ok restored ";
         *put_int(msg + 12, skin_restore(rf[0] >= 0x10000 ? rf[0] : 0)) = 0;
-        if (rf[0] < 0x10000) forget_saves(0), relax_restore();
+        if (rf[0] < 0x10000) forget_saves(0), relax_restore(), regrow_restore();
         skin_result(msg);
         return;
     }
@@ -5884,6 +6362,30 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         relax_cmd(ff, len > 1 ? parse_fields(txt + 1, len - 1, ff, 3 * 8) : 0);
         return;
     }
+    if (txt[0] == 'B') {
+        static u64 bf2[3 + 2 * 8 + 16];
+        gate_cmd(bf2, len > 1 ? parse_fields(txt + 1, len - 1, bf2, 3 + 2 * 8 + 16) : 0);
+        return;
+    }
+    if (txt[0] == 'Z') {
+        static u64 zf[5 * 8];
+        regrow_cmd(zf, len > 1 ? parse_fields(txt + 1, len - 1, zf, 5 * 8) : 0);
+        return;
+    }
+    if (txt[0] == 'V') {
+        u64 vf[3 + MAX_PIECE_ROOTS];
+        for (int i = 0; i < 3 + MAX_PIECE_ROOTS; i++) vf[i] = 0;
+        int k = parse_fields(txt + 1, len - 1, vf, 3 + MAX_PIECE_ROOTS);
+        if (k < 4 || vf[0] < 0x10000) { skin_result("err want V<comp>,<lod>,<keep>,<root>"); return; }
+        vanish_cmd(vf[0], (int)vf[1], vf[2] != 0, vf + 3, k - 3);
+        return;
+    }
+    if (txt[0] == 'U') { notice_cmd(txt, len); return; }
+    if (txt[0] == 'a') {
+        u64 af[3] = { 0, 0, 0 };
+        state_cmd(af, len > 1 ? parse_fields(txt + 1, len - 1, af, 3) : 0);
+        return;
+    }
     if (txt[0] == 'W') {
         u64 wf[2] = { 0, 0 };
         parse_fields(txt + 1, len - 1, wf, 2);
@@ -5952,6 +6454,12 @@ static const sig_def SIGS[] = {
     { "photo gate", &RVA_PHOTO_GATE, "48 83 ec 28 e8 ?? ?? ?? ?? 48 85 c0 74 ?? 48 89 5c 24 20 48 8b 98 08 03 00 00", 0 },
     { "FText", &RVA_FTEXT_CTOR, "48 8b c4 56 48 83 ec 60 48 89 58 10 48 8b f1", 0 },
     { "UI stack", &RVA_UI_STACK, "48 83 ec 28 48 8b 05 ?? ?? ?? ?? 48 85 c0 75 ?? 48 8b 0d ?? ?? ?? ?? 48 85 c9 75 ?? e8 ?? ?? ?? ?? 48 8b 0d ?? ?? ?? ?? 48 8b 01 45 33 c0 ba 20 02 00 00", 0 },
+    { "actors", &RVA_ACTORS_GETTER, "48 83 ec 28 48 8b 05 ?? ?? ?? ?? 48 85 c0 75 ?? 48 8b 0d ?? ?? ?? ?? 48 85 c9 75 ?? e8 ?? ?? ?? ?? 48 8b 0d ?? ?? ?? ?? 48 8b 01 45 33 c0 ba 30 22 00 00 ff 50 10", 0 },
+    { "objects", &RVA_OBJECTS_GETTER, "48 83 ec 28 48 8b 05 ?? ?? ?? ?? 48 85 c0 75 ?? 48 8b 0d ?? ?? ?? ?? 48 85 c9 75 ?? e8 ?? ?? ?? ?? 48 8b 0d ?? ?? ?? ?? 48 8b 01 45 33 c0 ba c0 02 00 00 ff 50 10", 0 },
+    { "object by FGuid", &RVA_OBJECT_BY_GUID, "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 30 0f 10 02 8b 41 58 48 8b f1 0f 11 44 24 20 3b 81 84 00 00 00 0f 84 ?? ?? ?? ?? 48 8d b9 88 00 00 00 ba 10 00 00 00", 0 },
+    { "text from table", &RVA_TEXT_FROM_TABLE, "48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57 48 83 ec 30 83 7a 08 00 48 8d 3d ?? ?? ?? ?? 49 8b e8 48 8b f1 74 05 4c 8b 02 eb 03 4c 8b c7 4d 8b c8 48 8d 15", 0 },
+    { "UI logics", &RVA_UI_LOGICS, "48 83 ec 28 48 8b 05 ?? ?? ?? ?? 48 85 c0 75 ?? 48 8b 0d ?? ?? ?? ?? 48 85 c9 75 ?? e8 ?? ?? ?? ?? 48 8b 0d ?? ?? ?? ?? 48 8b 01 45 33 c0 ba 48 56 00 00 ff 50 10", 0 },
+    { "ApplyActorState", &RVA_APPLY_STATE, "48 89 5c 24 20 89 54 24 10 55 56 41 56 48 83 ec 70 48 63 da 41 0f b6 f1 41 0f b6 e8 4c 8b f1 45 84 c9 75 ?? 8b 81 00 26 00 00", 0 },
 };
 // the game's constants singleton's getter: made 0x698 bytes in GMalloc (its two globals, +7 and +0x13)
 static const char SIG_CONFIG_GETTER[] = "48 83 ec 28 48 8b 05 ?? ?? ?? ?? 48 85 c0 75 ?? 48 8b 0d ?? ?? ?? ?? 48 85 c9 75 ?? e8 ?? ?? ?? ?? 48 8b 0d ?? ?? ?? ?? 48 8b 01 45 33 c0 ba 98 06 00 00 ff 50 10";
@@ -6020,7 +6528,10 @@ static void resolve_addresses(void)
             missing++;
             if (mp - miss < 90) { if (mp != miss) *mp++ = ','; mp = put(mp, SIGS[i].name); }
             if (SIGS[i].rva != &RVA_NEED_CPU_DATA && SIGS[i].rva != &RVA_STRIHASH && SIGS[i].rva != &RVA_PHOTO_ENTER
-                && SIGS[i].rva != &RVA_PHOTO_GATE && SIGS[i].rva != &RVA_UI_STACK && SIGS[i].rva != &RVA_FTEXT_CTOR) addr_missing_core = 1;
+                && SIGS[i].rva != &RVA_PHOTO_GATE && SIGS[i].rva != &RVA_UI_STACK && SIGS[i].rva != &RVA_FTEXT_CTOR
+                && SIGS[i].rva != &RVA_ACTORS_GETTER && SIGS[i].rva != &RVA_OBJECTS_GETTER && SIGS[i].rva != &RVA_OBJECT_BY_GUID
+                && SIGS[i].rva != &RVA_APPLY_STATE && SIGS[i].rva != &RVA_TEXT_FROM_TABLE && SIGS[i].rva != &RVA_UI_LOGICS)
+                addr_missing_core = 1;
         }
     }
     *mp = 0;
@@ -6046,6 +6557,8 @@ static void resolve_addresses(void)
     if (!RVA_PHOTO_MGR && RVA_PHOTO_ENTER) { if (mp - miss < 90) { if (mp != miss) *mp++ = ','; mp = put(mp, "photo manager"); *mp = 0; } missing++; }
     if (!RVA_SB_CONFIG || !RVA_STRIHASH) RVA_SB_CONFIG = RVA_STRIHASH = 0;
     if (!RVA_PHOTO_MGR || !RVA_PHOTO_GATE || !RVA_UI_STACK) RVA_PHOTO_MGR = RVA_PHOTO_ENTER = 0;
+    if (!RVA_ACTORS_GETTER || !RVA_OBJECTS_GETTER || !RVA_OBJECT_BY_GUID) RVA_APPLY_STATE = 0;
+    if (!RVA_TEXT_FROM_TABLE || !RVA_UI_LOGICS) RVA_TEXT_FROM_TABLE = RVA_UI_LOGICS = 0;
     if (!moved && !missing) { put(o, "addresses as in the Steam build"); return; }
     o = put(o, "another game build: ");
     o = put_int(o, moved);

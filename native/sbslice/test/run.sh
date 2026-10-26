@@ -167,6 +167,10 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # and her body under it, cut as gore.lua cuts it with the face (MODE_PLANE, the head's radius)
   on head && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
     jobs+=("real head cut CH_P_EVE_09 body, plane under the face|HEAD=1 HEADPLANE=1 HEADAT=0.85|CH_P_EVE_09")
+  # a cut high up the left arm on CH_P_EVE_30: the piece's cap and bone never ride Ab-L-Deltoid (under Dm-L-Deltoid-A,
+  # which the animation keeps pointing at her shoulder: they stood straight down off the arm lying at 45 degrees)
+  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30.uasset ]] &&
+    jobs+=("real arm cut CH_P_EVE_30 high up the arm|ARM=1 ARMAT=0.2|CH_P_EVE_30")
   E29B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB"
   on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB.uasset ]] &&
     jobs+=("real right arm cut CH_P_EVE_29_TypeB, shoulder helpers driven|ARM=1 DRIVEN=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3 $E29B|CH_P_EVE_29_TypeB"
