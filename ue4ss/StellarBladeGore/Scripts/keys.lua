@@ -32,7 +32,6 @@ M.MOD_FKEYS = { Ctrl = { "LeftControl", "RightControl" }, Shift = { "LeftShift",
 -- settings.lua's dev), help
 M.ACTIONS = {
   { id = "menu", label = "Settings Menu", def = "F3", help = "Opens and closes this menu." },
-  { id = "reload", label = "Reload Settings", def = "F6", help = "Reads settings.lua and tune.lua again." },
   { id = "hold", label = "Hold the Death", def = "Shift+F4", help = "In a death: brings the death screen up early, or hides it and keeps her down till pressed again." },
   { id = "photo", label = "Photo Mode in a Death", def = "P", help = "In a death: opens the game's photo mode on her body (and holds the death)." },
   { id = "slice", label = "Test: Cut", def = "F9", uv = true, dev = true, help = "Developer Keys: cuts a limb, the head or the torso off her where she stands." },

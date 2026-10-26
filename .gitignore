@@ -14,3 +14,4 @@ bin/
 obj/
 /release/
 /native/sbslice/build/
+/minimods/*/build/

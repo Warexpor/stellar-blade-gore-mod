@@ -1,4 +1,4 @@
--- Stellar Blade Gore Mod settings. Edit and save, then restart the game or press F6 in game to re-read it.
+-- Stellar Blade Gore Mod settings. Edit and save, then restart the game or open the F3 menu in game to re-read it.
 -- (settings.default.lua is what ships: the mod copies it to settings.lua on its first start, and reads settings.lua.
 -- Edit settings.lua; an update replaces only the default.)
 -- Anything here overrides the same key in tune.lua (the full list of knobs, for tinkering).

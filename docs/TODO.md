@@ -1,5 +1,18 @@
 # To do
 
+## Planned: the head and hair split down their length
+
+Parked for later (2026-10-26). A vertical split carried on up through her head, or a head alone split in two. Harness: `HEADSPLIT=1` in `native/sbslice/test/real/real_split.c` on her face mesh (`CH_P_EVE_Face_Jali3`, the one in game):
+
+```
+HEADSPLIT=1 HEADN=y HEADSINKB=Bip001-Spine1 HEADSHEET=0.3 HEADOBJ=/tmp/sbslice-real/hs PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3 native/sbslice/test/real/run.sh CH_P_EVE_Face_Jali3
+```
+
+- The face has no facial bones (Root, the Bip001 spine, Head, `Dm-NeckSub`, `Ab-NeckSub`); expressions are morph targets. Half A takes the two neck helpers as flattening sinks, and half B has none left (one mesh asset), so B's seam goes on a borrowed `Bip001-Spine1` that follows the head (as the beheading's `FACESINK`). Both halves: 0 stretched triangles, a straight cut.
+- The split's sheet sits `SHEET_IN` (2 cm) inside the kept side: on the head its nose and lips stood out of the cheek as a slab. A head doesn't bend, so 0.3 cm (`sheet_in`, `HEADSHEET`) hides it. Still to do: the lid over the opening (none yet), and the mouth and eye shells, which show as specks through the flat sheet.
+- Hair (`00_HR/EVE_HR_01`, in the head's frame with its Root at the head bone; the ponytail `EVE_HR_01_Tail`, a 9-bone chain) can't be cut by weights: every bone of theirs is skinned, so there is no bone to sink the dropped side on. Ideas: the dropped side's skin on one of that side's chain bones, scaled to nothing in the half's pose each frame, or a copy of the hair mesh asset per half. The ponytail goes whole to the half its tie is on. Its physics on the copy's half needs her animation Blueprint (or a ragdoll of its own).
+- Renders: `test/real/head/compose.py` (her face half, the hair clipped along the plane in Python as a preview, not sbslice's, and the ponytail) and `render_head.py` (headless Blender; `VIEWS`, `SIZE`, `CENTER`). The hair meshes are extracted into `.cache/work/hair` with retoc (`-f SB/Content/Art/Character/PC/00_HR/EVE_HR_01/...`).
+
 ## 0.4.3
 
 - Photo mode with her head cut off alive: its hair (ponytail or head hair, not told apart yet) snaps towards her body on a pose change, though it rides the piece's copy and its cloth is reset for 10 frames after the change (a pose seems to bring its own hair snapshot, `PonytailSnapshotDataPtr` / `HairSnapshotDataPtr`). Expressions show on the head only in part (its brows, from her face curves) and look at the camera not at all: most of both are facial bones under her head, which the copy doesn't move. Copying them over each frame (sbslice `Z`, tried and rolled back) is the lead.

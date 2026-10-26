@@ -1,7 +1,7 @@
 // The spawner window: a small always-on-top Win32 window, its own thread, listing the enemies main.lua can spawn.
 // Lua and the window talk through files next to the Lua log (paths relative to the game's Win64 dir):
 //   spawner.list  Lua -> window: one enemy a line, "<alias>\t<label>" (UTF-8), read whenever the window opens
-//   spawner.cmd   Lua -> window: "show" or "hide" (the hotkey), or "toast\t<text>": a note at the top of the screen
+//   spawner.cmd   Lua -> window: "show", "hide" or "toggle" (the hotkey), or "toast\t<text>": a note at the top of the screen
 //                 that fades out by itself (click-through, never takes the focus); deleted once read
 //   spawner.req   window -> Lua: "spawn\t<alias>\t<count>", "clear" or "kill", Lua deletes it once done
 //   spawner.state window -> Lua: "1" while the window shows, "0" once hidden: Lua frees the game's mouse meanwhile (the
@@ -87,10 +87,18 @@ __declspec(dllimport) void *WINAPI CreateFontW(int, int, int, int, int, u32, u32
 #define ID_KILL 104
 #define MAX_ENEMIES 64
 
-static const u16 LIST[] = u"ue4ss\\Mods\\StellarBladeGore\\spawner.list";
-static const u16 CMD[] = u"ue4ss\\Mods\\StellarBladeGore\\spawner.cmd";
-static const u16 REQ[] = u"ue4ss\\Mods\\StellarBladeGore\\spawner.req";
-static const u16 STATE[] = u"ue4ss\\Mods\\StellarBladeGore\\spawner.state";
+// the mod folder the files are in, the window's class and title: the gore mod's, or the spawner minimod's
+// (minimods/SBSpawner, its own DLL: both loaded, each has a window of its own)
+#ifndef SPAWNER_DIR
+#define SPAWNER_DIR u"ue4ss\\Mods\\StellarBladeGore\\"
+#define SPAWNER_CLASS u"SBGoreSpawner"
+#define SPAWNER_TOAST u"SBGoreToast"
+#define SPAWNER_TITLE u"Stellar Blade Gore: spawner"
+#endif
+static const u16 LIST[] = SPAWNER_DIR u"spawner.list";
+static const u16 CMD[] = SPAWNER_DIR u"spawner.cmd";
+static const u16 REQ[] = SPAWNER_DIR u"spawner.req";
+static const u16 STATE[] = SPAWNER_DIR u"spawner.state";
 
 static HWND win, list, status, toast;
 static u16 toast_text[128];
@@ -277,9 +285,9 @@ static u32 WINAPI spawner_thread(void *arg)
     wc.inst = inst;
     wc.cursor = LoadCursorW(0, (const u16 *)(u64)32512 /*IDC_ARROW*/);
     wc.bg = (void *)(u64)(15 + 1); // COLOR_BTNFACE + 1
-    wc.name = u"SBGoreSpawner";
+    wc.name = SPAWNER_CLASS;
     if (!RegisterClassExW(&wc)) return 0;
-    win = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, u"SBGoreSpawner", u"Stellar Blade Gore: spawner",
+    win = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, SPAWNER_CLASS, SPAWNER_TITLE,
                           WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, 60, 60, 320, 464, 0, 0, inst, 0);
     if (!win) return 0;
     void *font = GetStockObject(17 /*DEFAULT_GUI_FONT*/);
@@ -293,12 +301,12 @@ static u32 WINAPI spawner_thread(void *arg)
     tc.cbSize = sizeof tc;
     tc.proc = toast_proc;
     tc.inst = inst;
-    tc.name = u"SBGoreToast";
+    tc.name = SPAWNER_TOAST;
     toast_bg = CreateSolidBrush(0x00201818);
     toast_font = CreateFontW(-24, 0, 0, 0, 600 /*SEMIBOLD*/, 0, 0, 0, 1 /*DEFAULT_CHARSET*/, 0, 0, 5 /*CLEARTYPE*/, 0, u"Segoe UI");
     if (RegisterClassExW(&tc))
         toast = CreateWindowExW(0x8 | 0x80 | 0x20 | 0x80000 | 0x08000000 /*TOPMOST TOOLWINDOW TRANSPARENT LAYERED NOACTIVATE*/,
-                                u"SBGoreToast", u"", 0x80000000 /*WS_POPUP*/, 0, 0, TOAST_W, TOAST_H, 0, 0, inst, 0);
+                                SPAWNER_TOAST, u"", 0x80000000 /*WS_POPUP*/, 0, 0, TOAST_W, TOAST_H, 0, 0, inst, 0);
     SetTimer(win, 1, 200, 0);
     MSG m;
     while (GetMessageW(&m, 0, 0, 0) > 0) { TranslateMessage(&m); DispatchMessageW(&m); }

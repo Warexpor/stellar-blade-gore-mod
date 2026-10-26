@@ -367,6 +367,38 @@ static void write_obj(const char *fn, const skin_info *o)
     fclose(f);
 }
 
+// gore.lua's skirt_chains for a thigh cut (KEEP_RIGID): the tops of the Skirt chains (a Skirt bone whose parent isn't
+// one) with no physics body on them, the bodies' names in SKIRTBODIES (jobs.sh: from the outfit's physics asset).
+// RIGIDKEEP=<roots> names them instead ("" none). Appended to keep_roots
+static void rigid_skirts(int limb)
+{
+    if (!strstr(bname[limb], "Thigh")) return;
+    if (getenv("RIGIDKEEP")) {
+        char cl[256];
+        snprintf(cl, sizeof cl, "%s", getenv("RIGIDKEEP"));
+        for (char *tk = strtok(cl, ","); tk && nkeep < MAX_KEEP_ROOTS; tk = strtok(0, ",")) {
+            int c = bone(tk);
+            if (c >= 0) { keep_rigid[nkeep] = 1; keep_roots[nkeep++] = c; }
+        }
+        return;
+    }
+    const char *bl = getenv("SKIRTBODIES") ? getenv("SKIRTBODIES") : "";
+    for (int i = 0; i < NB && nkeep < MAX_KEEP_ROOTS; i++) {
+        if (!strstr(bname[i], "Skirt") || (bparent[i] >= 0 && strstr(bname[bparent[i]], "Skirt"))) continue;
+        int has = 0;
+        for (int j = 0; j < NB && !has; j++) {
+            int u = j;
+            while (u >= 0 && u != i) u = bparent[u];
+            if (u != i) continue;
+            const char *q = strstr(bl, bname[j]);
+            size_t ln = strlen(bname[j]);
+            while (q && !((q == bl || q[-1] == ',') && (q[ln] == 0 || q[ln] == ','))) q = strstr(q + 1, bname[j]);
+            has = q != 0;
+        }
+        if (!has) { keep_rigid[nkeep] = 1; keep_roots[nkeep++] = i; }
+    }
+}
+
 static const char *NOSINK_PRE[] = { "Bip001", "SC_", "Ab_" };
 static const char *NOSINK_PART[] = { "Hair", "Cape", "Breast", "Prop" };
 // the spine bones the lid rides, as gore.lua sends them after the limbs (SPLIT_RIDE.of); NORIDE=1: none (axis bands).
@@ -749,7 +781,9 @@ int main(int argc, char **argv)
         return bad != 0;
     }
     int spine1 = bone("Bip001-Spine1"), pelvis = bone("Bip001-Pelvis"), head = bone("Bip001-Head");
-    if (spine1 < 0 || pelvis < 0 || head < 0) { fprintf(stderr, "no Bip001 spine\n"); return 1; }
+    // HEADBONE=<bone>: the head split's bone on a mesh with no Bip001 spine (her hair: its Root, the head's socket)
+    if (getenv("HEADBONE")) head = bone(getenv("HEADBONE"));
+    else if (spine1 < 0 || pelvis < 0 || head < 0) { fprintf(stderr, "no Bip001 spine\n"); return 1; }
     // SEQ=<bone>:<at>[:<tilt deg>],...: cuts one after another as an enemy's corpse takes them (the killing swing's
     // and its corpse hits), each square to its bone (tilted about a side axis) at <at> between the bone and its next
     // Bip001 joint (the head: from the neck), collapsed; the limbs cut before that hang under it go with it (drop
@@ -1020,6 +1054,70 @@ int main(int argc, char **argv)
         printf("head: %d head vertices over the plane, %d stayed on the body; %d vertices off the neck went with it\n%s\n", nh, hleft, taken, bad ? "FAIL" : "PASS");
         return bad;
     }
+    // HEADSPLIT=1: her face mesh (CH_P_EVE_Face_Jali3) split down its length through the head, as a vertical split
+    // carried on up through it would: A (her) keeps the side in front of the plane, B (a copy) the other. HEADN=x|y|z
+    // the plane's normal in component space (default x), HEADOFF=<cm> its offset from the head bone along it.
+    // Each half is probed still and with B's head turned 30 degrees and 15 cm off along -n (the copy flying off)
+    if (env_on("HEADSPLIT")) {
+        float lo[3] = { 1e9f, 1e9f, 1e9f }, hi[3] = { -1e9f, -1e9f, -1e9f };
+        for (int v = 0; v < NV; v++) { skin_info vo; orig_info(v, &vo); float x[3]; skin_v(&vo, v, x); for (int k = 0; k < 3; k++) { if (x[k] < lo[k]) lo[k] = x[k]; if (x[k] > hi[k]) hi[k] = x[k]; } }
+        float *hp0 = space + head * 12 + 4;
+        printf("face: bbox %.1f..%.1f %.1f..%.1f %.1f..%.1f, head bone at %.1f %.1f %.1f\n", lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], hp0[0], hp0[1], hp0[2]);
+        int ax = getenv("HEADN") ? getenv("HEADN")[0] - 'x' : 0;
+        float hn[3] = { ax == 0, ax == 1, ax == 2 }, hneg[3] = { -hn[0], -hn[1], -hn[2] }, hat[3] = { hp0[0], hp0[1], hp0[2] };
+        if (getenv("HEADOFF")) for (int k = 0; k < 3; k++) hat[k] += hn[k] * (float)atof(getenv("HEADOFF"));
+        int fsink = env_on("FACESINK") ? bone("Bip001-Spine1") : 0;
+        // HEADSHEET=<cm>, HEADFAR=<cm>: sbslice's sheet_in / sheet_far for this cut
+        if (getenv("HEADSHEET")) sheet_in = (float)atof(getenv("HEADSHEET"));
+        if (getenv("HEADFAR")) sheet_far = (float)atof(getenv("HEADFAR"));
+        set_nosink();
+        limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0; free_spine = -1;
+        skin_cut((u64)comp_a, 0, head, hat, hn, MODE_SIDE, 0, fsink, fsink > 0 ? head : -1);
+        printf("A: %.300s\n", lastres);
+        set_nosink();
+        limbs_comp = (u64)comp_b; ngone = nkeep = ndrop = nride = 0; free_spine = -1;
+        // HEADSINKB=<bone>: B's seam on that borrowed bone, made to follow the head (A takes the face's only helpers)
+        int bsink = getenv("HEADSINKB") ? bone(getenv("HEADSINKB")) : fsink;
+        skin_cut((u64)comp_b, 0, head, hat, hneg, MODE_SIDE, 0, bsink > 0 ? bsink : 0, bsink > 0 ? head : -1);
+        printf("B: %.300s\n", lastres);
+        if (!ov_a || !ov_b) { printf("FAIL: no override\n"); return 1; }
+        if (fsink > 0) memcpy(space + fsink * 12, space + head * 12, 48);
+        if (bsink > 0) memcpy(space + bsink * 12, space + head * 12, 48);
+        skin_collapse();
+        int bad = 0;
+        for (int h = 0; h < 2; h++) {
+            const skin_info *o = h ? ov_b : ov_a; const float *nn = h ? hneg : hn;
+            // what each half shows: kept vertices (not wholly on its sinks) behind the plane, by more than 0.5 cm
+            int shown = 0, behind = 0, front = 0, frontgone = 0;
+            for (int v = 0; v < NV; v++) {
+                skin_info vo; orig_info(v, &vo); float x0[3]; skin_v(&vo, v, x0);
+                float d0 = (x0[0] - hat[0]) * nn[0] + (x0[1] - hat[1]) * nn[1] + (x0[2] - hat[2]) * nn[2];
+                int gone = vanished_in(&o[v], h ? (u64)comp_b : (u64)comp_a);
+                if (!gone) { shown++; float x[3]; skin_v(&o[v], v, x); float d = (x[0] - hat[0]) * nn[0] + (x[1] - hat[1]) * nn[1] + (x[2] - hat[2]) * nn[2]; if (d < -0.5f) behind++; }
+                if (d0 > 1) { front++; frontgone += gone; }
+            }
+            skin_probe(h ? (u64)comp_b : (u64)comp_a, 0, 0);
+            printf("half %c: %d shown, %d of them behind the plane; %d of %d in front let go; probe %.200s\n", h ? 'B' : 'A', shown, behind, frontgone, front, lastres);
+            bad |= behind > 0 || frontgone > front / 100;
+        }
+        if (getenv("HEADOBJ")) { char fn[512]; snprintf(fn, sizeof fn, "%s_a.obj", getenv("HEADOBJ")); write_obj(fn, ov_a); snprintf(fn, sizeof fn, "%s_b.obj", getenv("HEADOBJ")); write_obj(fn, ov_b); }
+        {
+            float *saved = malloc(48 * NB); memcpy(saved, space, 48 * NB);
+            float q[4] = { 0, 0, 0.2588190f, 0.9659258f };
+            for (int i = 0; i < NB; i++) if (i == head || (fsink > 0 && i == fsink) || (bsink > 0 && i == bsink)) {
+                float *t = space + i * 12, nq[4], r[3], d[3] = { t[4] - hat[0], t[5] - hat[1], t[6] - hat[2] };
+                qmul(q, t, nq); memcpy(t, nq, 16);
+                quat_rot(q, d, r);
+                for (int k = 0; k < 3; k++) t[4 + k] = hat[k] + r[k] + hneg[k] * 15;
+            }
+            skin_probe((u64)comp_b, 0, 0);
+            printf("half B flung: %.200s\n", lastres);
+            if (getenv("HEADOBJ")) { char fn[512]; snprintf(fn, sizeof fn, "%s_b_flung.obj", getenv("HEADOBJ")); write_obj(fn, ov_b); }
+            memcpy(space, saved, 48 * NB); free(saved);
+        }
+        printf("%s\n", bad ? "FAIL" : "PASS");
+        return bad;
+    }
     // ARM=1: F9's cut of the left upper arm (0.4 down it, square to it), the cape's chain (Ab_CapeL01, hanging off the
     // arm's twist bone) named to stay on the body, as gore.lua does (NOKEEP=1: not named, it goes with the arm). Every
     // vertex the vanilla skin puts mostly on the cape must stay on the body, every one mostly on the forearm's subtree
@@ -1134,6 +1232,7 @@ int main(int argc, char **argv)
             // as gore.lua sends a limb cut: every driver a sink of last resort (fffd), the limbs' gone so far let go (fffc)
             if (!env_on("OLDDRV")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, gone_sides(&lf, 1) & 12) ? 2 : under_driver(i));
             limbs_comp = (u64)comp_a; ngone = 0; nkeep = 0; nride = 0; ndrop = 0;
+            rigid_skirts(lf);
             skin_cut((u64)comp_a, 0, lf, aat, an, MODE_CUT, 0, 0, -1);
             printf("leg first: %.200s\n", lastres);
             if (strncmp(lastres, "ok", 2)) { printf("FAIL: the leg cut first failed\n"); return 1; }
@@ -1151,6 +1250,8 @@ int main(int argc, char **argv)
         limbs_comp = (u64)comp_a; ngone = 0; nkeep = onbody ? ncape : 0; nride = 0;
         ndrop = with ? ncape : 0;
         memcpy(keep_roots, capes, 4 * ncape); memcpy(drop_roots, capes, 4 * ncape);
+        for (int k = 0; k < nkeep; k++) keep_rigid[k] = 0;
+        rigid_skirts(ua);
         int arm_s0 = nsinks;
         // (legs only: an arm's drivers shape the shoulder the cut's rim runs round, posed arm cuts lost half their opening)
         int gonel[2] = { ua, lf }, limbbits = gone_sides(gonel, lf >= 0 ? 2 : 1) & 12;
@@ -1256,6 +1357,32 @@ int main(int argc, char **argv)
             armb[i] = (i == ua || (bparent[i] >= 0 && armb[bparent[i]]));
         }
         for (int i = 0; i < NB; i++) if (capeb[i]) armb[i] = 0;
+        // SHARDS=<cm>: what goes with the limb lying farther than that off its axis (a skirt round a thigh), by the
+        // vanilla skin's top bone
+        if (getenv("SHARDS")) {
+            float rr = (float)atof(getenv("SHARDS")), *a0 = space + ua * 12 + 4, *b0 = space + fa * 12 + 4, ax[3], al = 0;
+            for (int k = 0; k < 3; k++) { ax[k] = b0[k] - a0[k]; al += ax[k] * ax[k]; }
+            al = __builtin_sqrtf(al);
+            for (int k = 0; k < 3; k++) ax[k] /= al;
+            int hist[MAX_BONES] = { 0 }, tot = 0;
+            for (int v = 0; v < NV; v++) {
+                int onarm = 0;
+                for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] && armb[ov_a[v].bones[i]]) onarm = 1;
+                if (!onarm) continue;
+                skin_info vo; orig_info(v, &vo);
+                float x[3], d[3]; skin_v(&vo, v, x);
+                for (int k = 0; k < 3; k++) d[k] = x[k] - a0[k];
+                float t = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2], q = 0;
+                for (int k = 0; k < 3; k++) { float e = d[k] - ax[k] * t; q += e * e; }
+                if (__builtin_sqrtf(q) < rr || t > al * 0.6f) continue;
+                int tb = vo.bones[0], tw = 0;
+                for (int i = 0; i < 8; i++) if (vo.weights[i] > tw) { tw = vo.weights[i]; tb = vo.bones[i]; }
+                hist[tb]++; tot++;
+            }
+            printf("shards: %d vertices with the limb over %.0f cm off its axis:", tot, rr);
+            for (int i = 0; i < NB; i++) if (hist[i]) printf(" %s %d", bname[i], hist[i]);
+            printf("\n");
+        }
         int nc = 0, cgone = 0, nf = 0, fleft = 0;
         for (int v = 0; v < NV; v++) {
             skin_info vo; orig_info(v, &vo);
@@ -1528,6 +1655,7 @@ int main(int argc, char **argv)
             skin_probe((u64)comp_a, 0, 0);
             sscanf(lastres, "ok stretched=%d", &flung);
             printf("arm probe flung: %.400s\n", lastres);
+            if (getenv("ARMOBJ")) { char fn[512]; snprintf(fn, sizeof fn, "%s_flung.obj", getenv("ARMOBJ")); write_obj(fn, ov_a); }
             char *h = strstr(lastres, "hidden="); if (h) sscanf(h, "hidden=%d", &hid);
             memcpy(space, saved, 48 * NB); free(saved);
             sink_hold(0, 0);

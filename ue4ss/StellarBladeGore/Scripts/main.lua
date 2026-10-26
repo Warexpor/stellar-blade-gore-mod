@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.4.3"
+local VERSION = "0.4.4"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -1611,15 +1611,46 @@ local function reattach_transform(mesh)
   return r
 end
 
--- where the mesh belongs on the capsule: an offset from it (the gameplay one, rel, by default) turned with its yaw
+-- rotators and quaternions as UE's FRotator::Quaternion and FQuat::Rotator
+function rel.quat(r)
+  local h = math.pi / 360
+  local sp, cp = math.sin(r.Pitch * h), math.cos(r.Pitch * h)
+  local sy, cy = math.sin(r.Yaw * h), math.cos(r.Yaw * h)
+  local sr, cr = math.sin(r.Roll * h), math.cos(r.Roll * h)
+  return { X = cr * sp * sy - sr * cp * cy, Y = -cr * sp * cy - sr * cp * sy,
+           Z = cr * cp * sy - sr * sp * cy, W = cr * cp * cy + sr * sp * sy }
+end
+function rel.rotator(q)
+  local d = 180 / math.pi
+  local s = q.Z * q.X - q.W * q.Y
+  local yaw = math.atan(2 * (q.W * q.Z + q.X * q.Y), 1 - 2 * (q.Y * q.Y + q.Z * q.Z)) * d
+  local function axis(a) a = a % 360; return a > 180 and a - 360 or a end
+  if s < -0.4999995 then return { Pitch = -90, Yaw = yaw, Roll = axis(-yaw - 2 * math.atan(q.X, q.W) * d) } end
+  if s > 0.4999995 then return { Pitch = 90, Yaw = yaw, Roll = axis(yaw - 2 * math.atan(q.X, q.W) * d) } end
+  return { Pitch = math.asin(2 * s) * d, Yaw = yaw,
+           Roll = math.atan(-2 * (q.W * q.X + q.Y * q.Z), 1 - 2 * (q.X * q.X + q.Y * q.Y)) * d }
+end
+
+-- where the mesh belongs on the capsule: an offset from it (the gameplay one, rel, by default) in its whole frame.
+-- Turned with its yaw alone, she went upside down on a climbing bar, where the capsule pitches, and walked on her head
+-- after it (Nexus report, 0.4.3): rel.follow put the mesh where the yaw said, every tick, each from the last
 function rel.target(cap, loc, rot)
   loc, rot = loc or rel.loc, rot or rel.rot
   local cl = cap:K2_GetComponentLocation()
-  local cr = cap:K2_GetComponentRotation()
-  local yaw = math.rad(cr.Yaw)
-  return { X = cl.X + loc.X * math.cos(yaw) - loc.Y * math.sin(yaw),
-           Y = cl.Y + loc.X * math.sin(yaw) + loc.Y * math.cos(yaw), Z = cl.Z + loc.Z },
-    { Pitch = rot.Pitch, Yaw = cr.Yaw + rot.Yaw, Roll = rot.Roll }
+  local cq = try(function() local q = cap:K2_GetComponentToWorld().Rotation; return { X = q.X, Y = q.Y, Z = q.Z, W = q.W } end)
+  if not cq then
+    local cr = cap:K2_GetComponentRotation()
+    cq = rel.quat({ Pitch = cr.Pitch, Yaw = cr.Yaw, Roll = cr.Roll })
+  end
+  -- the offset turned by the capsule (q v q*), the rotation the capsule's then the offset's (cq * rq)
+  local tx, ty, tz = 2 * (cq.Y * loc.Z - cq.Z * loc.Y), 2 * (cq.Z * loc.X - cq.X * loc.Z), 2 * (cq.X * loc.Y - cq.Y * loc.X)
+  local wl = { X = cl.X + loc.X + cq.W * tx + cq.Y * tz - cq.Z * ty, Y = cl.Y + loc.Y + cq.W * ty + cq.Z * tx - cq.X * tz,
+               Z = cl.Z + loc.Z + cq.W * tz + cq.X * ty - cq.Y * tx }
+  local rq = rel.quat(rot)
+  return wl, rel.rotator({ X = cq.W * rq.X + cq.X * rq.W + cq.Y * rq.Z - cq.Z * rq.Y,
+                            Y = cq.W * rq.Y - cq.X * rq.Z + cq.Y * rq.W + cq.Z * rq.X,
+                            Z = cq.W * rq.Z + cq.X * rq.Y - cq.Y * rq.X + cq.Z * rq.W,
+                            W = cq.W * rq.W - cq.X * rq.X - cq.Y * rq.Y - cq.Z * rq.Z })
 end
 
 -- put the mesh back into normal animated gameplay state
@@ -1724,6 +1755,8 @@ function rel.follow(pawn, mesh)
   -- off the capsule altogether is recover()'s (attached_to_capsule)
   local parent = try(function() return mesh:GetAttachParent() end)
   if not (valid(cap) and valid(parent) and parent:GetAddress() == cap:GetAddress()) then return end
+  -- (a climb or a rope swing places her mesh itself)
+  if try(function() return pawn:IsClimbing() or pawn:IsRopeSwing() end) == true then return end
   local t = try(function()
     local l, r = mesh.RelativeLocation, mesh.RelativeRotation
     return { rel.target(cap, { X = l.X, Y = l.Y, Z = l.Z }, { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll }) }
@@ -2951,8 +2984,8 @@ local function sandbox_slice()
   local pawn = find_eve()
   local mesh = pawn and try(function() return pawn.Mesh end)
   if not (gore and valid(mesh)) then log("F9: no Eve or no gore.lua"); return end
-  -- cut on a ragdoll, she stays down until F8 (as a cut on a standing Eve stays)
-  if active then saved.manual = true end
+  -- (a death stays the game's: F9 made it a test ragdoll's, so the HUD and the held revive screen came back and,
+  -- revived from it, she was left a ragdoll with no control, reported. F7's and F11's are test ones already)
   gore.slice(pawn, mesh, nil, "F9", pick_kind(false))
 end
 
@@ -3193,7 +3226,6 @@ function screen.key_name(id) return goreCtx.keys and goreCtx.keys.show(goreCtx.k
 key_on("ragdoll", sandbox_ragdoll)
 key_on("face", sandbox_face)
 key_on("recover", sandbox_recover)
-key_on("reload", load_tune)
 key_on("menu", function() if goreCtx.gui then goreCtx.gui.toggle(find_eve()) end end)
 -- P in a death: the death keeps the key from photo mode, so sbslice.dll enters photo mode itself (its answer: the
 -- manager and the gates the key's path checks, read before). A death not held yet is held first, as Shift+F4 does:
@@ -4048,7 +4080,10 @@ end
 -- once a piece is off her, photo mode may open from the game's own key too: F9's head on her alive went back on her
 -- neck as it opened (playtest). So her mesh is shielded as soon as she has a cut (sbslice f4, f5 once none is left),
 -- and photo mode's state read every 0.5 s while she has one, her head's place kept from before: the watch above takes
--- over however photo mode opened
+-- over however photo mode opened.
+-- A ragdoll with nothing cut off (F7's, or a death before its cut) is shielded too: photo mode opened on it by the
+-- game's key turned its physics off, and back on as it closed from wherever the bones had gone; on stairs she shifted
+-- and stretched (playtest)
 function screen.photo_guard(pawn, mesh)
   if screen.stillTill and rag and rag.hold_still then
     if os.clock() < screen.stillTill then rag.hold_still() else screen.stillTill = nil end
@@ -4057,16 +4092,19 @@ function screen.photo_guard(pawn, mesh)
   if not screen.watchFreeze then screen.clock, screen.stopped = nil, nil end
   if screen.photoOn then return screen.photo_watch(pawn, mesh) end
   local a = mesh:GetAddress()
-  if (gore.cuts_on(mesh)) == 0 then
+  local cut = (gore.cuts_on(mesh)) > 0
+  local why = cut and "a piece is off her"
+    or try(function() return mesh:IsSimulatingPhysics(PELVIS) end) == true and "her ragdoll on"
+  if not why then
     if screen.shielded == a then
       screen.shielded = nil
-      log("no piece off her: her mesh unshielded: " .. gore.photo_unshield())
+      log("no piece off her, no ragdoll: her mesh unshielded: " .. gore.photo_unshield())
     end
     return false
   end
   if screen.shielded ~= a then
     screen.shielded = a
-    log("a piece is off her: her mesh shielded from photo mode's collision switch: " .. gore.photo_shield(mesh))
+    log(why .. ": her mesh shielded from photo mode's collision switch: " .. gore.photo_shield(mesh))
   end
   local now = os.clock()
   if now < (screen.photoPoll or 0) then return false end

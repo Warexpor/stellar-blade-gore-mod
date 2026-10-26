@@ -53,8 +53,8 @@ M.ROWS = {
   -- { key = "gore.stubBone", label = "Spine Bone Thickness", kind = "num", min = 0.1, max = 0.6, step = 0.02, help = "Share of the cut's width (next cut)." },
   { section = "Death" },
   { key = "deathScreen", label = "Death Screen", kind = "list", values = { "game", "delay", "key" },
-    names = { game = "Instant", delay = "Delayed", key = "Shift+F4" },
-    help = "When the death screen appears. Instant: as the game shows it. Delayed: after Death Screen Delay. Shift+F4: only when you press Shift+F4 (or hold D-pad down + R1 for a second), which also brings it up early or hides it again." },
+    names = { game = "Instant", delay = "Delayed", key = "On Press" },
+    help = "When the death screen appears. Instant: as the game shows it. Delayed: after Death Screen Delay. On Press: only when you press Hold the Death (Shift+F4, or D-pad down + R1 held for a second, unless rebound), which also brings it up early or hides it again." },
   { key = "hideHud", label = "Hide HUD on Death", kind = "bool", help = "Hides the HUD (HP bar, skills, minimap, notices) through a death, so the body lies on a clean screen. The death screen still comes up as Death Screen says. Off: the HUD stays up, as in the game." },
   { key = "reviveAt", label = "Death Screen Delay", kind = "num", min = 1, max = 60, step = 1, unit = " s", help = "Seconds into a death before the death screen (and the revive item screen) shows. Only used with Death Screen set to Delayed." },
   { key = "gore.voice.enabled", label = "Death Scream", kind = "bool", help = "Eve cries out, from her own voice recordings, the moment she dies. Off: only the game's own death voice." },
@@ -147,7 +147,7 @@ function M.init(c)
     for i, r in ipairs(M.ROWS) do if r.section == "Mod" then at = i; break end end
     local rows = { { section = "Keys" } }
     for _, a in ipairs(ctx.keys.ACTIONS) do
-      rows[#rows + 1] = { key = "keys." .. a.id, id = a.id, label = a.label, kind = "key",
+      rows[#rows + 1] = { key = "keys." .. a.id, id = a.id, label = a.label, kind = "key", dev = a.dev,
         help = a.help .. " Enter, then press the new key (Ctrl, Shift and Alt can go with it); Backspace cancels. A key another action had is swapped with this one's. Keyboard keys only: changed from the keyboard." }
     end
     -- the controller's combos: A, then hold the new buttons together and let go
@@ -158,6 +158,8 @@ function M.init(c)
     for k, r in ipairs(rows) do table.insert(M.ROWS, at + k - 1, r) end
     M.TABS = nil
   end
+  M.ALL = M.ALL or M.ROWS
+  M.refresh()
 end
 
 -- a setting by its dotted path in the live tune table, and set
@@ -188,6 +190,19 @@ local function set(path, v)
   t[last] = v
 end
 M.get = get
+
+-- the rows shown: the test keys' only with Developer Keys on (they do nothing without it). M.ALL holds every row;
+-- the selection stays on its row
+function M.refresh()
+  local s, cur = M.state, M.ROWS[M.state.sel]
+  local dev = get("dev") == true
+  local rows = {}
+  for _, r in ipairs(M.ALL or M.ROWS) do if not r.dev or dev then rows[#rows + 1] = r end end
+  M.ROWS, M.TABS = rows, nil
+  for i, r in ipairs(rows) do if r == cur then s.sel = i end end
+  if s.sel > #rows then s.sel = 2 end
+  if s.top > s.sel then s.top = s.sel end
+end
 
 -- menu.lua: { ["path"] = value, ... } read over the settings (main.lua's load_tune), written here
 function M.overlay(t)
@@ -665,6 +680,9 @@ function M.open(pawn)
     try(function() s.ui.w:SetVisibility(3) end)
   end
   s.open, s.held, s.changed, s.swallow = true, {}, {}, true
+  -- (settings.lua read again: a hand edit shows here and applies without a restart, as F6 did)
+  if ctx.reload_tune then ctx.reload_tune() end
+  M.refresh()
   if not selectable(s.sel) then s.sel = 2 end
   pause(pawn, true)
   log("menu: making it: first draw")
@@ -721,6 +739,7 @@ local function step(dir)
   end
   set(row.key, v)
   s.changed[row.key] = true
+  if row.key == "dev" then M.refresh() end
   -- (a row whose change shows at once on what is already out: its function on gore)
   if row.apply and ctx.gore and ctx.gore[row.apply] then
     local ok, err = pcall(ctx.gore[row.apply])
@@ -738,6 +757,7 @@ local function press(pawn)
     s.changed = {}
     if ctx.reload_tune then ctx.reload_tune() end
     log("menu: back to settings.lua (menu.lua deleted)")
+    M.refresh()
     render()
   elseif row.kind == "bool" or row.kind == "list" then step(1)
   elseif row.kind == "pad" then
@@ -795,6 +815,7 @@ local function reset_tab()
     end
   end
   log(string.format("menu: %s tab reset to settings.lua (%d changed)", t.name, n))
+  M.refresh()
   render()
 end
 -- up/down within the tab (round from its last row to its first), the tabs round too

@@ -1,4 +1,4 @@
--- Every knob of the mod, re-read on F6 (no restart). settings.lua overrides these key by key (the player's switches,
+-- Every knob of the mod, re-read as the F3 menu opens (no restart). settings.lua overrides these key by key (the player's switches,
 -- and dev: the test keys, the spawner and the glass cannon only work with it on). The top ones apply to F7 test
 -- ragdolls; the collision switches also apply to real deaths.
 return {
@@ -432,7 +432,7 @@ return {
                                -- monster stumps, which hangs in the air where she was cut
     bleedTime = 2.5,           -- seconds both openings keep bleeding (0 = until she recovers)
     bleedAxis = "z",           -- the bleed effect's (NS_Hit_Flesh_Slice_BloodOnly) cone axis, pointed out of each
-                               -- opening: "z", "x", "-z", "-x" (F6 re-reads it; the "bleed: opening faces" log line
+                               -- opening: "z", "x", "-z", "-x" (the F3 menu re-reads it; the "bleed: opening faces" log line
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
     bleedSize = 0.6,           -- the bleed's size (the effect's scale; the spurts are as many)
     bleedPulse = 0.35,         -- seconds between spurts while an opening bleeds (each follows the stump's turn)

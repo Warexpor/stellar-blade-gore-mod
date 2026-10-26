@@ -2536,6 +2536,33 @@ local function kept_chains(mesh, bone, a, b, at, n)
   return tops, stay
 end
 
+-- a skirt's chains with no physics body anywhere on them (their tops: a Skirt bone whose parent isn't one), by bone
+-- index. CH_P_EVE_37 (Black Rose) hangs its front and side panels off the thighs' twist bones, animated only: a thigh
+-- cut took them off with the leg, and the skirt stretched from her hips to it (Nexus report). A thigh cut keeps them
+-- on her rigidly ("g", KEEP_RIGID): their skin stays on the body where it hangs, the ones on her other leg and her
+-- pelvis with it (skin partly on the cut thigh went with the leg). Per mesh asset
+M.skirtCache = {}
+function M.skirt_chains(mesh)
+  local sm = try(function() return mesh.SkeletalMesh end)
+  local key = valid(sm) and addr(sm)
+  if key and M.skirtCache[key] then return M.skirtCache[key] end
+  local t = M.bone_tree(mesh)
+  if not t then return {} end
+  local body = bodies_of(mesh)
+  local tops, out = {}, {}
+  for i = 0, t.n - 1 do
+    local nm = t.name[i] or ""
+    if nm:find("Skirt") and not (t.pname[i] or ""):find("Skirt") then tops[#tops + 1] = i end
+  end
+  for _, i in ipairs(tops) do
+    local has = false
+    for j = 0, t.n - 1 do if body[j] and M.under(t, j, t.name[i]) then has = true; break end end
+    if not has then out[#out + 1] = i end
+  end
+  if key then M.skirtCache[key] = out end
+  return out
+end
+
 -- a chain a limb cut kept on the body (the cape off the upper arm's twist bone), cut off at the joint it hangs from as
 -- a piece of its own (tune.gore.chains "detach"): the plane through that parent joint, facing down the chain, so all
 -- of it is in front. Its own bones may be its sinks this once (they never are: they swing, and the seam swung with
@@ -2721,13 +2748,17 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
         if inside then gone[#gone + 1] = c.bone end
       end
     end
+    local rigid = part.kind == "limb" and bone:find("Thigh") and M.skirt_chains(mesh) or {}
     local f = { string.format("g%x", mesh:GetAddress()) }
-    if #kept > 0 or #gone > 0 then
+    if #kept > 0 or #gone > 0 or #rigid > 0 then
       f[#f + 1] = "0"
       for _, c in ipairs(kept) do
         local i = try(function() return mesh:GetBoneIndex(FName(c)) end)
         if i and i > 0 then f[#f + 1] = string.format("%x", i) end
       end
+      -- (KEEP_RIGID, 0x8000 on the index)
+      for _, i in ipairs(rigid) do f[#f + 1] = string.format("%x", i + 0x8000) end
+      if #rigid > 0 then log(string.format("cut %s: %d skirt chain(s) with no body kept on her", bone, #rigid)) end
     end
     if #gone > 0 then
       f[#f + 1] = "0"

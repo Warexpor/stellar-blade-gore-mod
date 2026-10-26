@@ -294,6 +294,11 @@ static u64 limbs_comp;
 // to a point in its band. Halved, a neck chain's swinging half stretched to the flattened sheet (fifteenth playtest)
 #define MAX_KEEP_ROOTS 32
 static int gone_roots[MAX_LIMB_ROOTS], ngone, keep_roots[MAX_KEEP_ROOTS], nkeep, drop_roots[MAX_KEEP_ROOTS], ndrop;
+// a limb cut's kept root sent with KEEP_RIGID: a chain with no body of its own (CH_P_EVE_37's skirt panels hang off
+// the thigh's twist bone, animated, no physics), whose bones go with the limb wherever its skin is kept: its skin on
+// the body is held where it hangs now, as the stub's is (the carrier), not on its own bones
+#define KEEP_RIGID 0x8000
+static unsigned char keep_rigid[MAX_KEEP_ROOTS];
 // and the spine bones its lid pieces ride (each lid triangle on the nearest one): the flattened skin behind the lid
 // is banded the same way, each band on sinks that ride that bone, so sheet and lid move together
 #define MAX_RIDE 6
@@ -1150,6 +1155,7 @@ static int nremaps;
                         // 42234 sheet vertices on the real mesh); 2 cm hides all but a few
 #define SHEET_FAR 5.0f  // cm: what lies further behind the plane collapses to a point in its band instead of
                         // flattening (a slice across the waist would flatten the shoulders out past the opening)
+static float sheet_in = SHEET_IN, sheet_far = SHEET_FAR; // (the head split, harness: a rigid head wants less)
 
 typedef struct {
     const cut_ctx *c;
@@ -1662,16 +1668,18 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     }
     // a limb cut: the accessory chains Lua names ("g" with no gone roots, its kept roots) hang off the limb but stay
     // on the body, their skin on their own bones (Lua hangs their bodies on the limb's parent). CH_P_EVE_09's cape
-    // hangs off the upper arm's twist bone and went off with the arm. Used by this cut only
+    // hangs off the upper arm's twist bone and went off with the arm. Used by this cut only.
+    // A rigid one (KEEP_RIGID, 2 here) keeps its bones on the limb: its skin stays on the body by side[], and gives
+    // its weight up to the stub's carrier (or the nearest kept ancestor) as the stub's does
     static unsigned char keepcut[MAX_BONES];
     int anykeep = mode == MODE_CUT && limbs_comp == comp && nkeep > 0 && nb <= MAX_BONES;
     if (anykeep) {
         for (int i = 0; i < nb; i++) {
             int par = parent_of(&c, i);
             keepcut[i] = 0;
-            for (int r = 0; r < nkeep; r++) if (keep_roots[r] == i) keepcut[i] = 1;
+            for (int r = 0; r < nkeep; r++) if (keep_roots[r] == i) keepcut[i] = keep_rigid[r] ? 2 : 1;
             if (!keepcut[i] && par >= 0 && par < i) keepcut[i] = keepcut[par];
-            if (keepcut[i]) limb[i] = 0;
+            if (keepcut[i] == 1) limb[i] = 0;
         }
     }
     // or they go whole with the limb (the 4th group, drop roots): every vertex mostly on them is the limb's wherever it
@@ -1872,7 +1880,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     if (dropbone[mb]) wd += w;
                     if (hmode && headsub[mb]) wh += w;
                 }
-                vkind[v] = wg > 127 ? 2 : wk > 127 ? 0 : wd > 127 || h <= -SHEET_FAR / tm[8] ? 3 : h <= 0 ? 1 : 0;
+                vkind[v] = wg > 127 ? 2 : wk > 127 ? 0 : wd > 127 || h <= -sheet_far / tm[8] ? 3 : h <= 0 ? 1 : 0;
                 if (hmode && wg <= 127 && wk <= 127 && wd <= 127) {
                     float e[3] = { x[0] - p2[0], x[1] - p2[1], x[2] - p2[2] }, h2 = e[0] * n2[0] + e[1] * n2[1] + e[2] * n2[2];
                     float rad2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2] - h2 * h2;
@@ -2151,7 +2159,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // axis), deeper torso collapses to a point per band, the other half's limbs to a point per root; sections with a
     // borrowed bone (the face) flatten onto that alone
     int nproj = 0, npoint = 0, nheldband = 0;
-    float pin[3] = { p[0] + n[0] * SHEET_IN / tm[8], p[1] + n[1] * SHEET_IN / tm[8], p[2] + n[2] * SHEET_IN / tm[8] };
+    float pin[3] = { p[0] + n[0] * sheet_in / tm[8], p[1] + n[1] * sheet_in / tm[8], p[2] + n[2] * sheet_in / tm[8] };
     float bandc[SPLIT_BANDS][3];
     int nbands = AXIS_BANDS;
     const float *ridet[MAX_RIDE] = { 0 }; // the ride bones that have a band, as posed now
@@ -4800,16 +4808,20 @@ typedef unsigned char (*photo_enter_fn)(void);
 // SetCollisionResponseToChannel(2, 1)), and puts them back on leaving. On her ragdoll that ended the physics: the mesh
 // went back to its animated pose, a cut-off head back on her neck, and was flung from there as photo mode closed
 // (playtest). So her mesh ("f2<mesh>", or "f4<mesh>" alone once a piece is off her: the game's own key opens photo
-// mode too) gets its own copy of its vtable with those two slots stubbed out while photo mode is on (the manager's
-// +0x84 not 0), passed on otherwise. The copy stays: an object that may be gone is only written back to when it
-// still holds our copy.
-#define VT_COPY 0x1400
+// mode too) has those two calls stubbed out while photo mode is on (the manager's +0x84 not 0), passed on otherwise.
+// The two slots of her class's vtable are patched in place, and the stubs pass every other mesh's calls (and hers
+// with photo mode off) on to what the slots held. Her mesh used to be moved onto a copy of its vtable: UUEPBS (a body
+// slider) patches FinalizeBoneTransform in that vtable and finds the engine's by the object's vtable, so on our copy
+// it found none and never called it; her pose stopped updating at the cut and she stood frozen with her pieces in
+// the air through every death (Nexus report). The patch stays once made: another mod may have chained onto it since
 #define VT_SET_COLLISION 0x668
 #define VT_SET_RESPONSE 0x860
 typedef void (*vcall4_fn)(u64, u64, u64, u64);
-static u64 shield_buf[1 + VT_COPY / 8]; // [0]: the slot before the vtable (MSVC's RTTI locator), kept
-#define shield_vt (shield_buf + 1)
-static u64 shield_obj, shield_old_vt;
+// her mesh, and each vtable patched with what its two slots held (a mesh of another class patches its own)
+#define SHIELD_VTS 4
+static u64 shield_obj;
+static struct { u64 vt, col, resp; } shield_vts[SHIELD_VTS];
+static int shield_nvt;
 static int shield_blocked; // calls stubbed out, reported by f2 / f3
 static int photo_on(void)
 {
@@ -4817,41 +4829,61 @@ static int photo_on(void)
     u64 mgr = RVA_PHOTO_MGR ? *(u64 *)(exe + RVA_PHOTO_MGR) : 0;
     return mem_readable(mgr, 0x88) && *(int *)(mgr + 0x84) != 0;
 }
+// the patched vtable self is on (another mod's copy of it, which holds our stub too: the first one's)
+static int shield_of(u64 self)
+{
+    u64 vt = *(u64 *)self;
+    for (int i = 0; i < shield_nvt; i++) if (shield_vts[i].vt == vt) return i;
+    return 0;
+}
 static void shield_set_collision(u64 self, u64 a, u64 b, u64 c)
 {
-    if (photo_on()) { shield_blocked++; return; }
-    ((vcall4_fn)(*(u64 *)(shield_old_vt + VT_SET_COLLISION)))(self, a, b, c);
+    if (self == shield_obj && photo_on()) { shield_blocked++; return; }
+    ((vcall4_fn)shield_vts[shield_of(self)].col)(self, a, b, c);
 }
 static void shield_set_response(u64 self, u64 a, u64 b, u64 c)
 {
-    if (photo_on()) { shield_blocked++; return; }
-    ((vcall4_fn)(*(u64 *)(shield_old_vt + VT_SET_RESPONSE)))(self, a, b, c);
+    if (self == shield_obj && photo_on()) { shield_blocked++; return; }
+    ((vcall4_fn)shield_vts[shield_of(self)].resp)(self, a, b, c);
 }
-// 1 shielded now, 0 not (no object, its vtable unreadable or another class's than the first one's)
+static int vt_write(u64 slot, u64 v)
+{
+    u32 old;
+    if (!VirtualProtect((void *)slot, 8, 0x40 /*PAGE_EXECUTE_READWRITE*/, &old)) return 0;
+    *(volatile u64 *)slot = v;
+    VirtualProtect((void *)slot, 8, old, &old);
+    return 1;
+}
+// 1 shielded now, 0 not (no object, its vtable unreadable or not writable, SHIELD_VTS classes patched already)
 static int photo_shield(u64 obj)
 {
     if (!mem_readable(obj, 8)) return 0;
     u64 vt = *(u64 *)obj;
-    if (vt == (u64)shield_vt) return 1;
-    if (shield_old_vt && vt != shield_old_vt) return 0; // (one copy: a mesh of another class is left alone)
-    if (!mem_readable(vt - 8, VT_COPY + 8)) return 0;
-    if (!shield_old_vt) {
-        for (int i = 0; i < 1 + VT_COPY / 8; i++) shield_buf[i] = ((u64 *)vt)[i - 1];
-        shield_vt[VT_SET_COLLISION / 8] = (u64)shield_set_collision;
-        shield_vt[VT_SET_RESPONSE / 8] = (u64)shield_set_response;
-        shield_old_vt = vt;
+    int known = 0;
+    for (int i = 0; i < shield_nvt; i++) if (shield_vts[i].vt == vt) known = 1;
+    if (!known) {
+        if (shield_nvt >= SHIELD_VTS || !mem_readable(vt, VT_SET_RESPONSE + 8)) return 0;
+        u64 col = *(u64 *)(vt + VT_SET_COLLISION), resp = *(u64 *)(vt + VT_SET_RESPONSE);
+        if (!col || !resp || col == (u64)shield_set_collision || resp == (u64)shield_set_response) return 0;
+        // (recorded first: a call between the two writes finds what to pass on to)
+        shield_vts[shield_nvt].vt = vt;
+        shield_vts[shield_nvt].col = col;
+        shield_vts[shield_nvt].resp = resp;
+        shield_nvt++;
+        if (!vt_write(vt + VT_SET_COLLISION, (u64)shield_set_collision)) { shield_nvt--; return 0; }
+        if (!vt_write(vt + VT_SET_RESPONSE, (u64)shield_set_response)) {
+            vt_write(vt + VT_SET_COLLISION, col);
+            shield_nvt--;
+            return 0;
+        }
     }
-    if (shield_obj && shield_obj != obj && mem_readable(shield_obj, 8) && *(u64 *)shield_obj == (u64)shield_vt)
-        *(u64 *)shield_obj = shield_old_vt;
-    *(u64 *)obj = (u64)shield_vt;
     shield_obj = obj;
     return 1;
 }
-// her mesh back on its own vtable ("f5": no piece off her any more)
+// her mesh's calls passed on again ("f5": no piece off her any more)
 static int photo_unshield(void)
 {
-    int was = shield_obj && mem_readable(shield_obj, 8) && *(u64 *)shield_obj == (u64)shield_vt;
-    if (was) *(u64 *)shield_obj = shield_old_vt;
+    int was = shield_obj != 0;
     shield_obj = 0;
     return was;
 }
@@ -5730,7 +5762,9 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
                 if (keep >= 4) { if (nfs == 0) free_spine = lf[i] < MAX_BONES ? (int)lf[i] : -1; else if (nfs == 1) free_upper = lf[i] == 1; nfs++; }
                 else if (keep == 3) { if (ndrop < MAX_KEEP_ROOTS) drop_roots[ndrop++] = (int)lf[i]; }
                 else if (keep == 2) { if (nride < MAX_RIDE) ride_bones[nride++] = (int)lf[i]; }
-                else if (keep) { if (nkeep < MAX_KEEP_ROOTS) keep_roots[nkeep++] = (int)lf[i]; }
+                else if (keep) {
+                    if (nkeep < MAX_KEEP_ROOTS) { keep_rigid[nkeep] = (lf[i] & KEEP_RIGID) != 0; keep_roots[nkeep++] = (int)(lf[i] & ~(u64)KEEP_RIGID); }
+                }
                 else if (ngone < MAX_LIMB_ROOTS) gone_roots[ngone++] = (int)lf[i];
             }
             cnt = ngone * 100 + nkeep;
