@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.4.1"
+local VERSION = "0.4.2"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -216,7 +216,7 @@ local function load_tune()
           if type(x[parts[i]]) ~= "table" then x[parts[i]] = {} end
           x = x[parts[i]]
         end
-        if #parts > 0 and type(v) ~= "table" then x[parts[#parts]] = v end
+        if #parts > 0 then x[parts[#parts]] = v end
       end
     elseif not mok and not tostring(m):find("No such file", 1, true) then
       -- (a broken menu.lua dropped every menu change without a word)
@@ -785,15 +785,88 @@ function screen.perf_note(kind, ms, line)
   k.n = k.n + 1
   if ms > k.ms then k.ms, k.line = ms, line end
 end
+-- the engine's garbage collection: a probe object nothing holds, in the transient package; once a find by its path
+-- misses, a GC pass has run (a find is a hash lookup, the freed object is never read). Each frame hitch says whether
+-- one ran in its frame, and the minute's line how many ran and how many hitches had one: half-second game-thread
+-- stalls with no disk or memory pressure were seen in vanilla too, and GC is the suspect (gc = { path, n, runs, hit })
+screen.gc = { n = 0, runs = 0, hit = 0 }
+screen.GC_S = 0.25
+function screen.gc_ran(now_too)
+  local g = screen.gc
+  if g.off then return false end
+  -- looked at every GC_S s, and in a hitch's frame (each frame cost too much: 15 fps, playtest)
+  local now = os.clock()
+  if not now_too and now < (g.next or 0) then return false end
+  g.next = now + screen.GC_S
+  local gm = goreCtx.gore
+  if not (gm and gm.native_ready and gm.native_ready()) then return false end
+  -- asked of sbslice by its index ("G", as goreCtx.held), never read: UE4SS's StaticFindObject finds no subobject by
+  -- its path (".../GameEngine_X:SBGameInstance_Y.SBGore_GCProbe1": "not found by its path", playtest)
+  local k = g.k
+  if k then
+    if not goreCtx.alive_ask({ k }) then return false end
+    if k.alive then return false end
+    g.runs = g.runs + 1
+  end
+  -- (in the game instance, as the menu's widgets. An outer doesn't hold what is in it, so the probe still goes at
+  -- the next pass)
+  g.cls = valid(g.cls) and g.cls or try(function() return StaticFindObject("/Script/CoreUObject.Object") end)
+  g.outer = valid(g.outer) and g.outer or try(function() return FindFirstOf("GameInstance") end)
+  g.k = nil
+  local why = not valid(g.cls) and "no Object class" or not valid(g.outer) and "no game instance"
+  if not why then
+    g.n = g.n + 1
+    local o = try(function() return StaticConstructObject(g.cls, g.outer, FName("SBGore_GCProbe" .. g.n)) end)
+    g.k = valid(o) and goreCtx.keep(o) or nil
+    -- its index read now, while it is surely alive; alive at once, or the probe would read a pass every look
+    if not g.k then why = "not made"
+    elseif not goreCtx.alive_ask({ g.k }) then g.k = nil; return k ~= nil -- sbslice not up yet: made again next look
+    elseif not g.k.alive then why = "not alive as it was made" end
+  end
+  -- a probe that can't be made is given up (one line), not tried again every look
+  if why then g.off, g.k = true, nil; log("garbage collection probe: " .. why .. ", off") end
+  return k ~= nil
+end
+-- fewer garbage collection passes (tune.fewerGC): the engine forces a pass each time a streamed level goes out, and
+-- keeps incremental passes going while one waits to be purged. 9 passes a minute were counted, against the 61 s
+-- timer, with the worst hitch of that minute (1296 ms) in one (playtest). Both are turned off; the timed pass still
+-- runs, so nothing piles up past a minute. Each cvar's own value is read first and put back when the option goes off
+-- (checked at the start and once a minute, so the menu's switch takes effect within a minute)
+screen.GC_CVARS = { "s.ForceGCAfterLevelStreamedOut", "s.ContinuouslyIncrementalGCWhileLevelsPendingPurge" }
+function screen.gc_tune()
+  local want = tune.fewerGC == true
+  local g = screen.gc
+  if (g.tuned or false) == want then return end
+  local pawn = cachedPawn
+  local ksl = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+  if not (valid(pawn) and valid(ksl)) then return end
+  g.was = g.was or {}
+  local out = {}
+  for _, cv in ipairs(screen.GC_CVARS) do
+    local cur = try(function() return ksl:GetConsoleVariableIntValue(cv) end)
+    if want and g.was[cv] == nil then g.was[cv] = cur or 1 end
+    local to = want and 0 or (g.was[cv] or 1)
+    local ok = screen.console(pawn, string.format("%s %d", cv, to))
+    local now = try(function() return ksl:GetConsoleVariableIntValue(cv) end)
+    out[#out + 1] = string.format("%s %s -> %s%s", cv, tostring(cur), tostring(now), ok and "" or " (not run)")
+  end
+  g.tuned = want
+  log(string.format("garbage collection: %s: %s", want and "fewer passes" or "the game's own passes", table.concat(out, ", ")))
+end
 function screen.perf_flush()
   local p = screen.perf
   if os.clock() - p.t < 60 then return end
   p.t = os.clock()
+  screen.gc_tune()
   for _, kind in ipairs({ "slow", "hitch" }) do
     local k = p[kind]
     if k.n > 0 then log(string.format("%d %s in the last minute, the worst %s", k.n, kind == "slow" and "slow ticks" or "frame hitches", k.line)) end
     p[kind] = { n = 0, ms = 0 }
   end
+  local g = screen.gc
+  log(string.format("garbage collection: %d runs in the last minute, %d of them in a frame hitch%s", g.runs, g.hit,
+    g.off and " (no probe: can't tell)" or ""))
+  g.runs, g.hit = 0, 0
 end
 -- revived where she lay, her movement left off is put back to walking within WINDOW polls (~20 s) after she got up,
 -- once it has been off POLLS (~1.5 s) with her capsule still; at = { since = after, at = capsule }: off since then, there
@@ -1153,13 +1226,21 @@ function screen.hiding(t)
   if m == "key" then return true end
   return t < (tune.reviveAt or 10)
 end
+-- one hook a call, a second apart: all four in one tick were a 206-213 ms freeze while she played, once a session
+-- (playtest); hook = { left = { [f] = what }, got = {} }
 function screen.hook()
   if screen.hooked or os.clock() < (screen.retry or 0) then return end
   screen.retry = os.clock() + 1
   if not valid(try(function() return StaticFindObject("/Game/Art/UI/Widget/HUD/WB_MainHUD_Dead.WB_MainHUD_Dead_C") end)) then return end
-  screen.hooked = true
-  local got = {}
-  for f, what in pairs(SCREEN_FNS) do
+  local hk = screen.hookQ
+  if not hk then
+    hk = { left = {}, got = {} }
+    for f, what in pairs(SCREEN_FNS) do hk.left[f] = what end
+    screen.hookQ = hk
+  end
+  local f, what = next(hk.left)
+  if f then
+    hk.left[f] = nil
     local ok = pcall(RegisterHook, "/Game/Art/UI/Widget/HUD/WB_MainHUD_Dead.WB_MainHUD_Dead_C:" .. f, function()
       if not active then return end
       if what == "shown" then
@@ -1170,10 +1251,12 @@ function screen.hook()
         screen.press = true
       end
     end)
-    if ok then got[#got + 1] = f end
+    if ok then hk.got[#hk.got + 1] = f end
+    if next(hk.left) then return end
   end
-  table.sort(got)
-  log("hook death screen: " .. (#got > 0 and table.concat(got, ", ") or "none"))
+  screen.hooked = true
+  table.sort(hk.got)
+  log("hook death screen: " .. (#hk.got > 0 and table.concat(hk.got, ", ") or "none"))
 end
 -- may she be got up now (her ragdoll has run recoverAfter): a button pressed, the screen gone, or no screen at all
 -- recoverAfter + screenWait s in (a death without one: F5's)
@@ -1195,6 +1278,8 @@ screen.SHOWN_S, screen.GONE_S = 1.5, 0.75
 local REVIVE_WAIT = 2.5
 function screen.revive(t)
   local rv = screen.rv
+  screen.intro_look()
+  screen.fade_in()
   if not active or saved.manual then
     for f, vis in pairs(rv.held or {}) do
       local w = vis and dead_hud.get(f)
@@ -1231,7 +1316,11 @@ function screen.revive(t)
         try(function() w:SetVisibility(rv.held[f]); w:SetIsEnabled(true) end)
         rv.held[f], up = false, true
         rv.shown, screen.shownAt = true, os.clock()
-        log(string.format("revive screen: shown %.1f s into the death", t))
+        log(string.format("revive screen: shown %.1f s into the death%s", t, screen.skip_intro(w)))
+        if screen.shown == true then
+          try(function() w:SetRenderOpacity(0) end)
+          screen.fade = { w = w, t = os.clock() }
+        end
       end
       on = on or up
     end
@@ -1243,6 +1332,71 @@ function screen.revive(t)
   elseif rv.down and not screen.revived and t - rv.down >= REVIVE_WAIT and not death_screen() then
     screen.revived = true
   end
+end
+-- a screen shown after being held hidden: its intro (the death screen's You Die, 3.98 s) doesn't run while it is
+-- collapsed, so it played from its start once shown: 2-3 s after Shift+F4 before anything showed (playtest). Put at
+-- its end it popped up with no animation; sped up it was no longer the game's (playtest). So shown by Shift+F4, it
+-- plays at the game's own speed from INTRO_FROM s in, past its lead-in (a guess, read from the log's opacity
+-- samples below). Returns a note for the log
+screen.INTRO_FROM = 2.0
+-- and as its intro is half in by then (the opacity samples: 5 of 10.9 at 2 s), it popped in with no transition
+-- (playtest): the whole screen fades in over FADE_S as well
+screen.FADE_S = 0.5
+function screen.fade_in()
+  local f = screen.fade
+  if not f then return end
+  local k = math.min(1, (os.clock() - f.t) / screen.FADE_S)
+  if not valid(f.w) then screen.fade = nil; return end
+  try(function() f.w:SetRenderOpacity(k * k * (3 - 2 * k)) end)
+  if k >= 1 then screen.fade = nil end
+end
+function screen.skip_intro(w)
+  local out = {}
+  local cls = try(function() return w:GetClass() end)
+  local jump = screen.shown == true
+  try(function()
+    cls.Animations:ForEach(function(_, e)
+      local a = e:get()
+      if not valid(a) then return end
+      local nm = tostring(try(function() return a:GetFName():ToString() end))
+      if try(function() return w:IsAnimationPlaying(a) end) ~= true then return end
+      local at, en = try(function() return w:GetAnimationCurrentTime(a) end), try(function() return a:GetEndTime() end)
+      local from = jump and en and math.min(screen.INTRO_FROM, en - 0.1) or nil
+      if from and (at or 0) < from then try(function() w:SetAnimationCurrentTime(a, from) end) else from = nil end
+      out[#out + 1] = string.format("%s %.2f/%.2f s%s", nm, at or -1, en or -1, from and string.format(", from %.2f s", from) or "")
+      screen.introLook = screen.introLook or { w = w, a = a, t = os.clock(), next = 0, line = {} }
+    end)
+  end)
+  return #out > 0 and (", intro at the game's speed: " .. table.concat(out, ", ")) or ", no animation playing"
+end
+-- the intro's opacity over time, logged once as it finishes: the summed opacity of every visible widget under the
+-- screen, each 0.25 s with the animation's own time, so INTRO_FROM can be put where something first shows
+function screen.intro_look()
+  local L = screen.introLook
+  if not L then return end
+  local now = os.clock()
+  if now < L.next then return end
+  L.next = now + 0.25
+  local w, a = L.w, L.a
+  local playing = valid(w) and try(function() return w:IsAnimationPlaying(a) end) == true
+  if not playing or now - L.t > 6 then
+    screen.introLook = nil
+    log("revive screen: intro opacity (anim time = summed opacity): " .. table.concat(L.line, ", "))
+    return
+  end
+  local sum = 0
+  local function walk(x, depth)
+    if not valid(x) or depth > 12 then return end
+    local v = try(function() return x:GetVisibility() end)
+    if v == 1 or v == 2 then return end
+    local op = try(function() return x:GetRenderOpacity() end) or 1
+    if op <= 0.01 then return end
+    local n = try(function() return x:GetChildrenCount() end)
+    if not n or n == 0 then sum = sum + op; return end
+    for k = 0, n - 1 do walk(try(function() return x:GetChildAt(k) end), depth + 1) end
+  end
+  walk(try(function() return w.WidgetTree.RootWidget end), 0)
+  L.line[#L.line + 1] = string.format("%.2f=%.1f", try(function() return w:GetAnimationCurrentTime(a) end) or -1, sum)
 end
 -- the rest of the HUD hidden through a death (tune.hideHud): her HP bar, skills, minimap, notices, all inside
 -- WB_MainHUD_Master, which holds the death screen too. Every widget in it is collapsed but the branch down to the
@@ -2701,6 +2855,37 @@ function hm.lethal_watch(pawn, mesh)
   elseif not ok then log("lethal hit: early cut failed: " .. tostring(err)) end
 end
 
+-- tune.gore.lowArm: a hit that leaves her HP bar under lowArm.below (a quarter) takes her left arm off where she stands,
+-- once a life; it grows back with her HP bar full again (a rest) or at her next life (the death's end undoes every cut)
+function hm.low_arm(pawn, mesh)
+  local g = tune.gore or {}
+  local la = g.lowArm or {}
+  if not gore or g.enabled == false or la.enabled ~= true or not goreCtx.glass then hm.lowLast = nil; return end
+  -- (the HUD looked for at most every 5 s till found, 35 ms: glass.lua keeps it)
+  local pct = goreCtx.glass.bar_pct(false)
+  if not pct then return end
+  local last = hm.lowLast
+  hm.lowLast = pct
+  local bone = "Bip001-L-UpperArm"
+  if hm.lowCut and pct >= 0.99 then
+    hm.lowCut = false
+    if gore.has_cut(mesh, bone) then
+      log(string.format("low HP arm: her HP bar full again (%.3f): the arm back", pct))
+      try(function() gore.cleanup(pawn, mesh) end)
+    end
+    return
+  end
+  -- a hit (the bar dropped since the last tick) that she lives through, leaving her under the mark
+  if not (last and pct < last - 0.002 and pct > 0.0005 and pct < (la.below or 0.25)) then return end
+  if hm.lethal or gore.has_cut(mesh, bone) or gore.busy() then return end
+  local ws = weapon_swing(mesh)
+  if ws and ws.dir then gore.aim(ws.dir) end
+  local ok, r = pcall(gore.slice_bone, pawn, mesh, bone, nil, "low HP")
+  hm.lowCut = hm.lowCut or (ok and r) or false
+  log(string.format("low HP arm: her HP bar %.3f -> %.3f, under %.2f: %s", last, pct, la.below or 0.25,
+    not ok and ("failed: " .. tostring(r)) or r and "her left arm cut off" or "not cut"))
+end
+
 -- while she is alive: her HP bar for the marks' healing, and the hit waiting for its mark once its delay is up. The
 -- slash runs along the attacker's fastest bone's motion (a weapon) if it moved in the last 0.3 s, else the hit's push
 local function hit_marks(pawn, mesh)
@@ -3318,6 +3503,11 @@ local anim_fall
 local function animated_death(pawn, mesh, push)
   local a = tune.active or {}
   if a.enabled == false or a.animated == false then return false end
+  -- with the cuts off nothing would ever switch her fall to the ragdoll: a plain ragdoll, as the menu says (reported)
+  if (tune.gore or {}).enabled == false then
+    log("death: cuts off, the ragdoll")
+    return false
+  end
   local marked, v = animated_marker(pawn)
   if not marked then
     log(string.format("death: ragdoll show (ImpulseLimitVelocity %s)", tostring(v)))
@@ -3326,6 +3516,13 @@ local function animated_death(pawn, mesh, push)
   -- in the air: her fall animation played on mid-air and she sank at 1.2 m/s for 3 s (thirty-fifth playtest)
   if try(function() return pawn.CharacterMovement:IsFalling() end) then
     log("death: animated show in the air, the ragdoll instead")
+    return false
+  end
+  -- killed in mid-air: the death show stops her movement before this, so it no longer says falling, and a floor
+  -- further than the trace reaches reads as unknown. She hung in the air playing her fall (0.4.1 report): airborne
+  -- on any of her last ticks alive (hm.airT) is the ragdoll too
+  if hm.airT and os.clock() - hm.airT < 0.5 then
+    log(string.format("death: airborne %.2f s before it, the ragdoll instead", os.clock() - hm.airT))
     return false
   end
   -- nor with her feet off the floor while her movement doesn't say falling (killed in mid-air, it was already off):
@@ -3338,6 +3535,14 @@ local function animated_death(pawn, mesh, push)
   end
   try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
   try(function() mesh:SetSimulatePhysics(false) end)
+  -- a part cut off her while she lived (tune.gore.lowArm, F9) simulates on, where it lies: turned off with the rest,
+  -- the arm lying on the floor went back to her shoulder with her animation, and flew off it at 72 m/s once the
+  -- death's ragdoll turned it on again, a stretch (playtest)
+  local kept = {}
+  for _, b in ipairs(gore and gore.cut_parts(mesh) or {}) do
+    if try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName(b), true, true); return true end) then kept[#kept + 1] = b end
+  end
+  if #kept > 0 then log("death: the parts cut off her alive simulate on: " .. table.concat(kept, ", ")) end
   return anim_fall(pawn, mesh, push)
 end
 
@@ -3853,14 +4058,19 @@ local function tick()
     track_swing(pawn, mesh)
     hm.guard_watch(pawn, mesh)
     tp.mark("swing")
-    if gore then gore.watch(mesh) end
+    if gore then gore.watch(mesh, tp.mark) end
     tp.mark("bone watch")
     if goreCtx.glass then goreCtx.glass.tick(pawn, mesh) end
     tp.mark("glass")
     hit_marks(pawn, mesh)
     tp.mark("hit marks")
     hm.lethal_watch(pawn, mesh)
+    hm.low_arm(pawn, mesh)
     hm.yaw, hm.yawT = try(function() return pawn:K2_GetActorRotation().Yaw end), os.clock()
+    -- falling or flying (an air combo) on this tick alive: a death in the next moment is a ragdoll (animated_death)
+    if try(function() local cm = pawn.CharacterMovement; return cm:IsFalling() or cm.MovementMode == 5 end) then
+      hm.airT = os.clock()
+    end
     tp.mark("lethal")
   elseif active and ((tune.gore or {}).afterHits or {}).enabled ~= false and (tune.gore or {}).enabled ~= false
     and os.clock() >= (screen.photoAfter or 0) then
@@ -4115,6 +4325,7 @@ local function game_tick(ctx)
     for _, fn in ipairs(screen.late or {}) do fn() end
     screen.late = nil
     log(string.format("started (%d s after the player start)", screen.START_S))
+    screen.gc_tune()
   end
   if not adopt(ctx) then return end
   goreCtx.frame = goreCtx.frame + 1
@@ -4126,13 +4337,17 @@ local function game_tick(ctx)
   local dil = try(function() return cachedPawn.CustomTimeDilation end)
   -- (one past HITCH_MAX_MS, a load or a pause, still told early in a death)
   local early = active and screen.deathAt and now - screen.deathAt < screen.DEATH_S
-  if gap and gap >= HITCH_MS and (gap < HITCH_MAX_MS or early) then
+  local hitch = gap and gap >= HITCH_MS and (gap < HITCH_MAX_MS or early)
+  local gc = screen.gc_ran(hitch)
+  if hitch then
     local st = gore and gore.last_stage
     local slow = math.min(dil or 1, lastDil or 1)
-    screen.perf_note("hitch", gap, string.format("frame hitch: %.0f ms%s%s%s", gap,
+    if gc then screen.gc.hit = screen.gc.hit + 1 end
+    screen.perf_note("hitch", gap, string.format("frame hitch: %.0f ms%s%s%s%s", gap,
       lastTick and now - lastTick.t < 0.5 and string.format(", the mod's last tick %.0f ms", lastTick.ms) or "",
       st and now - st.t < 0.5 and ", after " .. st.what or "",
-      slow < 0.99 and string.format(", her time x%.2f (the game's hit-stop)", slow) or ""))
+      slow < 0.99 and string.format(", her time x%.2f (the game's hit-stop)", slow) or "",
+      gc and ", garbage collection ran" or ""))
   end
   screen.perf_flush()
   -- a run of slow frames with the mod's own tick short (an fps dip, playtest): told once with what the mod has out
@@ -4298,10 +4513,21 @@ screen.restartHook, screen.restartErr = pcall(RegisterHook, "/Script/Engine.Play
   if not screen.tickHooked then pcall(screen.hook_tick, "player start") end
 end)
 if not screen.restartHook then log("ClientRestart hook failed: " .. tostring(screen.restartErr) .. " (her tick hooked from the loop)") end
+-- still not hooked a while in: said once a minute, so a log that stops at "loaded" tells a session that never got
+-- into the game (the main menu: her Blueprint isn't loaded) from one where the hook failed (a Nexus log stopped at
+-- "loaded", no death in it)
+screen.waitSaid = 0
 LoopAsync(1000, function()
   if screen.tickHooked then return true end
   if screen.restartHook and os.clock() - screen.loadedAt < 20 then return false end
-  return screen.hook_tick("late")
+  local ok = screen.hook_tick("late")
+  local s = os.clock() - screen.loadedAt
+  if not ok and s >= 30 + 60 * screen.waitSaid then
+    screen.waitSaid = screen.waitSaid + 1
+    log(string.format("not started %.0f s after loading: her Blueprint isn't loaded (the main menu?), ClientRestart hook %s",
+      s, screen.restartHook and "set, never fired in game" or "failed"))
+  end
+  return ok
 end)
 
 log("loaded (stabiliser + logger)")

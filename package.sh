@@ -32,6 +32,8 @@ mkdir -p "$PAKS" "$MODS/StellarBladeGore/Scripts" "$MODS/SBSlice/dlls"
 # (not the outfits pak: physfix.lua and sbslice.dll make the same physics fixes in game, on every outfit, any mod's too)
 cp "$PAKDIR"/ZZ_StellarBladeGore_P.{utoc,ucas,pak} "$PAKS/"
 cp "$SCRIPTS"/*.lua "$MODS/StellarBladeGore/Scripts/"
+# (no FText constructor signature: UE4SS calls it as the game starts, and with the Steam overlay on that call
+# closes the game at launch, why Stellar Blade's UE4SS packs ship it disabled as dFText_Constructor.lua; 0.4.1 report)
 "$ROOT/native/sbslice/build.sh" "$ROOT/.cache/release/sbslice" >/dev/null
 cp "$ROOT/.cache/release/sbslice/main.dll" "$MODS/SBSlice/dlls/main.dll"
 # enabled.txt turns a mod on without touching mods.txt (UE4SS 3 reads both)

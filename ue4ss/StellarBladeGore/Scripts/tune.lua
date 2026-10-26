@@ -39,6 +39,9 @@ return {
   deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
                                -- seconds into the death, "key" only on Shift+F4 (or holdPad). Shift+F4 shows it early,
                                -- and hides it again (the death held) once it is up
+  fewerGC = false,             -- fewer garbage collection passes: the engine's pass forced as each streamed level goes
+                               -- out (and its incremental ones while one waits) off, the 61 s timed pass kept; false (the default)
+                               -- the game's own values back
   hideHud = true,              -- the rest of the HUD (HP bar, skills, minimap, notices) hidden through a death, back as
                                -- she is up again; the death and revive screens keep to deathScreen
   keepFresh = 2,               -- s: a character or widget seen as it spawned is checked alive (sbslice "G") this soon, or
@@ -270,6 +273,10 @@ return {
           { "jaw_open", "jawOpen", 0.14, from = 0.05, over = 6 },
         } },
       },
+    },
+    lowArm = {                 -- a hit that leaves her HP under a quarter takes her left arm off as she fights on
+      enabled = false,         --   (once a life; it grows back with her HP full again, or at her next life)
+      below = 0.25,            --   the share of her HP bar under which it goes
     },
     afterHits = {              -- an enemy's weapon swinging through her once she is dead cuts her again: a limb, the
       enabled = true,          --   head or (while she is whole) her body in two along the swing, else a hit mark

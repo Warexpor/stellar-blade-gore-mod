@@ -1457,6 +1457,55 @@ local function settle(dt)
   if run.rolls then log("rolled about the bone since the start (deg): " .. roll_report(run.mesh, run.rolls)) end
 end
 
+-- hanging in the air: settle's own check runs only once she is calm, and a split killed in mid-air left her half up
+-- there, swinging, for 16 s till it did (0.4.1 playtest). Each half's pelvis is looked at every HANG_EVERY s: up over
+-- settle.air and dropped under HANG_DROP cm in the last HANG_SPAN s, what holds it is logged once (bodies not
+-- simulating, gravity) and it is let go: gravity on, every body simulating, woken
+local HANG_EVERY, HANG_SPAN, HANG_DROP = 0.25, 1.0, 20
+local function hang_watch()
+  if run.piece or run.asleep or run.t < 0.5 then return end
+  if run.t < (run.hangNext or 0) then return end
+  run.hangNext = run.t + HANG_EVERY
+  local st = cfg().settle or {}
+  run.hang = run.hang or {}
+  local comps = { run.mesh }
+  for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  for i, c in ipairs(comps) do
+    local z = valid(c) and try(function() return c:GetSocketLocation(FName("Bip001-Pelvis")).Z end)
+    local h = run.hang[i] or { zs = {} }
+    run.hang[i] = h
+    if z then
+      table.insert(h.zs, { t = run.t, z = z })
+      while #h.zs > 1 and h.zs[2].t <= run.t - HANG_SPAN do table.remove(h.zs, 1) end
+      local old = h.zs[1]
+      if run.t - old.t >= HANG_SPAN * 0.9 and old.z - z < HANG_DROP then
+        local pel = try(function() local l = c:GetSocketLocation(FName("Bip001-Pelvis")); return vec(l.X, l.Y, l.Z) end)
+        local over = pel and M.over_floor(run.pawn or try(function() return run.mesh:GetOwner() end), pel)
+        if over and over > (st.air or 60) then
+          if not h.said then
+            h.said = true
+            local still, n = {}, 0
+            for _, b in ipairs(bodies(c)) do
+              n = n + 1
+              if try(function() return c:IsSimulatingPhysics(FName(b)) end) ~= true then still[#still + 1] = b end
+            end
+            local v = lin_vel(c, "Bip001-Pelvis")
+            log(string.format("%s hangs at %.1f s: pelvis %.0f cm over the floor, dropped %.0f cm in %.1f s, %.0f cm/s; gravity %s, %d of %d bodies not simulating%s; let go",
+              i == 1 and "her body" or "the split's copy", run.t, over, old.z - z, run.t - old.t, v and len(v) or -1,
+              tostring(try(function() return c:IsGravityEnabled() end)), #still, n,
+              #still > 0 and (" (" .. table.concat(still, ",", 1, math.min(#still, 12)) .. ")") or ""))
+          end
+          gravity(c, true)
+          try(function() c:SetSimulatePhysics(true) end)
+          try(function() c:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
+          try(function() c:WakeAllRigidBodies() end)
+          h.zs = {}
+        end
+      end
+    end
+  end
+end
+
 -- her fall: a death in the air fell at a steady 2 m/s for over a second, as if under water (thirty-fifth playtest).
 -- From when her pelvis starts dropping until it lands, the bodies still on her are kept at least as fast downward as
 -- a free fall from then would be (up to fall.max)
@@ -1521,6 +1570,7 @@ function M.tick(dt)
   end
   settle(dt)
   if not run then return end
+  hang_watch()
   fall_assist(dt)
   clamp_spin()
   if run.impactAt and run.t >= run.impactAt then

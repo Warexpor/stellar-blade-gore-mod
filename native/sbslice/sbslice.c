@@ -15,6 +15,7 @@ typedef void *HANDLE;
 #define WINAPI __stdcall
 __declspec(dllimport) HANDLE WINAPI CreateThread(void *, u64, u32(WINAPI *)(void *), void *, u32, u32 *);
 __declspec(dllimport) void WINAPI Sleep(u32);
+__declspec(dllimport) short WINAPI GetAsyncKeyState(int);
 __declspec(dllimport) HANDLE WINAPI CreateFileW(const u16 *, u32, u32, void *, u32, u32, HANDLE);
 __declspec(dllimport) int WINAPI ReadFile(HANDLE, void *, u32, u32 *, void *);
 __declspec(dllimport) int WINAPI WriteFile(HANDLE, const void *, u32, u32 *, void *);
@@ -74,6 +75,7 @@ static u64 RVA_PHOTO_MGR = 0x7032598;                             // photo mode'
 static u64 RVA_PHOTO_ENTER = 0x22a98b0;                           // photo mode entered (see photo_open)
 static u64 RVA_PHOTO_GATE = 0x231c400;                            // and its gates
 static u64 RVA_UI_STACK = 0x212f940;                              // the open UI list
+static u64 RVA_FTEXT_CTOR = 0x285d510;                            // FText::FText(FString &&) (the F3 menu's text)
 #define INVALID_HANDLE ((HANDLE)(long long)-1)
 
 static u64 exe;
@@ -5486,6 +5488,56 @@ static void async_cmd(const u16 *txt, int len)
     if (!CreateThread(0, 0, async_main, 0, 0, 0)) { async_busy = 0; skin_result("err no thread"); return; }
     skin_result("ok started");
 }
+// "T<text block>,<its SetText>;<text>": the F3 menu's text, set with no FText from UE4SS. UE4SS makes an FText from
+// Lua with the engine's constructor, which its scan misses in this game, and its signature file (UE4SS packs ship it
+// off, as dFText_Constructor.lua) has UE4SS call it as the game starts: with the Steam overlay on, the game closed at
+// launch (0.4.1 report). Here it is called only from the menu, the game long up: the text copied into a string from
+// GMalloc (the FText takes it over, and the engine frees it), the FText made, handed to SetText through ProcessEvent
+// (vtable +0x218, UE4SS logs it), and our hold on it let go (SetText keeps its own). No answer: the menu sets a dozen
+// texts a frame. "T?": "ok" when it can, else "err <why>"
+typedef void *(*ftext_ctor_fn)(void *self, void *src);
+typedef void (*process_event_fn)(u64 obj, u64 fn, void *params);
+#define PROCESS_EVENT_SLOT (0x218 / 8)
+static const char *text_why(void)
+{
+    if (!RVA_FTEXT_CTOR) return "err FText constructor not found";
+    if (!RVA_GMALLOC || !*(u64 *)(exe + RVA_GMALLOC)) return "err no GMalloc";
+    return 0;
+}
+static void text_cmd(const u16 *txt, int len)
+{
+    if (len >= 2 && txt[1] == '?') { const char *w = text_why(); skin_result(w ? w : "ok"); return; }
+    if (text_why()) return;
+    int semi = 1;
+    while (semi < len && txt[semi] && txt[semi] != ';') semi++;
+    if (semi >= len || txt[semi] != ';') return;
+    u64 f[2] = { 0, 0 };
+    parse_fields(txt + 1, semi - 1, f, 2);
+    if (f[0] < 0x10000 || f[1] < 0x10000 || !mem_readable(f[0], 8) || !mem_readable(f[1], 8)) return;
+    u64 vt = *(u64 *)f[0];
+    if (!mem_readable(vt + PROCESS_EVENT_SLOT * 8, 8)) return;
+    const u16 *src = txt + semi + 1;
+    int n = 0;
+    while (semi + 1 + n < len && src[n]) n++;
+    // FString { TCHAR *Data; int Num (with its terminator); int Max }: an empty one has no data
+    struct { u16 *data; int num, max; } fs = { 0, 0, 0 };
+    if (n > 0) {
+        fs.data = (u16 *)ue_malloc((u64)(n + 1) * 2);
+        if (!fs.data) return;
+        for (int i = 0; i < n; i++) fs.data[i] = src[i];
+        fs.data[n] = 0;
+        fs.num = fs.max = n + 1;
+    }
+    // FText { TSharedRef<ITextData> (object, controller), u32 flags }
+    struct { u64 obj, ctl; u32 flags, pad; } ft = { 0, 0, 0, 0 };
+    ((ftext_ctor_fn)(exe + RVA_FTEXT_CTOR))(&ft, &fs);
+    if (fs.data) ue_free(fs.data); // (moved from: left null; else a copy was made)
+    if (!ft.obj || !ft.ctl || !mem_readable(ft.ctl + 8, 4)) return;
+    ((process_event_fn)(*(u64 *)(vt + PROCESS_EVENT_SLOT * 8)))(f[0], f[1], &ft);
+    // the shared count: ours let go when SetText holds one (never to 0 here: a text it didn't take stays, small)
+    int *cnt = (int *)(ft.ctl + 8);
+    if (*cnt > 1) __atomic_fetch_sub(cnt, 1, __ATOMIC_ACQ_REL);
+}
 static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
 {
     (void)context; (void)result;
@@ -5652,6 +5704,18 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         skin_probe(sf[0], (int)sf[1], (int)(sf[2] & 0xf));
         return;
     }
+    if (txt[0] == 'T') { text_cmd(txt, len); return; }
+    if (txt[0] == 'K') {
+        /* K<vk>,<vk>...: "ok " and a 1 or 0 for each key, held down now (the F3 menu's arrow keys: the engine never
+           sees them, and UE4SS's binds fire once a press, so holding one didn't repeat) */
+        u64 kf[8] = { 0 };
+        int k = len > 1 ? parse_fields(txt + 1, len - 1, kf, 8) : 0;
+        char km[4 + 8 + 1], *o = put(km, "ok ");
+        for (int i = 0; i < k; i++) *o++ = (GetAsyncKeyState((int)kf[i]) & 0x8000) ? '1' : '0';
+        *o = 0;
+        skin_result(km);
+        return;
+    }
     if (txt[0] == 'G') {
         static u64 gf[2 * 64];
         alive_cmd(gf, len > 1 ? parse_fields(txt + 1, len - 1, gf, 2 * 64) : 0);
@@ -5728,6 +5792,7 @@ static const sig_def SIGS[] = {
     { "Strihash", &RVA_STRIHASH, "44 0f b7 01 33 c0 4c 8b c9 66 45 85 c0 74 ?? 4c 8d 15 ?? ?? ?? ?? 66 66 0f 1f 84 00 00 00 00 00 41 0f b7 d0", 0 },
     { "photo enter", &RVA_PHOTO_ENTER, "40 53 48 83 ec 20 e8 ?? ?? ?? ?? 48 8b d8 48 85 c0 75 ?? 48 83 c4 20 5b c3 48 8b cb 48 89 7c 24 30", 0 },
     { "photo gate", &RVA_PHOTO_GATE, "48 83 ec 28 e8 ?? ?? ?? ?? 48 85 c0 74 ?? 48 89 5c 24 20 48 8b 98 08 03 00 00", 0 },
+    { "FText", &RVA_FTEXT_CTOR, "48 8b c4 56 48 83 ec 60 48 89 58 10 48 8b f1", 0 },
     { "UI stack", &RVA_UI_STACK, "48 83 ec 28 48 8b 05 ?? ?? ?? ?? 48 85 c0 75 ?? 48 8b 0d ?? ?? ?? ?? 48 85 c9 75 ?? e8 ?? ?? ?? ?? 48 8b 0d ?? ?? ?? ?? 48 8b 01 45 33 c0 ba 20 02 00 00", 0 },
 };
 // the game's constants singleton's getter: made 0x698 bytes in GMalloc (its two globals, +7 and +0x13)
@@ -5797,7 +5862,7 @@ static void resolve_addresses(void)
             missing++;
             if (mp - miss < 90) { if (mp != miss) *mp++ = ','; mp = put(mp, SIGS[i].name); }
             if (SIGS[i].rva != &RVA_NEED_CPU_DATA && SIGS[i].rva != &RVA_STRIHASH && SIGS[i].rva != &RVA_PHOTO_ENTER
-                && SIGS[i].rva != &RVA_PHOTO_GATE && SIGS[i].rva != &RVA_UI_STACK) addr_missing_core = 1;
+                && SIGS[i].rva != &RVA_PHOTO_GATE && SIGS[i].rva != &RVA_UI_STACK && SIGS[i].rva != &RVA_FTEXT_CTOR) addr_missing_core = 1;
         }
     }
     *mp = 0;

@@ -24,6 +24,10 @@ return {
     afterHits = {
       enabled = true,          -- enemies swinging at her body after she died cut it again
     },
+    lowArm = {
+      enabled = false,         -- a hit that leaves her HP under a quarter cuts her left arm off; she fights on without
+                               -- it (once a life; it grows back with her HP full again, or at her next life)
+    },
     throw = 250,               -- cm/s a cut-off piece flies off with (0: it just drops)
     headRagdoll = false,       -- a beheading during her animated fall always makes her a full ragdoll (false: the
     headRagdollChance = 0.6,   --   share of beheadings that do, 0-1; the rest play the fall on headless)
@@ -62,7 +66,8 @@ return {
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
   active = {
     animated = true,           -- light deaths play her own fall animation and only the cut pieces fall by physics
-                               -- (heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway); false:
+                               -- (heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway, and every
+                               -- death with gore.enabled false); false:
                                -- every death a full ragdoll
     push = 1.0,                -- how hard the killing blow throws her body, times the default (0: no push of ours)
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
@@ -71,6 +76,8 @@ return {
   deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
                                -- hides it again once it is up (she stays down till you press it again)
+  fewerGC = false,            -- fewer garbage collection hitches: no forced pass each time the game unloads part of
+                              -- the map (its regular pass a minute still runs); off by default: the game's own behaviour
   hideHud = true,             -- the HUD (HP bar, skills, minimap) hidden through a death, back as she is up again
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
                                -- shows the death screen or hides it again; key names as UE's Gamepad_* (false: none)

@@ -243,9 +243,10 @@ local function dead_rows()
     local r = f and ctx.gore.command(string.format("D%x,%x,%x,0,%x;%s", addr(dt), addr(rs), row, f.off, show)) or "no field"
     if r == "ok str set" then set = set + 1 elseif r == "ok str same" then same = same + 1 else failed[#failed + 1] = field .. ": " .. r end
   end
-  -- (the game's own 0 for deathScreen "game": the screen at once; else the screen is made by reviveAt and main.lua
-  -- holds it hidden as the mode says)
-  local delay = ctx.tune.deathScreen == "game" and 0 or tonumber(ctx.tune.reviveAt) or 10
+  -- the game's own 0 in every mode: the screen and its intro start at once, and main.lua holds it hidden as
+  -- deathScreen says (its intro waits while it is hidden). At reviveAt the game started the intro only then, so
+  -- Shift+F4 earlier showed an empty screen till reviveAt s into the death (playtest)
+  local delay = 0
   local delays = 0
   for _, k in ipairs(M.DELAYS) do
     local was = ctx.gore.row_float(dt, M.DEAD_ROW, k .. "DeadUIDelayTime", delay)

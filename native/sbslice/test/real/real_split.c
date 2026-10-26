@@ -2240,7 +2240,10 @@ int main(int argc, char **argv)
     int asplit = -1;
     unsigned char *asub = 0;
     if (getenv("ARMSPLIT")) {
-        int right = getenv("ARMSPLIT")[0] == 'R';
+      // ARMSPLIT=LR (RL): both, in that order (the low HP cut's left arm while she lived, the killing blow's right one)
+      asub = calloc(NB, 1);
+      for (const char *as = getenv("ARMSPLIT"); *as == 'L' || *as == 'R'; as++) {
+        int right = *as == 'R';
         asplit = bone(right ? "Bip001-R-UpperArm" : "Bip001-L-UpperArm");
         int fa = bone(right ? "Bip001-R-Forearm" : "Bip001-L-Forearm");
         if (asplit < 0 || fa < 0) { printf("FAIL: no arm\n"); return 1; }
@@ -2251,20 +2254,22 @@ int main(int argc, char **argv)
         set_nosink(); other_limbs_nosink(asplit);
         limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0;
         skin_cut((u64)comp_a, 0, asplit, aat, an, MODE_CUT, 0, 0, -1);
-        printf("arm first: %.200s\n", lastres);
+        printf("arm %c first: %.200s\n", *as, lastres);
         if (strncmp(lastres, "ok", 2)) { printf("FAIL: the arm cut failed\n"); return 1; }
         skin_collapse();
         // flung 40 cm out and down from the shoulder and turned (its constraint broken at the hit)
-        asub = calloc(NB, 1);
-        for (int i = 0; i < NB; i++) asub[i] = i == asplit || (bparent[i] >= 0 && asub[bparent[i]]);
+        unsigned char *one = calloc(NB, 1);
+        for (int i = 0; i < NB; i++) { one[i] = i == asplit || (bparent[i] >= 0 && one[bparent[i]]); asub[i] |= one[i]; }
         float q[4] = { 0.3826834f, 0, 0, 0.9238795f }, a0[3] = { ap[0], ap[1], ap[2] };
-        for (int i = 0; i < NB; i++) if (asub[i]) {
+        for (int i = 0; i < NB; i++) if (one[i]) {
             float *t = space + i * 12, nq[4], r[3], d[3] = { t[4] - a0[0], t[5] - a0[1], t[6] - a0[2] };
             qmul(q, t, nq); memcpy(t, nq, 16);
             quat_rot(q, d, r);
             for (int k = 0; k < 3; k++) t[4 + k] = aat[k] + r[k] + an[k] * 40;
             t[6] -= 25;
         }
+        free(one);
+      }
         sink_hold(0, 0); // "H", her tick: the held seams on their rim bones
         skin_probe((u64)comp_a, 0, 0);
         printf("arm flung, before the split: %.200s\n", lastres);

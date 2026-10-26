@@ -54,6 +54,7 @@ for _, a in ipairs(M.ACTIONS) do M.BY_ID[a.id] = a end
 M.uv = false -- Ultra Violence is on (main.lua): the uv actions' defaults are on Alt
 M.handlers = {}
 M.fired = {}
+M.nav = {} -- the arrow keys pressed since the menu last looked: "up", "down", "left", "right"
 
 function M.init(c)
   ctx, log = c, c.log
@@ -126,7 +127,12 @@ function M.register()
       end
     end
   end
-  log(string.format("keys: %d binds (%d keys, 7 sets of modifiers each)", n, #M.LIST))
+  -- the menu's arrow keys, its own: the engine never saw the arrow keys while the game played (the menu read them
+  -- down by name, and nothing moved, playtest). Noted here, taken by gui.lua's tick (M.nav)
+  for _, d in ipairs({ { "UP_ARROW", "up" }, { "DOWN_ARROW", "down" }, { "LEFT_ARROW", "left" }, { "RIGHT_ARROW", "right" } }) do
+    if Key[d[1]] and pcall(RegisterKeyBind, Key[d[1]], function() M.nav[#M.nav + 1] = d[2] end) then n = n + 1 end
+  end
+  log(string.format("keys: %d binds (%d keys, 7 sets of modifiers each, and the menu's arrows)", n, #M.LIST))
 end
 
 -- the keys pressed since the last frame: each to the action bound to it (game thread, game_tick). The menu taking a

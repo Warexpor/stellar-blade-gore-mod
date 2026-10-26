@@ -1,7 +1,7 @@
 -- The in-game settings menu (tune.menuKey F3, or tune.menuPad on the controller): plain UMG widgets made here at
 -- runtime in the look of the game's own settings screen (its fonts, colours and layout; nothing in the pak). The
--- world goes on while it is open (it was slowed to a stop: asked not to be); her moving and looking are held. Q/E (LB/RB) switch the tab, Up/Down (or the D-pad) picks a row, Left/Right
--- changes it, R / Y (Triangle) puts the tab back to settings.lua, Enter / A presses a button, Backspace / B or the key again closes it. A change applies at once; on
+-- world goes on while it is open (it was slowed to a stop: asked not to be); her moving and looking are held. Q/E (LB/RB) switch the tab, Up/Down (or the D-pad) picks a row, < >
+-- (or the D-pad) changes it, R / Y (Triangle) puts the tab back to settings.lua, Enter / A presses a button, Backspace / B or the key again closes it. A change applies at once; on
 -- closing, the changed values are saved to menu.lua (path = value), which wins over settings.lua, and the settings
 -- are read again (the enemies' and the death table's are made over from them). "Reset to settings.lua" deletes it.
 -- The Keys tab (keys.lua): Enter on a row, then the new key, which another action had is swapped onto its old one.
@@ -17,15 +17,18 @@ M.FONT_BOLD = "/Game/Art/Font/Bold.Bold"
 M.ICONS = "/Game/Art/UI/Texture/Interaction/"
 M.HINTS = {
   kb = { { { "PC/KeyIcon_KeyBoard_Q", "PC/KeyIcon_KeyBoard_E" }, "Tab", "Q E" },
-    { { "PC/KeyIcon_KeyBoard_Left", "PC/KeyIcon_KeyBoard_Right" }, "Adjust", "< >" },
+    { { "PC/KeyIcon_KeyBoard_Comma", "PC/KeyIcon_KeyBoard_Period" }, "Adjust", { "<", ">" } },
+    { { "PC/KeyIcon_KeyBoard_Enter" }, "Select", "ENTER" },
     { { "PC/KeyIcon_KeyBoard_R" }, "Reset Tab", "R" },
     { { "PC/KeyIcon_KeyBoard_F3" }, "Exit", "F3" } },
   xbox = { { { "XBOX/KeyIcon_XboxOne_Gamepad_LeftShoulder", "XBOX/KeyIcon_XboxOne_Gamepad_RightShoulder" }, "Tab", "LB RB" },
     { { "XBOX/KeyIcon_XboxOne_Gamepad_DPad_X" }, "Adjust", "D-PAD" },
+    { { "XBOX/KeyIcon_XboxOne_Gamepad_FaceButton_Bottom" }, "Select", "A" },
     { { "XBOX/KeyIcon_XboxOne_Gamepad_FaceButton_Top" }, "Reset Tab", "Y" },
     { { "XBOX/KeyIcon_XboxOne_Gamepad_FaceButton_Right" }, "Exit", "B" } },
   playstation = { { { "DualSense/KeyIcon_DualSense_Gamepad_LeftShoulder", "DualSense/KeyIcon_DualSense_Gamepad_RightShoulder" }, "Tab", "L1 R1" },
     { { "DualSense/KeyIcon_DualSense_Gamepad_DPad_X" }, "Adjust", "D-PAD" },
+    { { "DualSense/KeyIcon_DualSense_Gamepad_FaceButton_Bottom" }, "Select", "X" },
     { { "DualSense/KeyIcon_DualSense_Gamepad_FaceButton_Top" }, "Reset Tab", "TRI" },
     { { "DualSense/KeyIcon_DualSense_Gamepad_FaceButton_Right" }, "Exit", "O" } },
 }
@@ -33,15 +36,16 @@ M.HINTS = {
 M.ROWS = {
   { section = "Gore" },
   { key = "gore.enabled", label = "Cuts and Blood", kind = "bool", help = "Master switch for all cuts, stumps and blood, on Eve and on enemies. Off: deaths are plain ragdolls." },
-  { key = "gore.death.limb", label = "Limb Cut Chance", kind = "num", min = 0, max = 100, step = 5, help = "Rolled when no blade was tracked, or Blade Decides left it aside. Weight against the other chances: the arm or leg nearest the hit comes off." },
-  { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 5, help = "Rolled when no blade was tracked, or Blade Decides left it aside. Weight against the other chances: the head comes off." },
-  { key = "gore.death.torso", label = "Waist Cut Chance", kind = "num", min = 0, max = 100, step = 5, help = "Rolled when no blade was tracked, or Blade Decides left it aside. Weight against the other chances: the body is cut in two at the waist, leaning a little at random." },
-  { key = "gore.death.split", label = "Vertical Split Chance", kind = "num", min = 0, max = 100, step = 5, help = "Weight against the other chances: the body splits in two from head to hips. Like the others it is rolled when Blade Decides leaves the cut to chance (a tracked blade decides first); set only this one above 0 and every death splits." },
+  { key = "gore.death.limb", label = "Limb Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside. Weight against the other chances: the arm or leg nearest the hit comes off." },
+  { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside. Weight against the other chances: the head comes off." },
+  { key = "gore.death.torso", label = "Waist Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside. Weight against the other chances: the body is cut in two at the waist, leaning a little at random." },
+  { key = "gore.death.split", label = "Vertical Split Chance", kind = "num", min = 0, max = 100, step = 1, help = "Weight against the other chances: the body splits in two from head to hips. Like the others it is rolled when Blade Decides leaves the cut to chance (a tracked blade decides first); set only this one above 0 and every death splits." },
   { key = "gore.death.moreLimbs", label = "Extra Limb Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a limb cut takes the next nearest limb too (0-1), and a third at the same chance again. At 0.35: 35% two or more limbs, 12% three. Rolled limb cuts only; a tracked blade cuts every limb it crosses." },
   { key = "gore.bladeFollow", label = "Blade Decides", kind = "num", min = 0, max = 1, step = 0.05, help = "Share of deaths with a tracked blade where the blade alone decides what is cut (0-1). The rest roll the chances above. At 1 most deaths are waist cuts or splits, since a blade mostly crosses her body." },
   { key = "gore.torsoLegs.enabled", label = "Waist Cut Leg Animation", kind = "bool", help = "A waist cut during an animated death fall: the legs and hips keep playing the fall while the upper body flies off as a ragdoll. Off: the whole body goes ragdoll." },
   { key = "gore.torsoLegs.rolled", label = "   Leg Animation Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance of the leg animation when no blade was tracked (0-1). A level swing uses 0.75 and a slanted one 0.35 (tune.lua)." },
   { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Enemy weapons swinging through Eve's dead body cut it again (a limb, the head or the body), up to 6 times a death. About a quarter leave only a wound." },
+  { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under a quarter of her HP cuts her left arm off, and she fights on without it. Once a life: it grows back when her HP is full again (a rest) or at her next life." },
   { key = "gore.throw", label = "Cut Piece Force", kind = "num", min = 0, max = 800, step = 25, unit = " cm/s", help = "Speed a piece flies off with when it wasn't cut by the killing blow, e.g. a hit after death (0: it just drops). The killing blow's pieces fly with the blow (deathThrow in tune.lua)." },
   { key = "holdDown", label = "Stay Down After Knockdown", kind = "bool", help = "When knocked down, Eve stays on the ground until you dodge or jump. Off: she gets up by herself after a second, as in the game." },
   -- { section = "Stumps" },
@@ -60,7 +64,7 @@ M.ROWS = {
   { key = "convulse.voice.enabled", label = "   Breathing Sounds", kind = "bool", help = "Quiet breaths with her gasps and an occasional moan. Never once she is beheaded, and never over her death scream." },
   { key = "convulse.voice.volume", label = "   Breathing Volume", kind = "num", min = 0, max = 3, step = 0.1, help = "Volume of those breaths and moans (1: default, 0: silent)." },
   { key = "convulse.neck.enabled", label = "   Neck Movement", kind = "bool", help = "Her head strains to lift or turn, shakes with the effort, drops back, then jerks a few times. Not once she is beheaded." },
-  { key = "active.animated", label = "Animated Death Falls", kind = "bool", help = "Standing and light-hit deaths play Eve's own fall animation and hold its end pose; cut pieces still fall by physics. Heavy hits, explosions, mid-air deaths and splits are ragdolls. Off: every death is a full ragdoll." },
+  { key = "active.animated", label = "Animated Death Falls", kind = "bool", help = "Standing and light-hit deaths play Eve's own fall animation and hold its end pose; cut pieces still fall by physics. Heavy hits, explosions, mid-air deaths and splits are ragdolls, and so is every death with Cuts and Blood off. Off: every death is a full ragdoll." },
   { key = "gore.headRagdoll", label = "   Ragdoll When Beheaded", kind = "bool", help = "A beheading during an animated fall always switches her to a full ragdoll. Off: the chance below decides." },
   { key = "gore.headRagdollChance", label = "   Beheading Ragdoll Chance", kind = "num", min = 0, max = 1, step = 0.1, help = "With Ragdoll When Beheaded off: the chance a beheading during an animated fall ragdolls her. The rest play the fall on headless." },
   { key = "gore.legRagdoll", label = "   Ragdoll When Leg Cut", kind = "bool", help = "A leg cut during an animated fall switches her to a full ragdoll. Off: she plays the fall to the end without the leg." },
@@ -83,6 +87,7 @@ M.ROWS = {
   { section = "Mod" },
   { key = "menuPadIcons", label = "Controller Icons", kind = "list", values = { "xbox", "playstation" },
     names = { xbox = "Xbox", playstation = "PlayStation" }, help = "Which controller's buttons this menu shows when you use a controller." },
+  { key = "fewerGC", label = "Fewer GC Hitches", kind = "bool", help = "Stops the engine forcing a garbage collection each time it unloads part of the map, one of the causes of the game's own half-second freezes. Its regular pass once a minute still runs. Off: the game's own behaviour. Takes effect within a minute." },
   { key = "smoothAnim", label = "Smooth Character Animation", kind = "bool", help = "Animates every character every frame. The engine updates distant or small characters less often, which can look choppy, most of all when they run. Costs some CPU with many on screen." },
   { key = "verboseLog", label = "Detailed Log", kind = "bool", help = "Writes every per-frame detail to stellarbladegore.log, for bug reports. The log grows much faster; leave it off otherwise." },
   { key = "dev", label = "Developer Keys", kind = "bool", help = "Test keys (F5 test death, F7 ragdoll, F9-F11 cuts), the enemy spawner and glass cannon mode. See the README." },
@@ -91,16 +96,46 @@ M.ROWS = {
 }
 M.VISIBLE = 12 -- rows on screen at once (a longer tab scrolls)
 M.KEYS = {
-  up = { "Up", "Gamepad_DPad_Up", "Gamepad_LeftStick_Up" },
-  down = { "Down", "Gamepad_DPad_Down", "Gamepad_LeftStick_Down" },
-  left = { "Left", "Gamepad_DPad_Left", "Gamepad_LeftStick_Left" },
-  right = { "Right", "Gamepad_DPad_Right", "Gamepad_LeftStick_Right" },
+  -- (the arrow keys come from keys.lua's own binds, ctx.keys.nav: the engine never saw them down)
+  up = { "Gamepad_DPad_Up", "Gamepad_LeftStick_Up" },
+  down = { "Gamepad_DPad_Down", "Gamepad_LeftStick_Down" },
+  -- (< and > on Comma and Period; the arrow keys come from keys.lua's own binds, ctx.keys.nav: the engine never saw
+  -- them down)
+  left = { "Comma", "Gamepad_DPad_Left", "Gamepad_LeftStick_Left" },
+  right = { "Period", "Gamepad_DPad_Right", "Gamepad_LeftStick_Right" },
   ok = { "Enter", "Gamepad_FaceButton_Bottom" },
   back = { "BackSpace", "Gamepad_FaceButton_Right" },
   reset = { "R", "Gamepad_FaceButton_Top" },
   tabl = { "Q", "Gamepad_LeftShoulder" },
   tabr = { "E", "Gamepad_RightShoulder" },
 }
+-- every controller button a combo can take, and its name on each controller
+M.PAD = { "Gamepad_FaceButton_Bottom", "Gamepad_FaceButton_Right", "Gamepad_FaceButton_Left", "Gamepad_FaceButton_Top",
+  "Gamepad_LeftShoulder", "Gamepad_RightShoulder", "Gamepad_LeftTrigger", "Gamepad_RightTrigger",
+  "Gamepad_LeftThumbstick", "Gamepad_RightThumbstick", "Gamepad_DPad_Up", "Gamepad_DPad_Down", "Gamepad_DPad_Left",
+  "Gamepad_DPad_Right", "Gamepad_Special_Left", "Gamepad_Special_Right" }
+M.PAD_NAMES = {
+  xbox = { "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "LS", "RS", "Up", "Down", "Left", "Right", "View", "Menu" },
+  playstation = { "Cross", "Circle", "Square", "Triangle", "L1", "R1", "L2", "R2", "L3", "R3", "Up", "Down", "Left",
+    "Right", "Create", "Options" },
+}
+local function pad_show(combo)
+  if type(combo) ~= "table" or #combo == 0 then return "None" end
+  local names = M.PAD_NAMES[ctx.tune.menuPadIcons == "xbox" and "xbox" or "playstation"]
+  local out = {}
+  for i, k in ipairs(combo) do
+    local n = k
+    for j, p in ipairs(M.PAD) do if p == k then n = names[j] end end
+    out[i] = n
+  end
+  return table.concat(out, " + ")
+end
+local function same_combo(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+  if #a ~= #b then return false end
+  for i = 1, #a do if a[i] ~= b[i] then return false end end
+  return true
+end
 M.state = { open = false, sel = 2, top = 1, ui = nil, held = {}, changed = {}, toggled = 0 }
 
 function M.init(c)
@@ -113,8 +148,13 @@ function M.init(c)
     local rows = { { section = "Keys" } }
     for _, a in ipairs(ctx.keys.ACTIONS) do
       rows[#rows + 1] = { key = "keys." .. a.id, id = a.id, label = a.label, kind = "key",
-        help = a.help .. " Enter, then press the new key (Ctrl, Shift and Alt can go with it); Backspace cancels. A key another action had is swapped with this one's." }
+        help = a.help .. " Enter, then press the new key (Ctrl, Shift and Alt can go with it); Backspace cancels. A key another action had is swapped with this one's. Keyboard keys only: changed from the keyboard." }
     end
+    -- the controller's combos: A, then hold the new buttons together and let go
+    rows[#rows + 1] = { key = "menuPad", id = "menuPad", label = "Menu (Controller)", kind = "pad", min = 2, max = 3,
+      help = "Opens and closes this menu on the controller, all held together. A, then hold 2 or 3 buttons together and let go; B alone cancels." }
+    rows[#rows + 1] = { key = "holdPad", id = "holdPad", label = "Death Hold (Controller)", kind = "pad", min = 2, max = 2,
+      help = "Shift+F4 on the controller: both held for a second in a death show the death screen or hide it again. A, then hold 2 buttons together and let go; B alone cancels." }
     for k, r in ipairs(rows) do table.insert(M.ROWS, at + k - 1, r) end
     M.TABS = nil
   end
@@ -155,7 +195,7 @@ function M.overlay(t)
   if not ok or type(m) ~= "table" then return 0 end
   local n = 0
   for path, v in pairs(m) do
-    if type(path) == "string" and type(v) ~= "table" then
+    if type(path) == "string" then
       local parts, x = {}, t
       for part in path:gmatch("[^.]+") do parts[#parts + 1] = tonumber(part) or part end
       for i = 1, #parts - 1 do
@@ -175,7 +215,7 @@ local function save()
   for k in pairs(M.state.changed) do saved[k] = get(k) end
   -- (a value back at settings.lua's, a tab reset, is dropped from menu.lua)
   local base = ctx.base_tune and ctx.base_tune()
-  if base then for k in pairs(M.state.changed) do if get_in(base, k) == saved[k] then saved[k] = nil end end end
+  if base then for k in pairs(M.state.changed) do if same_combo(get_in(base, k), saved[k]) then saved[k] = nil end end end
   local keys = {}
   for k in pairs(saved) do keys[#keys + 1] = k end
   if #keys == 0 then return true end
@@ -186,7 +226,14 @@ local function save()
   f:write("-- \"Reset to settings.lua\") to go back to it.\nreturn {\n")
   for _, k in ipairs(keys) do
     local v = saved[k]
-    f:write(string.format("  [%q] = %s,\n", k, type(v) == "string" and string.format("%q", v) or tostring(v)))
+    if type(v) == "table" then
+      -- (a controller combo: its button names)
+      local q = {}
+      for i, x in ipairs(v) do q[i] = string.format("%q", tostring(x)) end
+      f:write(string.format("  [%q] = { %s },\n", k, table.concat(q, ", ")))
+    else
+      f:write(string.format("  [%q] = %s,\n", k, type(v) == "string" and string.format("%q", v) or tostring(v)))
+    end
   end
   f:write("}\n")
   f:close()
@@ -197,6 +244,11 @@ local function value_text(row)
   if row.kind == "key" then
     if M.state.capture and M.state.capture.id == row.id then return "Press a key..." end
     return ctx.keys.show(ctx.keys.binding(row.id))
+  end
+  if row.kind == "pad" then
+    local c = M.state.capture
+    if c and c.id == row.id then return #c.combo > 0 and (pad_show(c.combo) .. "...") or "Hold the buttons..." end
+    return pad_show(get(row.key))
   end
   local v = get(row.key)
   if row.kind == "bool" then return v and "On" or "Off" end
@@ -222,6 +274,50 @@ local function tab_of(i)
   local T = tabs()
   for k, t in ipairs(T) do if i >= t.first and i <= t.last then return k, t end end
   return 1, T[1]
+end
+
+-- a string on a TextBlock. UE4SS makes every FText from Lua (FText(), a UFunction's FText return too) with the
+-- engine's FText constructor, which its scan doesn't find in this game without UE4SS_Signatures/FText_Constructor.lua:
+-- it called address 0 and the game crashed at the menu's first text (0.4.1 report, then reproduced). That file (UE4SS
+-- packs ship it off, as dFText_Constructor.lua) has UE4SS call the constructor as the game starts, and with the Steam
+-- overlay on the game closes at launch (the reporter's, and ours on 2026-10-25). So sbslice.dll sets the text ("T":
+-- the FText made there, only once the menu is up, handed to SetText), and UE4SS's FText is only the way left when the
+-- DLL can't (and its constructor was found: "Failed to find FText::FText" isn't in UE4SS.log, made anew each start)
+local ftextMissing
+local function ftext_missing()
+  if ftextMissing ~= nil then return ftextMissing end
+  ftextMissing = false
+  local f = io.open("ue4ss/UE4SS.log", "r")
+  if not f then return false end
+  for line in f:lines() do
+    if line:find("Failed to find FText::FText", 1, true) then ftextMissing = true; break end
+  end
+  f:close()
+  return ftextMissing
+end
+-- the DLL's text: asked once ("T?"), with SetText's address. M.textBy: "dll", "ue4ss" or nil (neither: no menu)
+local function text_by()
+  if M.textBy ~= nil then return M.textBy or nil end
+  local g = ctx.gore
+  -- (sbslice not up yet: asked again at the next open)
+  if not (g and g.native_ready and g.native_ready() and g.command) then return not ftext_missing() and "ue4ss" or nil end
+  local r = g.command("T?")
+  local fn = StaticFindObject("/Script/UMG.TextBlock:SetText")
+  M.setTextFn = valid(fn) and try(function() return fn:GetAddress() end) or nil
+  if r == "ok" and M.setTextFn then M.textBy = "dll"
+  elseif not ftext_missing() then M.textBy = "ue4ss"
+  else M.textBy = false end
+  log(string.format("menu: its text by %s (sbslice: %s)", M.textBy or "nothing", tostring(r)))
+  return M.textBy or nil
+end
+local function set_text(tb, s)
+  s = tostring(s or "")
+  if M.textBy == "dll" then
+    local a = try(function() return tb:GetAddress() end)
+    if a then ctx.gore.fire(string.format("T%x,%x;%s", a, M.setTextFn, s)) end
+  else
+    tb:SetText(FText(s))
+  end
 end
 
 -- ---- the widgets ----
@@ -273,6 +369,8 @@ local function build()
   w.WidgetTree = tree
   local canvas = StaticConstructObject(cls("/Script/UMG.CanvasPanel"), tree, FName("SBGore_MenuCanvas"))
   tree.RootWidget = canvas
+  -- (the widgets stage in parts: a 0.4.1 report crashed in it, its last line "making it: widgets")
+  stage("widgets: backdrop")
   local n = 0
   -- ax, ay: the slot's alignment (0.5: x / y is its middle)
   local function place(slot, x, y, ww, hh, ax, ay)
@@ -309,7 +407,7 @@ local function build()
     if o.just then
       if not try(function() tb:SetJustification(o.just); return true end) then try(function() tb.Justification = o.just end) end
     end
-    tb:SetText(FText(s or ""))
+    set_text(tb, s)
     return tb
   end
   local function tint(tb, r, g, b, a)
@@ -339,13 +437,15 @@ local function build()
     box(c[1] - 30, c[2], 60, 1, 1, 1, 1, 0.06)
     box(c[1], c[2] - 30, 1, 60, 1, 1, 1, 0.06)
   end
-  local ui = { w = w, rows = {}, tabs = {}, K = K, tint = tint }
+  local ui = { w = w, rows = {}, tabs = {}, K = K, tint = tint, gi = gi }
+  stage("widgets: title")
   -- the title (the game's orange), the mod's name and version small under it
   tint(text(101, 92, 23, "Gore Settings"), 0.716, 0.246, 0.034)
   tint(text(101, 196, 9, "STELLAR BLADE GORE MOD  " .. tostring(ctx.version or ""), { font = bold, spacing = 200 }), 0.25, 0.27, 0.3)
   -- tabs and rows on one grid: the same top, height and spacing, so a tab lines up with the row beside it
   local r0, rh, bh = 222, 58, 48
-  ui.r0, ui.rh = r0, rh
+  ui.r0, ui.rh, ui.bh = r0, rh, bh
+  stage("widgets: tabs and rows")
   -- the tabs down the left
   for k, t in ipairs(tabs()) do
     local ty = r0 + (k - 1) * rh
@@ -353,6 +453,7 @@ local function build()
   end
   -- the rows: label left, value centred (at 945), arrows the same distance either side of it on the focused row
   local vc = 945
+  ui.vc = vc
   for i = 1, M.VISIBLE do
     local ry = r0 + (i - 1) * rh
     local cy = ry + bh / 2
@@ -366,43 +467,67 @@ local function build()
   ui.track = { x = 1196, y = r0, h = M.VISIBLE * rh - 10 }
   ui.trackBg = box(ui.track.x, ui.track.y, 2, ui.track.h, 1, 1, 1, 0.08)
   ui.thumb, ui.thumbSlot = box(ui.track.x, ui.track.y, 2, rh, 0.02, 0.32, 0.9, 1)
+  stage("widgets: help line")
   -- what the focused row does
   ui.help = text(400, r0 + M.VISIBLE * rh + 14, 15, "", { wrap = 780 })
   tint(ui.help, 0.32, 0.33, 0.35)
   -- the keys, bottom right: the game's key icons and their names, the keyboard's or the controller's (the last one
   -- used; the controller's as menuPadIcons says). An icon that doesn't load is a white key cap with its text
-  local function icon(path, x, y, sz)
+  local function icon_tex(path)
     local tex = StaticFindObject(M.ICONS .. path .. "." .. path:match("[^/]+$"))
-    if not valid(tex) then return nil end
-    local im = box(x, y, sz, sz, 1, 1, 1, 1)
-    if not try(function() im:SetBrushFromTexture(tex, false); return true end) then
-      try(function() im:SetRenderOpacity(0) end)
-      return nil
-    end
-    return im
+    return valid(tex) and tex or nil
   end
   local function hints(list)
-    local IS, STEP, GAP = 44, 36, 34 -- icon size; the next icon of one hint (the icons' own margins overlap); between hints
-    local width = 0
-    for i, h in ipairs(list) do width = width + IS + (#h[1] - 1) * STEP + 4 + #h[2] * 10 + (i < #list and GAP or 0) end
-    local x, cy, out = VW - 90 - width, VH - 73, {}
-    for _, h in ipairs(list) do
-      local ims = {}
-      for j, p in ipairs(h[1]) do ims[#ims + 1] = icon(p, x + (j - 1) * STEP, cy - IS / 2, IS) end
-      if #ims == #h[1] then
-        for _, im in ipairs(ims) do out[#out + 1] = im end
-      else
-        for _, im in ipairs(ims) do try(function() im:SetRenderOpacity(0) end) end
-        -- the key cap fallback, over the hint's icon space
-        local kw = IS + (#h[1] - 1) * STEP - 8
-        out[#out + 1] = box(x + 4, cy - 13, kw, 26, 0.95, 0.95, 0.95, 1)
-        local kt = text(x + 4 + kw / 2, cy, 11, h[3], { font = bold, centre = true, mid = true })
-        tint(kt, 0.03, 0.035, 0.05)
-        out[#out + 1] = kt
+    -- each key its own: the game's icon (44 square, the key ~30 of it in the middle) where one is in memory, else a
+    -- white key cap of the icon's height, as wide as its text. Caps were one box over the whole hint, sized for the
+    -- icons, the text spilling out of them (playtest)
+    local IS, GAP, KGAP, CAP, CW = 44, 30, 6, 30, 9 -- icon; between hints; between keys; cap height; a cap letter
+    local function ulen(t) return (utf8 and utf8.len(t)) or #t end
+    local function caps_of(h)
+      local c = h[3]
+      if type(c) == "table" then return c end
+      if #h[1] == 1 then return { c } end
+      local t = {}
+      for w in tostring(c):gmatch("%S+") do t[#t + 1] = w end
+      return t
+    end
+    local plan, width = {}, 0
+    for i, h in ipairs(list) do
+      local caps, keys, kw = caps_of(h), {}, 0
+      for j, p in ipairs(h[1]) do
+        local tex = icon_tex(p)
+        local cap = caps[j] or "?"
+        local w = tex and (CAP + 2) or math.max(CAP, ulen(cap) * CW + 14)
+        keys[j] = { tex = tex, cap = cap, w = w }
+        kw = kw + w + (j > 1 and KGAP or 0)
       end
-      x = x + IS + (#h[1] - 1) * STEP + 4
-      out[#out + 1] = text(x, cy, 17, h[2], { font = bold, mid = true })
-      x = x + #h[2] * 10 + GAP
+      local lw = #h[2] > 0 and (10 + #h[2] * 10) or 0
+      -- (a hint with no name shares the next one's: its keys sit close before the next keys)
+      local g = i < #list and (h[2] == "" and KGAP * 2 or GAP) or 0
+      plan[i] = { keys = keys, kw = kw, lw = lw, g = g, name = h[2] }
+      width = width + kw + lw + g
+    end
+    local x, cy, out = VW - 90 - width, VH - 73, {}
+    for _, pl in ipairs(plan) do
+      for j, k in ipairs(pl.keys) do
+        local made = false
+        if k.tex then
+          -- (the icon drawn at its full 44, centred on the key's slot: its margins spill either side)
+          local im = box(x + k.w / 2 - IS / 2, cy - IS / 2, IS, IS, 1, 1, 1, 1)
+          if try(function() im:SetBrushFromTexture(k.tex, false); return true end) then out[#out + 1] = im; made = true
+          else try(function() im:SetRenderOpacity(0) end) end
+        end
+        if not made then
+          local w = math.max(CAP, ulen(k.cap) * CW + 14)
+          out[#out + 1] = box(x, cy - CAP / 2, w, CAP, 0.95, 0.95, 0.95, 1)
+          local kt = text(x + w / 2, cy, 15, k.cap, { font = bold, centre = true, mid = true })
+          tint(kt, 0.03, 0.035, 0.05)
+          out[#out + 1] = kt
+        end
+        x = x + k.w + (j < #pl.keys and KGAP or 0)
+      end
+      if pl.lw > 0 then out[#out + 1] = text(x + 10, cy, 17, pl.name, { font = bold, mid = true }) end
+      x = x + pl.lw + pl.g
     end
     return out
   end
@@ -424,7 +549,7 @@ local function build()
     ui.keys[set] = hints(list)
   end
   stage("on screen")
-  try(function() w:SetVisibility(3) end) -- not hit-testable: the game keeps the mouse
+  try(function() w:SetVisibility(3) end) -- not hit-testable: clicks reach the game's input, read in M.tick
   w:AddToViewport(960)
   return ui
 end
@@ -452,9 +577,9 @@ local function render()
     local on = row ~= nil and idx == s.sel
     show_all(r.focus, on)
     local lab, val = row and row.label or "", row and row.key and value_text(row) or ""
-    try(function() r.lab:SetText(FText(lab)); r.val:SetText(FText(val)) end)
+    try(function() set_text(r.lab, lab); set_text(r.val, val) end)
     -- (no arrows on a key: Enter takes a new one)
-    local arrows = on and val ~= "" and row.kind ~= "key"
+    local arrows = on and val ~= "" and row.kind ~= "key" and row.kind ~= "pad"
     show(r.la, arrows); show(r.ra, arrows)
     if on then
       tint(r.lab, 0.022, 0.025, 0.05); tint(r.val, 0.022, 0.025, 0.05)
@@ -466,7 +591,7 @@ local function render()
     end
   end
   local cur = M.ROWS[s.sel]
-  try(function() ui.help:SetText(FText(cur and cur.help or "")) end)
+  try(function() set_text(ui.help, cur and cur.help or "") end)
   local padSet = ctx.tune.menuPadIcons == "xbox" and "xbox" or "playstation"
   for set, list in pairs(ui.keys) do show_all(list, set == (s.pad and padSet or "kb")) end
   -- the scroll bar, only on a tab longer than the screen
@@ -499,6 +624,11 @@ local function pause(pawn, on)
       try(function() pc:SetIgnoreMoveInput(true) end)
       try(function() pc:SetIgnoreLookInput(true) end)
       try(function() pawn:DisableInput(pc) end)
+      -- the mouse: its cursor shown, free of the viewport's capture (game and UI), the clicks still read as keys
+      s.paused.cursor = try(function() return pc.bShowMouseCursor end)
+      try(function() pc.bShowMouseCursor = true end)
+      local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+      if valid(wbl) then try(function() wbl:SetInputMode_GameAndUIEx(pc, nil, 0, false) end) end
     end
   elseif not on and s.paused then
     local p = s.paused
@@ -507,6 +637,9 @@ local function pause(pawn, on)
       try(function() p.pc:ResetIgnoreMoveInput() end)
       try(function() p.pc:ResetIgnoreLookInput() end)
       if valid(pawn) then try(function() pawn:EnableInput(p.pc) end) end
+      try(function() p.pc.bShowMouseCursor = p.cursor == true end)
+      local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+      if valid(wbl) then try(function() wbl:SetInputMode_GameOnly(p.pc) end) end
     end
   end
 end
@@ -518,6 +651,11 @@ function M.open(pawn)
   if ok and ctx.keys and s.ui.menuKey ~= ctx.keys.binding("menu") then
     try(function() s.ui.w:RemoveFromParent() end)
     ok = false
+  end
+  if not ok and not text_by() then
+    log("menu: not made: sbslice.dll can't set its text, and UE4SS didn't find the game's FText constructor "
+      .. "(UE4SS.log: \"Failed to find FText::FText\"); settings.lua works as ever")
+    return
   end
   if not ok then
     local built, ui = pcall(build)
@@ -569,7 +707,7 @@ end
 local function step(dir)
   local s = M.state
   local row = M.ROWS[s.sel]
-  if not row or not row.key or row.kind == "key" then return end
+  if not row or not row.key or row.kind == "key" or row.kind == "pad" then return end
   local v = get(row.key)
   if row.kind == "bool" then v = not (v == true)
   elseif row.kind == "list" then
@@ -602,6 +740,13 @@ local function press(pawn)
     log("menu: back to settings.lua (menu.lua deleted)")
     render()
   elseif row.kind == "bool" or row.kind == "list" then step(1)
+  elseif row.kind == "pad" then
+    -- (read in M.tick: nothing counts till every button is up, A included)
+    s.capture = { id = row.id, key = row.key, pad = true, combo = {}, ready = false, t = os.clock(), min = row.min, max = row.max }
+    render()
+  elseif row.kind == "key" and ctx.keys and s.pad then
+    -- (the mod's keys are keyboard keys: A on a controller waited 10 s for one)
+    log("menu: " .. tostring(row.id) .. ": a keyboard key, changed from the keyboard")
   elseif row.kind == "key" and ctx.keys then
     -- the next key pressed (keys.lua hands it here instead of to its action)
     s.capture = { id = row.id, key = row.key, t = os.clock() }
@@ -672,6 +817,49 @@ local function switch(dir)
   render()
 end
 
+-- the mouse: a row or tab under it (once it moves) is picked, a click on a tab opens it, on a row's arrows steps it,
+-- elsewhere on a row presses it (as Enter); the wheel moves up and down. Hit-tested here against the layout (the
+-- widgets aren't hit-testable), its position in layout units
+local function mouse(pawn, pc, down)
+  local s, ui = M.state, M.state.ui
+  if not ui then return end
+  M.wll = valid(M.wll) and M.wll or StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary")
+  local p = valid(M.wll) and try(function() return M.wll:GetMousePositionOnViewport(ui.gi) end)
+  if not p then return end
+  local x, y = p.X / ui.K, p.Y / ui.K
+  local moved = s.mx ~= nil and math.abs(x - s.mx) + math.abs(y - s.my) > 2
+  s.mx, s.my = x, y
+  local lmb = down("LeftMouseButton")
+  local click = lmb and not s.lmb
+  s.lmb = lmb
+  local function just(k) return try(function() return pc:WasInputKeyJustPressed({ KeyName = FName(k) }) end) == true end
+  local wheel = just("MouseScrollUp") and -1 or just("MouseScrollDown") and 1 or nil
+  if (moved or click or wheel) and s.pad then s.pad = false; render() end
+  if wheel then move(wheel); return end
+  if not (moved or click) then return end
+  local tk, t = tab_of(s.sel)
+  for k in ipairs(ui.tabs) do
+    local ty = ui.r0 + (k - 1) * ui.rh
+    if x >= 101 and x <= 309 and y >= ty and y <= ty + ui.bh then
+      if click and k ~= tk then switch(k - tk) end
+      return
+    end
+  end
+  for i = 1, M.VISIBLE do
+    local ry = ui.r0 + (i - 1) * ui.rh
+    if x >= 385 and x <= 1175 and y >= ry and y <= ry + ui.bh then
+      local idx = s.top + i - 1
+      if idx > t.last or not selectable(idx) then return end
+      if s.sel ~= idx then s.sel = idx; render() end
+      if click then
+        if x >= ui.vc - 215 and x <= ui.vc - 120 then step(-1)
+        elseif x >= ui.vc + 120 and x <= ui.vc + 215 then step(1)
+        else press(pawn) end
+      end
+      return
+    end
+  end
+end
 -- every tick of hers: the open combo on the controller, and the menu's keys while it is open (a key held repeats)
 function M.tick(pawn)
   local s = M.state
@@ -679,15 +867,57 @@ function M.tick(pawn)
   if not valid(pc) then return end
   local function down(name) return try(function() return pc:IsInputKeyDown({ KeyName = FName(name) }) end) == true end
   local pad = ctx.tune.menuPad
-  if type(pad) == "table" and #pad > 0 then
+  if type(pad) == "table" and #pad > 0 and not s.capture then
     local all = true
     for _, k in ipairs(pad) do if not down(k) then all = false; break end end
     if all and not s.padWas then M.toggle(pawn, true) end
     s.padWas = all
   end
+  -- (arrows pressed with the menu shut, or while a key is being taken, don't wait for it)
+  if ctx.keys and (not s.open or s.capture) and #ctx.keys.nav > 0 then ctx.keys.nav = {} end
   if not s.open then return end
   local now = os.clock()
   -- waiting for a key to bind: only Backspace / B (cancel) is read, and it gives up after 10 s
+  if s.capture and s.capture.pad then
+    local c = s.capture
+    local held = {}
+    for _, k in ipairs(M.PAD) do if down(k) then held[#held + 1] = k end end
+    local bs = down("BackSpace")
+    if not c.ready then
+      if #held == 0 then c.ready = true end
+    elseif #held > 0 then
+      -- the buttons in the order they went down, up to max
+      for _, k in ipairs(held) do
+        local have = false
+        for _, x in ipairs(c.combo) do if x == k then have = true end end
+        if not have and #c.combo < c.max then c.combo[#c.combo + 1] = k; c.t = now; render() end
+      end
+    elseif #c.combo > 0 then
+      -- all let go: taken, or (one button) B cancels, anything else too few
+      local combo = c.combo
+      if #combo >= c.min then
+        local old = get(c.key)
+        set(c.key, combo)
+        s.changed[c.key] = true
+        log(string.format("menu: %s on %s (was %s)", c.id, table.concat(combo, "+"), type(old) == "table" and table.concat(old, "+") or tostring(old)))
+        capture_end()
+      elseif #combo == 1 and combo[1] == "Gamepad_FaceButton_Right" then
+        log("menu: " .. c.id .. " not changed (cancelled)")
+        capture_end()
+      else
+        log(string.format("menu: %s needs %d buttons held together, got %d", c.id, c.min, #combo))
+        c.combo = {}
+      end
+      render()
+      return
+    end
+    if bs or now - c.t > 10 then
+      log("menu: " .. c.id .. " not changed (" .. (bs and "cancelled" or "no buttons in 10 s") .. ")")
+      capture_end()
+      render()
+    end
+    return
+  end
   if s.capture then
     local back = false
     for _, k in ipairs(M.KEYS.back) do if down(k) then back = true end end
@@ -698,6 +928,30 @@ function M.tick(pawn)
     end
     return
   end
+  if not s.swallow then mouse(pawn, pc, down) end
+  if ctx.keys and #ctx.keys.nav > 0 then
+    local nav = ctx.keys.nav
+    ctx.keys.nav = {}
+    if s.pad then s.pad = false; render() end
+    for _, d in ipairs(nav) do
+      if d == "up" then move(-1) elseif d == "down" then move(1) elseif d == "left" then step(-1) else step(1) end
+    end
+    s.arrow = { what = nav[#nav], next = now + 0.4 }
+  end
+  -- an arrow held repeats as the controller's do: its state asked of sbslice.dll (Windows' own, the engine never sees
+  -- it), only while one is held and only as a repeat is due
+  local ar = s.arrow
+  if ar and now >= ar.next then
+    local g = ctx.gore
+    local r = g and g.native_ready and g.native_ready() and g.command and g.command("K26,28,25,27")
+    local bits = type(r) == "string" and r:match("^ok ([01][01][01][01])")
+    local at = ({ up = 1, down = 2, left = 3, right = 4 })[ar.what]
+    if bits and bits:sub(at, at) == "1" then
+      ar.next = now + 0.08
+      if at == 1 then move(-1) elseif at == 2 then move(1) elseif at == 3 then step(-1) else step(1) end
+    else s.arrow = nil end
+  end
+  if not s.open then return end
   for what, names in pairs(M.KEYS) do
     local on = false
     local pad

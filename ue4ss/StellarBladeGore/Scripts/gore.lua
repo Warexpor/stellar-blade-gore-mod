@@ -1063,12 +1063,41 @@ function M.tachy_mat_is(mat)
   local t = M.TACHY_MAT and StaticFindObject and try(function() return StaticFindObject(M.TACHY_MAT) end)
   return valid(t) and try(function() return t:GetAddress() == mat:GetAddress() end) or false
 end
+-- her textures at full detail on the caps: the streamer sizes a texture by the meshes it knows draw it, and a
+-- procedural mesh tells it nothing, so with Tachy herself nowhere near they stayed at a low mip, her bone and core
+-- blurry on Eve while sharp on her (playtest). Each texture of her material (its instances' parameters and the base
+-- material's own) is flagged to stay fully loaded, once a session (the component's SetTextureForceResidentFlag
+-- isn't callable in this build: NOT set, playtest)
+M.sharp_done = false
+function M.tachy_sharp()
+  if M.sharp_done then return end
+  M.sharp_done = true
+  local m = M.TACHY_MAT and StaticFindObject and try(function() return StaticFindObject(M.TACHY_MAT) end)
+  local seen, n, bad = {}, 0, 0
+  local function hold(tex)
+    if not valid(tex) then return end
+    local a = try(function() return tex:GetAddress() end)
+    if not a or seen[a] then return end
+    seen[a] = true
+    local ok = try(function() tex.bForceMiplevelsToBeResident = true; return tex.bForceMiplevelsToBeResident == true end)
+    if ok then n = n + 1 else bad = bad + 1 end
+  end
+  for _ = 1, 8 do
+    if not valid(m) then break end
+    try(function() m.TextureParameterValues:ForEach(function(_, e) hold(e:get().ParameterValue) end) end)
+    try(function() m.CachedExpressionData.ReferencedTextures:ForEach(function(_, e) hold(e:get()) end) end)
+    m = try(function() return m.Parent end)
+  end
+  log(string.format("tachy stumps: %d of her textures held at full detail%s", n,
+    bad > 0 and string.format(", %d NOT", bad) or ""))
+end
 local function set_cap_material(comp, mat, meat)
   if not mat then return end
   if M.tachy_mat_is(mat) then
     local made
     if meat == "core" then made = M.tachy_core_mat(comp, mat) else made = M.tachy_flesh(comp, mat) end
     if not made then try(function() comp:SetMaterial(0, mat) end) end
+    M.tachy_sharp()
     return
   end
   if not meat and not cfg().debugCaps and M.matte_cap(comp) then return end
@@ -4558,7 +4587,9 @@ split_stage = function(q)
     if valid(q.body2) then try(function() q.body2:SetMasterPoseComponent(nil, true) end) end
     for _, c in ipairs(q.copies2 or {}) do if valid(c) then try(function() c:SetMasterPoseComponent(q.body2, true) end) end end
     command(string.format("p%x,%x", q.mesh:GetAddress(), q.body2:GetAddress()))
+    mark("copy pose")
     if ctx.on_need_ragdoll then try(function() ctx.on_need_ragdoll("split") end) end
+    mark("her ragdoll")
     split_physics(q, vel)
     return
   end
@@ -4686,6 +4717,12 @@ function M.cuts_on(mesh)
   return n, split
 end
 
+-- the parts cut off this mesh so far (a limb, the head, her upper body), by their root bone
+function M.cut_parts(mesh)
+  local a, out = addr(mesh), {}
+  for _, c in ipairs(cuts) do if c.addr == a and PARTS[c.bone] then out[#out + 1] = c.bone end end
+  return out
+end
 function M.slice(pawn, mesh, hit, why, kind) return start(pawn, mesh, hit, why, kind or "limb") end
 -- a rolled limb cut's further limbs (tune.gore.death.moreLimbs): each one more with that chance, at most two more,
 -- queued after it; each takes the arm or thigh nearest the hit not cut yet and flies the way the first one did
@@ -5532,7 +5569,9 @@ local function stage_tick(q)
   -- every stage, with how long after the cut was asked for it ran: the cut showed late after her death (twenty-fifth
   -- playtest)
   -- (only a slow one without verboseLog: one line a stage was most of a cut's log)
-  if stage ~= "anim" and (ctx.tune.verboseLog or ms >= (cfg().slowMs or 15)) then
+  -- (the anim stage, a tick each while her fall plays on, only when slow: its last is the halves' ragdoll, 53 ms once,
+  -- playtest)
+  if (stage ~= "anim" and ctx.tune.verboseLog) or ms >= (cfg().slowMs or 15) then
     log(string.format("%s stage %s at +%.0f ms took %.0f ms%s", q.kind, stage, (t0 - (q.t0 or t0)) * 1000, ms,
       ms >= (cfg().slowMs or 15) and ": " .. table.concat(prof, ", ") or ""))
   end
@@ -5565,14 +5604,20 @@ end
 -- her bones looked at while she plays, every WATCH_EVERY ticks: a stub's carrier must be a helper that held still
 -- against its parent all along (sbslice "w"; an animation-driven corrective flung a thigh's stub about, twenty-fifth
 -- playtest)
-M.watching = { every = 5, n = 0 }
-function M.watch(mesh)
+-- tm: main.lua's slow tick marker, each part named (a look held a frame 466-563 ms in the first minute with no asset
+-- load over 15 ms, playtest)
+-- gap: s between two preloads (each one 30-35 ms of the game thread: a sound a look, every 5 ticks, was 20 hitches in
+-- a row, a stutter run, playtest)
+M.watching = { every = 5, n = 0, gap = 0.5, at = 0 }
+function M.watch(mesh, tm)
   local w = M.watching
   if cfg().enabled == false or native.state ~= "ready" or not valid(mesh) then return end
   w.n = w.n + 1
   if w.n % w.every ~= 0 then return end
+  tm = tm or function() end
   local r = command(string.format("w%x", mesh:GetAddress()))
   if r:sub(1, 2) ~= "ok" and not w.logged then w.logged = true; log("bone watch refused: " .. r) end
+  tm("bone watch w")
   -- and while she plays, the cuts' assets are loaded (and kept: native.root) one a look, so even the first cut
   -- loads nothing
   if not w.preload then
@@ -5609,35 +5654,43 @@ function M.watch(mesh)
     for _, v in ipairs(sounds) do list[#list + 1] = v end
     w.preload, w.next, w.t0 = list, 1, os.clock()
   end
-  -- and her outfit's bone tree, 40 bones a look, then the cut's bone lists made from it (warm: nothing left to read
-  -- when the cut comes)
+  tm("bone watch list")
+  -- and her outfit's bone tree, 40 bones a look, then the cut's bone lists made from it, one a look (warm: nothing
+  -- left to read when the cut comes)
   local t = M.bone_tree(mesh, 40)
-  if t and not t.warm then
-    t.warm = true
-    nosink_list(mesh); nocarry_list(mesh); limbs_list(mesh, nil); M.driven_list(mesh)
-    for _, r in ipairs(LIMB_ROOTS) do limbs_list(mesh, r) end
+  tm("bone watch tree")
+  if t and (t.warm or 0) < 8 then
+    t.warm = (t.warm or 0) + 1
+    local k = t.warm
+    if k == 1 then nosink_list(mesh) elseif k == 2 then nocarry_list(mesh) elseif k == 3 then limbs_list(mesh, nil)
+    elseif k == 4 then M.driven_list(mesh) else limbs_list(mesh, LIMB_ROOTS[k - 4]) end
+    tm("bone watch warm " .. k)
   end
-  -- and a cap or stub actor made ahead, one a look (M.pool), none while a cut is opening
-  if not pending then
+  -- and a cap or stub actor made ahead, one a look (M.pool), none while a cut is opening, nor before the preloads
+  -- have the cap's material (a lid made first loaded it there and then, untimed: a look held a frame 551 ms, playtest)
+  if not pending and w.next >= w.sounds then
     local owner = try(function() return mesh:GetOwner() end)
     if valid(owner) then M.pool_fill(owner) end
+    tm("bone watch pool")
   end
   local path = w.preload[w.next]
   if path and w.next >= w.sounds and os.clock() - w.t0 < 30 then path = nil end
-  if path and ctx.may_load() then
+  if path and native.rooted[path] then w.next = w.next + 1
+  elseif path and os.clock() >= w.at and ctx.may_load() then
     w.next = w.next + 1
-    if not native.rooted[path] then
-      local t0 = os.clock()
-      load_obj(path)
-      -- (a look held a frame 440-540 ms in the first minute, playtest: which asset)
-      local ms = (os.clock() - t0) * 1000
-      if ms >= (cfg().slowMs or 15) then log(string.format("cut asset load took %.0f ms: %s", ms, path)) end
-    end
-    if w.next > #w.preload then
-      local n = 0
-      for _, ok in pairs(native.rooted) do if ok then n = n + 1 end end
-      log(string.format("cut assets loaded and kept: %d of %d", n, #w.preload))
-    end
+    w.at = os.clock() + w.gap
+    local t0 = os.clock()
+    load_obj(path)
+    -- (a look held a frame 440-540 ms in the first minute, playtest: which asset)
+    local ms = (os.clock() - t0) * 1000
+    if ms >= (cfg().slowMs or 15) then log(string.format("cut asset load took %.0f ms: %s", ms, path)) end
+    tm("bone watch load")
+  end
+  if path and w.next > #w.preload and not w.told then
+    w.told = true
+    local n = 0
+    for _, ok in pairs(native.rooted) do if ok then n = n + 1 end end
+    log(string.format("cut assets loaded and kept: %d of %d", n, #w.preload))
   end
 end
 

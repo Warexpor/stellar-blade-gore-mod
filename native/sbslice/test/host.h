@@ -17,6 +17,7 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #undef u16
 #define CreateThread CreateThread_
 #define Sleep Sleep_
+#define GetAsyncKeyState GetAsyncKeyState_
 #define CreateFileW CreateFileW_
 #define ReadFile ReadFile_
 #define WriteFile WriteFile_
@@ -44,6 +45,7 @@ void spawner_start(void) {} // the window is Win32 only
 int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (void)l; (void)a; (void)b; return 0; } // stats.c: test_stats.c
 #undef CreateThread
 #undef Sleep
+#undef GetAsyncKeyState
 #undef CreateFileW
 #undef ReadFile
 #undef WriteFile
@@ -67,6 +69,7 @@ int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (v
 static char lastres[8192];
 HANDLE CreateThread_(void *a, u64 b, u32(WINAPI *c)(void *), void *d, u32 e, u32 *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return 0; }
 void Sleep_(u32 x) { (void)x; }
+short GetAsyncKeyState_(int k) { (void)k; return 0; }
 u64 GetTickCount64_(void) { return 0; }
 u32 GetCurrentThreadId_(void) { return 1; }
 void *AddVectoredExceptionHandler_(u32 f, long(WINAPI *h)(void *)) { (void)f; (void)h; return 0; }
