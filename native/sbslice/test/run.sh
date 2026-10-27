@@ -118,6 +118,11 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
       on arm && [[ -z $posed ]] && jobs+=("real thigh cuts $m, both legs|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4 LEGFIRST=Bip001-R-Thigh|$m")
       # a calf cut: its stub's carrier rides the thigh, never the hip's jiggle body (a body of its own)
       on arm && [[ -z $posed ]] && jobs+=("real calf cut $m|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|$m")
+      # Lose Arm at Low HP's arm dissolving back in at a camp rest (real_split.c REGROW): the copy shows the arm whole
+      # and its seam's band, nothing of her body, and doesn't move as her cut is undone under it; standing and seated
+      on arm && [[ -z $posed ]] && jobs+=("real regrow $m, right arm|REGROW=1 ARM=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.38|$m"
+                                         "real regrow $m, right arm, seated|REGROW=1 REPOSE=1 ARM=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.38|$m"
+                                         "real regrow $m, left arm|REGROW=1 ARM=1|$m")
       # a stub carrier must have held still while she played: helpers that swung, or none watched yet, carry nothing
       if on arm && [[ -z $posed ]]; then
         jobs+=("real arm cut $m, its parent's helpers driven|ARM=1 DRIVEN=1|$m" "real arm cut $m, never watched|ARM=1 UNWATCHED=1|$m")
@@ -182,7 +187,9 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
            "real thigh cut CH_P_EVE_10 near the knee, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.81|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10, hip helpers moving|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
            "real thigh cut CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47|CH_P_EVE_10"
-           "real split CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 POSED=|CH_P_EVE_10")
+           "real split CH_P_EVE_10, ActiveBoneIndices not found|NOACTIVE=1 POSED=|CH_P_EVE_10"
+           "real regrow CH_P_EVE_10, right arm, seated|REGROW=1 REPOSE=1 ARM=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.38|CH_P_EVE_10"
+           "real regrow CH_P_EVE_10, left arm|REGROW=1 ARM=1|CH_P_EVE_10")
   # CH_P_EVE_20_TypeB's thigh posed, every helper on her spine seen moving a little over a long session: the stub still
   # takes a carrier (the least moved) and keeps her live pose (playtest: no carrier, the skin coned down past the cap)
   E20B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_20/CH_P_EVE_20_TypeB"

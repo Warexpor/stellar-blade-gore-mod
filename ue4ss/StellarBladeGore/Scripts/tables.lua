@@ -261,6 +261,7 @@ end
 M.next = 0
 function M.tick()
   local now = os.clock()
+  if M.swordPut and now >= M.swordAt then M.sword_put() end
   -- (the game's ID maps looked for while sbslice's scans run: again each 0.1 s till they are done)
   if M.cont then
     if now < (M.cont.at or 0) then return end
@@ -327,6 +328,47 @@ function M.gun_gate(on)
   end
   return ctx.gore.command(string.format("B%x,%x,1,%x,%x,%x,%x,%x,%x", addr(dt), addr(rs), slot.off, M.BLOCK_BULLET,
     k1.off, M.TPS_MODE, k2.off, M.TPS_MODE))
+end
+
+-- Lose Arm at Low HP, her right arm: no sword while it is off. The game's own block (Altess Levoire's, where her
+-- sword is taken from her): the effect P_Eve_Stance_BlockSword puts her in the stance P_Eve_BlockSword (her sword
+-- folded, only evades, getups and a swordless strike on the attack keys; her gun has P_Eve_GunBlockSword, heals are
+-- untouched; no lock-on and no drone scan meanwhile), and P_Eve_Stance_BlockSword_End dispels it. Lua can't apply an
+-- effect (the cheat manager's effect commands are stubs), but SBBlueprintLibrary's CreateSBZoneEvent fires an
+-- EventActorEffectTable row on her (ZoneEvent_AttachActorEffect): ATL_01_E_ActorEff_005 applies the stance's effect.
+-- No row applies its end, so ATL_01_E_ActorEff_002 (its effect P_Eve_BlockSword is in no effect table: it does
+-- nothing in the game) names P_Eve_Stance_BlockSword_End for SWORD_HOLD s around its event (sbslice d), then is put
+-- back (M.tick). Answer for the log
+M.EVENT_FX = "/Game/Local/Data/EventActorEffectTable.EventActorEffectTable"
+M.SWORD_ON, M.SWORD_OFF, M.SWORD_END = "ATL_01_E_ActorEff_005", "ATL_01_E_ActorEff_002", "P_Eve_Stance_BlockSword_End"
+M.ZONE_ACTOR_EFFECT, M.SWORD_HOLD = 2, 2
+function M.sword_put()
+  local p = M.swordPut
+  M.swordPut = nil
+  if p then ctx.gore.command(p) end
+end
+function M.sword_gate(on)
+  local lib = try(function() return StaticFindObject("/Script/SB.Default__SBBlueprintLibrary") end)
+  if not valid(lib) then return "err no SBBlueprintLibrary" end
+  local out = ""
+  if not on then
+    M.sword_put()
+    local dt, rs = table_of(M.EVENT_FX)
+    local f = rs and fields(rs).ActorEffectAlias
+    local key, to = name_idx(M.SWORD_OFF), name_idx(M.SWORD_END)
+    if not (f and key and to) then return "err no EventActorEffectTable or its ActorEffectAlias" end
+    local head = string.format("d%x,%x,%x,0,%x", addr(dt), addr(rs), key, f.off)
+    local r = ctx.gore.command(string.format("%s,%x", head, to))
+    local was = r:match("^ok row %x+ (%x+)")
+    if not was then return "err " .. M.SWORD_OFF .. ": " .. r end
+    -- (its old name, unless a stop before the put back left ours in it)
+    was = tonumber(was:sub(-8), 16)
+    if was ~= to then M.swordPut, M.swordAt = string.format("%s,%x", head, was), os.clock() + M.SWORD_HOLD end
+    out = M.SWORD_OFF .. " -> " .. M.SWORD_END .. ", "
+  end
+  local row = on and M.SWORD_ON or M.SWORD_OFF
+  local ok, err = pcall(function() lib:CreateSBZoneEvent(M.ZONE_ACTOR_EFFECT, FName(row)) end)
+  return out .. row .. (ok and " fired" or (" NOT fired: " .. tostring(err)))
 end
 
 -- the revive screen's delay changed in game (the menu): Player's delays written again

@@ -2,6 +2,8 @@
 // checks what each half shows once the shared mesh asset's sinks are collapsed. Both halves are components of the
 // same mesh asset, so a sink one half collapses moves every vertex the other half still weights to it.
 //   real_split <mesh.bin> [obj prefix]   writes <prefix>_a.obj / _b.obj (posed halves) when given
+// Its env flags pick other cuts instead (ARM, WAIST, HEAD, WEAPON, ...); REGROW=1 with ARM=1: a part cut off her
+// alive dissolving back in (regrow_run).
 // Run through ./run.sh.
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -565,6 +567,241 @@ static void bonemaps_owned(void)
         u16 *p = *(u16 **)((unsigned char *)secbuf + s * 0xe8 + SEC_BONE_MAP);
         if (p != bmaps[s] && !gm_owns(p)) { printf("FAIL: section %d's BoneMap is %p, not the engine's allocator's\n", s, (void *)p); fflush(stdout); _exit(1); }
     }
+}
+
+// ---- REGROW=1 (with ARM=1): the arm Lose Arm at Low HP cut off her alive dissolving back in at a camp rest ----
+// gore.lua's ghost_begin / ghost_release / ghost_end and main.lua's ghost_tick, command for command: her mesh (A) with
+// the arm's cut on, the arm back on her pose (its bodies stop simulating); a copy of her mesh (B, the same asset) gets
+// her cut weights ("y"); "V" hides everything but the arm on the copy (keep 1) and the arm on her (keep 0). The arm
+// dissolves in on the copy; then the hand-off: her cut undone under the copy (gore.cleanup's "x", RGX its keep flag),
+// the copy fading out over her; then the copy destroyed and the held sinks put back ("r"). At each stage every
+// triangle either component shows is checked against the vanilla skin on the same pose: shown where it belongs, or
+// off it (stretched: an edge over 3x and 5 cm longer than vanilla's, a spike or sheet; else moved), and each vanilla
+// triangle shown by neither (a hole) or both (two layers). REGROWOBJ=<prefix>: each stage's two meshes as OBJs, the
+// triangles shown only (regrow/render.py makes pictures of them). REPOSE=1: her pose changed after the cut (she sits)
+static unsigned char rg_lod[2][0x48];
+static float *rg_inv0;   // the inverse bind matrices as the asset had them before any collapse
+// the copy's master pose component: her (TWeakObjectPtr::Get on the copy's MasterPoseComponent)
+static int rg_master;
+static u64 rg_weak(u64 w) { return rg_master && w == (u64)comp_b + SC_MASTER_POSE ? (u64)comp_a : 0; }
+static void rg_release(u64 li)
+{
+    int k = li == (u64)rg_lod[1];
+    skin_info **o = k ? &ov_b : &ov_a;
+    free(*o); *o = 0; free(ov_wts[k]); ov_wts[k] = 0;
+    rg_lod[k][0x18] = 0;
+}
+static void rg_vanilla(int v, float *x)
+{
+    skin_info o; orig_info(v, &o);
+    cut_ctx c = { 0 }; c.nb = NB; c.binfo = binfo; c.refinv = rg_inv0; c.space = space; c.nspace = NB;
+    skin_point(&c, &o, pos + v * 3, x);
+}
+static float rg_area(const float *a, const float *b, const float *c)
+{
+    float e[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, f[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    float n[3] = { e[1] * f[2] - e[2] * f[1], e[2] * f[0] - e[0] * f[2], e[0] * f[1] - e[1] * f[0] };
+    return 0.5f * __builtin_sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+}
+typedef struct { int shown, wrong, stretched, moved, arm, body; float far; } rg_side;
+// the copy's seam: its triangles between the part and the rest (shown, on the point at the part's root joint), and
+// those off where they belong with a vertex farther from that joint than the cut's opening reaches (outside her; the
+// band's edge fanned in to the joint is inside her, and not counted as her body on the copy)
+static int rg_ring, rg_outside, rg_root = -1;
+static unsigned char *rg_band;   // the rest's vertices on a triangle with the part's: the copy keeps them (its seam)
+static float rg_reach;
+// what a component shows: o its weights (0: none, it's gone), arm[v] the vanilla skin's arm vertices, ref vanilla.
+// Fills shown[t] (1 where it belongs, 2 off it)
+static rg_side rg_look(const skin_info *o, const float *ref, const unsigned char *arm, unsigned char *shown, const char *obj, int copy)
+{
+    rg_side r = { 0 };
+    memset(shown, 0, NIDX / 3);
+    if (!o) return r;
+    float *x = malloc(12 * (size_t)NV);
+    for (int v = 0; v < NV; v++) skin_v(&o[v], v, x + 3 * (size_t)v);
+    FILE *f = obj ? fopen(obj, "w") : 0;
+    if (f) for (int v = 0; v < NV; v++) fprintf(f, "v %.3f %.3f %.3f\n", x[3 * v], x[3 * v + 1], x[3 * v + 2]);
+    for (int t = 0; t + 2 < NIDX; t += 3) {
+        const float *p[3], *q[3];
+        for (int k = 0; k < 3; k++) { p[k] = x + 3 * (size_t)idx[t + k]; q[k] = ref + 3 * (size_t)idx[t + k]; }
+        float a = rg_area(p[0], p[1], p[2]);
+        if (a < 0.02f) continue;
+        float d = 0, st = 0;
+        for (int k = 0; k < 3; k++) {
+            float dk = dist3(p[k], q[k]), e = dist3(p[k], p[(k + 1) % 3]), e0 = dist3(q[k], q[(k + 1) % 3]);
+            if (dk > d) d = dk;
+            if (e > 3 * e0 && e - e0 > 5) st = 1;
+        }
+        int na = arm[idx[t]] + arm[idx[t + 1]] + arm[idx[t + 2]];
+        r.shown++;
+        if (na && na < 3 && copy) rg_ring++;
+        if (copy && d >= 0.5f && rg_root >= 0) {
+            int out = 0;
+            for (int k = 0; k < 3; k++) {
+                // (one that belongs where it is is fine; the arm's ring off its place stays within reach of the joint)
+                if (dist3(p[k], q[k]) < 0.5f) continue;
+                out |= dist3(p[k], space + rg_root * 12 + 4) > rg_reach;
+            }
+            rg_outside += out;
+        }
+        int nb2 = copy && rg_band ? rg_band[idx[t]] + rg_band[idx[t + 1]] + rg_band[idx[t + 2]] : 0;
+        if (na == 3) r.arm++; else if (na + nb2 < 3 && (!copy || d < 0.5f)) r.body++;
+        shown[t / 3] = d < 0.5f ? 1 : 2;
+        if (d >= 0.5f) { r.wrong++; if (st) r.stretched++; else r.moved++; if (d > r.far) r.far = d; }
+        if (f) fprintf(f, "f %u %u %u\n", idx[t] + 1, idx[t + 1] + 1, idx[t + 2] + 1);
+    }
+    if (f) fclose(f);
+    free(x);
+    return r;
+}
+// one stage: both components against vanilla; returns the holes and doubles, prints the line
+static void rg_stage(const char *name, const unsigned char *arm, int *holes, int *doubled, rg_side *ra, rg_side *rb, int copy_on)
+{
+    float *ref = malloc(12 * (size_t)NV);
+    for (int v = 0; v < NV; v++) rg_vanilla(v, ref + 3 * (size_t)v);
+    unsigned char *sa = malloc(NIDX / 3 + 1), *sb = malloc(NIDX / 3 + 1);
+    char fa[512] = "", fb[512] = "";
+    if (getenv("REGROWOBJ")) {
+        snprintf(fa, sizeof fa, "%s_%s_her.obj", getenv("REGROWOBJ"), name);
+        snprintf(fb, sizeof fb, "%s_%s_copy.obj", getenv("REGROWOBJ"), name);
+    }
+    // (her weights: the override, or her own once it's released)
+    skin_info *mine = ov_a;
+    if (!mine) { mine = malloc(sizeof(skin_info) * (size_t)NV); for (int v = 0; v < NV; v++) orig_info(v, &mine[v]); }
+    rg_ring = rg_outside = 0;
+    *ra = rg_look(mine, ref, arm, sa, *fa ? fa : 0, 0);
+    *rb = rg_look(copy_on ? ov_b : 0, ref, arm, sb, *fb ? fb : 0, 1);
+    if (mine != ov_a) free(mine);
+    *holes = *doubled = 0;
+    int ah = 0, bh = 0;
+    for (int t = 0; t + 2 < NIDX; t += 3) {
+        float a = rg_area(ref + 3 * (size_t)idx[t], ref + 3 * (size_t)idx[t + 1], ref + 3 * (size_t)idx[t + 2]);
+        if (a < 0.02f) continue;
+        int i = t / 3, ok = (sa[i] == 1) + (sb[i] == 1);
+        if (!ok) { (*holes)++; if (arm[idx[t]] && arm[idx[t + 1]] && arm[idx[t + 2]]) ah++; else bh++; }
+        if (ok == 2) (*doubled)++;
+    }
+    printf("regrow %-9s her: %d shown, %d off it (%d stretched, %d moved, %.1f cm at most) | copy: %d shown (%d arm, %d body), %d off it (%d stretched, %d moved, %.1f cm at most) | holes %d (%d arm, %d body), doubled %d\n",
+        name, ra->shown, ra->wrong, ra->stretched, ra->moved, ra->far, rb->shown, rb->arm, rb->body, rb->wrong, rb->stretched, rb->moved, rb->far, *holes, ah, bh, *doubled);
+    free(ref); free(sa); free(sb);
+}
+static int regrow_run(int ua)
+{
+    int bad = 0;
+    // the asset's inverse bind matrices before the collapse: the collapsed sinks' own, put back
+    rg_inv0 = malloc(64 * (size_t)NB);
+    memcpy(rg_inv0, refinv, 64 * (size_t)NB);
+    for (int i = 0; i < nsinks; i++) if (sinks[i].bone < NB) memcpy(rg_inv0 + 16 * (size_t)sinks[i].bone, sinks[i].m, 64);
+    unsigned char *armb = calloc(NB, 1), *arm = calloc(NV, 1);
+    for (int i = 0; i < NB; i++) armb[i] = i == ua || (bparent[i] >= 0 && armb[bparent[i]]);
+    int narm = 0;
+    for (int v = 0; v < NV; v++) {
+        // (the part: what the cut sent off with the arm, by its weights' strongest bone, as "V" takes it)
+        int d = 0, dw = -1;
+        for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i] > dw) { dw = ov_a[v].weights[i]; d = ov_a[v].bones[i]; }
+        arm[v] = armb[d]; narm += arm[v];
+    }
+    printf("regrow: %s, %d of %d vertices went with the arm\n", bname[ua], narm, NV);
+    // (how far the cut's opening reaches from the part's root joint: the copy's seam fans in from it to that joint)
+    rg_band = calloc(NV, 1);
+    for (int t = 0; t + 2 < NIDX; t += 3) {
+        int np = arm[idx[t]] + arm[idx[t + 1]] + arm[idx[t + 2]];
+        if (np && np < 3) for (int k = 0; k < 3; k++) if (!arm[idx[t + k]]) rg_band[idx[t + k]] = 1;
+    }
+    rg_root = ua; rg_reach = 0;
+    for (int v = 0; v < NV; v++) if (arm[v]) {
+        skin_info o; orig_info(v, &o);
+        int seam = 0;
+        for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) for (int k = 0; k < nsinks; k++) seam |= sinks[k].bone == ov_a[v].bones[i];
+        float x[3]; skin_v(&o, v, x);
+        float d = dist3(x, space + ua * 12 + 4);
+        if (seam && d > rg_reach) rg_reach = d;
+    }
+    rg_reach += 1;
+    if (env_on("REPOSE")) {
+        bend(local, "Bip001-Spine1", 1, 0.3f, 0, 20); bend(local, "Bip001-L-Thigh", 0, 0, 1, 70); bend(local, "Bip001-R-Thigh", 0, 0, 1, 70);
+        bend(local, "Bip001-L-Calf", 0, 0, 1, -80); bend(local, "Bip001-R-Calf", 0, 0, 1, -80);
+        bend(local, "Bip001-L-UpperArm", 0, 1, 0, 40); bend(local, "Bip001-R-UpperArm", 0, 1, 0, -40);
+        pose_from_local(space);
+    }
+    tramp(exe + RVA_RELEASE_OVERRIDE_SKIN_WEIGHTS, (void *)rg_release);
+    tramp(exe + RVA_WEAK_PTR_GET, (void *)rg_weak);
+    rg_lod[0][0x18] = 1;
+    *(u64 *)(comp_a + SC_LOD_INFO) = (u64)rg_lod[0]; *(int *)(comp_a + SC_LOD_INFO + 8) = 1;
+    *(u64 *)(comp_b + SC_LOD_INFO) = (u64)rg_lod[1]; *(int *)(comp_b + SC_LOD_INFO + 8) = 1;
+    int holes, dbl;
+    rg_side ra, rb;
+    rg_stage("cut", arm, &holes, &dbl, &ra, &rb, 0);
+    rg_side cut = ra;
+    // ghost_begin: the copy on her pose (SetMasterPoseComponent), "V<copy>,0,1,<root>" on its own weights (the
+    // asset's; the part read off hers), "V<hers>,0,0,<root>"
+    free(ov_b); ov_b = 0;
+    u64 root = (u64)ua;
+    rg_master = 1;
+    vanish_cmd((u64)comp_b, 0, 1, &root, 1);
+    printf("regrow V copy: %s\n", lastres);
+    if (strncmp(lastres, "ok vanish", 9) || !ov_b) { printf("FAIL: the copy's vanish\n"); return 1; }
+    rg_lod[1][0x18] = 1;
+    vanish_cmd((u64)comp_a, 0, 0, &root, 1);
+    printf("regrow V hers: %s\n", lastres);
+    rg_stage("dissolve", arm, &holes, &dbl, &ra, &rb, 1);
+    if (getenv("RGDBG")) for (int t = 0, n = 0; t + 2 < NIDX && n < atoi(getenv("RGDBG")); t += 3) {
+        int v = idx[t];
+        if (arm[v]) continue;
+        float x[3], y[3], z[3]; skin_v(&ov_b[idx[t]], idx[t], x); skin_v(&ov_b[idx[t + 1]], idx[t + 1], y); skin_v(&ov_b[idx[t + 2]], idx[t + 2], z);
+        if (rg_area(x, y, z) < 0.02f) continue;
+        n++;
+        printf("dbg v%d copy:", v); for (int i = 0; i < MAX_INF; i++) if (ov_b[v].weights[i]) printf(" %s/%d", bname[ov_b[v].bones[i]], ov_b[v].weights[i]);
+        printf(" | hers:"); for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s/%d", bname[ov_a[v].bones[i]], ov_a[v].weights[i]);
+        skin_info o; orig_info(v, &o); printf(" | vanilla:"); for (int i = 0; i < MAX_INF; i++) if (o.weights[i]) printf(" %s/%d", bname[o.bones[i]], o.weights[i]);
+        printf("\n");
+    }
+    // (the copy shows the arm only, all of it where it belongs; she shows none of it; her body as the cut left it)
+    if (rb.body) { printf("FAIL: the copy shows %d triangles of her body as the arm dissolves in\n", rb.body); bad = 1; }
+    // (her own: the cut's, no more; the copy's: its seam's ring fanned in to the joint, inside her, only)
+    if (rg_outside || ra.stretched > cut.stretched) { printf("FAIL: %d of the copy's triangles reach out of her, %d more stretched on her, as the arm dissolves in\n", rg_outside, ra.stretched - cut.stretched); bad = 1; }
+    if (ra.arm) { printf("FAIL: %d triangles of the arm still on her\n", ra.arm); bad = 1; }
+    if (dbl) { printf("FAIL: %d triangles on both as the arm dissolves in\n", dbl); bad = 1; }
+    // the hand-off: gore.cleanup undoes her cut ("x<hers>,0[,1]"), the copy kept. Nothing of the copy may move with it
+    float *cx = malloc(12 * (size_t)NV);
+    for (int v = 0; v < NV; v++) skin_v(&ov_b[v], v, cx + 3 * (size_t)v);
+    int keepx = getenv("RGX") ? atoi(getenv("RGX")) : 0;
+    skin_clear((u64)comp_a, 0, keepx);
+    printf("regrow x hers%s: %s\n", keepx ? " (sinks kept)" : "", lastres);
+    rg_stage("fade", arm, &holes, &dbl, &ra, &rb, 1);
+    {
+        int moved = 0; float most = 0;
+        for (int v = 0; v < NV; v++) {
+            float x[3]; skin_v(&ov_b[v], v, x);
+            float d = dist3(x, cx + 3 * (size_t)v);
+            if (d > 0.01f) moved++;
+            if (d > most) most = d;
+        }
+        printf("regrow hand-off: %d of the copy's vertices moved (%.1f cm at most)\n", moved, most);
+        if (moved) { printf("FAIL: the copy jumps as her cut is undone under it\n"); bad = 1; }
+        free(cx);
+    }
+    if (ra.wrong) { printf("FAIL: her own skin back has %d triangles off it (%.1f cm)\n", ra.wrong, ra.far); bad = 1; }
+    if (holes) { printf("FAIL: %d holes in her once her cut is undone\n", holes); bad = 1; }
+    // (the copy's arm as it dissolved in, its seam's ring closed inside her own arm: only that may be off)
+    if (rb.body || rg_outside) { printf("FAIL: the fading copy shows %d triangles off the arm (%d of her body, %d stretched, %.1f cm off at most): its hidden side came back\n", rb.shown - rb.arm, rb.body, rb.stretched, rb.far); bad = 1; }
+    if (rg_outside) { printf("FAIL: %d of the copy's triangles off where they belong reach out of her (past the part's root joint)\n", rg_outside); bad = 1; }
+    // ghost_end: the copy destroyed, the held sinks put back ("r": every asset's, the borrowed BoneMap entries)
+    free(ov_b); ov_b = 0; free(ov_wts[1]); ov_wts[1] = 0;
+    int put = skin_restore(0);
+    forget_saves(0); relax_restore(); regrow_restore();
+    printf("regrow r: restored %d, %d sinks left\n", put, nsinks);
+    rg_stage("end", arm, &holes, &dbl, &ra, &rb, 0);
+    if (ra.wrong || holes) { printf("FAIL: her skin at the end: %d triangles off it, %d holes\n", ra.wrong, holes); bad = 1; }
+    if (nsinks) { printf("FAIL: %d sinks still collapsed\n", nsinks); bad = 1; }
+    int left = 0;
+    for (int i = 0; i < 16 * NB; i++) if (refinv[i] != rg_inv0[i]) left++;
+    if (left) { printf("FAIL: %d inverse bind matrix entries not put back\n", left); bad = 1; }
+    *(u64 *)(comp_a + SC_LOD_INFO) = 0; *(int *)(comp_a + SC_LOD_INFO + 8) = 0;
+    *(u64 *)(comp_b + SC_LOD_INFO) = 0; *(int *)(comp_b + SC_LOD_INFO + 8) = 0;
+    free(armb); free(arm);
+    printf("%s\n", bad ? "FAIL" : "PASS");
+    return bad;
 }
 
 int main(int argc, char **argv)
@@ -1537,6 +1774,7 @@ int main(int argc, char **argv)
         // triangle stretched from the body to the dropped arm is the outfit hanging off the shoulder (sixteenth playtest)
         int still = -1, flung = -1, hid = 0, still_hid = 0;
         skin_collapse(); // "k", as in game a few frames after the cut
+        if (env_on("REGROW")) return regrow_run(ua);
         // the stump's collapsed seam stays behind its cap: no body-side vertex wholly on sinks lies past the plane into
         // the limb (an outfit cone stuck out of the cut face, playtest screenshot); the limb's likewise behind its own
         int conev = 0; float conemax = -1e9f, conelimb = 0;

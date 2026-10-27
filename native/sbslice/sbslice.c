@@ -1136,7 +1136,8 @@ static char *core_rim(char *o, const char *tag, float *pts, u16 *sec, int *n, co
 // even a 1-entry array) and, through the component's MasterBoneMap, made to follow the master's head.
 #define MAX_BONEMAP_FIX 64
 #define MAX_REMAPS 16
-static struct { u64 arr; int num, max; unsigned short *old, *data; } bmfix[MAX_BONEMAP_FIX]; // old: data swapped out, or 0; data: the array in use after
+static struct { u64 arr, sm; int num, max; unsigned short *old, *data; } bmfix[MAX_BONEMAP_FIX]; // old: data swapped out, or 0; data: the array in use after; sm: the mesh asset whose render data holds arr
+static u64 bm_owner; // the mesh asset being cut, for bmfix (assets_prune)
 static int nbmfix;
 static struct { u64 comp; int index, old, to, applied; } remaps[MAX_REMAPS]; // applied on "k", with the sinks
 static int nremaps;
@@ -1303,7 +1304,7 @@ static int tarray_push16(u64 arr, unsigned short v, int limit)
         if (!nb2) return 0;
         for (int i = 0; i < num; i++) nb2[i] = bm[i];
         nb2[num] = v;
-        bmfix[nbmfix].arr = arr; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; bmfix[nbmfix].old = bm; bmfix[nbmfix].data = nb2; nbmfix++;
+        bmfix[nbmfix].arr = arr; bmfix[nbmfix].sm = bm_owner; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; bmfix[nbmfix].old = bm; bmfix[nbmfix].data = nb2; nbmfix++;
         // the pointer first: a reader that still sees the old count reads the same entries
         *(unsigned short **)arr = nb2;
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
@@ -1311,7 +1312,7 @@ static int tarray_push16(u64 arr, unsigned short v, int limit)
         *(int *)(arr + 8) = num + 1;
     } else {
         if (!ours && num >= 8) return 0;
-        bmfix[nbmfix].arr = arr; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; bmfix[nbmfix].old = 0; bmfix[nbmfix].data = bm; nbmfix++;
+        bmfix[nbmfix].arr = arr; bmfix[nbmfix].sm = bm_owner; bmfix[nbmfix].num = num; bmfix[nbmfix].max = max; bmfix[nbmfix].old = 0; bmfix[nbmfix].data = bm; nbmfix++;
         bm[num] = v;
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         *(int *)(arr + 8) = num + 1;
@@ -1569,6 +1570,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     c.comp = comp;
     c.sm = *(u64 *)(comp + SC_SKELETAL_MESH);
     if (!c.sm) { skin_result("err no mesh"); return; }
+    bm_owner = c.sm;
     u64 rd = *(u64 *)(comp + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(comp + SC_MESH_OBJECT) + 0x40) : *(u64 *)(c.sm + SM_RENDER_DATA);
     if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
     u64 ld = ((u64 *)*(u64 *)rd)[lod];
@@ -3655,6 +3657,7 @@ static void skin_probe(u64 comp, int lod, int dump)
     c.comp = comp;
     c.sm = *(u64 *)(comp + SC_SKELETAL_MESH);
     if (!c.sm) { skin_result("err no mesh"); return; }
+    bm_owner = c.sm;
     u64 rd = *(u64 *)(comp + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(comp + SC_MESH_OBJECT) + 0x40) : *(u64 *)(c.sm + SM_RENDER_DATA);
     if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
     u64 ld = ((u64 *)*(u64 *)rd)[lod];
@@ -3822,6 +3825,7 @@ static void skin_mark(u64 comp, int lod, const float *pw, const float *nw, float
     c.comp = comp;
     c.sm = *(u64 *)(comp + SC_SKELETAL_MESH);
     if (!c.sm) { skin_result("err no mesh"); return; }
+    bm_owner = c.sm;
     u64 rd = *(u64 *)(comp + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(comp + SC_MESH_OBJECT) + 0x40) : *(u64 *)(c.sm + SM_RENDER_DATA);
     if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
     u64 ld = ((u64 *)*(u64 *)rd)[lod];
@@ -4255,6 +4259,7 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
 {
     u64 sm = *(u64 *)(comp + SC_SKELETAL_MESH);
     if (!sm) { skin_result("err no mesh"); return; }
+    bm_owner = sm;
     const unsigned char *bi = *(const unsigned char **)(sm + SM_REF_BONE_INFO);
     int nb = *(int *)(sm + SM_REF_BONE_INFO + 8);
     if (!bi || nb <= 0 || nb > MAX_BONES) { skin_result("err no skeleton"); return; }
@@ -4280,7 +4285,45 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
         col[b] = 0;
     }
     if (!any) { skin_result("err no root bone"); return; }
-    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == sm && sinks[i].down && sinks[i].bone > 0 && sinks[i].bone < nb) col[sinks[i].bone] = 1;
+    // the copy (keep 1) with no weights of its own yet: the asset's own, the part whole as it is (on the cut's weights
+    // its seam closed onto a point and the band the cut collapsed on her showed on neither: the arm dissolved in
+    // standing off her shoulder by that band, test/real REGROW's pictures). Which vertices are the part is read off
+    // its master's weights (hers, with the cut); the rest's vertices on a triangle with the part's are kept too, the
+    // band, over her collapsed seam. kv: 1 the part, 2 the band
+    unsigned char *kv = 0;
+    if (keep) {
+        kv = (unsigned char *)mem_alloc((u64)nv);
+        if (!kv) { skin_result("err out of memory"); return; }
+        const skin_info *pv = w;
+        skin_info *mw = 0;
+        u64 mst = ((weak_get_fn)(exe + RVA_WEAK_PTR_GET))(comp + SC_MASTER_POSE);
+        int mn = 0;
+        if (!has_override(comp, lod) && mst && mst != comp && *(u64 *)(mst + SC_SKELETAL_MESH) == sm && has_override(mst, lod)
+            && !read_weights(mst, lod, 0, &mn) && mn == nv && (mw = (skin_info *)mem_alloc((u64)nv * sizeof(skin_info)))
+            && !read_weights(mst, lod, mw, &mn)) pv = mw;
+        for (int v = 0; v < nv; v++) {
+            int d = -1, dw = -1;
+            for (int i = 0; i < MAX_INF; i++) if (pv[v].weights[i] > dw && pv[v].bones[i] >= 0 && pv[v].bones[i] < nb) { dw = pv[v].weights[i]; d = pv[v].bones[i]; }
+            kv[v] = d >= 0 && dw > 0 && part[d];
+        }
+        u64 ib = pv != w ? *(u64 *)(ld + LOD_INDICES) : 0;
+        int ni = ib ? ((index_num_fn)(*(u64 *)(*(u64 *)ib + 0x58)))(ib) : 0;
+        const u32 *ix = ni > 0 ? ib_indices(ib, ni, (index_get_fn)(*(u64 *)(*(u64 *)ib + 0x68))) : 0;
+        for (int t = 0; ix && t + 2 < ni; t += 3) {
+            int np = 0;
+            for (int k = 0; k < 3; k++) np += ix[t + k] < (u32)nv && kv[ix[t + k]] == 1;
+            if (np && np < 3) for (int k = 0; k < 3; k++) if (ix[t + k] < (u32)nv && !kv[ix[t + k]]) kv[ix[t + k]] = 2;
+        }
+        if (mw) mem_free(mw);
+    }
+    // (point sinks only: a flattening one presses its vertices onto the cut plane and a carrier holds them as they were
+    // on its bone, so the copy's whole body, hidden onto the shoulder's carrier, stayed in sight rigid on it: 50 cm off
+    // once she sat, test/real REGROW)
+    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == sm && sinks[i].down && !sinks[i].proj && sinks[i].bone > 0 && sinks[i].bone < nb) col[sinks[i].bone] = 1;
+    // (and every sink the asset has down, for the copy's kept side: what moves once they are put back)
+    static unsigned char pt[MAX_BONES];
+    for (int b = 0; b < nb; b++) pt[b] = 0;
+    for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == sm && sinks[i].down && sinks[i].bone > 0 && sinks[i].bone < nb) pt[sinks[i].bone] = 1;
     // the active bones as the cut finds them, for a borrow
     for (int i = 0; i < MAX_BONES; i++) bactive[i] = 0;
     for (int s = 0; s < nsec; s++) {
@@ -4296,6 +4339,57 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
     for (int i = 0; i < nb; i++) nact += bactive[i];
     act_pushed = 0;
     find_active(ld, nb, nact);
+    // the copy (keep 1): its hidden side on a point of its own, a bone no vertex of the asset can be on (in no
+    // section's own BoneMap, no sink) collapsed onto the part's root joint, through the regrow's matrices ("Z", "r" put
+    // it back). On the cut's sinks it came back the moment her cut was undone under it ("x" puts the asset's sinks
+    // back): her whole body on the fading copy (test/real REGROW); holding them down instead dented her own shoulder
+    // on them as the copy faded. The free bone nearest the joint, the point inside her there: the band's edge fans in
+    // to it (to a free bone's own origin, by her feet, they were 64 cm spikes)
+    int gb = -1;
+    if (keep) {
+        static unsigned char own[MAX_BONES];
+        for (int b = 0; b < nb; b++) own[b] = 0;
+        for (int s = 0; s < nsec; s++) {
+            u64 a = secs + (u64)s * 0xe8 + SEC_BONE_MAP;
+            unsigned short *bmap = *(unsigned short **)a;
+            int n0 = *(int *)(a + 8);
+            for (int i = 0; i < nbmfix; i++) if (bmfix[i].arr == a && bmfix[i].num < n0) n0 = bmfix[i].num;
+            for (int k = 0; k < n0; k++) if (bmap[k] < nb) own[bmap[k]] = 1;
+        }
+        for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == sm && sinks[i].bone < nb) own[sinks[i].bone] = 1;
+        for (int i = 0; i < nrelaxed; i++) if (relaxed[i].mesh == sm && relaxed[i].bone < nb) own[relaxed[i].bone] = 1;
+        float *ri = *(float **)(sm + SM_REF_BASES_INV);
+        int nri = *(int *)(sm + SM_REF_BASES_INV + 8);
+        // (her pose, the master the copy follows)
+        u64 master = ((weak_get_fn)(exe + RVA_WEAK_PTR_GET))(comp + SC_MASTER_POSE), src = master && *(u64 *)(master + SC_SKELETAL_MESH) == sm ? master : comp;
+        int rd = *(int *)(src + SC_SPACE_READ);
+        const float *sp = rd == 0 || rd == 1 ? *(const float **)(src + SC_SPACE_BASES + (u64)rd * 0x10) : 0;
+        int nsp = rd == 0 || rd == 1 ? *(int *)(src + SC_SPACE_BASES + (u64)rd * 0x10 + 8) : 0;
+        int rb = (int)roots[0];
+        float bd = 1e30f;
+        for (int b = 1; sp && rb >= 0 && rb < nsp && b < nb && b < nri && b < nsp; b++) {
+            if (own[b]) continue;
+            float d0 = sp[(u64)b * 12 + 4] - sp[(u64)rb * 12 + 4], d1 = sp[(u64)b * 12 + 5] - sp[(u64)rb * 12 + 5], d2 = sp[(u64)b * 12 + 6] - sp[(u64)rb * 12 + 6];
+            float d = d0 * d0 + d1 * d1 + d2 * d2;
+            if (d < bd) { bd = d; gb = b; }
+        }
+        if (gb >= 0 && ri) {
+            int r = -1;
+            for (int i = 0; i < nregrown; i++) if (regrown[i].mesh == sm && regrown[i].bone == gb) { r = i; break; }
+            if (r < 0 && nregrown < MAX_REGROW) {
+                r = nregrown++;
+                regrown[r].mesh = sm; regrown[r].bone = gb;
+                for (int k = 0; k < 16; k++) regrown[r].m[k] = ri[(u64)gb * 16 + k];
+            }
+            if (r >= 0) {
+                float at[3], *m = ri + (u64)gb * 16;
+                local_of_cs(sp + (u64)gb * 12, sp + (u64)rb * 12 + 4, at);
+                for (int k = 0; k < 16; k++) m[k] = 0;
+                m[12] = at[0]; m[13] = at[1]; m[14] = at[2]; m[15] = 1;
+            }
+            else gb = -1;
+        } else gb = -1;
+    }
     int hidden = 0, kept = 0, used = 0, borrowed = 0, stuck = 0;
     static unsigned char usedb[MAX_BONES];
     for (int i = 0; i < nb; i++) usedb[i] = 0;
@@ -4306,7 +4400,13 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
         int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
         // the section's collapse point: the hidden side's sink, else any of its sinks, else one borrowed
         int hb = -1, hany = -1;
-        for (int b = 1; b < nb; b++) {
+        if (gb >= 0) {
+            int need = 0;
+            for (int v = base; v < base + cnt && v < nv && !need; v++) need = !kv[v];
+            if (need && inmap[(u64)s * nb + gb]) hb = gb;
+            else if (need && borrow_bone(secs, s, gb, inmap, nb)) { hb = gb; borrowed++; }
+        }
+        for (int b = 1; b < nb && hb < 0; b++) {
             if (!col[b] || !inmap[(u64)s * nb + b]) continue;
             if ((part[b] != 0) == (keep == 0)) { hb = b; break; }
             if (hany < 0) hany = b;
@@ -4317,7 +4417,23 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
             int d = -1, dw = -1;
             for (int i = 0; i < MAX_INF; i++) if (w[v].weights[i] > dw && w[v].bones[i] >= 0 && w[v].bones[i] < nb) { dw = w[v].weights[i]; d = w[v].bones[i]; }
             if (d < 0 || dw <= 0) { sk++; continue; }
-            int hide = keep ? !part[d] : part[d];
+            int hide = keep ? !kv[v] : part[d];
+            if (!hide && keep) {
+                // (off the cut's sinks, onto the bone each hangs from: the copy then stays as it is once they are
+                // put back, its seam fanned out over her as she got her own skin back, playtest)
+                for (int i = 0; i < MAX_INF; i++) {
+                    int b = w[v].bones[i];
+                    if (!w[v].weights[i] || b <= 0 || b >= nb || !pt[b]) continue;
+                    int a = *(const int *)(bi + (u64)b * 0xc + 8);
+                    while (a > 0 && a < nb && pt[a]) a = *(const int *)(bi + (u64)a * 0xc + 8);
+                    if (a < 0 || a >= nb) continue;
+                    if (!inmap[(u64)s * nb + a]) { if (!borrow_bone(secs, s, a, inmap, nb)) continue; borrowed++; }
+                    int j = -1;
+                    for (int k = 0; k < MAX_INF; k++) if (k != i && w[v].weights[k] && w[v].bones[k] == a) j = k;
+                    if (j >= 0) { w[v].weights[j] = (unsigned char)(w[v].weights[j] + w[v].weights[i]); w[v].weights[i] = 0; w[v].bones[i] = 0; }
+                    else w[v].bones[i] = a;
+                }
+            }
             if (!hide) { sk++; continue; }
             if (hb < 0) {
                 // (a borrow only once the section is known to need one)
@@ -4341,6 +4457,7 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
             mo = put_int(mo, s);
         }
     }
+    if (kv) mem_free(kv);
     tarray arr = { w, nv, nv };
     ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(comp, lod, &arr);
     char msg[320], *o = put(msg, "ok vanish ");
@@ -4466,6 +4583,7 @@ static void weapon_split(u64 ca, u64 cb, int lod, const float *pw, const float *
     c.comp = ca;
     c.sm = *(u64 *)(ca + SC_SKELETAL_MESH);
     if (!c.sm || *(u64 *)(cb + SC_SKELETAL_MESH) != c.sm) { skin_result("err the two components want one mesh"); return; }
+    bm_owner = c.sm;
     u64 rd = *(u64 *)(ca + SC_MESH_OBJECT) ? *(u64 *)(*(u64 *)(ca + SC_MESH_OBJECT) + 0x40) : *(u64 *)(c.sm + SM_RENDER_DATA);
     if (!rd || lod < 0 || lod >= *(int *)(rd + 8)) { skin_result("err no render data for lod"); return; }
     u64 ld = ((u64 *)*(u64 *)rd)[lod];
@@ -4904,6 +5022,64 @@ static int object_alive(u64 obj, int index)
     if (!mem_readable(item, 0x10) || *(u64 *)item != obj) return 0;
     return !(*(u32 *)(item + 8) & (EIF_UNREACHABLE | EIF_PENDINGKILL));
 }
+// ---- the mesh assets our records write into, still there? ------------------------------------------------------------
+// The sinks, the grip's eased bones (relaxed) and a regrow's matrices (regrown) are written back into a mesh asset's
+// inverse bind matrices by the asset's address, the borrowed BoneMap entries (bmfix) into its render data. A level reload frees the old level's assets (an enemy kind's, her
+// face's) while the script forgets its cuts (gore.forget), and these records stayed: the next "r" (or a collapse, a
+// hold) wrote into freed memory. Each asset recorded is noted with its GUObjectArray index the first time a command
+// sees it (the frame after its cut, alive: it is being worn), and every command first drops the records of a noted
+// asset no longer alive, writing nothing (its memory may be another object's now). An asset not noted (the object
+// array unreadable, or the asset not alive as first seen) is left as before: written back
+#define MAX_ASSETS 64
+static struct { u64 sm; int idx; } assets[MAX_ASSETS];
+static int nassets, assets_gone;
+static int objarr_sane(void)
+{
+    if (!RVA_GUOBJECTARRAY) return 0;
+    u64 arr = exe + RVA_GUOBJECTARRAY + GUO_OBJOBJECTS;
+    return mem_readable(arr, 0x20) && *(int *)(arr + 0x14) > 0 && mem_readable(*(u64 *)arr, 8);
+}
+// 1 alive or not judged, 0 a noted asset gone (decided once per asset per pass: seen[] holds this pass's answers)
+static int asset_live(u64 sm, u64 *seen, int *live, int *nseen)
+{
+    if (sm < 0x10000) return 1;
+    for (int i = 0; i < *nseen; i++) if (seen[i] == sm) return live[i];
+    int k = -1, r = 1;
+    for (int i = 0; i < nassets; i++) if (assets[i].sm == sm) { k = i; break; }
+    if (k >= 0) r = object_alive(sm, assets[k].idx);
+    else if (nassets < MAX_ASSETS && mem_readable(sm, 0x10)) {
+        int idx = *(int *)(sm + UOBJ_INTERNAL_INDEX);
+        if (object_alive(sm, idx)) { assets[nassets].sm = sm; assets[nassets].idx = idx; nassets++; }
+    }
+    if (*nseen < MAX_ASSETS) { seen[*nseen] = sm; live[*nseen] = r; (*nseen)++; }
+    return r;
+}
+static void assets_prune(void)
+{
+    if (!objarr_sane()) return;
+    u64 seen[MAX_ASSETS]; int live[MAX_ASSETS], nseen = 0, k = 0, gone = 0;
+    for (int i = 0; i < nsinks; i++) if (asset_live(sinks[i].mesh, seen, live, &nseen)) sinks[k++] = sinks[i]; else gone++;
+    nsinks = k; k = 0;
+    for (int i = 0; i < nrelaxed; i++) if (asset_live(relaxed[i].mesh, seen, live, &nseen)) relaxed[k++] = relaxed[i]; else gone++;
+    nrelaxed = k; k = 0;
+    for (int i = 0; i < nregrown; i++) if (asset_live(regrown[i].mesh, seen, live, &nseen)) regrown[k++] = regrown[i]; else gone++;
+    nregrown = k; k = 0;
+    // (a section's borrowed BoneMap entries: its render data went with the asset, and the engine freed ours with it)
+    for (int i = 0; i < nbmfix; i++) if (asset_live(bmfix[i].sm, seen, live, &nseen)) bmfix[k++] = bmfix[i]; else gone++;
+    nbmfix = k;
+    // the noted assets kept: alive and still recorded
+    k = 0;
+    for (int i = 0; i < nassets; i++) {
+        int used = 0;
+        for (int j = 0; j < nsinks && !used; j++) used = sinks[j].mesh == assets[i].sm;
+        for (int j = 0; j < nrelaxed && !used; j++) used = relaxed[j].mesh == assets[i].sm;
+        for (int j = 0; j < nregrown && !used; j++) used = regrown[j].mesh == assets[i].sm;
+        for (int j = 0; j < nbmfix && !used; j++) used = bmfix[j].sm == assets[i].sm;
+        if (used) assets[k++] = assets[i];
+    }
+    nassets = k;
+    assets_gone += gone;
+}
 static void alive_cmd(const u64 *f, int k)
 {
     static char msg[4 + 64 * 16];
@@ -5023,31 +5199,79 @@ static int pair_set(u64 s, int nbodies)
     return -1;
 }
 static int known_at = -1, known_variant = -1; // where the first table was, and its hash
-#define PT_KEEP 256 // pairs that collide: her arms and legs, and every cut-off piece against the rest of her
+#define PT_KEEP 1024 // pairs that collide: her arms and legs, every cut-off piece against the rest of her, her hair alive
 static int kept_pair(const u64 *keep, int nkeep, int a, int b)
 {
     for (int i = 0; i < nkeep; i++) if ((int)keep[2 * i] == a && (int)keep[2 * i + 1] == b) return 1;
     return 0;
 }
-static void table_cmd(u64 pa, int nbodies, const u64 *keep, int nkeep)
+// the asset's table: its offset (variant set), else -1 with the answer to give
+static int table_find(u64 pa, int nbodies, int *variant, const char **err)
 {
-    if (pa < 0x10000 || nbodies < 2 || nbodies > 4096) { skin_result("err bad asset"); return; }
+    *err = 0;
+    if (pa < 0x10000 || nbodies < 2 || nbodies > 4096) { *err = "err bad asset"; return -1; }
     // the first one from the asset's start: the scan reaches past its end, where the next asset in memory may keep a
     // table of its own (CH_P_EVE_08's, playtest 38). Once found, every asset's is at that offset (one class). Only
     // what is read is asked readable: an asset near the end of its pages failed the whole scan's check once the table's
     // place was known, and her bodies collided with each other (a cut-off leg thrown off her, playtest)
-    if (!mem_readable(pa, (known_at >= 0 ? (u64)known_at : 0x28) + 80)) { skin_result("err asset unreadable"); return; }
-    int at = -1, variant = -1;
+    if (!mem_readable(pa, (known_at >= 0 ? (u64)known_at : 0x28) + 80)) { *err = "err asset unreadable"; return -1; }
+    int at = -1;
+    *variant = -1;
     if (known_at >= 0) {
-        if (pair_set(pa + known_at, nbodies) == known_variant) at = known_at, variant = known_variant;
+        if (pair_set(pa + known_at, nbodies) == known_variant) at = known_at, *variant = known_variant;
     } else {
         for (int off = 0x28; off < PT_SCAN && at < 0 && mem_readable(pa + off, 80); off += 8) {
             int v = pair_set(pa + off, nbodies);
-            if (v >= 0) at = off, variant = v;
+            if (v >= 0) at = off, *variant = v;
         }
     }
-    if (at < 0) { skin_result(known_at >= 0 ? "err no table where the others were" : "err no table"); return; }
-    known_at = at; known_variant = variant;
+    if (at < 0) { *err = known_at >= 0 ? "err no table where the others were" : "err no table"; return -1; }
+    known_at = at; known_variant = *variant;
+    return at;
+}
+// "L<physics asset>,<bodies>": the pairs of bodies the table lets collide (every pair not in it), "ok colliding N
+// a,b ..." in hex. physfix.lua reads it before its first "t" on an asset: the vanilla pairs of her ponytail's bodies
+// with her head, neck, back and arms (CH_P_EVE_30's Ab-TL-HairB02-04), which it keeps while she is alive
+#define PT_LIST 2000
+static char *put_hex(char *o, u64 v);
+static void colliding_cmd(u64 pa, int nbodies)
+{
+    int variant;
+    const char *err;
+    int at = table_find(pa, nbodies, &variant, &err);
+    if (at < 0) { skin_result(err); return; }
+    u64 s = pa + at;
+    const unsigned char *data = *(const unsigned char **)s;
+    int num = *(int *)(s + 8);
+    int total = nbodies * (nbodies - 1) / 2 - num;
+    if (total > PT_LIST) { skin_result("err too many colliding"); return; }
+    static unsigned char in[4096 * 4096 / 8];
+    for (int i = 0; i < nbodies * nbodies / 8 + 1; i++) in[i] = 0;
+    for (int i = 0; i < num; i++) {
+        const int *e = (const int *)(data + (u64)i * PT_ELEM);
+        int k = e[0] * nbodies + e[1];
+        in[k >> 3] |= (unsigned char)(1u << (k & 7));
+    }
+    static char out[32 + PT_LIST * 8];
+    char *o = put(out, "ok colliding ");
+    o = put_int(o, total);
+    int n = 0;
+    for (int a = 0; a < nbodies; a++)
+        for (int b = a + 1; b < nbodies; b++) {
+            int k = a * nbodies + b;
+            if (in[k >> 3] >> (k & 7) & 1) continue;
+            *o++ = ' '; o = put_hex(o, (u64)a); *o++ = ','; o = put_hex(o, (u64)b);
+            n++;
+        }
+    *o = 0;
+    skin_result(n == total ? out : "err table count");
+}
+static void table_cmd(u64 pa, int nbodies, const u64 *keep, int nkeep)
+{
+    int variant;
+    const char *err;
+    int at = table_find(pa, nbodies, &variant, &err);
+    if (at < 0) { skin_result(err); return; }
     u64 s = pa + at;
     int nk = 0;
     for (int i = 0; i < nkeep; i++)
@@ -6156,6 +6380,8 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
     float *dir = (float *)(p + 0x28);
     if (!txt || len < 2) return;
     if (txt[0] == '&') { async_cmd(txt + 1, len - 1); return; }
+    // (no write into a mesh asset the level took with it: assets_prune)
+    assets_prune();
     // "H[comp,comp,...]": hold stump seams on their rim bones. No answer file — her tick sends it every frame, and a
     // command's result file is what made per-frame calls stutter. comps still alive; none means every cut
     if (txt[0] == 'H') {
@@ -6177,10 +6403,16 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         return;
     }
     if (txt[0] == 't') {
-        static u64 tf[2 + 2 * PT_KEEP]; // (static: 4 KB on the stack wants a stack probe; game thread only)
+        static u64 tf[2 + 2 * PT_KEEP]; // (static: 16 KB on the stack wants a stack probe; game thread only)
         for (int i = 0; i < 2 + 2 * PT_KEEP; i++) tf[i] = 0;
         int k = parse_fields(txt + 1, len - 1, tf, 2 + 2 * PT_KEEP);
         table_cmd(tf[0], (int)tf[1], tf + 2, k > 2 ? (k - 2) / 2 : 0);
+        return;
+    }
+    if (txt[0] == 'L') {
+        u64 cf[2] = { 0, 0 };
+        parse_fields(txt + 1, len - 1, cf, 2);
+        colliding_cmd(cf[0], (int)cf[1]);
         return;
     }
     if (txt[0] == 'D') { row_str_cmd(txt + 1, len - 1); return; }
@@ -6227,9 +6459,12 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         // "r<mesh asset>": that asset's sinks only (an enemy's corpse going away; its component may be gone with it)
         u64 rf[1] = { 0 };
         if (len > 1) parse_fields(txt + 1, len - 1, rf, 1);
-        char msg[32] = "ok restored ";
-        *put_int(msg + 12, skin_restore(rf[0] >= 0x10000 ? rf[0] : 0)) = 0;
+        char msg[48] = "ok restored ";
+        char *o = put_int(msg + 12, skin_restore(rf[0] >= 0x10000 ? rf[0] : 0));
         if (rf[0] < 0x10000) forget_saves(0), relax_restore(), regrow_restore();
+        // (and how many records of assets gone since the last answer were dropped, nothing written)
+        if (assets_gone) { o = put(o, " gone="); o = put_int(o, assets_gone); assets_gone = 0; }
+        *o = 0;
         skin_result(msg);
         return;
     }

@@ -45,15 +45,19 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.death` | 42 / 25 / 15 / 18 | Odds of a limb, a beheading, a cut across her body (under the bust, leaning a little at random) or a split down the middle (running a little diagonally), when the blow doesn't decide. All split (`0` for the rest) splits every death; otherwise a blade seen decides first (`bladeFollow`). |
 | `gore.death.moreLimbs` | 0.35 | Chance a rolled limb cut takes the next nearest limb too, and a third at the same chance again. |
 | `gore.bladeFollow` | 0.75 | Share of deaths with a tracked blade that the blade alone decides; the rest roll `gore.death`. At `1` most deaths were waist cuts or splits, as a blade mostly crosses her body. |
+| `gore.oddsNear.enabled` | true | The odds above, when rolled, lean to what is near where the blow landed: a swing at her waist cuts the waist, a nearby arm or leg, or splits her if it came down her length, never her head; one at her neck mostly beheads. Odds with only one kind above 0 still do that one every death, wherever it hit. F3 → Chances Follow the Hit. |
+| `gore.oddsNear.floor` | 0 | Share of its odds a part far from the hit keeps (0-1): `0.1` lets a waist swing behead now and then, `1` is as if off. F3 → Far Part Chance. |
 | `gore.torsoLegs.enabled` | `true` | A cut across her waist sometimes leaves her legs playing her death fall while the upper body flies off in the ragdoll: most often from a level swing, less from a slanted one, half the time when the blow wasn't seen (`level` / `slant` / `rolled` in `tune.lua`). `false`: all of her ragdolls. |
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again. |
-<!-- | `gore.smash.enabled` | `false` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a burst of blood fly out where it was, and the stump stays as a cut's. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always`: with it on, every death smashes, F6's too, to try it. | -->
+<!-- | `gore.smash.enabled` | `false` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a burst of blood fly out where it was, and the stump stays as a cut's. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always`: with it on, every death smashes, to try it. | -->
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
-| `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts her left arm off, and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. F3 → Gameplay → Lose Arm at Low HP. |
+| `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. F3 → Gameplay → Lose Arm at Low HP. |
+| `gore.lowArm.side` | `"left"` | Which arm comes off: `"left"`, `"right"` or `"either"` (one at random each time). F3 → Gameplay → Which Arm. |
 | `gore.lowArm.below` | `0.25` | The share of her HP (25%) a hit has to leave her under for the arm to come off. F3 → Gameplay → Arm Comes Off Below, in 1% steps. |
-| `gore.lowArm.noHealGun` | `true` | While that arm is off she can't use heal items or shoot the gun (both need her left hand). F3 → Gameplay → No Heals or Gun Without It. |
+| `gore.lowArm.noHealGun` | `true` | While her left arm is off she can't use heal items or shoot the gun (both need her left hand). F3 → Gameplay → No Heals or Gun Without It. |
 | `gore.lowArm.notice` | `true` | With `noHealGun`: pressing her aim or heal key while the arm is off shows the game's own "Cannot use right now." notice, with its sound. F3 → Gameplay → 'Cannot Use' Notice. |
+| `gore.lowArm.noSword` | `true` | While her right arm is off she can't use her sword: the game's own swordless stance (as where her sword is taken from her), the sword folded away. Dodges, the gun and heals still work; no lock-on or drone scan meanwhile. F3 → Gameplay → No Sword Without It. |
 | `gore.lowArm.healBack` | `false` | The arm also grows back once her HP is back at `healAt` (0.9), however she healed (gear that restores HP on kills or over time), and at least 1% over `below`. F3 → Gameplay → Grows Back With HP, Grows Back At (1% steps). |
 | `gore.lowArm.effect` | `true` | A part cut off her alive (that arm, F9's) dissolves back in with a glow when it comes back. Off: it is back at once, with no effect. F3 → Gameplay → Regrow Effect. |
 | `gore.throw` | 250 | How fast a cut-off piece flies off, cm a second (`0`: it just drops). |
@@ -71,6 +75,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `convulse.voice.enabled` | `true` | The quiet breaths and moans after her death (`false`: silent). |
 | `convulse.voice.volume` | `1.0` | How loud those breaths and moans are, times the default (`0.5`: half). |
 | `convulse.neck.enabled` | `true` | Her neck straining after her death: her head trying to lift or turn, shaking with the effort, dropping back, then sharp jerks (`false`: her head lies still). |
+| `deathMoves` | `false` | Being tested: after a ragdoll death with a limb cut off, or cut across the waist, she struggles on the floor over her last seconds (a hand on the stump or going out to it, trying to sit up or crawl; after a waist cut her upper body clutches the wound and crawls), and her arms swing in her last movements. In game her body hasn't visibly followed it yet. F3 → Death → Death Struggle (Testing). |
+| `struggle.strength` | `1.0` | How hard she moves in the struggle, times the default. F3 → Death → Struggle Strength. |
 | `active.stiffness` | `1.0` | How stiff her ragdoll is: `0` limp as a sack, `1` as made, `2`-`3` she keeps her shape as she falls and lies. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` (On Press in the F3 menu) only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
 | `fewerGC` | `false` | Fewer garbage collection hitches: the engine no longer forces a pass every time it unloads part of the map (its regular pass once a minute still runs). Off puts the game's own behaviour back. |
@@ -88,7 +94,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `enemies.cutChance` | `1.0` | Chance a kill cuts something off (0-1). |
 | `enemies.pushScale` | `1.0` | Times the game's own throw of a dying enemy (`0`: it drops on the spot, `2`: twice as far). Works with the cuts off too. |
 | `enemies.push` | 0 | Cm a second every dying enemy is pushed along the blow on top. |
-| `enemies.attackDown` | `true` | Enemies keep attacking her while she is knocked down (`false`: they wait till she is up, as in the game). F3 → Attacks While Down. |
+| `enemies.attackDown` | `true` | Enemies keep attacking her while she is knocked down (`false`: they wait till she is up, as in the game). Still in the works (it does little yet): settings.lua only, out of the F3 menu. |
+| `enemies.afterDeath.enabled` | `false` | Being tested: after her death the enemies around her keep at her body for `time` (10) s, playing their own attacks at it, and their weapons cut it (Hits After Death). F3 → Attacks After Death. |
 | `smoothAnim` | `false` | Every character animated every frame. The engine skips animation frames on characters further off or small on screen, which can look choppy next to a smooth world, most when they run. Costs some CPU with many characters around. |
 | `verboseLog` | `false` | A detailed log (every death's bone speeds, each cut stage, every slow frame...), for a bug report when asked for one. Off, slow frames are summed up once a minute. |
 | `dev` | `false` | Test keys, the enemy spawner and the glass cannon mode (see below). |
@@ -105,6 +112,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Face mods** for Eve work: the pak carries no face or body mesh of hers or the enemies' (older versions carried her face, and a face replacer stopped the game at launch).
 - **Voice mods** that replace Eve's death cries (`vo_eve_die_*`, e.g. Violent Death Mod) work as they are: her death cry plays their recordings. A mod that adds new sounds instead can be pointed at with `gore.voice.sounds` in `settings.lua`.
 - **Proper Death Expression** by blabmice is built in, credited below. Don't install it alongside.
+- **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.
 - **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs).
 - **UUEPBS** (the body slider) works alongside: her sliders stay on through her deaths and cuts (before the next release, her deaths froze where she was cut).
 - **Mods that edit the game's data tables** (movesets, shops, items, effects) work: the mod no longer ships whole `CharacterDeadTable` and `EffectTable` copies, it changes only its own rows in game. A mod that changes the `Player` row's death shows conflicts with it: the mod's are written over them.
@@ -117,10 +125,12 @@ With `dev = true` in `settings.lua`:
 | Key | Test |
 |---|---|
 | F7 / F8 | Ragdoll her with a shove / get her up |
+| Alt+F7 / Alt+F8 | Lose Arm at Low HP's cut now: her left arm (no heals or gun) / her right arm (no sword). Needs Lose Arm at Low HP on |
 | F9 | Cut a limb, the head or the torso (grows back at a camp rest) |
 <!-- | F10 | A hit mark | -->
 | F11 | Split her in half |
-| F6 | Play a death |
+| F6 | Test the struggle: a ragdoll death with set cuts, the next each press (right arm, left leg, waist, left arm and right leg, both legs, left forearm, no cut), with F7's shove; she lies till F8 |
+| Alt+F6 | Test the animated death: plays the game's own death animations on her, the next each press (standing, two hit deaths, lying down), so a death animation mod's show; always the animated death, no cut; she lies till F8 |
 | Delete | Cut her along a made-up blade |
 | Page Up | Her death face, the next mood each press, for 6 s |
 | F5 / Insert | Spawn an enemy / pick the next kind |
@@ -134,7 +144,7 @@ These are the defaults; the F3 menu's Keys tab changes them. Its last two rows a
 
 F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own; a camp rest grows back what F9 cut off her alive).
 
-Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 held for a second (`holdPad`, `holdPadFor`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body (and holds the death, as Shift+F4 does); the game's own photo mode key works with pieces cut off her too (while she lives, what was cut off stays where it fell and its poses and expressions apply to her; its hide option hides her caps and stubs too). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
+Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 held for a second (`holdPad`, `holdPadFor`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body; the death waits while it is open and goes on as it closes (held with Shift+F4 first, it stays held); the game's own photo mode key works with pieces cut off her too (while she lives, what was cut off stays where it fell and its poses and expressions apply to her; its hide option hides her caps and stubs too). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
 
 ## Building from source
 
@@ -154,7 +164,7 @@ On Linux, with `git`, `cargo`, `clang`, `llvm-dlltool`, `python3` and `curl`. Th
 ./package.sh
 ```
 
-That builds the release zip in `release/`. Its paks are built without the other mods. `native/sbslice/test/run.sh` runs the cut tests on real meshes and must print `PASS`.
+That builds the release zip in `release/`. Its paks are built without the other mods. `native/sbslice/test/run.sh` runs the cut tests on real meshes and must print `PASS`. `ue4ss/test/run.sh` runs the scripts against a made-up game (no game needed: a fall death, the regrow, the struggle, attacks after death, a level reload with an arm or her head off, and a sweep of every key and many deaths) and must print `PASS` for each scenario.
 
 How it all works: [docs/TECHNICAL.md](docs/TECHNICAL.md).
 

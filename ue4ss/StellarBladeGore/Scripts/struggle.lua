@@ -12,7 +12,7 @@
 --   * clutch: an arm still on and a stump: the hand goes to the stump and holds it, shaking, slipping and taking hold
 --     again, while she rolls over towards her side and back (the wound up) and her legs draw up and kick out in turn.
 --     A leg's stump takes both hands when she has both.
---   * reach: a hand stretching towards her cut-off arm or leg lying near, straining, falling short and dropping.
+--   * reach: a hand going out to a stump in disbelief: over it, her head lifting to look, touching it, flinching back.
 --   * turn: on her back with an arm: reaching across her and rolling over onto her front (a crawl comes next).
 --   * crawl: face down with an arm: the hand reaching out past her head, planting, and dragging her forward, the
 --     other one after it, her legs scrabbling.
@@ -24,7 +24,9 @@
 --   * curl: curling up tight, the knees drawn to her chest, the arms in round her head.
 --   * lie: a moment lying still, only breathing.
 -- A death with no limb cut (rise.alone of them) only tries to sit up or prop up, between convulse.lua's arm swings.
--- Nothing on a beheading, a split, a waist cut, or an animated death (her fall's end pose) unless animated is on.
+-- A waist cut: her upper body, a piece of its own from the cut bone up, fights on with its arms (clutching the wound,
+-- a hand going out to it, turning over, crawling, curling up); no sitting up or pushing, which need her hips.
+-- Nothing on a beheading, a split, or an animated death (her fall's end pose) unless animated is on.
 --
 -- How: each joint moved has a target direction for its bone (a hand's or foot's place solved into its two bones
 -- with two-bone IK, the elbow or knee bent the way the joint goes), and the bone's turn against its parent is steered
@@ -67,6 +69,9 @@ local ARM = { "Clavicle", "UpperArm", "Forearm", "Hand" }
 local LEG = { "Thigh", "Calf", "Foot" }
 local TORSO = { P .. "Pelvis", P .. "Spine", P .. "Spine1", P .. "Spine2" }
 local CORE = { P .. "Pelvis", P .. "Spine", P .. "Spine1", P .. "Spine2", P .. "Neck", P .. "Head" }
+-- a waist cut's bone (gore.lua's torso cut breaks Spine1), and the torso bodies on the upper body from it up
+local WAIST = { [P .. "Spine"] = { P .. "Spine", P .. "Spine1", P .. "Spine2" },
+  [P .. "Spine1"] = { P .. "Spine1", P .. "Spine2" }, [P .. "Spine2"] = { P .. "Spine2" } }
 -- each bone moved: the body it turns against
 local PARENT = {}
 for _, s in ipairs({ "L", "R" }) do
@@ -83,6 +88,7 @@ for _, s in ipairs({ "L", "R" }) do
   local b = P .. s .. "-"
   TIP[b .. "Clavicle"], TIP[b .. "UpperArm"], TIP[b .. "Forearm"] = b .. "UpperArm", b .. "Forearm", b .. "Hand"
   TIP[b .. "Thigh"], TIP[b .. "Calf"] = b .. "Calf", b .. "Foot"
+  TIP[b .. "Hand"] = b .. "Finger2" -- (the middle finger's root: the hand's length, no body of its own)
 end
 TIP[P .. "Spine1"], TIP[P .. "Spine2"], TIP[P .. "Neck"] = P .. "Spine2", P .. "Neck", P .. "Head"
 -- the bodies below a bone that turn with it, down the limb: an upper arm turned alone dragged its forearm and hand,
@@ -173,11 +179,12 @@ end
 -- her frame from what is still on her: up her spine, her right, her front. A cut-off arm's or leg's bones lie apart
 -- with the piece, so a pair counts only whole, and a single side by where it sits off her middle
 local function frame(mesh)
-  local p, n = loc(mesh, P .. "Pelvis"), loc(mesh, P .. "Neck")
+  local w = st and st.plan and st.plan.waist
+  local p, n = loc(mesh, w or (P .. "Pelvis")), loc(mesh, P .. "Neck")
   local up = p and n and norm(sub(n, p))
   if not up then return nil end
   local r = vec(0, 0, 0)
-  for _, set in ipairs({ { "UpperArm", ARM, n }, { "Thigh", LEG, p } }) do
+  for _, set in ipairs({ { "UpperArm", ARM, n }, not w and { "Thigh", LEG, p } or nil }) do
     local onL, onR = not cut_at(mesh, "L", set[2]), not cut_at(mesh, "R", set[2])
     local a, b = onL and loc(mesh, P .. "L-" .. set[1]), onR and loc(mesh, P .. "R-" .. set[1])
     if a and b then r = add(r, sub(b, a))
@@ -202,6 +209,11 @@ local function wrap(d) return (d + 180) % 360 - 180 end
 -- where a stump is: a shoulder or hip by the other side's, mirrored across her; an elbow, wrist, knee or ankle at
 -- the far end of the bone it was cut from (along its centre of mass, as long as the other side's)
 local function stump(mesh, f, root)
+  -- (the waist: on the upper body's cut bone, 0.3 of the way up it, where gore.lua's torso cut runs)
+  if WAIST[root] then
+    local a, b = loc(mesh, root), TIP[root] and loc(mesh, TIP[root])
+    return a and (b and lerp(a, b, 0.3) or a)
+  end
   local s, part = root:match("^Bip001%-(%a)%-(%a+)$")
   if not s then return nil end
   local o = s == "L" and "R" or "L"
@@ -244,7 +256,7 @@ end
 -- of every step's turn, and without it an arm sagged short of where it was sent; the first playtest's limbs barely
 -- moved). How much of the turn it set a step is still there the next (kept) is summed for the log: little kept says
 -- something else holds the joint, a lot kept and the limb still short says it is too weak
-local function servo(mesh, b, t, k, dt)
+local function servo(mesh, b, t, k, dt, mid)
   local c = cfg()
   local at, tip = loc(mesh, b), TIP[b] and loc(mesh, TIP[b])
   local d = at and tip and norm(sub(tip, at))
@@ -269,31 +281,96 @@ local function servo(mesh, b, t, k, dt)
     hold = scale(hold, math.exp(-dt / 0.3))
   end
   st.hold[b] = hold
-  local want = add(ax and scale(ax, (c.gain or 8) * ang) or vec(0, 0, 0), hold)
-  local wl, top = len(want), (c.speed or 320) * k
+  local want = add(ax and scale(ax, (c.gain or 5) * ang) or vec(0, 0, 0), hold)
+  local wl, top = len(want), (c.speed or 160) * k
   if wl > top then want = scale(want, top / wl) end
   local dv = sub(want, rel)
   if (c.response or 0) > 0 then dv = scale(dv, 1 - math.exp(-dt / c.response)) end
-  local cap = (c.accel or 6000) * k * dt
+  local cap = (c.accel or 2500) * k * dt
   if len(dv) > cap then dv = scale(dv, cap / len(dv)) end
   push(mesh, b, dv)
   push(mesh, p, scale(dv, -share(b, p)), true)
-  st.trace[b] = { step = st.step, set = add(rel, dv) }
+  local set = add(rel, dv)
+  st.trace[b] = { step = st.step, set = set }
+  -- (the first steps of an act: the turn read back at once too, so the log tells a push the engine never took from
+  -- one undone before the next step, 0% kept in every playtest)
+  local sl = len(set)
+  if st.probeN < 24 and sl > 20 then
+    st.probeN = st.probeN + 1
+    local w1 = try(function() local x = mesh:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local w2 = try(function() local x = mesh:GetPhysicsAngularVelocityInDegrees(FName(p)); return vec(x.X, x.Y, x.Z) end)
+    if w1 and w2 then st.now, st.nowN = st.now + dot(perp(sub(w1, w2), d), set) / (sl * sl), st.nowN + 1 end
+  end
   st.err, st.errN = st.err + ang, st.errN + 1
+  if mid then st.errM, st.errMN = (st.errM or 0) + ang, (st.errMN or 0) + 1 end
   return ang
 end
 
--- a limb (s, "arm" or "leg") with its end towards point t, the middle joint bent towards pole. How far off the end is
+-- a bone's own X axis in the world: an elbow's or knee's hinge (Bip001 limbs bend about X, convulse.lua's xaxis)
+local function hinge(mesh, b)
+  return try(function()
+    local q = mesh:GetSocketTransform(FName(b), 0).Rotation
+    local x, y, z, w = q.X, q.Y, q.Z, q.W
+    return norm(vec(1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)))
+  end)
+end
+-- v turned by ang (radians) about unit axis a
+local function turn_about(v, a, ang)
+  local c, s = math.cos(ang), math.sin(ang)
+  return add(add(scale(v, c), scale(cross(a, v), s)), scale(a, dot(a, v) * (1 - c)))
+end
+
+-- how far an elbow or knee folds, deg (tune.physfix.ranges: Forearm front 145, Calf back 140)
+local FOLD = { arm = 145, leg = 140 }
+-- d, a forearm's or shin's direction, brought into what its hinge x allows from up (the upper bone's): folded 0 to
+-- most deg about x. Both elbows and both knees fold one way only, positive about the lower bone's own X (her bind
+-- pose: each one's X x its length points the way its range's 145 / 140 go); the other way the joint stops at 3 deg.
+-- A fold the wrong way asked for comes out straight, or folded fully when it is nearer that
+local function fold(up, d, x, most)
+  local u, v = norm(perp(up, x)), norm(perp(d, x))
+  if not (u and v) then return d end
+  local th, m = math.atan(dot(cross(u, v), x), dot(u, v)), math.rad(most)
+  if th < 0 then th = th < -(math.pi - m / 2) and m or 0 end
+  return turn_about(u, x, math.min(th, m))
+end
+M.fold = fold
+
+-- a limb (s, "arm" or "leg") with its end towards point t. How far off the end is. The elbow or knee is a hinge
+-- that folds one way (fold): the middle joint goes off the line to t the side that folding brings the end back
+-- (square to its X), the forearm or shin is sent along the hinge's plane from where the upper bone points now, and
+-- the hand is held in line with the forearm. pole only stands in when the hinge can't be read. The bend's side had
+-- been the pole's, each act's guess: the wrong one asked her elbows to bend backwards, the joint limit held them
+-- straight (playtest: no elbow bend, limp hands, 28 to 99 deg off on elbows and knees)
 local LIMB = { arm = { "UpperArm", "Forearm", "Hand" }, leg = { "Thigh", "Calf", "Foot" } }
+-- the solve: shoulder or hip a, elbow or knee m, wrist or ankle e, towards t, hinge x (nil: unread) -> the upper and
+-- the lower bone's directions
+local function solve(a, m, e, t, x, pole, kind)
+  local u = norm(sub(t, a))
+  local side = x and u and math.abs(dot(x, u)) < 0.9 and norm(cross(u, x))
+  if side then pole = side end
+  local d1, d2 = ik(a, t, len(sub(m, a)), len(sub(e, m)), pole)
+  if not d1 then return nil end
+  local up = norm(sub(m, a))
+  local h = side and up and norm(perp(up, x))
+  if h then
+    -- (the bend the solve asks for, about the hinge from the upper bone as it is)
+    d2 = turn_about(h, x, math.min(math.acos(clamp(dot(d1, d2), -1, 1)), math.rad(FOLD[kind])))
+  end
+  return d1, d2
+end
+M.solve = solve
 local function reach(mesh, s, kind, t, pole, k, dt)
   local b = P .. s .. "-"
   local j = LIMB[kind]
   local a, m, e = loc(mesh, b .. j[1]), loc(mesh, b .. j[2]), loc(mesh, b .. j[3])
   if not (a and m and e) then return nil end
-  local d1, d2 = ik(a, t, len(sub(m, a)), len(sub(e, m)), pole)
+  local d1, d2 = solve(a, m, e, t, hinge(mesh, b .. j[2]), pole, kind)
   if not d1 then return nil end
   servo(mesh, b .. j[1], d1, k, dt)
-  servo(mesh, b .. j[2], d2, k, dt)
+  servo(mesh, b .. j[2], d2, k, dt, true)
+  -- (the wrist: nothing held it, and her hands flopped about on every move, playtest)
+  local w = cfg().wrist or 0.6
+  if kind == "arm" and w > 0 then servo(mesh, b .. "Hand", d2, k * w, dt) end
   return len(sub(e, t))
 end
 -- a limb's length, shoulder or hip to wrist or ankle
@@ -310,14 +387,39 @@ local function roll(mesh, f, want, k, dt)
   if not now then return nil end
   local err = wrap(want - now)
   local sp = clamp(err * (c.gain or 2.5), -(c.speed or 70) * k, (c.speed or 70) * k)
-  local w = spin(mesh, P .. "Spine1")
+  local wb = st.plan and st.plan.waist
+  local w = spin(mesh, wb == P .. "Spine2" and wb or (P .. "Spine1"))
   local cur = w and dot(w, f.up) or 0
   local dv = (sp - cur) * (1 - math.exp(-dt / 0.15))
   local cap = (c.accel or 400) * k * dt
   dv = clamp(dv, -cap, cap)
-  for _, b in ipairs(TORSO) do push(mesh, b, scale(f.up, dv), true) end
+  for _, b in ipairs(wb and WAIST[wb] or TORSO) do push(mesh, b, scale(f.up, dv), true) end
   st.rollMin, st.rollMax = math.min(st.rollMin or now, now), math.max(st.rollMax or now, now)
   return now
+end
+
+-- a hand or foot planted on the floor pulling her: her torso's bodies sped along dir (on the floor) up to drag.speed
+-- cm/s, never slowed. Her limbs only turn against her own body, and a hand on the floor has too little weight on it to
+-- grip: the crawl's and the heels' strokes swept the air and she stayed where she was (playtest). This is the grip
+-- the floor would give, while a stroke presses it
+local function drag(mesh, dir, k, dt)
+  local c = sub_cfg("drag")
+  if c.enabled == false or not dir or k <= 0 then return end
+  local want, cap = (c.speed or 35) * math.min(k, 1.2), (c.accel or 250) * k * dt
+  local wb = st.plan and st.plan.waist
+  for _, b in ipairs(wb and WAIST[wb] or TORSO) do
+    local v = try(function() local x = mesh:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local dv = v and clamp(want - dot(v, dir), 0, cap)
+    if dv and dv > 0 then try(function() mesh:SetPhysicsLinearVelocity(scale(dir, dv), true, FName(b)) end) end
+  end
+  st.dragT = (st.dragT or 0) + dt
+end
+-- along the floor towards her head, and whether the end of a limb is down on it: no further off the floor than her
+-- body's bone b, plus a few cm, down being the way the floor is in her frame (her front face down, her back on it)
+local function headward(f) return norm(perp(f.up, UP)) end
+local function planted(mesh, e, b, down, over)
+  local p, q = loc(mesh, e), loc(mesh, b)
+  return p and q and dot(sub(p, q), down) >= -(over or 4)
 end
 
 -- ---- pulses: a bone turned about an axis, its speed a sine over dur (breaths, reflexes, tremors) ----
@@ -331,7 +433,7 @@ end
 -- Pulses on one bone in the same step add up
 local function pulses_tick(mesh, dt)
   local keep, now, seen = {}, st.t, {}
-  local cap = (cfg().accel or 6000) * math.max(dt or 0, 1 / 120)
+  local cap = (cfg().accel or 2500) * math.max(dt or 0, 1 / 120)
   for _, p in ipairs(st.pulses) do
     if now >= p.at then
       local x = math.min(1, (now - p.at) / p.dur)
@@ -369,9 +471,16 @@ end
 -- (alone: the roll for a plan of sit-up tries only, made already: an animated fall's, before her bodies simulated,
 -- when every limb read as off her)
 local function pick(mesh, alone)
-  for _, b in ipairs(CORE) do if cut(mesh, b) then return nil, "her body is cut through" end end
   local g = ctx.gore
   if g and g.cuts_on and select(2, g.cuts_on(mesh)) == true then return nil, "split" end
+  -- (a waist cut: the lowest torso bone cut, nothing cut above it on her spine)
+  local waist
+  for _, b in ipairs(CORE) do
+    if cut(mesh, b) then
+      if waist or not WAIST[b] then return nil, waist and "her upper body is cut through too" or "her body is cut through" end
+      waist = b
+    end
+  end
   local arms, legs, stumps = {}, {}, {}
   for _, s in ipairs({ "L", "R" }) do
     if whole(mesh, s, ARM) then arms[#arms + 1] = s end
@@ -386,8 +495,14 @@ local function pick(mesh, alone)
     return 9
   end
   table.sort(stumps, function(a, b) return rank(a) < rank(b) end)
+  if waist then
+    -- (her legs lie with the lower half: none of hers to move)
+    if #arms == 0 then return nil, "a waist cut and no arm left" end
+    table.insert(stumps, 1, waist)
+    return { arms = arms, legs = {}, stumps = stumps, wound = waist, waist = waist }
+  end
   if #stumps == 0 then
-    if alone == nil then alone = math.random() < (sub_cfg("rise").alone or 0.5) end
+    if alone == nil then alone = st.alone or math.random() < (sub_cfg("rise").alone or 0.5) end
     if alone then return { alone = true, arms = arms, legs = legs, stumps = stumps } end
     return nil, "no limb cut"
   end
@@ -396,18 +511,12 @@ end
 
 local function side_name(s) return s == "L" and "left" or "right" end
 local function wound_name(root)
+  if WAIST[root] then return "waist" end
   local s, part = root:match("^Bip001%-(%a)%-(%a+)$")
   local where = ({ Clavicle = "shoulder", UpperArm = "shoulder", Forearm = "elbow", Hand = "wrist", Thigh = "hip",
     Calf = "knee", Foot = "ankle" })[part] or part
   return side_name(s) .. " " .. where
 end
-local function piece_name(root)
-  local s, part = root:match("^Bip001%-(%a)%-(%a+)$")
-  local what = ({ Clavicle = "arm", UpperArm = "arm", Forearm = "forearm", Hand = "hand", Thigh = "leg", Calf = "shin",
-    Foot = "foot" })[part] or part
-  return side_name(s) .. " " .. what
-end
-
 -- ---- her legs ----
 -- drawn up towards her chest (d 1) or kicked out (0), the knee to her front
 local function leg_to(mesh, f, ls, d, k, dt, front)
@@ -423,11 +532,11 @@ local function kick(mesh, f, legs, k, dt)
     local l = st.legClock[ls]
     if st.t >= l.next then
       l.drawn = not l.drawn
-      l.next = st.t + (l.drawn and rnd(0.9, 2.2) or rnd(0.6, 1.4)) / st.pace
+      l.next = st.t + (l.drawn and rnd(1.4, 3.0) or rnd(1.0, 2.0)) / st.pace
       l.from, l.at = l.k or 0, st.t
       if l.drawn then st.draws = st.draws + 1 end
     end
-    l.k = (l.from or 0) + ((l.drawn and 1 or 0) - (l.from or 0)) * smooth((st.t - (l.at or 0)) / 0.5)
+    l.k = (l.from or 0) + ((l.drawn and 1 or 0) - (l.from or 0)) * smooth((st.t - (l.at or 0)) / 0.9)
     leg_to(mesh, f, ls, l.k, k * 0.8, dt)
   end
 end
@@ -440,6 +549,7 @@ local function brace(mesh, f, legs, k, dt)
 end
 -- face down, one after the other: a knee drawn in under her and shoved back
 local function scrabble(mesh, f, legs, x, k, dt)
+  local shove
   for i, ls in ipairs(legs) do
     local L, hip = limb_len(mesh, ls, "leg")
     if L then
@@ -447,8 +557,11 @@ local function scrabble(mesh, f, legs, x, k, dt)
       local d = y < 0.5 and smooth(y / 0.5) or 1 - smooth((y - 0.5) / 0.5)
       local t = add(lerp(add(hip, scale(f.up, -0.95 * L)), add(hip, scale(f.up, -0.4 * L)), d), scale(f.front, 0.3 * L * d))
       reach(mesh, ls, "leg", t, f.front, k, dt)
+      if y >= 0.5 and planted(mesh, P .. ls .. "-Foot", P .. "Pelvis", f.front, 6) then shove = true end
     end
   end
+  -- (the knee shoved back with the foot down: she goes forward)
+  if shove then drag(mesh, headward(f), k * 0.6, dt) end
 end
 
 -- ---- the acts: each { start(a, f), tick(a, f, k, dt) -> true when done, done(a) -> its log line } ----
@@ -457,7 +570,7 @@ local ACT = {}
 -- the hand on the stump, rolling, the legs kicking
 ACT.clutch = {
   start = function(a, f)
-    a.dur = range(sub_cfg("acts").clutch, { 3, 5 }) / st.pace
+    a.dur = range(sub_cfg("acts").clutch, { 2, 3.5 }) / st.pace
     a.slip, a.from, a.to, a.st, a.next = vec(0, 0, 0), vec(0, 0, 0), vec(0, 0, 0), 0, rnd(0.8, 1.6)
     a.shake = norm(vec(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1))) or UP
     a.rockT = rnd(2.2, 3.4)
@@ -468,13 +581,13 @@ ACT.clutch = {
     local spot = stump(mesh, f, s.wound)
     if not spot then return true end
     local ws = s.wound:match("^Bip001%-(%a)%-")
-    local leg = s.wound:find("Thigh") or s.wound:find("Calf") or s.wound:find("Foot")
+    local leg = s.waist or s.wound:find("Thigh") or s.wound:find("Calf") or s.wound:find("Foot")
     if a.t >= a.next then
       a.next = a.t + rnd(1.2, 2.8)
       a.from, a.to, a.st = a.slip, vec(rnd(-5, 5), rnd(-5, 5), rnd(-5, 5)), a.t
     end
     a.slip = lerp(a.from, a.to, smooth((a.t - a.st) / 0.4))
-    local tremor = scale(a.shake, (cfg().shake or 1.2) * math.sin(2 * math.pi * 7 * a.t) * math.min(k, 1))
+    local tremor = scale(a.shake, (cfg().shake or 0.6) * math.sin(2 * math.pi * 7 * a.t) * math.min(k, 1))
     for i, h in ipairs(s.arms) do
       local sh = loc(mesh, P .. h .. "-UpperArm")
       if sh and (leg or i == 1) then
@@ -496,47 +609,70 @@ ACT.clutch = {
   done = function(a) return string.format("hand came within %.0f cm of the stump", a.closest or -1) end,
 }
 
--- a hand stretching towards a piece cut off her, falling short
+-- where she is, for how far she moved: the upper body's cut bone after a waist cut
+local function body_at(mesh) return loc(mesh, st.plan and st.plan.waist or (P .. "Pelvis")) end
+
+-- a hand going out to a stump in disbelief: rising over it, her head lifting to look, closing in slowly, touching
+-- it, flinching back, and the arm dropping (clutch holds it; this never takes hold)
 ACT.reach = {
   start = function(a, f)
     local mesh = st.mesh
     local best
     for _, root in ipairs(st.plan.stumps) do
-      local at = loc(mesh, root)
+      local at = stump(mesh, f, root)
       for _, h in ipairs(st.plan.arms) do
         local L, sh = limb_len(mesh, h, "arm")
         local d = at and sh and len(sub(at, sh))
-        if d and d < L * (sub_cfg("reach").within or 3) and d > L * 0.4 and (not best or d < best.d) then
-          best = { root = root, h = h, d = d, L = L }
+        if d and d < L * (sub_cfg("reach").within or 1.3) and (not best or d < best.d) then
+          best = { root = root, h = h, d = d }
         end
       end
     end
     if not best then st.reached = 2; return nil end
     a.root, a.h, a.d = best.root, best.h, best.d
-    a.dur = range(sub_cfg("acts").reach, { 2.5, 3.5 }) / st.pace
+    a.dur = range(sub_cfg("acts").reach, { 1.8, 2.5 }) / st.pace
+    a.shake = norm(vec(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1))) or UP
     st.reached = (st.reached or 0) + 1
     local cv = ctx.convulse
-    local said = cv and cv.effort and (try(function() return cv.effort(a.dur * 0.8, 0.6) end) or "") or ""
-    return string.format("%s hand reaching for her %s, %.0f cm off%s", side_name(a.h), piece_name(a.root), a.d, said)
+    local said = cv and cv.effort and (try(function() return cv.effort(a.dur * 0.6, 0.4) end) or "") or ""
+    return string.format("%s hand going out to the %s stump%s", side_name(a.h), wound_name(a.root), said)
   end,
   tick = function(a, f, k, dt)
     local mesh = st.mesh
-    local at = loc(mesh, a.root)
-    if not at then return true end
+    local spot = stump(mesh, f, a.root)
+    if not spot then return true end
     local x = a.t / a.dur
-    -- (out over the first part, straining, then let go: the arm drops)
+    -- (cm off the stump, in front of it: over it, closing in, touching, flinching back; then the arm drops)
+    local hover = (sub_cfg("reach").hover or 14)
+    local gap
+    if x < 0.3 then gap = hover
+    elseif x < 0.6 then gap = hover + (3 - hover) * smooth((x - 0.3) / 0.3)
+    elseif x < 0.7 then gap = 3
+    else gap = 3 + (hover + 4 - 3) * smooth((x - 0.7) / 0.08) end
     local e = x < 0.8 and smooth(x / 0.25) or 1 - smooth((x - 0.8) / 0.2)
-    local t = add(add(at, vec(0, 0, 8)), scale(UP, 1.5 * math.sin(2 * math.pi * 9 * a.t)))
+    local tremor = scale(a.shake, 2 * (cfg().shake or 0.6) * math.sin(2 * math.pi * 6 * a.t) * math.min(k, 1))
+    local t = add(add(spot, scale(f.front, gap)), tremor)
     local pole = add(scale(out(f, a.h), 0.6), scale(f.up, -0.6))
-    local off = reach(mesh, a.h, "arm", t, pole, k * 1.1 * e, dt)
-    if off and off < (a.closest or 1e9) then a.closest = off end
-    -- (leaning over towards it)
-    local toward = dot(sub(at, f.neck), f.right) > 0 and 1 or -1
-    roll(mesh, f, toward * 35 * e, k, dt)
-    kick(mesh, f, st.plan.legs, k * 0.5, dt)
+    local off = reach(mesh, a.h, "arm", t, pole, k * e, dt)
+    if off and gap <= 3 and off < (a.closest or 1e9) then a.closest = off end
+    if off and (not a.near or off < a.near) then a.near = off end
+    -- (her head lifting and turning to look at it)
+    local n = loc(mesh, P .. "Neck")
+    local side = n and norm(perp(sub(spot, n), f.up))
+    if side then
+      local look = norm(add(scale(f.front, 0.7), side)) or f.front
+      local ang = math.rad(40 * e)
+      servo(mesh, P .. "Neck", add(scale(f.up, math.cos(ang)), scale(look, math.sin(ang))), k * 0.6 * e, dt)
+    end
+    -- (turned a little onto the side of it)
+    roll(mesh, f, (dot(sub(spot, f.neck), f.right) > 0 and 1 or -1) * 20 * e, k * 0.6, dt)
+    kick(mesh, f, st.plan.legs, k * 0.4, dt)
     return a.t >= a.dur
   end,
-  done = function(a) return string.format("her hand got within %.0f cm of it", a.closest or -1) end,
+  done = function(a)
+    return a.closest and string.format("her hand touched within %.0f cm of it", a.closest)
+      or string.format("her hand got within %.0f cm of it", a.near or -1)
+  end,
 }
 
 -- on her back: an arm across her, rolling over onto her front
@@ -544,7 +680,7 @@ ACT.turn = {
   start = function(a, f)
     a.h = st.plan.arms[math.random(#st.plan.arms)]
     a.way = a.h == "R" and -1 or 1 -- (the right arm reaching over to her left rolls her onto her left side)
-    a.dur = range(sub_cfg("acts").turn, { 2.5, 3.5 }) / st.pace
+    a.dur = range(sub_cfg("acts").turn, { 2, 2.8 }) / st.pace
     return string.format("turning onto her front, %s arm across", side_name(a.h))
   end,
   tick = function(a, f, k, dt)
@@ -565,9 +701,9 @@ ACT.turn = {
 -- face down: a hand reaching out past her head, planting, dragging her forward, the other after it
 ACT.crawl = {
   start = function(a, f)
-    a.dur = range(sub_cfg("acts").crawl, { 3.5, 5.5 }) / st.pace
-    a.T = rnd(1.1, 1.5) / st.pace
-    a.from = loc(st.mesh, P .. "Pelvis")
+    a.dur = range(sub_cfg("acts").crawl, { 2.5, 4 }) / st.pace
+    a.T = rnd(1.6, 2.2) / st.pace
+    a.from, a.drag0 = body_at(st.mesh), st.dragT or 0
     return string.format("crawling, %s", #st.plan.arms > 1 and "both arms" or (side_name(st.plan.arms[1]) .. " arm"))
   end,
   tick = function(a, f, k, dt)
@@ -587,15 +723,20 @@ ACT.crawl = {
         else t, kk = lerp(add(ahead, scale(f.front, 4)), pulled, smooth((x - 0.45) / 0.55)), 1.3 end
         local pole = sum(scale(out(f, h), 0.7), scale(away, 0.5), scale(f.up, -0.3))
         reach(mesh, h, "arm", t, pole, k * kk, dt)
+        if x >= 0.45 and planted(mesh, P .. h .. "-Hand", P .. "Spine2", f.front) then a.pull = true end
       end
     end
+    -- (a hand planted and pulling back drags her towards it)
+    if a.pull then drag(mesh, headward(f), k, dt) end
+    a.pull = nil
     scrabble(mesh, f, st.plan.legs, (a.t / (a.T * 1.3)) % 1, k * 0.8, dt)
     roll(mesh, f, (r > 0 and 1 or -1) * 180, k * 0.5, dt)
     return a.t >= a.dur
   end,
   done = function(a)
-    local p = loc(st.mesh, P .. "Pelvis")
-    return string.format("dragged herself %.0f cm", p and a.from and len(sub(p, a.from)) or -1)
+    local p = body_at(st.mesh)
+    return string.format("dragged herself %.0f cm (pulling for %.1f s)", p and a.from and len(sub(p, a.from)) or -1,
+      (st.dragT or 0) - (a.drag0 or 0))
   end,
 }
 
@@ -619,7 +760,7 @@ local function rise_tick(a, f, k, dt)
   local c, mesh = sub_cfg("rise"), st.mesh
   local e = a.t < a.dur and smooth(a.t / 0.35) or 1 - smooth((a.t - a.dur) / a.give)
   local pk = k * a.k * (c.power or 1.5) * e
-  local shake = (c.shake or 4) * math.sin(2 * math.pi * a.hz * a.t)
+  local shake = (c.shake or 2) * math.sin(2 * math.pi * a.hz * a.t)
   for i, cl in ipairs(CURL) do
     local ang = math.rad(cl[3] * (c.curl or 1) * (a.h and 0.8 or 1) + (i > 1 and shake or 0))
     servo(mesh, cl[1], add(scale(a.up, math.cos(ang)), scale(a.front, math.sin(ang))), pk, dt)
@@ -629,7 +770,11 @@ local function rise_tick(a, f, k, dt)
     local o = a.h == "R" and a.right or scale(a.right, -1)
     local b = P .. a.h .. "-"
     servo(mesh, b .. "UpperArm", norm(sum(scale(a.front, -0.85), scale(a.up, -0.35), scale(o, 0.25))), pk, dt)
-    servo(mesh, b .. "Forearm", norm(sum(scale(a.up, -0.7), scale(o, 0.35), scale(a.front, -0.25))), pk, dt)
+    -- (into the plane her elbow bends in: off it, the joint limits held the forearm)
+    local fa, x = norm(sum(scale(a.up, -0.7), scale(o, 0.35), scale(a.front, -0.25))), hinge(mesh, b .. "Forearm")
+    local ua, fo = loc(mesh, b .. "UpperArm"), loc(mesh, b .. "Forearm")
+    local ud = ua and fo and norm(sub(fo, ua))
+    servo(mesh, b .. "Forearm", x and ud and fold(ud, fa, x, FOLD.arm) or fa, pk, dt, true)
     roll(mesh, f, (a.h == "R" and 1 or -1) * 25, k, dt)
   else
     roll(mesh, f, 0, k, dt)
@@ -651,9 +796,9 @@ ACT.prop = { start = function(a, f) return rise_start(a, f, true) end, tick = ri
 -- back first
 ACT.push = {
   start = function(a, f)
-    a.dur = range(sub_cfg("acts").push, { 3.5, 5.5 }) / st.pace
-    a.from = loc(st.mesh, P .. "Pelvis")
-    a.period, a.cycle, a.n = rnd(1.5, 2.1) / st.pace, -1, 0
+    a.dur = range(sub_cfg("acts").push, { 2.5, 4 }) / st.pace
+    a.from, a.drag0 = loc(st.mesh, P .. "Pelvis"), st.dragT or 0
+    a.period, a.cycle, a.n = rnd(2.0, 2.8) / st.pace, -1, 0
     a.turnAt, a.turnTo = rnd(1, 2), 0
     a.rockT = rnd(2.2, 3.4)
     return string.format("pushing with %d leg%s", #st.plan.legs, #st.plan.legs == 1 and "" or "s")
@@ -679,6 +824,7 @@ ACT.push = {
     local cycle = math.floor(a.t / a.period)
     if cycle ~= a.cycle then a.cycle, a.n = cycle, a.n + 1 end
     local bend = c.bend or 0.55
+    local shove
     for _, ls in ipairs(legs) do
       local L, hip = limb_len(mesh, ls, "leg")
       if L then
@@ -687,20 +833,24 @@ ACT.push = {
         else d, lift = 1 - smooth((x - bend) / (1 - bend)), -(c.press or 10) end
         local t = add(lerp(add(hip, scale(f.up, -0.95 * L)), add(hip, scale(f.up, -0.4 * L)), d), scale(f.front, lift - 4))
         reach(mesh, ls, "leg", t, f.front, k, dt)
+        if x >= bend and planted(mesh, P .. ls .. "-Foot", P .. "Pelvis", scale(f.front, -1), 6) then shove = true end
       end
     end
+    -- (a heel down and driving: she slides head first)
+    if shove then drag(mesh, headward(f), k * 0.8, dt) end
     return a.t >= a.dur
   end,
   done = function(a)
     local p = loc(st.mesh, P .. "Pelvis")
-    return string.format("%d pushes, her pelvis moved %.0f cm", a.n, p and a.from and len(sub(p, a.from)) or -1)
+    return string.format("%d pushes, her pelvis moved %.0f cm (driving for %.1f s)", a.n,
+      p and a.from and len(sub(p, a.from)) or -1, (st.dragT or 0) - (a.drag0 or 0))
   end,
 }
 
 -- curling up tight: knees to her chest, arms in round her head, rocking a little
 ACT.curl = {
   start = function(a, f)
-    a.dur = range(sub_cfg("acts").curl, { 2, 3.5 }) / st.pace
+    a.dur = range(sub_cfg("acts").curl, { 1.5, 2.5 }) / st.pace
     a.rockT = rnd(1.6, 2.4)
     a.way = math.random() < 0.5 and 1 or -1
     -- (her back's rounding fixed in the world as she lay: a target riding her own frame ran on ahead)
@@ -720,7 +870,7 @@ ACT.curl = {
     for _, ls in ipairs(st.plan.legs) do leg_to(mesh, f, ls, 1, k * e, dt, 0.55) end
     roll(mesh, f, a.way * (60 + 15 * math.sin(2 * math.pi * a.t / a.rockT)), k * 0.8, dt)
     -- (her back rounding a little)
-    servo(mesh, P .. "Spine2", a.back, k * 0.6 * e, dt)
+    if st.plan.waist ~= P .. "Spine2" then servo(mesh, P .. "Spine2", a.back, k * 0.6 * e, dt) end
     return a.t >= a.dur
   end,
   done = function() return "" end,
@@ -728,7 +878,7 @@ ACT.curl = {
 
 -- lying still a moment, only breathing
 ACT.lie = {
-  start = function(a) a.dur = range(sub_cfg("acts").lie, { 0.8, 1.8 }) / st.pace; return "lying still" end,
+  start = function(a) a.dur = range(sub_cfg("acts").lie, { 0.6, 1.2 }) / st.pace; return "lying still" end,
   tick = function(a) return a.t >= a.dur end,
   done = function() return "" end,
 }
@@ -753,9 +903,9 @@ local function choose(f, v)
     opt("reach", arms and (st.reached or 0) < 2, w.reach or 1.5)
     opt("turn", arms and back and not st.dimmed, w.turn or 0.8)
     opt("crawl", arms and down, w.crawl or 3)
-    opt("rise", back and tries, w.rise or 1)
-    opt("prop", back and tries and arms, w.prop or 1)
-    opt("push", not arms, w.push or 3)
+    opt("rise", back and tries and not s.waist, w.rise or 1)
+    opt("prop", back and tries and arms and not s.waist, w.prop or 1)
+    opt("push", not arms and not s.waist, w.push or 3)
     opt("curl", arms or legs, w.curl or 0.8)
     opt("lie", true, w.lie or 0.6)
   end
@@ -781,7 +931,7 @@ local function vitality(t, raw)
   local c, x = sub_cfg("bleed"), t / st.total
   local fr, last, low = c.frantic or 0.25, c.last or 0.85, c.low or 0.25
   local v
-  if x < fr then v = 1 + (c.surge or 0.3) * (1 - x / fr)
+  if x < fr then v = 1 + (c.surge or 0.1) * (1 - x / fr)
   elseif x < last then v = 1 - (1 - low) * smooth((x - fr) / (last - fr))
   else v = low * (1 - smooth((x - last) / (1 - last))) end
   if raw then return v end
@@ -794,7 +944,7 @@ local function breathe(mesh, f, v, dt)
   local c = sub_cfg("breath")
   if c.enabled == false or st.breathless then return end
   local frac = clamp(v, 0, 1.3)
-  local T = (c.slow or 2.6) + ((c.fast or 0.75) - (c.slow or 2.6)) * clamp(frac, 0, 1)
+  local T = (c.slow or 2.6) + ((c.fast or 1.1) - (c.slow or 2.6)) * clamp(frac, 0, 1)
   local A = (c.depth or 4) * (0.35 + 0.65 * clamp(frac, 0, 1.3))
   if st.lastBreath then T, A = 1.6, (c.depth or 4) * 1.6 end
   st.breathPh = (st.breathPh or 0) + dt * 2 * math.pi / T
@@ -802,7 +952,7 @@ local function breathe(mesh, f, v, dt)
   local dv = w - (st.breathW or 0)
   st.breathW = w
   push(mesh, P .. "Spine2", scale(f.right, dv))
-  push(mesh, P .. "Spine1", scale(f.right, -dv * 0.5), true)
+  if st.plan.waist ~= P .. "Spine2" then push(mesh, P .. "Spine1", scale(f.right, -dv * 0.5), true) end
   if st.lastBreath and st.breathPh >= st.lastBreath then st.breathless = true; log(string.format("%.1f s: her last breath", st.t)) end
 end
 
@@ -816,14 +966,14 @@ local function reflexes(mesh, v)
     if stub and not cut(mesh, stub) then
       local at = st.reflexAt[root] or rnd(0.2, 1.0)
       if st.t >= at then
-        local n = math.random(1, 3)
+        local n = math.random(1, 2)
         local t0 = st.t
         for i = 1, n do
-          pulse(stub, across(mesh, stub), (c.speed or 140) * math.min(v, 1.2) * rnd(0.7, 1.1), rnd(0.1, 0.18), t0,
-            (c.quiver or 40) * math.min(v, 1), rnd(10, 14))
+          pulse(stub, across(mesh, stub), (c.speed or 80) * math.min(v, 1.2) * rnd(0.7, 1.1), rnd(0.1, 0.18), t0,
+            (c.quiver or 15) * math.min(v, 1), rnd(10, 14))
           t0 = t0 + rnd(0.15, 0.3)
         end
-        st.reflexAt[root] = t0 + rnd(0.4, 1.4) / math.max(v, 0.25)
+        st.reflexAt[root] = t0 + rnd(1.2, 2.8) / math.max(v, 0.25)
         st.reflexes = st.reflexes + n
       else
         st.reflexAt[root] = at
@@ -864,21 +1014,24 @@ function M.rising() return st ~= nil and st.act ~= nil and ACT[st.act.name].effo
 -- ---- the death ----
 function M.start(pawn, mesh)
   M.stop()
-  if cfg().enabled == false or ctx.tune.deathMoves ~= true then return end -- (parked: tune.deathMoves)
-  st = { pawn = pawn, mesh = mesh, t = 0, last = os.clock(), acc = 0 }
+  -- (main.lua's F6 struggle test: on whatever deathMoves says, its plan sit-up only when it has no cut)
+  local test = ctx.struggle_test
+  if not test and (cfg().enabled == false or ctx.tune.deathMoves ~= true) then return end -- (parked: tune.deathMoves)
+  st = { pawn = pawn, mesh = mesh, t = 0, last = os.clock(), acc = 0, alone = test and test.alone or nil }
 end
 
 local function begin(mesh, plan)
-  local tt = cfg().time or { 8, 12 }
+  local tt = cfg().time or { 5, 8 }
   st.plan, st.began, st.t = plan, true, 0
   st.total = rnd(tt[1], tt[2] or tt[1])
   st.legClock = { L = { next = rnd(0.2, 0.8) }, R = { next = rnd(0.5, 1.3) } }
   st.pulses, st.reflexAt, st.reflexes, st.draws, st.tries = {}, {}, 0, 0, 0
   st.trace, st.hold, st.step, st.kept, st.keptN, st.err, st.errN = {}, {}, 0, 0, 0, 0, 0
+  st.now, st.nowN, st.probeN = 0, 0, 0
   local tries = sub_cfg("rise").tries or { 1, 3 }
   st.triesMax = math.random(tries[1], tries[2] or tries[1])
   st.acts, st.pace, st.nextTry = {}, 1, rnd(1.0, 2.5)
-  st.start = loc(mesh, P .. "Pelvis")
+  st.start = body_at(mesh)
   try(function() mesh:WakeAllRigidBodies() end)
   local f = frame(mesh)
   local r = f and roll_of(f)
@@ -894,7 +1047,7 @@ end
 local function step(mesh, dt)
   local r = rag()
   local v = vitality(st.t)
-  st.pace = 0.5 + 0.5 * clamp(vitality(st.t, true), 0, 1.3)
+  st.pace = 0.5 + 0.5 * clamp(vitality(st.t, true), 0, 1)
   if st.plan.alone and not st.act then
     -- (between its tries she settles as she would)
   else
@@ -924,7 +1077,9 @@ local function step(mesh, dt)
     if not what then st.lastAct = name; return end -- (nothing to do it with: picked again next step)
     st.act = a
     st.acts[#st.acts + 1] = name
-    st.kept, st.keptN, st.err, st.errN = 0, 0, 0, 0
+    st.kept, st.keptN, st.err, st.errN, st.now, st.nowN, st.probeN = 0, 0, 0, 0, 0, 0, 0
+    st.errM, st.errMN = 0, 0
+    st.writes = r.writes and r.writes() or nil
     if cfg().log ~= false then log(string.format("%.1f s: %s (strength %.2f)", st.t, what, v)) end
     if (name == "rise" or name == "prop") and st.plan.alone then r.twitch(0.6); try(function() mesh:WakeAllRigidBodies() end) end
   end
@@ -933,8 +1088,17 @@ local function step(mesh, dt)
     local line = ACT[a.name].done(a)
     -- (how her joints followed: the angle they were off by on average, the share of each step's turn still there
     -- the next)
-    local how = st.errN > 0 and string.format("joints off by %.0f deg on average, %.0f%% of each turn kept", st.err / st.errN,
-      st.keptN > 0 and 100 * st.kept / st.keptN or -1) or "no joint steered"
+    local how = st.errN > 0 and string.format("joints off by %.0f deg on average, %.0f%% of each turn kept (%.0f%% read back at once)",
+      st.err / st.errN, st.keptN > 0 and 100 * st.kept / st.keptN or -1, st.nowN > 0 and 100 * st.now / st.nowN or -1)
+      or "no joint steered"
+    if (st.errMN or 0) > 0 then how = how .. string.format(" (elbows and knees %.0f)", st.errM / st.errMN) end
+    -- (what the ragdoll's own upkeep did to her bodies meanwhile: active.lua's settling zeroing every turn, the spin
+    -- and flung caps slowing bodies)
+    local w0, w1 = st.writes, r.writes and r.writes()
+    if w0 and w1 then
+      local z, c, fl = w1.zeroed - w0.zeroed, w1.clamped - w0.clamped, w1.flung - w0.flung
+      if z + c + fl > 0 then how = how .. string.format("; meanwhile her turns zeroed %d times, %d spins capped, %d flung bodies slowed", z, c, fl) end
+    end
     if cfg().log ~= false then log(string.format("%.1f s: %s over: %s%s", st.t, a.name, line ~= "" and (line .. "; ") or "", how)) end
     st.act, st.lastAct = nil, a.name
     if a.name == "turn" and not a.over then st.dimmed = true end
@@ -973,7 +1137,7 @@ function M.tick(paused)
     -- (from a quiet ragdoll she lies as she fell: a moment for her to sag into the floor)
     if st.plan0 then
       if v.t < (cfg().quietWait or 0.4) then return end
-    elseif not v.settled and v.t < (cfg().startMax or 2.5) then return end
+    elseif not v.settled and v.t < (cfg().startMax or 0.8) then return end
     local alone = nil
     if st.plan0 then alone = st.plan0.alone == true end
     local plan, why = pick(mesh, alone)
@@ -992,7 +1156,7 @@ function M.tick(paused)
   st.t = st.t + dt
   if st.t >= st.total then
     st.done = true
-    local p = loc(mesh, P .. "Pelvis")
+    local p = body_at(mesh)
     log(string.format("over after %.1f s: %s; rolled %.0f to %.0f deg, %d stump reflexes, %d leg draws, chest up to %.0f deg, moved %.0f cm in all",
       st.t, #st.acts > 0 and table.concat(st.acts, ", ") or "no acts", st.rollMin or 0, st.rollMax or 0, st.reflexes, st.draws,
       st.risen or 0, p and st.start and len(sub(p, st.start)) or -1))

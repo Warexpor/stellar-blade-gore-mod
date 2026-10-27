@@ -37,6 +37,9 @@ local try, valid = nil, nil
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local function len(v) return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) end
 local function addr(o) return try(function() return o:GetAddress() end) end
+-- bone names made into FNames once (each FName() looks the string up in the name table): the ragdoll's upkeep reads
+-- every body of hers each poll, 1.4-2.6 ms of a poll in a death (frame cost)
+local FN = setmetatable({}, { __index = function(t, b) local f = FName(b); t[b] = f; return f end })
 
 -- kg per main body, ~60 kg in all (Dempster-style segment shares for a light adult)
 local MASS = {
@@ -75,6 +78,10 @@ local speeds = {}       -- the capsule's last velocities while alive, newest las
 local SPEED_SAMPLES = 10 -- ~330 ms at the 33 ms tick
 local run = nil         -- the ragdoll in progress: { mesh, pac, t, masses = {bone = kg} }
 local dropped = {}      -- { comp, box, parent, socket, loc, rot }: weapons let go of
+-- her sword left with an arm cut off her alive: { copy, real }. The copy (its pose as she let go) drops and stays where
+-- it fell; the real one, the game's, stays on her hidden till every cut is undone. Dropping the real one, the game's
+-- swordless stance (No Sword) folded it back into her hair at once, off the floor, unseen (playtest)
+local standins = {}
 local gripped = {}      -- address -> { comp, parent, socket, loc, rot }: weapons still in her hand in a ragdoll death
 local extra = {}        -- other ragdolls to settle with hers (a split's copy)
 -- her hands opening once a weapon left them (tune.active.grip.open): hand bone -> { t, comps = { {comp, bone index} } }
@@ -119,13 +126,13 @@ local function bodies(mesh)
   return l and l.bones or {}
 end
 
-local function mass(mesh, bone) return try(function() return mesh:GetBoneMass(FName(bone), true) end) end
+local function mass(mesh, bone) return try(function() return mesh:GetBoneMass(FN[bone], true) end) end
 
 -- the main body an accessory hangs from (its nearest ancestor in MASS), or nil
 local function anchor_walk(mesh, bone)
   local b = bone
   for _ = 1, 64 do
-    local p = try(function() return mesh:GetParentBone(FName(b)):ToString() end)
+    local p = try(function() return mesh:GetParentBone(FN[b]):ToString() end)
     if not p or p == "None" then return nil end
     if MASS[p] then return p end
     b = p
@@ -151,7 +158,7 @@ end
 -- (read back with tune.gore.probes only: 35 more engine calls in the frame of a death or a cut)
 local function real_mass(mesh, bone)
   if not (ctx.tune.gore or {}).probes then return 0 end
-  return try(function() return mesh:GetBoneMass(FName(bone), false) end) or 0
+  return try(function() return mesh:GetBoneMass(FN[bone], false) end) or 0
 end
 local function set_masses(mesh, g, keep, only)
   local before, after, acc, accBefore, n = 0, 0, 0, 0, 0
@@ -176,7 +183,7 @@ local function set_masses(mesh, g, keep, only)
       main[#main + 1] = string.format("%s=%.0f", bone:gsub("Bip001%-", ""), m)
       if keep then keep.masses[bone] = m end
       local want = MASS[bone] * (g.massScale or 1.0)
-      if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then
+      if try(function() mesh:SetMassOverrideInKg(FN[bone], want, true); return true end) then
         before, after = before + m, after + want
       end
       readMain = readMain + real_mass(mesh, bone)
@@ -187,7 +194,7 @@ local function set_masses(mesh, g, keep, only)
       if am and share > 0 then want = math.max(math.min(cap, am * (g.massScale or 1.0) * share / groups[e.anchor]), floor) end
       if want > 0 and m > want then
         if keep then keep.masses[bone] = m end
-        if try(function() mesh:SetMassOverrideInKg(FName(bone), want, true); return true end) then m = want end
+        if try(function() mesh:SetMassOverrideInKg(FN[bone], want, true); return true end) then m = want end
       end
       acc, n = acc + m, n + 1
       readAcc = readAcc + real_mass(mesh, bone)
@@ -214,7 +221,7 @@ local function cap_spin(comp, g, max, split, only)
   if split then main, ends = s.splitMain or 360, s.splitEnds or 240 end
   for _, b in ipairs(only or bodies(comp)) do
     local w = max or ((MASS[b] and not ENDS[b]) and main or ends)
-    if try(function() comp:SetPhysicsMaxAngularVelocityInDegrees(w, false, FName(b)); return true end) then n = n + 1 end
+    if try(function() comp:SetPhysicsMaxAngularVelocityInDegrees(w, false, FN[b]); return true end) then n = n + 1 end
   end
   return string.format(", spin capped on %d bodies", n)
 end
@@ -245,7 +252,7 @@ local severed, severedOn = {}, nil
 -- the bodies a cut took off fly on their own
 local function on_her(comp, b)
   for r in pairs(severed) do
-    if r == b or try(function() return comp:BoneIsChildOf(FName(b), FName(r)) end) then return false end
+    if r == b or try(function() return comp:BoneIsChildOf(FN[b], FName(r)) end) then return false end
   end
   return true
 end
@@ -275,7 +282,7 @@ local function impact(mesh, g, dir, boost, whole)
       local d = vec(dir.X / h * (1 - up), dir.Y / h * (1 - up), up)
       local n = 0
       for bone, share in pairs(IMPACT) do
-        if try(function() mesh:AddImpulse(vec(d.X * boost * share, d.Y * boost * share, d.Z * boost * share), FName(bone), true); return true end) then n = n + 1 end
+        if try(function() mesh:AddImpulse(vec(d.X * boost * share, d.Y * boost * share, d.Z * boost * share), FN[bone], true); return true end) then n = n + 1 end
       end
       out = string.format(", impact %.0f cm/s on %d bones", boost, n)
       local l = (whole and not run.split) and (g.launch or 0) * k or 0
@@ -284,7 +291,7 @@ local function impact(mesh, g, dir, boost, whole)
         local ld = vec(dir.X / h * (1 - lu) * l, dir.Y / h * (1 - lu) * l, lu * l)
         local m = 0
         for b in pairs(MASS) do
-          if on_her(mesh, b) and try(function() mesh:AddImpulse(ld, FName(b), true); return true end) then m = m + 1 end
+          if on_her(mesh, b) and try(function() mesh:AddImpulse(ld, FN[b], true); return true end) then m = m + 1 end
         end
         run.launchV = l
         -- one push was lost at once: her pelvis read ~110 cm/s a tick later with nothing sideways left, her feet
@@ -299,7 +306,7 @@ local function impact(mesh, g, dir, boost, whole)
   if tw > 0 then
     local w = vec(0, 0, (math.random() < 0.5 and -1 or 1) * tw * (0.6 + 0.4 * math.random()))
     -- (added to the angular velocity: AddAngularImpulseInDegrees as a velocity change did nothing in game)
-    for _, bone in ipairs(TWIST) do try(function() mesh:SetPhysicsAngularVelocityInDegrees(w, true, FName(bone)) end) end
+    for _, bone in ipairs(TWIST) do try(function() mesh:SetPhysicsAngularVelocityInDegrees(w, true, FN[bone]) end) end
     out = out .. string.format(", twist %.0f deg/s", w.Z)
   end
   return out
@@ -312,7 +319,7 @@ local function drive(pac, bone, k, t)
   local s = (t.strength or 800) * stiff()
   local data = { bIsLocalSimulation = true, OrientationStrength = s * k, AngularVelocityStrength = s * k * (t.damping or 0.1),
     PositionStrength = 0, VelocityStrength = 0, MaxLinearForce = 0, MaxAngularForce = 0 }
-  return try(function() pac:ApplyPhysicalAnimationSettings(FName(bone), data); return true end)
+  return try(function() pac:ApplyPhysicalAnimationSettings(FN[bone], data); return true end)
 end
 
 local function tone_start(pawn, mesh, g)
@@ -361,7 +368,9 @@ local function weapons_back()
   local n = 0
   for _, d in ipairs(dropped) do
     local w = d.comp
-    if valid(w) and valid(d.parent) then
+    if d.copy then
+      if valid(w) then try(function() w:K2_DestroyComponent(w) end) end
+    elseif valid(w) and valid(d.parent) then
       if try(function()
         w:K2_AttachToComponent(d.parent, d.socket or FName("None"), 2, 2, 2, false)
         if d.loc and d.rot then w:K2_SetRelativeLocationAndRotation(d.loc, d.rot, false, {}, true) end
@@ -371,6 +380,48 @@ local function weapons_back()
     if valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
   end
   dropped = {}
+  return n
+end
+
+-- a copy of weapon w where it is, in its pose now (a poseable mesh: it keeps that pose, the gears and panels the
+-- sword animates stay as they were), not colliding (its box does)
+local function stand_in(pawn, w)
+  local cls = try(function() return StaticFindObject("/Script/Engine.PoseableMeshComponent") end)
+  if not valid(cls) then return nil, "no PoseableMeshComponent class" end
+  local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
+  local c = try(function() return pawn:AddComponentByClass(cls, true, id, false) end)
+  if not valid(c) then return nil, "not made" end
+  try(function() c:SetCollisionEnabled(0) end)
+  if not try(function() c:SetSkeletalMesh(w.SkeletalMesh, true); return true end) then
+    try(function() c:K2_DestroyComponent(c) end)
+    return nil, "no mesh"
+  end
+  local nmat = try(function() return w:GetNumMaterials() end) or 0
+  for i = 0, nmat - 1 do
+    local mt = try(function() return w:GetMaterial(i) end)
+    if mt then try(function() c:SetMaterial(i, mt) end) end
+  end
+  local tm = try(function() return w:K2_GetComponentToWorld() end)
+  if tm then try(function() c:K2_SetWorldTransform(tm, false, {}, true) end) end
+  local posed = try(function() c:CopyPoseFromSkeletalComponent(w); return true end)
+  return c, posed and "posed" or "ref pose"
+end
+-- the sword cut off her alive back with the arm: the copy gone, the real one shown
+local function standins_back()
+  local n = 0
+  for _, s in ipairs(standins) do
+    if valid(s.real) and try(function() s.real:SetHiddenInGame(false, false); return true end) then n = n + 1 end
+    local a = addr(s.copy)
+    for i = #dropped, 1, -1 do
+      local d = dropped[i]
+      if addr(d.comp) == a then
+        if valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
+        table.remove(dropped, i)
+      end
+    end
+    if valid(s.copy) then try(function() s.copy:K2_DestroyComponent(s.copy) end) end
+  end
+  standins = {}
   return n
 end
 
@@ -449,7 +500,7 @@ local function holding_hand(mesh, w)
   local hand, best
   for _, sd in ipairs({ "R", "L" }) do
     local b = "Bip001-" .. sd .. "-Hand"
-    local h = at and try(function() local v = mesh:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end)
+    local h = at and try(function() local v = mesh:GetSocketLocation(FN[b]); return vec(v.X, v.Y, v.Z) end)
     local d = h and len(vec(at.X - h.X, at.Y - h.Y, at.Z - h.Z))
     if d and d < 30 and (not best or d < best) then hand, best = b, d end
   end
@@ -491,6 +542,8 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
     local a = try(function() return d.comp:GetAddress() end)
     if a then held[a] = true end
   end
+  -- (and the real sword hidden on her while its copy lies where the arm fell: not dropped again, unseen)
+  for _, st in ipairs(standins) do local a = addr(st.real); if a then held[a] = true end end
   local list, cand = {}, weapons(pawn)
   for _, w in ipairs(extra or {}) do cand[#cand + 1] = w end
   for _, w in ipairs(cand) do
@@ -578,7 +631,7 @@ local function grip_start(mesh, g)
     local hand, best
     for _, sd in ipairs({ "R", "L" }) do
       local b = "Bip001-" .. sd .. "-Hand"
-      local h = try(function() local v = mesh:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end)
+      local h = try(function() local v = mesh:GetSocketLocation(FN[b]); return vec(v.X, v.Y, v.Z) end)
       local d = h and at and len(vec(at.X - h.X, at.Y - h.Y, at.Z - h.Z))
       if d and d < 30 and (not best or d < best) and not severed[b] then hand, best = b, d end
     end
@@ -825,7 +878,7 @@ local STRETCH_AT = { 0.5, 1.0, 2.0, 3.0 }
 local function crosses_cut(mesh, bone, up)
   for s in pairs(severed) do
     if s == bone then return true end
-    local below = try(function() return mesh:BoneIsChildOf(FName(bone), FName(s)) end) == true
+    local below = try(function() return mesh:BoneIsChildOf(FN[bone], FName(s)) end) == true
     local upBelow = s == up or try(function() return mesh:BoneIsChildOf(FName(up), FName(s)) end) == true
     if below and not upBelow then return true end
   end
@@ -835,7 +888,7 @@ local function joint_lengths(mesh)
   local out = {}
   for bone in pairs(MASS) do
     local up = anchor_of(mesh, bone)
-    local a = up and try(function() local v = mesh:GetSocketLocation(FName(bone)); return vec(v.X, v.Y, v.Z) end)
+    local a = up and try(function() local v = mesh:GetSocketLocation(FN[bone]); return vec(v.X, v.Y, v.Z) end)
     local b = a and try(function() local v = mesh:GetSocketLocation(FName(up)); return vec(v.X, v.Y, v.Z) end)
     if b then out[bone] = { up = up, l = len(vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z)) } end
   end
@@ -848,9 +901,9 @@ local function cape_lengths(mesh)
   local out = {}
   for _, bone in ipairs(bodies(mesh)) do
     if not MASS[bone] and bone:find("Cape") then
-      local up = try(function() return mesh:GetParentBone(FName(bone)):ToString() end)
+      local up = try(function() return mesh:GetParentBone(FN[bone]):ToString() end)
       -- (link to link: the top one hangs off the shoulder in a ragdoll, away from its arm bone by design)
-      local a = up and up:find("Cape") and try(function() local v = mesh:GetSocketLocation(FName(bone)); return vec(v.X, v.Y, v.Z) end)
+      local a = up and up:find("Cape") and try(function() local v = mesh:GetSocketLocation(FN[bone]); return vec(v.X, v.Y, v.Z) end)
       local b = a and try(function() local v = mesh:GetSocketLocation(FName(up)); return vec(v.X, v.Y, v.Z) end)
       if b then out[bone] = { up = up, l = len(vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z)) } end
     end
@@ -882,14 +935,14 @@ local ROLL = {
   ["Bip001-L-Foot"] = { "Bip001-L-Calf", "Bip001-L-Toe0" }, ["Bip001-R-Foot"] = { "Bip001-R-Calf", "Bip001-R-Toe0" },
 }
 local function quat(mesh, b)
-  return try(function() local r = mesh:GetSocketTransform(FName(b), 0).Rotation; return { r.X, r.Y, r.Z, r.W } end)
+  return try(function() local r = mesh:GetSocketTransform(FN[b], 0).Rotation; return { r.X, r.Y, r.Z, r.W } end)
 end
 local function qmul(a, b)
   return { a[4] * b[1] + a[1] * b[4] + a[2] * b[3] - a[3] * b[2], a[4] * b[2] - a[1] * b[3] + a[2] * b[4] + a[3] * b[1],
     a[4] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[4], a[4] * b[4] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3] }
 end
 local function qconj(a) return { -a[1], -a[2], -a[3], a[4] } end
-local function loc(mesh, b) return try(function() local l = mesh:GetSocketLocation(FName(b)); return vec(l.X, l.Y, l.Z) end) end
+local function loc(mesh, b) return try(function() local l = mesh:GetSocketLocation(FN[b]); return vec(l.X, l.Y, l.Z) end) end
 -- per joint: the child relative to its parent, and (at the start) the bone's own axis in the child's frame
 local function joint_rolls(mesh, axes)
   local out = {}
@@ -949,7 +1002,7 @@ local function buzz_tick(comps)
       local per = run.buzz[key]
       if not per then per = { i = i, names = bodies(comp), b = {} }; run.buzz[key] = per end
       for _, b in ipairs(per.names) do
-        local w = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+        local w = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
         if w then
           local e = per.b[b] or { n = 0, flips = 0, sum = 0 }
           per.b[b] = e
@@ -1051,7 +1104,7 @@ local function hang_capes(pawn, mesh, g)
         if try(function() pc:SetConstrainedComponents(mesh, FName(anchor), mesh, FName(root)); return true end) then
           for b in pairs(chain) do
             run.masses[b] = run.masses[b] or mass(mesh, b)
-            try(function() mesh:SetMassOverrideInKg(FName(b), g.capeKg or 0.12, true) end)
+            try(function() mesh:SetMassOverrideInKg(FN[b], g.capeKg or 0.12, true) end)
           end
           done[#done + 1] = string.format("%s (%d links) on %s", root, n, anchor:gsub("Bip001%-", ""))
         end
@@ -1123,7 +1176,7 @@ local function blow(pawn, mesh, hint)
   if d and len(d) > 1e-3 then return d, "key" end
   if hint and len(hint) > 1e-3 then return hint, "attack" end
   local h = try(function() local v = pawn.RagdollInfo.HitLocation; return vec(v.X, v.Y, v.Z) end)
-  local p = try(function() local v = mesh:GetSocketLocation(FName("Bip001-Pelvis")); return vec(v.X, v.Y, v.Z) end)
+  local p = try(function() local v = mesh:GetSocketLocation(FN["Bip001-Pelvis"]); return vec(v.X, v.Y, v.Z) end)
   if h and p and len(h) > 0 then
     d = vec(p.X - h.X, p.Y - h.Y, 0)
     if len(d) > 1 then return d, "hit" end
@@ -1137,14 +1190,14 @@ local freed = {}
 local function live(comp, b)
   local f = freed[addr(comp)]
   if f and f[b] then return false end
-  return try(function() return comp:IsSimulatingPhysics(FName(b)) end) ~= false
+  return try(function() return comp:IsSimulatingPhysics(FN[b]) end) ~= false
 end
 
 -- the fastest of a ragdoll's main bodies, cm/s, and which
 local function speed(comp)
   local top, which = 0, nil
   for _, b in ipairs(STILL) do
-    local v = live(comp, b) and try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local v = live(comp, b) and try(function() local x = comp:GetPhysicsLinearVelocity(FN[b]); return vec(x.X, x.Y, x.Z) end)
     if v and len(v) > top then top, which = len(v), b end
   end
   return top, which
@@ -1154,7 +1207,7 @@ end
 local function turning(comp)
   local top, which = 0, nil
   for _, b in ipairs(STILL) do
-    local w = live(comp, b) and try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local w = live(comp, b) and try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
     if w and len(w) > top then top, which = len(w), b end
   end
   return top, which
@@ -1166,7 +1219,7 @@ local function where(comps)
   for i, comp in ipairs(comps) do
     if valid(comp) then
       for _, b in ipairs(STILL) do
-        local p = live(comp, b) and try(function() local x = comp:GetSocketLocation(FName(b)); return vec(x.X, x.Y, x.Z) end)
+        local p = live(comp, b) and try(function() local x = comp:GetSocketLocation(FN[b]); return vec(x.X, x.Y, x.Z) end)
         if p then out[i .. "/" .. b] = p end
       end
     end
@@ -1182,7 +1235,7 @@ end
 local function sleep(comp)
   local n = 0
   for _, b in ipairs(own(comp)) do
-    if try(function() comp:PutRigidBodyToSleep(FName(b)); return true end) then n = n + 1 end
+    if try(function() comp:PutRigidBodyToSleep(FN[b]); return true end) then n = n + 1 end
   end
   return n
 end
@@ -1194,26 +1247,31 @@ local HOLD_MAX = 1.0
 local function velocities(comp)
   local out = {}
   for _, b in ipairs(bodies(comp)) do
-    local v = try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
-    local w = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local v = try(function() local x = comp:GetPhysicsLinearVelocity(FN[b]); return vec(x.X, x.Y, x.Z) end)
+    local w = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
     if v and w then out[b] = { v = v, w = w } end
   end
   return out
 end
 local function gravity(comp, on)
   try(function() comp:SetEnableGravity(on) end)
-  for _, b in ipairs(bodies(comp)) do try(function() comp:SetEnableBodyGravity(on, FName(b)) end) end
+  for _, b in ipairs(bodies(comp)) do try(function() comp:SetEnableBodyGravity(on, FN[b]) end) end
 end
+-- (and the same counted over every run, never reset: M.writes. A run's own counts start over with the next run, which
+-- a cut switching the death to the ragdoll begins mid act, and the struggle's delta over the act went wrong)
+local writes = { zeroed = 0, clamped = 0, flung = 0 }
 local function stop_all(comp)
   if run and run.piece then
     for _, b in ipairs(own(comp)) do
-      try(function() comp:SetPhysicsLinearVelocity(vec(0, 0, 0), false, FName(b)) end)
-      try(function() comp:SetPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false, FName(b)) end)
+      try(function() comp:SetPhysicsLinearVelocity(vec(0, 0, 0), false, FN[b]) end)
+      try(function() comp:SetPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false, FN[b]) end)
     end
     return
   end
   try(function() comp:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
   try(function() comp:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
+  if run then run.zeroed = (run.zeroed or 0) + 1 end
+  writes.zeroed = writes.zeroed + 1
 end
 
 function M.hold(mesh)
@@ -1237,8 +1295,8 @@ function M.release()
   for _, comp in ipairs({ mesh, table.unpack(extra) }) do
     if valid(comp) then
       for b, e in pairs(held.vel) do
-        try(function() comp:SetPhysicsLinearVelocity(e.v, false, FName(b)) end)
-        try(function() comp:SetPhysicsAngularVelocityInDegrees(e.w, false, FName(b)) end)
+        try(function() comp:SetPhysicsLinearVelocity(e.v, false, FN[b]) end)
+        try(function() comp:SetPhysicsAngularVelocityInDegrees(e.w, false, FN[b]) end)
         n = n + 1
       end
       try(function() comp:WakeAllRigidBodies() end)
@@ -1286,7 +1344,7 @@ end
 -- A main body faster than the torso by more than linearOver (and over linearFloor) is slowed to that.
 local TORSO = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2" }
 local function lin_vel(comp, b)
-  return live(comp, b) and try(function() local x = comp:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+  return live(comp, b) and try(function() local x = comp:GetPhysicsLinearVelocity(FN[b]); return vec(x.X, x.Y, x.Z) end)
 end
 local function clamp_flung(comp, s)
   if s.linear == false then return end
@@ -1300,7 +1358,7 @@ local function clamp_flung(comp, s)
       local l = v and len(v)
       if l and l > lim then
         local k = lim / l
-        try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FName(b)) end)
+        try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
         run.launched = (run.launched or 0) + 1
         if run.launched == 1 then log(string.format("launched: %s at %.0f cm/s slowed to %.0f at %.2f s", b, l, lim, run.t)) end
       end
@@ -1318,8 +1376,9 @@ local function clamp_flung(comp, s)
     local l = v and len(v)
     if l and l > cap then
       local k = cap / l
-      try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FName(b)) end)
+      try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
       run.flung = (run.flung or 0) + 1
+      writes.flung = writes.flung + 1
       if run.flung == 1 then
         log(string.format("flung: %s at %.0f cm/s (torso %.0f) slowed to %.0f at %.2f s", b, l, ref, cap, run.t or 0))
       end
@@ -1338,12 +1397,13 @@ local function clamp_spin()
       clamp_flung(comp, s)
       for b in pairs(MASS) do
         local cap = ENDS[b] and ends or main
-        local w = live(comp, b) and try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+        local w = live(comp, b) and try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
         local l = w and len(w)
         if l and l > cap then
           local k = cap / l
-          try(function() comp:SetPhysicsAngularVelocityInDegrees(vec(w.X * k, w.Y * k, w.Z * k), false, FName(b)) end)
+          try(function() comp:SetPhysicsAngularVelocityInDegrees(vec(w.X * k, w.Y * k, w.Z * k), false, FN[b]) end)
           run.clamped = (run.clamped or 0) + 1
+          writes.clamped = writes.clamped + 1
         end
       end
     end
@@ -1378,7 +1438,7 @@ local function aloft(c)
   local pawn = run.pawn or try(function() return run.mesh:GetOwner() end)
   local top, which = nil, nil
   for _, b in ipairs(aloft_bones(c)) do
-    local l = try(function() local x = c:GetSocketLocation(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local l = try(function() local x = c:GetSocketLocation(FN[b]); return vec(x.X, x.Y, x.Z) end)
     local over = l and M.over_floor(pawn, l)
     if over and (not top or over > top) then top, which = over, b end
   end
@@ -1386,6 +1446,12 @@ local function aloft(c)
 end
 local function settle(dt)
   local st = cfg().settle or {}
+  -- asleep and nothing to move her: looked at every 4th poll only (every body of hers read each time, kept up every
+  -- poll in a death that had long gone still: frame cost)
+  if run.asleep and not run.awake then
+    run.sleepN = (run.sleepN or 0) + 1
+    if run.sleepN % 4 ~= 0 then return end
+  end
   local comps = { run.mesh }
   for _, c in ipairs(extra) do comps[#comps + 1] = c end
   -- the main bodies' trail over the last window: how far each got (shivering in place goes nowhere)
@@ -1473,7 +1539,7 @@ local function settle(dt)
   if over and over > (st.air or 60) then
     run.still = 0
     for _, c in ipairs(comps) do
-      if valid(c) and run.piece then for _, b in ipairs(own(c)) do try(function() c:WakeRigidBody(FName(b)) end) end
+      if valid(c) and run.piece then for _, b in ipairs(own(c)) do try(function() c:WakeRigidBody(FN[b]) end) end
       elseif valid(c) then try(function() c:WakeAllRigidBodies() end) end
     end
     if not run.airSaid then
@@ -1523,7 +1589,7 @@ local function hang_watch()
   for i, c in ipairs(comps) do
     for _, bone in ipairs(valid(c) and aloft_bones(c) or {}) do
       local key = i .. bone
-      local l = try(function() local x = c:GetSocketLocation(FName(bone)); return vec(x.X, x.Y, x.Z) end)
+      local l = try(function() local x = c:GetSocketLocation(FN[bone]); return vec(x.X, x.Y, x.Z) end)
       local h = run.hang[key] or { zs = {} }
       run.hang[key] = h
       if l then
@@ -1539,7 +1605,7 @@ local function hang_watch()
               local still, n = {}, 0
               for _, b in ipairs(bodies(c)) do
                 n = n + 1
-                if try(function() return c:IsSimulatingPhysics(FName(b)) end) ~= true then still[#still + 1] = b end
+                if try(function() return c:IsSimulatingPhysics(FN[b]) end) ~= true then still[#still + 1] = b end
               end
               local v = lin_vel(c, bone)
               log(string.format("%s hangs at %.1f s: %s %.0f cm over the floor, dropped %.0f cm in %.1f s, %.0f cm/s; gravity %s, %d of %d bodies not simulating%s; let go",
@@ -1585,7 +1651,7 @@ local function fall_assist(dt)
   if dz >= 0 then return end
   for b in pairs(MASS) do
     local bv = on_her(comp, b) and lin_vel(comp, b)
-    if bv then try(function() comp:SetPhysicsLinearVelocity(vec(bv.X, bv.Y, bv.Z + dz), false, FName(b)) end) end
+    if bv then try(function() comp:SetPhysicsLinearVelocity(vec(bv.X, bv.Y, bv.Z + dz), false, FN[b]) end) end
   end
   run.fallSped = (run.fallSped or 0) + 1
   run.fallTop = math.max(run.fallTop or 0, -want)
@@ -1640,7 +1706,7 @@ function M.tick(dt)
       local along = cur and (cur.X * h.d.X + cur.Y * h.d.Y + cur.Z * h.d.Z)
       if along and along < h.v then
         local k = h.v - along
-        if try(function() run.mesh:SetPhysicsLinearVelocity(vec(cur.X + h.d.X * k, cur.Y + h.d.Y * k, cur.Z + h.d.Z * k), false, FName(b)); return true end) then sped = sped + 1 end
+        if try(function() run.mesh:SetPhysicsLinearVelocity(vec(cur.X + h.d.X * k, cur.Y + h.d.Y * k, cur.Z + h.d.Z * k), false, FN[b]); return true end) then sped = sped + 1 end
       end
     end
     if h.n <= 0 then
@@ -1655,7 +1721,7 @@ function M.tick(dt)
   local hold, fade, rest = t.hold or 0.35, t.fade or 2.5, math.min(math.max((t.rest or 0.1) * stiff(), 0), 1)
   -- landing ends the tone: pulled towards a standing pose with the floor and her own body in the way, every joint
   -- jittered until each part found the ground and the fade ran out (eighteenth playtest)
-  local vz = try(function() return run.mesh:GetPhysicsLinearVelocity(FName("Bip001-Pelvis")).Z end)
+  local vz = try(function() return run.mesh:GetPhysicsLinearVelocity(FN["Bip001-Pelvis"]).Z end)
   if vz then
     run.fall = math.min(run.fall or 0, vz)
     if t.landOff ~= false and run.fall < -(t.fallSpeed or 150) and vz > -(t.landSpeed or 40) then
@@ -1701,6 +1767,7 @@ end
 -- every cut on her undone (gore's cleanup remade her physics): nothing of her is cut off any more
 function M.mended(mesh)
   if addr(mesh) == severedOn then severed = {} end
+  if #standins > 0 then log(string.format("her sword back in her hand's place: %d shown, its copy gone", standins_back())) end
 end
 
 -- a split half let go of a body (a limb that went with the other half): the settle check leaves it out
@@ -1712,8 +1779,9 @@ function M.freed(comp, bone)
 end
 
 -- a limb came off: its root stops pulling towards the body (its own joints keep their fading tone). A cut arm lets
--- go of the weapons it held: in a death show's fall the animation kept her sword in the air, in an invisible hand
-function M.on_cut(mesh, bone)
+-- go of the weapons it held: in a death show's fall the animation kept her sword in the air, in an invisible hand.
+-- alive: a copy of it falls (stand_in), the real one hidden on her
+function M.on_cut(mesh, bone, alive)
   M.broken(mesh, bone)
   local b = tostring(bone)
   local side = b:match("^Bip001%-(%a)%-")
@@ -1728,7 +1796,32 @@ function M.on_cut(mesh, bone)
       local dx, dy, dz = at.X - hand.X, at.Y - hand.Y, at.Z - hand.Z
       return dx * dx + dy * dy + dz * dz < 30 * 30
     end
-    local r = valid(pawn) and drop_weapons(pawn, mesh, cfg(), in_hand) or ""
+    local r = ""
+    if valid(pawn) and alive and cfg().dropWeapon ~= false then
+      local copies, how = {}, {}
+      for _, w in ipairs(weapons(pawn)) do
+        if in_hand(w) then
+          local c, why = stand_in(pawn, w)
+          if c then
+            try(function() w:SetHiddenInGame(true, false) end)
+            standins[#standins + 1] = { copy = c, real = w }
+            copies[#copies + 1] = c
+          end
+          how[#how + 1] = why
+        end
+      end
+      if #copies > 0 then
+        local set = {}
+        for _, c in ipairs(copies) do set[addr(c) or 0] = true end
+        r = drop_weapons(pawn, mesh, cfg(), function(w) return set[addr(w) or 0] == true end, nil, copies)
+        for _, d in ipairs(dropped) do if set[addr(d.comp) or 0] then d.copy = true end end
+        r = r .. " (a copy, " .. table.concat(how, ", ") .. "; hers hidden)"
+      elseif #how > 0 then
+        r = ", no copy of her sword: " .. table.concat(how, ", ")
+      end
+    elseif valid(pawn) then
+      r = drop_weapons(pawn, mesh, cfg(), in_hand)
+    end
     if r ~= "" then log("cut " .. b .. r) end
   end
   -- a cut on her settled body (a hit after her death): woken and let settle again, or the piece took its throw asleep
@@ -1767,7 +1860,7 @@ function M.stop(pawn, restart)
   end
   local n = 0
   if valid(mesh) then
-    for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FName(bone), m, true); return true end) then n = n + 1 end end
+    for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FN[bone], m, true); return true end) then n = n + 1 end end
     cap_spin(mesh, cfg(), SPIN_DEFAULT)
   end
   run = nil
@@ -1784,6 +1877,11 @@ function M.view()
   return { mesh = run.mesh, comps = comps, t = run.t, settled = run.settled }
 end
 M.MASS = MASS
+-- what the ragdoll's upkeep has done to her bodies' speeds so far (struggle.lua's log): every turn zeroed, spins
+-- capped, flung bodies slowed (over every run: a delta across two reads holds through a new run)
+function M.writes()
+  return { zeroed = writes.zeroed, clamped = writes.clamped, flung = writes.flung }
+end
 -- the bones of her bodies (main.lua: her hair's simulated ones, set up again with the cloth)
 M.bodies = bodies
 -- a bone a cut took off (the root of the piece): nothing left to turn it against
@@ -1835,8 +1933,8 @@ function M.photo_hold(on, stopping)
       for _, e in ipairs(w) do
         if valid(e.c) then
           for b, v in pairs(e.vel) do
-            try(function() e.c:SetPhysicsLinearVelocity(v.v, false, FName(b)) end)
-            try(function() e.c:SetPhysicsAngularVelocityInDegrees(v.w, false, FName(b)) end)
+            try(function() e.c:SetPhysicsLinearVelocity(v.v, false, FN[b]) end)
+            try(function() e.c:SetPhysicsAngularVelocityInDegrees(v.w, false, FN[b]) end)
             n = n + 1
           end
           try(function() e.c:WakeAllRigidBodies() end)
@@ -1874,6 +1972,7 @@ function M.forget()
   layouts = {}
   run, speeds, dropped, extra, gripped, splits = nil, {}, {}, {}, {}, {}
   severed, severedOn = {}, nil
+  standins = {}
   freed = {}
 end
 

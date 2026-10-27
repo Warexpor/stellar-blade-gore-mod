@@ -24,10 +24,15 @@ The spec lists, per asset (relative path under SB/Content, no extension):
             fields changed ("sound": the SoundSource cue's package path)
   "notify": add an SBAnimNotify_CharSESound playing voice "voice" to an AnimSequence at time "at", keeping
             every notify it has
+A show job may also list "show_voices": [{"voice", "at"}], each an SBShowCharSESoundKey (a copy of VOICE_DONOR's)
+playing that character voice "at" s into the show: a voice that stays with the death whatever animation another
+mod puts in it.
 """
 import base64, copy, json, math, os, struct, sys
 
 RAGDOLL_CHANNEL = 23  # KeyContanerMap key used by every vanilla SBShowRagdollKey
+VOICE_CHANNEL = 56    # and by every SBShowCharSESoundKey
+VOICE_DONOR = "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Laser"  # her laser death's Die1 key
 PRELOAD_AT = 1.0e9    # a preload key's StartTime: never reached
 
 # Schema order (USBShowKey then USBShowRagdollKey), matches the exe reflection data.
@@ -220,6 +225,27 @@ def inject(d, donor, overrides):
             add_name(d, p["Value"])
     set_props(d, new, overrides)
     add_key_to_channel(d, main, idx, RAGDOLL_CHANNEL)
+
+
+def add_show_voice(d, donor, voice, at):
+    src = donor["Exports"][exports_of(donor, "SBShowCharSESoundKey")[0] - 1]
+    n = len(exports_of(d, "SBShowCharSESoundKey"))
+    name = f"SBShowCharSESoundKey_{n}"
+    for s_ in (name, "CharacterVoiceKey", voice, "StartTime"):
+        add_name(d, s_)
+    sb_pkg = next(-(i + 1) for i, im in enumerate(d["Imports"]) if im["ObjectName"] == "/Script/SB")
+    cls = ensure_import(d, "SBShowCharSESoundKey", sb_pkg, "/Script/CoreUObject", "Class")
+    tmpl = ensure_import(d, "Default__SBShowCharSESoundKey", sb_pkg, "/Script/SB", "SBShowCharSESoundKey")
+    main_idx, main = main_export(d)
+    new = copy.deepcopy(src)
+    new.update({"ObjectName": name, "OuterIndex": main_idx, "ClassIndex": cls, "TemplateIndex": tmpl,
+                "Data": [make_prop("StartTime", at), _name_prop("CharacterVoiceKey", voice)],
+                "SerializationBeforeSerializationDependencies": [], "CreateBeforeSerializationDependencies": [],
+                "SerializationBeforeCreateDependencies": [cls, tmpl], "CreateBeforeCreateDependencies": [main_idx]})
+    d["Exports"].append(new)
+    idx = len(d["Exports"])
+    main["CreateBeforeSerializationDependencies"].append(idx)
+    add_key_to_channel(d, main, idx, VOICE_CHANNEL)
 
 
 def flip(d, overrides):
@@ -796,6 +822,7 @@ def main():
     spec = json.load(open(spec_path))
     load = lambda rel: json.load(open(os.path.join(src, rel + ".json")))
     donor = load(spec["donor"])
+    voice_donor = load(VOICE_DONOR)
     # cpuaccess meshes are patched by sbtool, without JSON; their imports still count for fix_public
     imports = mesh_imports(sys.argv[4]) if len(sys.argv) > 4 else {}
     outputs = {}
@@ -843,6 +870,8 @@ def main():
                 ignore_channels(d, comp, chans)
         else:
             die(f"bad mode {mode}")
+        for v in job.get("show_voices", []):
+            add_show_voice(d, voice_donor, v["voice"], v["at"])
         if job.get("preload"):
             preload(d, job["preload"])
         outputs[rel] = full_import_names(d)

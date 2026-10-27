@@ -151,6 +151,7 @@ int main(void)
     // keep 0 hides the leg, keep 1 everything but the leg. A hidden triangle has no area left, a kept one is where the
     // cut's weights put it, and none spans the two
     int vanbad = 0;
+    skin_info *ghostw = 0;   // the copy's weights (keep 1), for the regrow's hand-off below
     {
         static unsigned char cw[NV][24];
         skin_info *cutw = override_w;
@@ -165,7 +166,7 @@ int main(void)
             if (!override_w || strncmp(lastres, "ok vanish ", 10)) { vanbad = 1; continue; }
             int hid = 0, shown = 0, wrong = 0;
             for (int t = 0; t < nidx; t += 3) {
-                int limbv = 0;
+                int limbv = 0, fan = 0;
                 float p[3][3];
                 for (int k = 0; k < 3; k++) {
                     int v = idx[t + k], d = 0, dw = -1;
@@ -174,23 +175,55 @@ int main(void)
                     skin(&override_w[v], vpos[v], p[k]);
                     float q[3]; skin(&cutw[v], vpos[v], q);
                     int hide = keep ? !(d == THIGH || d == CALF || d == THIGH_HELP) : (d == THIGH || d == CALF || d == THIGH_HELP);
-                    if (!hide && dist3(p[k], q) > 0.01f) wrong++;
+                    // (keep 1: a kept vertex on a collapsed sink goes onto the bone the sink hangs from, off where
+                    // the cut's weights put it: the copy stays put once the sinks are back)
+                    int onsink = 0;
+                    for (int i = 0; i < MAX_INF; i++) for (int j = 0; j < nsinks; j++) onsink |= cutw[v].weights[i] && sinks[j].down && sinks[j].bone == cutw[v].bones[i];
+                    if (!hide && !(keep && onsink) && dist3(p[k], q) > 0.01f) wrong++;
+                    fan |= keep && !hide && onsink;
                 }
                 float u[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] }, w2[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
                 float cx = u[1] * w2[2] - u[2] * w2[1], cy = u[2] * w2[0] - u[0] * w2[2], cz = u[0] * w2[1] - u[1] * w2[0];
                 float area = 0.5f * __builtin_sqrtf(cx * cx + cy * cy + cz * cz);
                 int hidetri = keep ? limbv < 3 : limbv > 0;
-                if (hidetri && area > 0.01f) wrong++;
+                // (but the seam's ring, moved off its sinks, fans in to the hidden side's point)
+                if (hidetri && area > 0.01f && !fan) wrong++;
                 hid += hidetri; shown += !hidetri && area > 0.01f;
             }
             printf("vanish keep %d: %d triangles hidden, %d shown, %d wrong\n", keep, hid, shown, wrong);
             vanbad |= wrong || !hid || !shown;
-            free(override_w);
+            if (keep) ghostw = override_w; else free(override_w);
         }
         *(u32 *)(swb + SW_MAX_INFLUENCES) = 4; *(u64 *)(swb + SW_DATA) = (u64)vw;
         override_w = cutw;
     }
     int r1 = skin_restore(0);
+    // the regrow's hand-off (gore.ghost_release, main.lua hm.ghost_tick): the copy (keep 1) fades out for 0.6 s after
+    // the cut is undone under it. With no bone free of every BoneMap (this mesh has none) its hidden side falls back on
+    // the cut's collapsed sinks, so a restore of them under the copy shows that side again (playtest: her whole body
+    // round the arm as the copy faded). Checked here that the fallback hides it with the sinks down and not after;
+    // with a free bone (her outfits all have some) test/real REGROW checks the copy stays put
+    int ghostbad = 0;
+    if (ghostw) {
+        int revealed = 0;
+        for (int t = 0; t < nidx; t += 3) {
+            int limbv = 0;
+            float p[3][3];
+            for (int k = 0; k < 3; k++) {
+                int v = idx[t + k], d = 0, dw = -1;
+                for (int i = 0; i < MAX_INF; i++) if (override_w[v].weights[i] > dw) { dw = override_w[v].weights[i]; d = override_w[v].bones[i]; }
+                limbv += d == THIGH || d == CALF || d == THIGH_HELP;
+                skin(&ghostw[v], vpos[v], p[k]);
+            }
+            if (limbv == 3) continue;
+            float u[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] }, w2[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
+            float cx = u[1] * w2[2] - u[2] * w2[1], cy = u[2] * w2[0] - u[0] * w2[2], cz = u[0] * w2[1] - u[1] * w2[0];
+            if (0.5f * __builtin_sqrtf(cx * cx + cy * cy + cz * cz) > 0.01f) revealed++;
+        }
+        printf("regrow hand-off: the copy's hidden side after the sinks' restore under it: %d triangles shown again\n", revealed);
+        ghostbad = revealed == 0;
+        free(ghostw);
+    } else ghostbad = 1;
     printf("restored %d, thigh_help refinv[0]=%.0f [14]=%.0f, spine_help [14]=%.0f, nsinks=%d\n", r1, refinv[THIGH_HELP*16], refinv[THIGH_HELP*16+14], refinv[SPINE_HELP*16+14], nsinks);
     // a tilted plane on the already moved pose (exercises a second cut over a posed limb)
     float pw2[3] = { 0, 0, 57 }, nw2[3] = { 0.3f, 0, 0.95f };
@@ -518,7 +551,7 @@ int main(void)
         cur_idx = idx; cur_nidx = &nidx;
     }
     int fitbad = modebad || corebad || np + 1 < 20 || strap || fa < 5.7f || fa > 6.3f || fb < 3.7f || fb > 4.3f || fcx < 0.8f || fcx > 1.2f;
-    int fail = fitbad || vanbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
+    int fail = fitbad || vanbad || ghostbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
     printf("%s\n", fail ? "FAIL" : "PASS");
     return fail;
 }

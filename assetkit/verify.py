@@ -346,9 +346,20 @@ for rel, job in spec["assets"].items():
                 fail.append(f"{tag}: {e['ObjectName']} is no preload key (in a channel {i in played}, disabled {off})")
     if len(pre) != len(want):
         fail.append(f"{tag}: {len(pre)} preload keys for {len(want)} shows")
+    # added voices ("show_voices"): a new SBShowCharSESoundKey each in channel 56, at its time, playing its voice
+    voiced = set()
+    for i, e in enumerate(o["Exports"], 1):
+        if cls_name(o, e) == "SBShowCharSESoundKey" and e["ObjectName"] not in vnames:
+            pr = props(e)
+            got = (pr.get("CharacterVoiceKey", {}).get("Value"), round(float(pr.get("StartTime", {}).get("Value") or 0), 4))
+            if i not in chans.get(56, []) or got not in [(x["voice"], round(x["at"], 4)) for x in job.get("show_voices", [])]:
+                fail.append(f"{tag}: {e['ObjectName']} is no listed voice (in channel 56 {i in chans.get(56, [])}, plays {got})")
+            voiced.add(e["ObjectName"])
+    if len(voiced) != len(job.get("show_voices", [])):
+        fail.append(f"{tag}: {len(voiced)} voice keys for {len(job.get('show_voices', []))} voices")
     vex = {e["ObjectName"]: e for e in v["Exports"]}
     for e in o["Exports"]:
-        if cls_name(o, e) == "SBShowRagdollKey" or e is main or e["ObjectName"] in pre:
+        if cls_name(o, e) == "SBShowRagdollKey" or e is main or e["ObjectName"] in pre or e["ObjectName"] in voiced:
             continue
         if e["ObjectName"] not in vex:
             fail.append(f"{tag}: unexpected new export {e['ObjectName']}")
@@ -358,7 +369,8 @@ for rel, job in spec["assets"].items():
     for k in props(vmain):
         if k != "KeyContanerMap" and json.dumps(props(vmain)[k]) != json.dumps(props(main).get(k)):
             fail.append(f"{tag}: main field {k} changed")
-    print(f"ok  {tag}  ragdoll keys={len(rag)} ch23={chans.get(23)}" + (f" preload={len(pre)}" if pre else ""))
+    print(f"ok  {tag}  ragdoll keys={len(rag)} ch23={chans.get(23)}" + (f" preload={len(pre)}" if pre else "")
+          + (f" voices={len(voiced)}" if voiced else ""))
 
 if fail:
     print("\nVERIFY FAILED:\n  " + "\n  ".join(fail))

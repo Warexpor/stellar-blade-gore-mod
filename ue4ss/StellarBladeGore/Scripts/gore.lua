@@ -2900,7 +2900,8 @@ local function stage_cut(q)
   if not q.bone then log("nothing cut (" .. q.why .. ")"); return false end
   q.entry = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone, sm = enemy.asset(q.mesh), riders = {} }
   cuts[#cuts + 1] = q.entry
-  if q.c.face then cuts[#cuts + 1] = { mesh = q.c.face, addr = addr(q.c.face), bone = "face" } end
+  -- (each with its mesh asset: the face's sinks are its own asset's, put back with it, cleanup_eve)
+  if q.c.face then cuts[#cuts + 1] = { mesh = q.c.face, addr = addr(q.c.face), bone = "face", sm = enemy.asset(q.c.face) } end
   q.parent = parent_bone(q.mesh, q.bone)
   -- a head's own opening is the bottom of the face's neck
   q.ob, q.ol = opening(q.c.result, "b"), q.c.face_result and opening(q.c.face_result, "l") or opening(q.c.result, "l")
@@ -3075,6 +3076,7 @@ end
 -- other half, invisible on hers) turns that off too
 local function no_self_collision(mesh, keep)
   if keep and ctx.arm_pairs then return end
+  if ctx.table_filled and try(function() return ctx.table_filled(mesh) end) == true then return end
   -- (an enemy's corpse never gets up: nothing to put back)
   if not self_saved and not enemy.cur then
     self_saved = { mesh = mesh, resp = try(function() return mesh:GetCollisionResponseToChannel(5) end) }
@@ -4290,8 +4292,9 @@ local function stage_split_cut(q)
       return false
     end
   end
-  cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = "split", saved = saved or nil, copy = saved and addr(q.body2) or nil }
-  cuts[#cuts + 1] = { mesh = q.body2, addr = addr(q.body2), bone = "split copy" }
+  cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = "split", saved = saved or nil, copy = saved and addr(q.body2) or nil,
+    sm = enemy.asset(q.mesh) }
+  cuts[#cuts + 1] = { mesh = q.body2, addr = addr(q.body2), bone = "split copy", sm = enemy.asset(q.body2) }
   -- each half keeps the limbs on its side whole and lets the others go; the halves share the mesh's sinks, and each
   -- half's skin lets go of every helper past the plane, so the other half's sinks never pull on it (q.gone1, q.gone2:
   -- limb_sides, above)
@@ -4807,6 +4810,23 @@ function M.slice_bone(pawn, mesh, bone, hit, why)
   M.bone_once = nil
   return ok
 end
+-- these bones cut in turn (main.lua's F6 struggle tests): the first now, the rest queued a cut apart as a swing's
+-- further cuts are. How many were started or queued
+function M.slice_bones(pawn, mesh, bones, why)
+  local n = 0
+  for i, bone in ipairs(bones) do
+    if PARTS[bone] then
+      if i == 1 or n == 0 then
+        if M.slice_bone(pawn, mesh, bone, nil, why) then n = n + 1 end
+      else
+        queued[#queued + 1] = function() return valid(mesh) and M.slice_bone(pawn, mesh, bone, nil, why) end
+        n = n + 1
+      end
+    end
+  end
+  if n > 1 then M.queue_gap = cfg().queueGap or 1 end
+  return n
+end
 function M.has_cut(mesh, bone) return already_cut(mesh, bone) end
 
 -- ---- smash (tune.gore.smash, experimental) ----
@@ -4821,7 +4841,7 @@ M.SMASH_MESHES = {
 }
 M.SMASH_FX = "/Game/Art/FX/Enviroment/Matrix_XI/Cinematic/ME05_02_EliteNative_Finish/NS_A_MeatSplash.NS_A_MeatSplash"
 -- the part a blunt blow at `at` smashes: the arm, leg, head or upper body whose bone runs nearest it, not one already
--- off. With no blow (F6's test death, smash.always) the kind is rolled on the death odds (tune.gore.death: limb, head,
+-- off. With no blow (smash.always) the kind is rolled on the death odds (tune.gore.death: limb, head,
 -- torso; a split's share left out), the limb at random: a pick among the parts alone never took the head in 50 F6
 -- deaths, and never her body (playtest)
 M.SMASH_SEG = { ["Bip001-Spine1"] = { "Bip001-Pelvis", "Bip001-Neck" } }
@@ -5504,6 +5524,72 @@ function M.pose(mesh)
   return p
 end
 
+-- tune.gore.oddsNear: the death odds main.lua rolls (a blade left aside by Blade Decides, or none seen) shaped by where
+-- the blow landed: each kind's weight times how near the hit was to what it cuts, 1 within near cm and down to floor
+-- at far cm (the neck for a beheading, the spine from her pelvis to her chest for a waist cut, her length for a split,
+-- the nearest arm or leg for a limb). A blade's plane down her length makes a waist cut less likely (across), one across
+-- her rules out a split, a blow from above a waist cut; with no plane a split is less likely (noPlane). A clear waist
+-- cut rolled a beheading as often as a blow at her neck (playtest). Returns the factors per kind and how they were
+-- judged, or nil: off, or no hit to go by
+function M.near_odds(mesh, h, hit)
+  local o = cfg().oddsNear or {}
+  if o.enabled == false then return nil end
+  local real = h and not h.made
+  local at = (real and h.loc) or hit
+  if not at then return nil end
+  local P = real and h.pose
+  local function bl(b)
+    local x = P and P[b]
+    if x then return x.t end
+    return bone_loc(mesh, b)
+  end
+  local function seg(a, b)
+    local pa, pb = bl(a), bl(b)
+    if not (pa and pb) then return nil end
+    local ab = sub(pb, pa)
+    local t = math.max(0, math.min(1, dot(sub(at, pa), ab) / math.max(dot(ab, ab), 1e-4)))
+    local d = sub(at, add(pa, scale(ab, t)))
+    return math.sqrt(dot(d, d))
+  end
+  local near, far, floor = o.near or 15, o.far or 35, math.min(math.max(o.floor or 0, 0), 1)
+  local function f(d)
+    if not d or d >= far then return floor end
+    if d <= near then return 1 end
+    return floor + (1 - floor) * (far - d) / math.max(far - near, 1e-3)
+  end
+  local dl
+  for _, sg in ipairs(LIMB_SEGS) do
+    if not already_cut(mesh, sg[1]) then
+      local d = seg(sg[1], sg[2])
+      if d and (not dl or d < dl) then dl = d end
+    end
+  end
+  local dh, db, ds = seg("Bip001-Neck", "Bip001-Head"), seg("Bip001-Pelvis", "Bip001-Spine2"), seg("Bip001-Pelvis", "Bip001-Neck")
+  local w = {
+    limb = f(dl),
+    head = already_cut(mesh, "Bip001-Head") and 0 or f(dh),
+    torso = already_cut(mesh, "Bip001-Spine1") and 0 or f(db),
+    split = f(ds),
+  }
+  local n = real and blade_plane(h)
+  local dn = real and h.dir and norm(h.dir)
+  local p0, p1 = bl("Bip001-Pelvis"), bl("Bip001-Neck")
+  local ax = p0 and p1 and norm(sub(p1, p0))
+  local how
+  if dn and dn.Z < -(cfg().splitDown or 0.6) then
+    w.torso, how = 0, "from above"
+  elseif n and ax and math.abs(dot(ax, norm(n))) < M.ALONG then
+    w.torso, how = w.torso * (o.across or 0.25), "down her length"
+  elseif n and ax then
+    w.split, how = 0, "across her"
+  else
+    w.split, how = w.split * (o.noPlane or 0.5), "no plane"
+  end
+  local function cm(d) return d and string.format("%.0f", d) or "?" end
+  w.why = string.format("hit %s cm from a limb, %s from the neck, %s from the waist; %s", cm(dl), cm(dh), cm(db), how)
+  return w
+end
+
 function M.blow(pawn, mesh, h, why)
   local n, how = blade_plane(h)
   -- a hit after her death with no plane (a bare hand's swing along the attacker's forward, no attack direction from
@@ -6184,6 +6270,10 @@ function M.watch(mesh, tm)
       list[#list + 1] = g.capMatte.material or M.matte.master
       for _, v in pairs(M.matte.tex) do list[#list + 1] = v end
     end
+    -- (physfix's complete physics asset, kept too: an outfit missing main bodies worn as a level loads finds it while
+    -- nothing may load, and a death in those first seconds ragdolls on it, Lemi21's Latex Nun)
+    local pf = type(ctx.tune.physfix) == "table" and ctx.tune.physfix or {}
+    if pf.enabled ~= false and pf.complete ~= false and pf.completeWith then list[#list + 1] = pf.completeWith end
     sounds[#sounds + 1] = vox.ATTENUATION
     w.sounds = #list + 1
     for _, v in ipairs(sounds) do list[#list + 1] = v end
@@ -6509,16 +6599,24 @@ local function cleanup_eve(pawn, mesh, theirs)
   if nh > 0 then steps[#steps + 1] = string.format("chains(%d)", nh) end
   -- the collapsed helper bones live on the mesh asset, which outlives a destroyed component. A cut enemy's corpse
   -- still rides its own asset's sinks (and the BoneMap entries every cut borrows): then only her assets'
+  local rs = {}
   if #theirs.cuts == 0 then
-    steps[#steps + 1] = "sinks(" .. command("r") .. ")"
+    rs[1] = "r"
   else
     local done_sm = {}
     for _, c in ipairs(cuts) do
       if c.sm and not done_sm[c.sm] then
         done_sm[c.sm] = true
-        steps[#steps + 1] = "sinks(" .. command(string.format("r%x", c.sm)) .. ")"
+        rs[#rs + 1] = string.format("r%x", c.sm)
       end
     end
+  end
+  -- (a regrow's copy still fading out over her rides them: put back once it is gone, M.ghost_end)
+  if M.sinksHeld then
+    M.sinksHeld.cmds = rs
+    if #rs > 0 then steps[#steps + 1] = "sinks(held for the dissolve's copy)" end
+  else
+    for _, r in ipairs(rs) do steps[#steps + 1] = "sinks(" .. command(r) .. ")" end
   end
   cuts = {}
   -- the face, when a head came off (an enemy's cut mesh keeps its LOD)
@@ -6597,7 +6695,7 @@ end
 -- The cut stays on while it comes back: on each mesh of hers it is on (her body, her face with a head) the part's
 -- bodies stop simulating, so its bones are on her pose again, and the part goes out of sight on her (sbslice "V",
 -- keep 0: its vertices onto a collapsed sink; another mod's copies of her mesh take those weights). A copy of the mesh
--- on her pose, the cut's weights with everything but the part out of sight ("V", keep 1), wears the game's corpse
+-- on her pose, its own weights with everything but the part and its seam out of sight ("V", keep 1), wears the corpse
 -- dissolve (MI_DeadMaterial_*, MA_DeadMaterial_01: the despawn show runs Dissolve 0 -> 1, Morph 0 -> 1 and
 -- EmissiveBright 10 -> 0) with each slot's own textures (BaseColor, BaseNormalTex, ORM), run backwards
 -- (M.ghost_set). Her own materials can't dissolve: MA_Skin_EVE is opaque and cooked. At the end the cut is undone
@@ -6657,8 +6755,8 @@ function M.ghost_begin(pawn, mesh, parts, path)
       if not c then return fail("no copy of " .. name_of(m)) end
       local e = { mesh = m, copy = c, hid = {} }
       g.list[#g.list + 1] = e
-      local y = command(string.format("y%x,0,%x", addr(m), addr(c)))
-      if y:sub(1, 9) ~= "ok copied" then return fail("weights on the copy: " .. y) end
+      -- (on her pose, its own weights: the part whole, and the band of her seam the cut collapsed; with her cut's
+      -- weights copied onto it, "y", the arm dissolved in standing off her shoulder by that band, test/real REGROW)
       try(function() c:SetMasterPoseComponent(m, true) end)
       local vc = command(string.format("V%x,0,1,%s", addr(c), table.concat(roots, ",")))
       local vm = command(string.format("V%x,0,0,%s", addr(m), table.concat(roots, ",")))
@@ -6716,7 +6814,36 @@ function M.ghost_set(g, x)
     end) end
   end
 end
--- the copies gone and her sections shown again (the cut itself: M.cleanup)
+-- the hand-off: her own part back under the copy (the caller undoes the cut, M.cleanup, which leaves the copies on),
+-- and the copy then dissolved out over it (M.ghost_fade). Swapped in one frame, the corpse material's look at Dissolve
+-- 0 jumped to her own skin's (playtest: a snap at the end). The copy's hidden side sits on a point of its own and
+-- bones borrowed into the asset's BoneMaps ("V"): the cleanup's full put back (sbslice "r", which takes those too)
+-- waits for M.ghost_end. Its "x" puts the cut's sinks back at once, which the copy no longer rides (on them, her whole
+-- body showed round the arm on the copy as it faded: a glitchy limb right after it came back, playtest)
+function M.ghost_release(g)
+  M.sinksHeld = { g = g }
+  for _, e in ipairs(g.list) do
+    if #e.hid > 0 and valid(e.mesh) then try(function() e.mesh:ShowAllMaterialSections(0) end) end
+    e.hid = {}
+    local a = addr(e.copy)
+    for i = #clones, 1, -1 do if addr(clones[i]) == a then table.remove(clones, i) end end
+  end
+end
+-- y: 0 the copy whole, 1 gone; no ripple, no glow
+function M.ghost_fade(g, y)
+  local d = type((cfg().lowArm or {}).dissolve) == "table" and cfg().lowArm.dissolve or {}
+  local e = y * y * (3 - 2 * y)
+  for _, mid in ipairs(g.mids) do
+    if valid(mid) then try(function()
+      mid:SetScalarParameterValue(FName("Dissolve"), e)
+      mid:SetScalarParameterValue(FName("Morph"), 0)
+      mid:SetScalarParameterValue(FName("EmissiveBright"), 0)
+      mid:SetScalarParameterValue(FName("DissolveMaskScale"), tonumber(d.maskScale) or 200)
+    end) end
+  end
+end
+-- the copies gone and her sections shown again (the cut itself: M.cleanup), and the sinks the cleanup left for them
+-- put back. Returns what was done with those, for the log ("" none held)
 function M.ghost_end(g)
   for _, e in ipairs(g.list) do
     if #e.hid > 0 and valid(e.mesh) then try(function() e.mesh:ShowAllMaterialSections(0) end) end
@@ -6726,6 +6853,17 @@ function M.ghost_end(g)
     if valid(e.copy) then try(function() e.copy:K2_DestroyComponent(e.copy) end) end
   end
   g.list, g.mids = {}, {}
+  local h = M.sinksHeld
+  if not (h and h.g == g) then return "" end
+  M.sinksHeld = nil
+  if not h.cmds or #h.cmds == 0 then return "" end
+  -- (a cut of hers made while the copy faded is on those sinks now: they stay down, its own cleanup puts them back)
+  for _, c in ipairs(cuts) do
+    if not owner_of(c) then return ", sinks kept down (a new cut of hers on them)" end
+  end
+  local out = {}
+  for _, r in ipairs(h.cmds) do out[#out + 1] = command(r) end
+  return ", sinks(" .. table.concat(out, "; ") .. ")"
 end
 
 -- ---- enemies (enemies.lua) ----
@@ -6953,11 +7091,46 @@ end
 function M.state() return native.state end
 
 -- a new Eve (the level reloaded after a death): drop every object held from the old one without touching it. Its
--- memory may be gone, and UE4SS's IsValid reads it: the first tick after the reload crashed the game
-function M.forget()
+-- memory may be gone, and UE4SS's IsValid reads it: the first tick after the reload crashed the game.
+-- pawn: the new Eve. Her old cuts' collapsed helper bones (sbslice's sinks) are her mesh assets' own, which outlive
+-- the level: the ones on an asset the new Eve wears (her body, her face, an outfit's glove or sleeve mesh) are put back
+-- (a fast travel or a load with an arm cut off her alive, Lose Arm at Low HP: else the new Eve showed the arm gone with
+-- nothing cut). Only those, by asset: the DLL drops its records of an asset gone with the old level by itself
+-- (assets_prune), and one of an enemy kind still around stays on its corpses' records till they go
+function M.forget(pawn)
+  local wears = {}
+  if pawn and native.state == "ready" then
+    local comps = {}
+    try(function() comps[1] = pawn.Mesh end)
+    try(function()
+      for _, c in ipairs(pawn:K2_GetComponentsByClass(StaticFindObject("/Script/Engine.SkeletalMeshComponent"))) do comps[#comps + 1] = c end
+    end)
+    for _, c in ipairs(comps) do
+      local sm = valid(c) and enemy.asset(c)
+      if sm then wears[sm] = true end
+    end
+  end
+  local put = {}
+  local function put_back(sm, why)
+    if put[sm] then return end
+    put[sm] = true
+    log(string.format("the level reloaded %s: sinks put back on mesh asset %x: %s", why, sm, command(string.format("r%x", sm))))
+  end
+  for _, c in ipairs(cuts) do
+    if c.sm and wears[c.sm] and not owner_of(c) then put_back(c.sm, "with a cut on her (" .. tostring(c.bone) .. ")") end
+  end
+  -- (or mid regrow, the sinks held for its copy fading out: M.ghost_end won't come. "r" alone held: every asset of hers)
+  local h = M.sinksHeld
+  for _, r in ipairs(h and h.cmds or {}) do
+    local sm = r:match("^r(%x+)$")
+    sm = sm and tonumber(sm, 16)
+    if sm and wears[sm] then put_back(sm, "as a regrow's copy faded")
+    elseif r == "r" then for w in pairs(wears) do put_back(w, "as a regrow's copy faded") end end
+  end
   spawned, bleeds, caps, cuts, forced, clones, rehomed = {}, {}, {}, {}, {}, {}, {}
   later, hung, queued, skinned, hid = {}, {}, {}, {}, {}
   M.held, M.held_sword, M.blocking, M.pieceHid, M.photoHid = {}, nil, nil, nil, nil
+  M.sinksHeld = nil
   bleed_logged = false
   pending, collision_saved, self_saved, copy_watch, limb_watch = nil, nil, nil, nil, nil
   enemy.owned, enemy.cur, enemy.faced, enemy.faded, enemy.shrink = setmetatable({}, { __mode = "k" }), nil, {}, {}, {}

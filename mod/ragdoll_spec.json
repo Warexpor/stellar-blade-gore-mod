@@ -52,7 +52,14 @@
       "set": {
         "ImpulsePower": 2500.0,
         "bOverrideHitBone": false
-      }
+      },
+      "show_voices": [
+        {
+          "voice": "die3",
+          "at": 0.0813
+        }
+      ],
+      "_comment_show_voices": "the death face (DIE3) at Proper Death Expression's Eve_Dead_Explosion time, from the show so a mod replacing the animation keeps it"
     },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Explosion2": {
       "mode": "clone",
@@ -60,7 +67,13 @@
       "set": {
         "ImpulsePower": 2000.0,
         "bOverrideHitBone": false
-      }
+      },
+      "show_voices": [
+        {
+          "voice": "die3",
+          "at": 0.0813
+        }
+      ]
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead": {
       "mode": "inject",
@@ -107,7 +120,14 @@
       "set": {
         "ImpulsePower": 1.0,
         "ImpulseLimitVelocity": 701.0
-      }
+      },
+      "show_voices": [
+        {
+          "voice": "die3",
+          "at": 0.2496
+        }
+      ],
+      "_comment_show_voices": "the death face (DIE3) from the show, not Eve_Dead_DownFaceUp / DownFaceDown, so a mod replacing those animations (Alternative Death Animations) keeps it: at Proper Death Expression's FaceUp time; a voice key can't check her facing as the anim keys do, and FaceDown (0.4152) hides her face"
     },
     "Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead_Falling": {
       "mode": "inject",
@@ -227,29 +247,11 @@
         }
       }
     },
-    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_DownFaceUp": {
-      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
-      "mode": "notify",
-      "voice": "die3",
-      "at": 0.2496
-    },
-    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_DownFaceDown": {
-      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
-      "mode": "notify",
-      "voice": "die3",
-      "at": 0.4152
-    },
     "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_FallingDown": {
       "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
       "mode": "notify",
       "voice": "die3",
       "at": 0.2238
-    },
-    "Art/Character/PC/CH_P_EVE_01/Animation/Eve_Dead_Explosion": {
-      "_comment": "grapple / explosive / falling death: the death face (DIE3) at the time Proper Death Expression's fixes start it; its own notifies stay",
-      "mode": "notify",
-      "voice": "die3",
-      "at": 0.0813
     },
     "Art/Character/Monster/CH_M_NA_16/CH_M_NA_16": {
       "_comment": "Generic humanoid enemies' bodies (enemies.lua, tune.enemies.kinds), extracted for the enemy cut tests. Not shipped: sbslice.dll keeps their LOD0 CPU copy at load, and copies in the pak would override enemy mods",

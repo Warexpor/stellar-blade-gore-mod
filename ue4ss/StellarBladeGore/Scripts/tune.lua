@@ -82,10 +82,6 @@ return {
     enabled = true,            -- false = no cutting, no blood (sbslice.dll stays idle)
     sliceOnDeath = true,       -- a killing blow leaves a mark (see death)
     sliceChance = 1.0,         -- 0..1, per death
-    f5Split = true,            -- F5's test death always splits her top to bottom, at once (no death show plays: a
-                               -- split never has a fall before it)
-    f5Delay = 0.5,             --   with f5Split off: seconds into F5's fall the death starts (the show's ragdoll key
-                               --   does nothing while she is alive, so the script starts it)
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
                                -- F9 rolls the cuts only, F10 marks, F11 splits
       limb = 42,               --   the arm or thigh nearest the hit comes off
@@ -100,6 +96,14 @@ return {
                                -- seen, is otherwise decided by that blade alone, nothing rolled: what its plane goes through
                                -- comes off (the neck, her body along it or in two down her length, the arms and
                                -- legs it crosses); the odds above are rolled only without either
+    oddsNear = {               -- the odds above, when rolled, follow where the blow landed (gore.lua's near_odds):
+      enabled = true,          --   each kind's odds times how near the hit was to what it cuts (false: as they are)
+      near = 15,               --   cm from the neck, her waist, her length or a limb within which its odds count in full
+      far = 35,                --   cm from it at which they are down to floor (her skin is 10-15 cm off the bones)
+      floor = 0,               --   share of its odds a part this far from the hit keeps (0: never; 1: as if off)
+      across = 0.25,           --   share of the waist cut's a blade down her length keeps (a blade across her: no split)
+      noPlane = 0.5,           --   share of the split's with no blade's plane to go by
+    },                         --   (odds whose only kinds above 0 are all far from the hit are rolled as they are)
     bladeJitter = 15,          -- for variety, each blade is turned up to this many degrees at random
     bladeShift = 10,           --   and moved up to this many cm along its normal
     bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
@@ -280,19 +284,24 @@ return {
     bluntRagdoll = false,      -- a blunt killing blow (a hammer, a fist, a stomp: told as smash's below, smash.sharp /
                                --   smash.blunt) cuts nothing: the death is a plain ragdoll, hits after it cut nothing
                                --   either. Goes before smash; blades still cut
-    lowArm = {                 -- a hit that leaves her HP under a quarter takes her left arm off as she fights on
+    lowArm = {                 -- a hit that leaves her HP under a quarter takes an arm off as she fights on
       enabled = false,         --   (once till it is back: it grows back at a camp rest, or at her next life)
+      side = "left",           --   which: "left", "right" or "either" (one at random each time)
       below = 0.25,            --   the share of her HP bar under which it goes
       noHealGun = true,        --   while it is off she can't use heal items or shoot (the game's own blocks on her,
                                --   ActorState_BlockItemUseHeal and _BlockItemUseBullet)
       notice = true,           --   and her aim or heal key pressed meanwhile shows the game's "Cannot use right now."
                                --   with its sound (the HUD's system notice)
+      noSword = true,          --   with the right arm off she can't use her sword (the game's own swordless stance,
+                               --   P_Eve_BlockSword: her gun and heals work, no lock-on or drone scan meanwhile)
       effect = true,           --   it comes back with an effect (F3 → Regrow Effect; false: back at once, no effect)
       dissolve = {             --   at a camp rest it dissolves back in (the game's corpse dissolve run backwards, her
         time = 3,              --   own textures on it), over time s (false: grown back over regrow s instead)
         glow = 10,             --   the glow it peaks at halfway (the despawn's EmissiveBright starts at 10)
         morph = true,          --   its surface ripples in with it (the despawn's Morph)
         maskScale = 200,       --   the dissolve pattern's scale
+        fade = 0.6,            --   then her own skin back under it, the copy dissolving out over it in fade s (0:
+                               --   swapped at once)
       },
       regrow = 1.5,            --   without the dissolve: s it takes to grow back out of her shoulder, the upper arm,
                                --   then the forearm, then the hand (0: back at once)
@@ -305,7 +314,7 @@ return {
     smash = {                  -- (experimental) a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg
       enabled = false,         --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
                                --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
-      always = false,          --   every death smashes, blunt or not, F6's test death too (to try it)
+      always = false,          --   every death smashes, blunt or not (to try it)
       chunks = 3,              --   meat chunks for an arm
       chunksLeg = 4,           --   for a leg
       chunksHead = 4,          --   for the head
@@ -571,38 +580,44 @@ return {
     borrow = true,             -- a mesh with no physics asset (no ragdoll) gets <mesh>_Physics, else fallback
     fallback = "/Game/Art/Character/PC/CH_P_EVE_01/CH_P_EVE_01_Physics.CH_P_EVE_01_Physics",
   },
-  enemyAfterDeath = false,     -- enemies.afterDeath (enemies attacking her body after her death): parked, off whatever
-                               -- settings.lua says. They came to her body but never swung (the game's skills don't fire
-                               -- at a dead target, and its own attack animations played by hand weren't found; docs/TODO.md)
   deathMoves = false,          -- her body moving after death (convulse.lua's arm swings, struggle.lua; not the neck's):
-                               -- parked, off whatever settings.lua says. Pushes set on her bodies never visibly moved her
-                               -- in game (probes: an arm turned 1 deg on a 138 deg/s swing); her face and voice still play
+                               -- being tested, off by default (settings.lua's deathMoves, F3 -> Death -> Death Struggle).
+                               -- Pushes set on her bodies never visibly moved her in game (probes: an arm turned 1 deg on
+                               -- a 138 deg/s swing); her face and voice play either way
   struggle = {                 -- struggle.lua: a maimed Eve fighting on the floor after a ragdoll death, as a run of
     enabled = true,            --   acts picked by what the cuts left her and how she lies (a hand on the stump,
-                               --   reaching for the cut-off limb, rolling onto her front and crawling, trying to sit
+                               --   a hand going out to the stump, rolling onto her front and crawling, trying to sit
                                --   or prop up, heels shoving her along with no arms, curling up, lying still), over
                                --   her bleeding out: frantic, weakening, dying. Breathing and stump reflexes through
                                --   it. Ragdoll deaths with a limb cut off (rise.alone of those without), not beheaded,
                                --   split or cut at the waist
     strength = 1.0,            -- times every speed and strength below (settings.lua's struggle.strength)
-    time = { 8, 12 },          -- s it lasts, from her coming to rest to her death
-    startMax = 2.5,            -- s into the ragdoll it starts at the latest (else once she has come to rest)
+    time = { 5, 8 },           -- s it lasts, from her coming to rest to her death (8-12 dragged on, playtest)
+    startMax = 0.8,            -- s into the ragdoll it starts at the latest (else once she has come to rest; 2.5
+                               --   came far too late, playtest)
     rate = 60,                 -- times a second she is steered at most
     animated = false,          -- an animated death's fall: maimed, she goes limp as she lies once it rests (a quiet
     quietWait = 0.4,           --   ragdoll: no blow, no momentum) and struggles from there, quietWait s later. Off:
                                --   the switch from the held end pose to a limp body looked wrong (playtest)
     log = true,                -- a log line for each act
-    gain = 8,                  -- a joint turns at gain x the angle it is off by, deg/s, plus what the gap has summed
+    gain = 5,                  -- a joint turns at gain x the angle it is off by, deg/s, plus what the gap has summed
     hold = 8,                  --   to (hold x angle x s, at most holdMax: gravity and the floor take a steady share of
     holdMax = 200,             --   every turn, and without it a limb sagged short; 5/220/3000/0.08 barely moved her)...
-    speed = 320,               --   ...at most this
-    accel = 6000,              -- deg/s^2 a joint's turn may change by at most (her muscles' strength: an arm held up
+    speed = 160,               --   ...at most this (320 with accel 6000 and a 1.3 surge looked frantic, playtest)
+    accel = 2500,              -- deg/s^2 a joint's turn may change by at most (her muscles' strength: an arm held up
                                --   against gravity needs about 1400)
     response = 0,              -- s a joint takes to get to the speed asked (0: at once, each step)
-    shake = 1.2,               -- cm the hand on a stump trembles
+    shake = 0.6,               -- cm the hand on a stump trembles
+    wrist = 0.6,               -- times the strength her wrists are held in line with the forearm while an arm moves
+                               --   (0: limp, as they flopped about before)
+    drag = {                   -- a hand or foot planted and pulling (crawl, heels, scrabbling knees) moves her torso
+      enabled = true,          --   along the floor up to speed cm/s, accel cm/s^2 at most: the floor's grip. Without
+      speed = 35,              --   it every stroke swept the air and she stayed put (playtest)
+      accel = 250,
+    },
     bleed = {                  -- her strength over the struggle: 1 + surge at the start, falling off over the first
       frantic = 0.25,          --   frantic share, down to low by last, then to nothing as she dies (her acts slower as
-      surge = 0.3,             --   she weakens: down to half the pace)
+      surge = 0.1,             --   she weakens: down to half the pace)
       low = 0.25,
       last = 0.85,             --   share in that she dies: last tremors, a last breath, her head rolling aside
     },
@@ -613,11 +628,13 @@ return {
       push = 3, curl = 0.8, lie = 0.6,
     },
     acts = {                   -- s each act takes at full strength (slower as she weakens)
-      clutch = { 3, 5 }, reach = { 2.5, 3.5 }, turn = { 2.5, 3.5 }, crawl = { 3.5, 5.5 },
-      push = { 3.5, 5.5 }, curl = { 2, 3.5 }, lie = { 0.8, 1.8 },
+      clutch = { 2, 3.5 }, reach = { 1.8, 2.5 }, turn = { 2, 2.8 }, crawl = { 2.5, 4 },
+      push = { 2.5, 4 }, curl = { 1.5, 2.5 }, lie = { 0.6, 1.2 },
     },
     reach = {
-      within = 3,              -- a cut-off piece reached for when it lies within this many of her arm's lengths
+      within = 1.3,            -- a stump gone out to when it lies within this many of the hand's arm lengths (it
+                               --   was a reach for the cut-off limb: not what people do)
+      hover = 14,              -- cm in front of it the hand hovers before closing in and flinching back
     },
     roll = {                   -- her rolling about her length
       side = 55,               --   deg over towards her side in a clutch, the wound up (90: fully on her side)...
@@ -633,7 +650,7 @@ return {
       give = 0.4,              --   s letting go
       curl = 1.0,              --   times the curl: spine 20, chest 40, neck 60 deg forward (propping: 0.8 of it)
       power = 1.5,             --   times strength for the curl (her trunk is heavy)
-      shake = 4,               --   deg the chest and neck shake at 8-11 Hz
+      shake = 2,               --   deg the chest and neck shake at 8-11 Hz
     },
     push = {                   -- no arms: her heels shoving her along on her back
       bend = 0.55,             --   share of a push drawing the feet up (the rest driving them out)
@@ -642,13 +659,13 @@ return {
     breath = {                 -- her chest heaving
       enabled = true,
       depth = 4,               --   deg her chest tilts at full strength (a third of it as she fades)
-      fast = 0.75,             --   s a breath at full strength...
+      fast = 1.1,              --   s a breath at full strength...
       slow = 2.6,              --   ...and nearly gone
     },
-    reflex = {                 -- a stump's stub jerking on its own: 1-3 jerks with a quiver, more often while strong
+    reflex = {                 -- a stump's stub jerking on its own: 1-2 jerks with a quiver, more often while strong
       enabled = true,
-      speed = 140,             --   deg/s at a jerk's peak
-      quiver = 40,             --   deg/s of 10-14 Hz quiver on it
+      speed = 80,              --   deg/s at a jerk's peak
+      quiver = 15,             --   deg/s of 10-14 Hz quiver on it
     },
   },
   convulse = {                 -- convulse.lua: her body's last movements once she lies dead (ragdoll or her animated

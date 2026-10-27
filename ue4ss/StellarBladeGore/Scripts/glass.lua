@@ -98,19 +98,23 @@ local function bar_pct(cached)
     local pct = valid(bar) and try(function() return bar.Percent end)
     return type(pct) == "number" and pct or nil
   end
-  -- the widget showing it, kept: FindAllOf costs about 35 ms, looked for again at most every 5 s
+  -- the widget showing it, kept: FindAllOf costs about 35 ms, looked for again 5 s after it was lost, then twice as
+  -- long after each look that finds none, up to a minute (with no bar to find, a hidden HUD or a HUD mod, it was a
+  -- 35 ms hitch every 5 s all session: a Nexus report of microstutter)
   if valid(st.barHud) then
     local pct = pct_of(st.barHud)
     if pct then return pct end
   end
   st.barHud = nil
   if cached or os.clock() < (st.barTry or 0) then return nil end
-  st.barTry = os.clock() + 5
+  st.barWait = math.min((st.barWait or 2.5) * 2, 60)
+  st.barTry = os.clock() + st.barWait
   for _, w in ipairs(try(function() return FindAllOf(HUD) end) or {}) do
     local name = try(function() return w:GetFullName() end) or ""
     local pct = not name:find("Default__") and valid(w) and pct_of(w)
-    if pct then st.barHud = w; return pct end
+    if pct then st.barHud, st.barWait = w, nil; return pct end
   end
+  if st.barWait >= 60 and not st.barToldGone then st.barToldGone = true; log("HP bar: no HUD bar found; looked for once a minute from here") end
   return nil
 end
 

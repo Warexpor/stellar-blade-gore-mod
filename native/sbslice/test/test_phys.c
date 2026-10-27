@@ -146,6 +146,20 @@ static void test_table(int variant, int nbodies, int corrupt)
     if (corrupt) ((elem *)*(u64 *)(asset + AT))[1].hidx ^= 1;
     u64 olddata = *(u64 *)(asset + AT);
     int ngm0 = ngm, nf0 = nfreed, owned = 1 + (*(u64 *)(asset + AT + 32) != 0) + (*(int *)(asset + AT + 72) > 1);
+    if (!corrupt) {
+        // the pairs it lets collide, read before it is rewritten: every pair not in it, nothing changed
+        char l[64]; snprintf(l, sizeof l, "L%llx,%x", (unsigned long long)(u64)asset, nbodies);
+        cmd(l);
+        int want = nbodies * (nbodies - 1) / 2 - n, got = 0, wrong = 0;
+        CHECK(!strncmp(lastres, "ok colliding ", 13) && atoi(lastres + 13) == want, "colliding: %.80s, want %d", lastres, want);
+        for (const char *q = strchr(lastres + 13, ' '); q; q = strchr(q + 1, ' ')) {
+            int a = (int)strtol(q + 1, 0, 16), b = (int)strtol(strchr(q, ',') + 1, 0, 16);
+            got++;
+            if (!(a < b && b < nbodies) || find(asset + AT, variant, a, b) >= 0) wrong++;
+        }
+        CHECK(got == want && !wrong && *(u64 *)(asset + AT) == olddata, "colliding: %d pairs listed, %d wrong, want %d", got, wrong, want);
+        printf("colliding (%d bodies): %d pairs listed, none in the table\n", nbodies, got);
+    }
     char c[64]; snprintf(c, sizeof c, "t%llx,%x", (unsigned long long)(u64)asset, nbodies);
     cmd(c);
     int m = nbodies * (nbodies - 1) / 2;

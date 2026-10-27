@@ -17,6 +17,11 @@ return {
     },
     bladeFollow = 0.75,        -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
                                -- roll the odds above (1: always the blade, mostly waist cuts and splits)
+    oddsNear = {
+      enabled = true,          -- the odds above follow where the blow landed: a part far from the hit isn't rolled
+                               -- (a waist swing never beheads). Odds whose only kind is far from it still roll it
+      floor = 0,               -- share of its odds a part far from the hit keeps (0-1; 1: the odds as they are)
+    },
     torsoLegs = {
       enabled = true,          -- a cut across her waist sometimes leaves her legs playing her fall while the upper
                                -- body flies off (more often from a level swing; false: all of her ragdolls)
@@ -27,17 +32,19 @@ return {
     -- smash = {               (parked for now)
     --   enabled = false,         -- a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or
     --                            -- upper body it hit to meat chunks instead of cutting it
-    --   always = false,          -- every death smashes, whatever hit her (to try it out; F6's test death too)
+    --   always = false,          -- every death smashes, whatever hit her (to try it out)
     -- },
     laserCut = true,           -- a laser trap death cuts along the beam, everything it went through (false: the odds)
     bluntRagdoll = false,      -- a blunt killing blow (a hammer, a fist, a stomp) cuts nothing: a plain ragdoll death
                                -- (blades still cut)
     lowArm = {
-      enabled = false,         -- a hit that leaves her HP under a quarter cuts her left arm off; she fights on without
+      enabled = false,         -- a hit that leaves her HP under a quarter cuts an arm off; she fights on without
                                -- it (it dissolves back in at a camp rest, or comes back at her next life)
+      side = "left",           -- which arm: "left", "right" or "either" (one at random each time)
       below = 0.25,            -- the share of her HP (0-1) a hit has to leave her under for it to come off
-      noHealGun = true,        -- while it is off: no heal items, no gun (both need her left hand)
+      noHealGun = true,        -- while the left one is off: no heal items, no gun (both need her left hand)
       notice = true,           -- and trying either shows the game's "Cannot use right now." with its sound
+      noSword = true,          -- while the right one is off: no sword (gun and heals still work)
       healBack = false,        -- it also grows back once her HP is back at healAt (0.9), however she healed
       healAt = 0.9,
       effect = true,           -- what comes back at a camp rest dissolves back in (false: back at once, no effect)
@@ -70,6 +77,13 @@ return {
                                --   dropping back, sharp jerks after (false: her head lies still)
     },
   },
+  deathMoves = false,          -- being tested: her body moving after a ragdoll death. Maimed (a limb off, or cut across the waist), she struggles
+                               -- on the floor over her last seconds: a hand on the stump or going out to it,
+                               -- trying to sit up or crawl; her arms swing in her last movements too. Off by
+                               -- default: in game her ragdoll hasn't visibly followed it yet (the log's "struggle:" lines)
+  struggle = {
+    strength = 1.0,            --   how hard she moves in it, times the default
+  },
   cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, and fly it with
                                -- WASD, Q/E (down/up), Shift (faster) or the left stick and triggers, till the death
                                -- screen (false: the game's own camera, which jerks after her body)
@@ -101,10 +115,10 @@ return {
   enemies = {
     enabled = true,            -- the same cuts on generic humanoid enemies you kill
     attackDown = true,         -- they keep attacking her while she is knocked down (false: they wait, as in the game)
-    -- afterDeath = {           (parked for now)
-    --   enabled = false,         -- after her death the enemies around her keep attacking her as if she were alive
-    --   time = 10,               --   for this many seconds
-    -- },
+    afterDeath = {
+      enabled = false,         -- after her death the enemies around her keep attacking her body (being tested): those
+      time = 10,               --   within 4.5 m play their own attacks at it for this many seconds, and their weapons
+    },                         --   cut it through Hits After Death
     cutChance = 1.0,           -- chance a kill near her cuts something off (0-1)
     pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: drops on the spot; 2: twice as far);
                                -- works with the cuts off too

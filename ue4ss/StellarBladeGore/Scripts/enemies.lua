@@ -21,6 +21,7 @@ local function vlog(s) if ctx.tune.verboseLog then log(s) end end -- (per-enemy 
 local DIR = "ue4ss/Mods/StellarBladeGore/"
 local LIST, CMD, REQ, STATE = DIR .. "spawner.list", DIR .. "spawner.cmd", DIR .. "spawner.req", DIR .. "spawner.state"
 local TICK_S = 0.033
+local FAR_EVERY = 4
 -- seconds of her hand kept: a kill is seen when its ragdoll starts, which comes a while after the blow that killed it
 -- (the death show's hit pause and stagger first); the swing is looked for round the hit, not in the last swingWindow
 local HAND_S = 1.5
@@ -42,7 +43,9 @@ local function unit(a) local l = len(a); return l > 1e-6 and vec(a.X / l, a.Y / 
 local function vof(v) return v and vec(v.X, v.Y, v.Z) or nil end
 local function v3(v) return v and string.format("(%.0f %.0f %.0f)", v.X, v.Y, v.Z) or "(?)" end
 local function addr(o) return try(function() return o:GetAddress() end) end
-local function bone_loc(mesh, b) return try(function() return vof(mesh:GetSocketLocation(FName(b))) end) end
+-- (bone names made into FNames once: each FName() looks the string up in the name table, and these run per enemy per poll)
+local FN = setmetatable({}, { __index = function(t, b) local f = FName(b); t[b] = f; return f end })
+local function bone_loc(mesh, b) return try(function() return vof(mesh:GetSocketLocation(FN[b])) end) end
 
 local function kinds() return cfg().kinds or {} end
 -- a kind's Blueprint class name: the asset's name with _C
@@ -342,7 +345,7 @@ local function poll_hit(e)
     bone = try(function() return m.PhysicalHitForceTargetBone:ToString() end), pel = pel }
 end
 
-local function simulating(e) return try(function() return e.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true end
+local function simulating(e) return try(function() return e.mesh:IsSimulatingPhysics(FN["Bip001-Pelvis"]) end) == true end
 local function dying(o) return try(function() return o.bActorIsBeingDestroyed end) ~= false end
 
 -- what a corpse's slots show: a material's name, a dynamic instance's parent's. The game's despawn show swaps them
@@ -798,14 +801,23 @@ local function attacky(nm)
   for _, w in ipairs(ATTACK_WORDS) do if nm:find(w, 1, true) then return true end end
   return false
 end
+-- an object's path (/Game/...): its full name less the class. UE4SS's objects have no GetPathName (it answered
+-- nothing, so every enemy's mesh read "in no monster folder" and no attack of theirs was ever found, playtest)
+local function path_of(o)
+  local f = valid(o) and try(function() return o:GetFullName() end) or ""
+  return f:match("^%S+ (.+)$") or ""
+end
+M.path_of = path_of
 -- the monsters' attack animations loaded now (the ones they played or have ready), by folder: paths only, nothing held
+-- (anywhere under the monster's folder with Anim in its path: Animation/, Animations/, Anim/...)
 function aft.scan_anims()
   aft.loaded = {}
   local nl = 0
   for _, an in ipairs(try(function() return FindAllOf("AnimSequence") end) or {}) do
-    local p = valid(an) and try(function() return an:GetPathName() end) or ""
-    local folder, nm = p:match("^(/Game/Art/Character/Monster/[^/]+/)Animation/([^/%.]+)%.")
-    if folder and attacky(nm) then
+    local p = path_of(an)
+    local folder, rest = p:match("^(/Game/Art/Character/Monster/[^/]+/)(.+)$")
+    local nm = rest and rest:find("Anim", 1, true) and rest:match("([^/%.]+)%.[^/]*$")
+    if folder and nm and attacky(nm) then
       aft.loaded[folder] = aft.loaded[folder] or {}
       table.insert(aft.loaded[folder], p)
       nl = nl + 1
@@ -818,7 +830,7 @@ local ANIM_CLS
 -- aren't its own: the load fails) would stall the game; the loaded ones (after_scan) are only looked up
 local function attack_anims(mesh)
   local sk = try(function() return mesh.SkeletalMesh end)
-  local path = valid(sk) and try(function() return sk:GetPathName() end) or ""
+  local path = path_of(sk)
   local folder = path:match("^(/Game/Art/Character/Monster/[^/]+/)")
   if not folder then
     aft.badPath = aft.badPath or {}
@@ -982,27 +994,31 @@ local function after_scan(why, classes)
     why, #s.det, #s.alive, nsk, nl, (os.clock() - t0) * 1000))
 end
 
+-- the decision nodes changed put back (only the ones still alive: asked by index, nothing of a freed one read)
+local function after_putback()
+  local list = {}
+  for _, k in ipairs(aft.tasks or {}) do list[#list + 1] = k end
+  local back = 0
+  for i = 1, #list, 64 do
+    local part = { table.unpack(list, i, math.min(i + 63, #list)) }
+    if ctx.alive_ask(part) then
+      for _, k in ipairs(part) do
+        if k.alive and valid(k.obj) then
+          for f, v in pairs(aft.undo[k] or {}) do try(function() k.obj[f] = v end) end
+          back = back + 1
+        end
+      end
+    end
+  end
+  return back
+end
 function M.after_tick(pawn)
-  local c = ctx.tune.enemyAfterDeath == true and cfg().afterDeath or {} -- (parked: tune.enemyAfterDeath)
+  local c = cfg().afterDeath or {}
   local since = ctx.dead_since and ctx.dead_since()
   local on = c.enabled == true and since and os.clock() - since < (c.time or 10)
   if not on then
     if aft.tasks then
-      -- the target searches put back (only the ones still alive)
-      local list = {}
-      for _, k in ipairs(aft.tasks) do list[#list + 1] = k end
-      local back = 0
-      for i = 1, #list, 64 do
-        local part = { table.unpack(list, i, math.min(i + 63, #list)) }
-        if ctx.alive_ask(part) then
-          for _, k in ipairs(part) do
-            if k.alive and valid(k.obj) then
-              for f, v in pairs(aft.undo[k] or {}) do try(function() k.obj[f] = v end) end
-              back = back + 1
-            end
-          end
-        end
-      end
+      local back = after_putback()
       local sws, stopped = aft.swings or 0, swings_stop()
       log(string.format("after death: over (%s), %d decision nodes put back, blackboards kept on her %d times, %d swings at her body (%d cut short)",
         since and "time up" or "she is up", back, aft.sets or 0, sws, stopped))
@@ -1145,6 +1161,7 @@ function M.tick(pawn, mesh, tm)
   tm("enemies hand")
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
   local seen = {}
+  local now = os.clock()
   for _, c in ipairs(ctx.live_chars()) do
     local k = kind_of(c.cls)
     if k then
@@ -1154,7 +1171,14 @@ function M.tick(pawn, mesh, tm)
       -- (an actor being destroyed stays in the list until the next GC: a removed spawn was adopted again every tick)
       if not e and not dying(c.obj) then e = adopt(c.obj, c.addr, c.cls, k, cuts) end
       if e then e.k = c.k end
+      -- one out of reach at the last look is looked at every FAR_EVERY polls, each on its own poll (by its address):
+      -- every enemy and corpse of the level every poll was ~1 ms of each poll, the poll's costliest part while she
+      -- played (frame cost, a Nexus report of 144 fps down to 100-110 with microstutter). Nothing is cut or pushed
+      -- out of reach, and its death or vanishing is seen ~0.1 s later
+      if e and e.far and (n + (c.addr // 0x1000)) % FAR_EVERY ~= 0 then e = nil end
       if e then
+        local dt = now - (e.lookAt or now)
+        e.lookAt = now
         if try(function() return e.obj.bActorIsBeingDestroyed end) ~= false then
           gone(c.addr, e, "destroyed", "destroyed")
         elseif not valid(e.mesh) then
@@ -1163,6 +1187,7 @@ function M.tick(pawn, mesh, tm)
           local sim = simulating(e)
           local pel = bone_loc(e.mesh, "Bip001-Pelvis")
           local near = her and pel and len(sub(pel, her)) < (g.reach or 2500)
+          e.far = not near
           if not e.dead then
             if near then poll_hit(e) end
             if sim and not hidden(e) then
@@ -1187,7 +1212,7 @@ function M.tick(pawn, mesh, tm)
               seen[c.addr] = nil
             elseif not sim then
               -- up again (its death undone, or the actor reused): after a second of not simulating
-              e.still = e.still + TICK_S
+              e.still = e.still + math.max(dt, TICK_S)
               if e.still > 1.0 then
                 gone(c.addr, e, nil, "up again")
                 seen[c.addr] = nil
@@ -1195,7 +1220,9 @@ function M.tick(pawn, mesh, tm)
             else
               e.still = 0
               if e.scaleAt and os.clock() >= e.scaleAt then scale_push(e) end
-              if not e.faded and n % 4 == 0 then
+              -- (its materials every 4 polls' time: a far one is looked at only that often, and on its own poll)
+              if not e.faded and now >= (e.matAt or 0) then
+                e.matAt = now + 4 * TICK_S - 0.005
                 local yes, now = dissolving(e)
                 if yes then
                   e.faded, e.want = true, nil
@@ -1220,7 +1247,16 @@ end
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()
   known, mine, expect, hand = {}, {}, {}, {}
-  aft.keys, aft.tasks = {}, nil
+  -- (after death's swings, attacks and tree nodes were the old level's, by address: a swing still on would be given back
+  -- to a freed mesh, IsValid reading it, once a new enemy took its address. Dropped without touching them; the trees
+  -- are looked up again in the new level. Nodes it changed that outlive the level, their tree asset kept loaded, are
+  -- put back first: asked by index, the freed ones aren't read)
+  if aft.tasks then
+    local ok, back = pcall(after_putback)
+    log(string.format("after death: the level reloaded while it was on: %s decision nodes put back", ok and tostring(back) or ("? (" .. tostring(back) .. ")")))
+  end
+  aft.keys, aft.tasks, aft.undo, aft.sets = {}, nil, nil, 0
+  aft.sw, aft.swings, aft.near, aft.anims, aft.scan, aft.loaded = {}, 0, nil, {}, nil, nil
   down.done, down.next, down.pending = {}, 0, {}
   freed = false
 end

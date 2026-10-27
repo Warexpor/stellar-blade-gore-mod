@@ -47,6 +47,7 @@ local state = nil      -- { patched, cpu, pa } for the current mesh
 local locks = {}       -- constraint components made for this ragdoll
 local waiting = false  -- logged that an outfit waits for sbslice.dll
 local filledTable = {} -- physics asset address -> true once sbslice.dll filled its collision table
+local alivePairs = {} -- physics asset address -> the pairs (bone names) it let collide that aren't two main bodies
 
 function M.init(c)
   ctx = c
@@ -495,10 +496,11 @@ local function fix_defaults(pa, mesh, sk)
   local coll = ""
   local filled = false
   if g.collisionTable ~= false and dll() == "ready" then
-    local r = ctx.gore.command(string.format("t%x,%x", pa:GetAddress(), #bodies_of(pa)))
+    local keep, kept = M.alive_pairs(pa)
+    local r = M.arm_table(pa, keep)
     filled = r:sub(1, 3) == "ok "
     filledTable[pa:GetAddress()] = filled or nil
-    coll = filled and (", her bodies collide with nothing of hers (" .. r .. ")") or (", collision table NOT filled: " .. r)
+    coll = filled and (", her bodies collide with nothing of hers (" .. r .. ")" .. kept) or (", collision table NOT filled: " .. r)
   end
   if not filled and g.quietJiggle ~= false then coll = coll .. ", " .. quiet_jiggle(pa, mesh) end
   return string.format("damping %.1f/%.1f on %d main bodies (pelvis reads back %s), %d main joints fixed, %d ranged from the bind pose%s%s",
@@ -556,6 +558,12 @@ function M.check(pawn, mesh, live)
       end
       -- none at all: the mesh asset's own field put back too (the override alone was dropped again)
       local onMesh = try(function() return mesh.SkeletalMesh.PhysicsAsset end)
+      -- (the mesh asset's own is ours still: her bodies come from it on any re-make, and re-made here every 2-3 s
+      -- she twitched as she ran, Lemi21's Latex Nun, Nexus report; put back on her at her death, M.start)
+      if valid(onMesh) and try(function() return onMesh:GetAddress() == state.pa:GetAddress() end) then
+        state.lost = 10
+        return
+      end
       if not valid(onMesh) then try(function() sk.PhysicsAsset = state.pa end) end
       local ok = try(function() mesh:SetPhysicsAsset(state.pa, true); return true end)
       if state.lost <= 3 or state.lost == 10 or not ok then
@@ -585,6 +593,10 @@ function M.check(pawn, mesh, live)
     if o and try(function() mesh:SetPhysicsAsset(o, true); return true end) then
       pa = o
       borrowed = string.format(" (the mesh has none: gave it %s)", path)
+    elseif not ctx.may_load() then
+      -- (loading held off, a level still streaming in: checked again once it may, not settled without one)
+      seenMesh = nil
+      return
     else
       borrowed = string.format(" (the mesh has none, and %s didn't load: she can't ragdoll)", path)
     end
@@ -608,6 +620,12 @@ function M.check(pawn, mesh, live)
           pa = o
           borrowed = string.format(" (its own %s has no body on %s: gave it %s)", own, table.concat(miss, ","), path)
         end
+      elseif not o and not ctx.may_load() then
+        -- (loading held off for a few seconds after a level load: checked again once it may. Settled here, an outfit
+        -- worn as the level loaded kept its own asset with no pelvis and her deaths never ragdolled, Lemi21's
+        -- Latex Nun, Nexus report)
+        seenMesh = nil
+        return
       else
         borrowed = string.format(" (no body on %s, and %s didn't load)", table.concat(miss, ","), path)
       end
@@ -701,6 +719,17 @@ end
 -- ragdoll start: lock the loose bodies of an unpatched asset to the body above them
 function M.start(pawn, mesh)
   M.check(pawn, mesh, true)
+  -- an asset we gave her that the component no longer reads (check leaves it alone while she lives): on her now,
+  -- before her bodies simulate
+  if cfg().enabled ~= false and state and state.borrowed and valid(state.pa) then
+    local now = try(function() return mesh:GetPhysicsAsset() end)
+    if not (valid(now) and try(function() return now:GetAddress() == state.pa:GetAddress() end)) then
+      local ok = try(function() mesh:SetPhysicsAsset(state.pa, true); return true end)
+      log(string.format("her physics asset was %s at her death: %s %s", valid(now) and name(now) or "none",
+        ok and "gave her" or "could NOT give her", name(state.pa)))
+      remade(ok)
+    end
+  end
   if cfg().enabled == false or cfg().lockLoose == false or not state or state.patched or not valid(state.pa) then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintComponent") end)
   if not valid(cls) then return "no PhysicsConstraintComponent class" end
@@ -810,6 +839,31 @@ local function body_capsules(mesh, bs, b)
   end)
   return #out > 0 and out or nil
 end
+-- the pairs her asset lets collide that aren't two main bodies (bone names), read from sbslice.dll before its table
+-- is first filled, and what to log. Her bodies collide with nothing of hers in the ragdoll, but while she is alive her
+-- hair simulated on her own mesh rests on her: CH_P_EVE_30's ponytail (Ab-TL-HairB02-04) collides with her head, neck,
+-- back and arms in the vanilla asset. Filled in, it sank through them, into her hair pin, and jittered there (playtest;
+-- F8, which stopped those bodies simulating, put it right). Kept while she lives (filled at death: physfix.arm_collision)
+function M.alive_pairs(pa)
+  local a = pa:GetAddress()
+  if alivePairs[a] then return alivePairs[a], string.format(", %d pairs of her hair's kept", #alivePairs[a]) end
+  local bodies = bodies_of(pa)
+  local names = {}
+  for i, bs in ipairs(bodies) do names[i - 1] = try(function() return bs.BoneName:ToString() end) or "" end
+  local r = ctx.gore.command(string.format("L%x,%x", a, #bodies))
+  if r:sub(1, 13) ~= "ok colliding " then return {}, ", her hair's pairs unread: " .. r end
+  local out = {}
+  for x, y in r:gmatch(" (%x+),(%x+)") do
+    local na, nb = names[tonumber(x, 16)], names[tonumber(y, 16)]
+    if na and nb and na ~= "" and nb ~= "" and not (MAIN[na] and MAIN[nb]) then out[#out + 1] = { na, nb } end
+  end
+  alivePairs[a] = out
+  return out, string.format(", %d pairs of her hair's kept", #out)
+end
+-- sbslice.dll filled the asset's table: no two of her main bodies collide whatever her mesh's PhysicsBody response
+function M.table_filled(pa) return valid(pa) and filledTable[pa:GetAddress()] == true end
+-- the table as she lives: her hair's pairs colliding (main.lua's recovery, after a death's arm pairs)
+function M.alive_table(pa) return M.arm_table(pa, valid(pa) and M.alive_pairs(pa) or {}) end
 -- the collision table with every pair of hers apart but these (bone names): sbslice.dll's answer
 function M.arm_table(pa, pairs)
   local idx, n = {}, 0

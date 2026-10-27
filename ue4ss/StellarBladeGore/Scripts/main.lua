@@ -18,8 +18,8 @@
 -- Sandbox: F7 ragdolls her with a shove onto her back (tune.lua), F8 recovers (F7, F9 and F11 stay until F8),
 -- F9 cuts a limb, the head or the torso (tune.gore), F10 puts a living hit's mark on her (tune.gore.hitMarks: a hit she
 -- lives through leaves a slash of blood on her skin, healing fades it), F11 ragdolls her and splits
--- her in half top to bottom, Delete ragdolls her and cuts along a made-up blade (as a killing blow does), F6 plays one
--- of her animated death shows (a test death, which always splits her: tune.gore.f5Split).
+-- her in half top to bottom, Delete ragdolls her and cuts along a made-up blade (as a killing blow does), F6 tests the
+-- struggle (a ragdoll death with set cuts, the next of STRUGGLE_TESTS each press).
 -- Enemies (enemies.lua): F5 spawns the picked humanoid enemy in front of her, Insert picks the next, Home shows
 -- or hides the spawner window (sbslice.dll), End ragdolls the followed one nearest her (the passive Airborne
 -- Squad die no other way); her killing blows and hits on their corpses cut them like her.
@@ -79,7 +79,16 @@ local function try(fn, ...)
   return nil
 end
 
-local function valid(o) return o ~= nil and try(function() return o:IsValid() end) == true end
+-- (no closure made per call: called hundreds of times a poll, each one garbage for the collector)
+local valid
+do
+  local function is_valid(o) return o:IsValid() end
+  valid = function(o)
+    if o == nil then return false end
+    local ok, v = pcall(is_valid, o)
+    return ok and v == true
+  end
+end
 local function name(o) return valid(o) and (try(function() return o:GetFName():ToString() end) or "?") or "<nil>" end
 local function v3(v) return v and string.format("(%.0f %.0f %.0f)", v.X, v.Y, v.Z) or "(?)" end
 local function len(v) return v and math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) or -1 end
@@ -94,6 +103,15 @@ local tune = {}
 -- tune.verboseLog, for chasing a bug (they were most of the log)
 function lg.v(s) if tune.verboseLog then log(s) end end
 local goreCtx = { tune = tune }
+-- UGameplayStatics' default object, found once: looked up by its path every frame (screen.view) and on many polls,
+-- each a path lookup on the game thread (a Nexus report of 144 fps down to 100-110 with the mod)
+do
+  local gsCdo = nil
+  function goreCtx.statics()
+    if not valid(gsCdo) then gsCdo = try(function() return StaticFindObject("/Script/Engine.Default__GameplayStatics") end) end
+    return gsCdo
+  end
+end
 -- an object held past this tick. Garbage collection frees an object's memory, and IsValid on a freed one reads it
 -- and crashes UE4SS (no pcall catches that: a death crashed so once the game freed a killed enemy, 0.3.0). 0.3.0
 -- looked each one up by its path in the name table, but UE4SS's StaticFindObject finds no level actor by its path
@@ -302,7 +320,7 @@ goreCtx.physics_of = function(m)
   return valid(pa) and pa or nil
 end
 -- a severed limb stops being driven by the muscle tone
-goreCtx.on_cut = function(mesh, bone) if rag then rag.on_cut(mesh, bone) end end
+goreCtx.on_cut = function(mesh, bone) if rag then rag.on_cut(mesh, bone, goreCtx.alive and goreCtx.alive()) end end
 -- a cut-off piece collides with the rest of her (physfix.piece_collision: its pairs join the collision table's), the
 -- mesh blocking its own bodies' channel, switched off and on so the engine filters her body pairs again
 goreCtx.piece_collision = function(mesh, roots)
@@ -316,13 +334,14 @@ goreCtx.piece_collision = function(mesh, roots)
   log("cut piece " .. table.concat(roots, ",") .. ": " .. tostring(w))
 end
 goreCtx.arm_table = function(m, p) return physfix and physfix.arm_table(goreCtx.physics_of(m), p) or "no physfix" end
--- she is up: none of her pairs collide any more. The table lives on her physics asset, so a cut on her standing (F9
+-- she is up: none of her pairs collide any more but her hair's (physfix.alive_pairs). The table lives on her physics asset, so a cut on her standing (F9
 -- after F8) took the last ragdoll's pairs, measured in another pose: her hands against her thighs, where they hang
 -- now, and the cut flung them off at 2000 cm/s (playtest)
 goreCtx.reset_pairs = function(mesh)
   if not goreCtx.arm_pairs then return end
   goreCtx.arm_pairs = nil
-  log("collision pairs reset: " .. tostring(goreCtx.arm_table(mesh, {})))
+  local pa = goreCtx.physics_of(mesh)
+  log("collision pairs reset: " .. tostring(physfix and valid(pa) and physfix.alive_table(pa) or "no physfix"))
 end
 -- a split's copy settles with her
 goreCtx.on_copy = function(comp) if rag then rag.add_body(comp) end end
@@ -429,6 +448,10 @@ local function find_eve() return cachedPawn end
 local rel = { loc = nil, rot = nil }
 -- ragdoll-time state
 local active, polls, deaths = false, 0, 0
+-- a cut on her alive (F9, Lose Arm at Low HP) leaves her bodies' PhysicsBody response alone when the table keeps her
+-- main bodies apart already: turned off, her ponytail's bodies sank through her head and back again (physfix.alive_pairs)
+goreCtx.table_filled = function(mesh) return not active and physfix and physfix.table_filled(goreCtx.physics_of(mesh)) or false end
+goreCtx.alive = function() return not active end
 local saved = {}
 local after = -1            -- polls since recovery; watch the mesh until ~10 s after the game respawns her
 local AFTER_POLLS = 300     -- ~10 s
@@ -697,8 +720,9 @@ function dface.stop()
   for _, x in pairs(f.extra or {}) do try(function() f.face:SetMorphTarget(x, 0, true) end) end
 end
 local faceCheck = nil
--- hits after death (hits_after, below): n so far this death, armed once the weapon slowed after the last, t0 the death
-local ah = { n = 0, armed = false, t0 = 0 }
+-- hits after death (hits_after, below): n so far this death, armedBy the enemies (addresses) whose weapon slowed
+-- after their last hit, t0 the death
+local ah = { n = 0, armedBy = {}, t0 = 0 }
 -- when her death began (os.clock), nil while she lives (enemies.lua: tune.enemies.afterDeath)
 goreCtx.dead_since = function() return active and ah.t0 or nil end
 local function sandbox_face()
@@ -919,7 +943,7 @@ end
 local function camera_hold(pawn)
   camWatch = { t0 = os.clock(), n = 0 }
   if tune.cameraStill == false or tune.cameraFollow == true or camHeld then return end
-  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local gs = goreCtx.statics()
   local cls = StaticFindObject("/Script/Engine.CameraActor")
   local pc = valid(gs) and try(function() return gs:GetPlayerController(pawn, 0) end)
   local pcm = valid(gs) and try(function() return gs:GetPlayerCameraManager(pawn, 0) end)
@@ -1084,7 +1108,7 @@ local function camera_watch(pawn, mesh)
   if t < w.n * 0.5 then return end
   w.n = w.n + 1
   local cam = try(function()
-    local v = StaticFindObject("/Script/Engine.Default__GameplayStatics"):GetPlayerCameraManager(pawn, 0):GetCameraLocation()
+    local v = goreCtx.statics():GetPlayerCameraManager(pawn, 0):GetCameraLocation()
     return { X = v.X, Y = v.Y, Z = v.Z }
   end)
   local c = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
@@ -1098,7 +1122,7 @@ end
 -- game's time meanwhile (ahead: game seconds over real ones), so she still gets up under the screen
 local skip, ahead = nil, 0 -- skip: { t0, k, pawn }
 local function time_speed(pawn, k)
-  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local gs = goreCtx.statics()
   return valid(gs) and valid(pawn) and try(function() gs:SetGlobalTimeDilation(pawn, k); return true end) == true
 end
 -- the death screen's widget, found once and kept (a scan of every object: 17 ms, twice a second, was a stutter of
@@ -1214,7 +1238,7 @@ end
 -- loaded (tried once a second in a death till then); none had ever been hooked, as the screen was never seen
 local SCREEN_FNS = { WB_Common_btn_1_Event_0 = "press", WB_Common_btn_2_Event_0 = "press", WB_Common_btn_1_Event = "press",
   WB_Common_btn_2_Event = "press", FinishPressAnimation = "press", FinishYouDieAnimation = "shown" }
-function screen.reset() dead_hud.scans, dead_hud.made, dead_hud.found, screen.rv.shown = 0, nil, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen, screen.shown, screen.hpZero, screen.hpBack = false, false, false, 0; screen.offSince, screen.shownAt = nil, nil end
+function screen.reset() dead_hud.scans, dead_hud.made, dead_hud.found, screen.rv.shown = 0, nil, nil, nil; screen.seen, screen.vis, screen.gone, screen.press, screen.respawn, screen.revived, screen.last = false, false, false, false, false, false, nil; screen.frozen, screen.shown, screen.hpZero, screen.hpBack, screen.photoTook = false, false, false, 0, nil; screen.offSince, screen.shownAt = nil, nil end
 -- the death and revive screens kept hidden t s into the death: held (Shift+F4, photo mode), else as tune.deathScreen
 -- says: "game" when the game puts them up (at once), "delay" till tune.reviveAt s, "key" till Shift+F4 (or the pad
 -- combo) shows them
@@ -1522,7 +1546,7 @@ function screen.probe(pawn)
         a and (" alpha " .. f(a)) or "", blur and (" blur " .. f(blur)) or "")
     else parts[#parts + 1] = name .. " none" end
   end
-  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local gs = goreCtx.statics()
   local pcm = try(function() return gs:GetPlayerCameraManager(pawn, 0) end)
   if valid(pcm) then
     local fc = try(function() return pcm.FadeColor end)
@@ -1545,7 +1569,7 @@ local function on_start(pawn, mesh)
   if gore then try(function() gore.voice_death(pawn, mesh) end) end
   if goreCtx.convulse then try(function() goreCtx.convulse.start(pawn, mesh) end) end
   if goreCtx.struggle then try(function() goreCtx.struggle.start(pawn, mesh) end) end
-  ah.n, ah.armed, ah.t0, ah.blunt = 0, false, os.clock(), nil
+  ah.n, ah.armedBy, ah.t0, ah.blunt = 0, {}, os.clock(), nil
   no_snapshot(pawn)
   hold = nil
   hold_capsule(pawn)
@@ -1856,9 +1880,9 @@ local function on_end(pawn, mesh)
     deaths, polls, name(parent), v3(mloc), v3(cloc), dist(mloc, cloc), tostring(visible),
     tostring(try(function() return mesh:GetCollisionProfileName():ToString() end))))
   if tune.massScale and tune.massScale ~= 1.0 then try(function() mesh:SetAllMassScale(1.0) end) end
-  if saved.collision then
-    -- sandbox ragdoll: put back the exact gameplay collision setup
-    local c = saved.collision
+  if saved.collision or saved.takeColl then
+    -- sandbox ragdoll (or the mod's own on a death with none): put back the exact gameplay collision setup
+    local c = saved.collision or saved.takeColl
     try(function() mesh:SetCollisionObjectType(c.obj) end)
     for ch, r in pairs(c.resp) do try(function() mesh:SetCollisionResponseToChannel(ch, r) end) end
     try(function() mesh:SetCollisionEnabled(c.enabled) end)
@@ -1955,19 +1979,29 @@ local function sandbox_recover()
   if gore and not active then gore.cleanup(pawn, mesh) end
   if rag and not active then rag.stop(pawn) end
   log("F8: recover requested")
+  -- a test death that stayed animated (Test: Animated Death's, a cut keeping her fall) has no physics to turn off,
+  -- and the tick only ends a death when it does: F8 did nothing (playtest)
+  if active and saved.manual and animDeath then on_end(pawn, mesh) end
 end
 
 -- what a killing blow does, by tune.gore.death's odds: "limb", "head", "torso" or "split" (split only when allowed:
--- a blow that came down from above)
+-- a blow that came down from above). near (gore.near_odds): each kind's weight times its factor, where the blow
+-- landed; odds with nothing left near the hit (the only one above 0 far from it) are rolled as they are
 local KINDS = { "limb", "head", "torso", "split" }
-local function pick_kind(split)
+local function pick_kind(split, near)
   local odds = (tune.gore or {}).death or { limb = 42, head = 25, torso = 15, split = 18 }
-  local function w(k)
+  local function raw(k)
     if k == "split" and not split then return 0 end
     return math.max(tonumber(odds[k]) or 0, 0)
   end
-  local total = 0
-  for _, k in ipairs(KINDS) do total = total + w(k) end
+  local function sum(f)
+    local t = 0
+    for _, k in ipairs(KINDS) do t = t + f(k) end
+    return t
+  end
+  local w = near and function(k) return raw(k) * (near[k] or 0) end or raw
+  local total = sum(w)
+  if total <= 0 and w ~= raw then w, total = raw, sum(raw) end
   if total <= 0 then return "limb" end
   local r = math.random() * total
   for _, k in ipairs(KINDS) do
@@ -2789,30 +2823,28 @@ function sw.laser_hit(pawn, mesh)
   return { t = os.clock(), loc = loc, n = nrm, how = "laser", src = "laser", attack_dir = 0, laser = true,
     bone = best.p.bone:find("%-[LR]%-") and best.p.bone or nil }
 end
-local function hits_after(pawn, mesh)
-  local g = tune.gore or {}
-  local c = g.afterHits or {}
-  local hist = swing.hist
-  if not (gore and (swing.bones or swing.weapons)) or #hist < 2 or os.clock() - hist[#hist].t > 0.2 then return end
+-- the fastest step one followed enemy's weapon just made (its blade meshes before its bones), nil with no fresh step
+function sw.after_step(S, g)
+  local hist = S.hist
+  if not (S.bones or S.weapons) or #hist < 2 or os.clock() - hist[#hist].t > 0.2 then return nil end
   local a, b = hist[#hist - 1], hist[#hist]
   local dt = b.t - a.t
-  if dt < 1e-3 then return end
+  if dt < 1e-3 then return nil end
   local best
-  for i = 1, #(swing.bones or {}) do
+  for i = 1, #(S.bones or {}) do
     local p, q = a.p[i], b.p[i]
     if p and q then
       local v = dist(p, q) / dt
-      if not best or v > best.v then best = { v = v, i = i, p = p, q = q, name = swing.bones[i] } end
+      if not best or v > best.v then best = { v = v, i = i, p = p, q = q, name = S.bones[i] } end
     end
   end
-  -- a weapon mesh's blade (swing_weapons) goes before the bones: its steps are its two ends' and its middle's
   local bb
   for k, e in pairs(b.w or {}) do
     local o = a.w and a.w[k]
     if o then
       local v = math.max(dist(o.a, e.a), dist(o.b, e.b)) / dt
       if not bb or v > bb.v then
-        local w = swing.weapons[k]
+        local w = S.weapons[k]
         local mid = function(x) return { X = (x.a.X + x.b.X) / 2, Y = (x.a.Y + x.b.Y) / 2, Z = (x.a.Z + x.b.Z) / 2 } end
         local far = dist(o.b, e.b) >= dist(o.a, e.a)
         bb = { v = v, p = far and o.b or o.a, q = far and e.b or e.a, name = w and w.name or "weapon",
@@ -2821,8 +2853,23 @@ local function hits_after(pawn, mesh)
     end
   end
   if bb and bb.v >= (g.swingMinSpeed or 300) then best = bb end
-  if not best or best.v < (g.swingMinSpeed or 300) then ah.armed = true; return end
-  if ah.blunt or not ah.armed or ah.n >= (c.max or 6) or os.clock() - ah.t0 < (c.from or 0.6) or gore.busy() then return end
+  return best
+end
+local function hits_after(pawn, mesh)
+  local g = tune.gore or {}
+  local c = g.afterHits or {}
+  if not gore then return end
+  -- every enemy followed, not only the nearest (the one swinging at her body needn't be: enemies.lua's swings after
+  -- death), each armed again once its own weapon slowed down (one cut a swing)
+  local best, S
+  for _, x in ipairs(#sw.list > 0 and sw.list or { swing }) do
+    local st = sw.after_step(x, g)
+    if st and st.v < (g.swingMinSpeed or 300) then ah.armedBy[x.addr or 0] = true
+    elseif st and (not best or st.v > best.v) then best, S = st, x end
+  end
+  if not best then return end
+  local hist = S.hist
+  if ah.blunt or not ah.armedBy[S.addr or 0] or ah.n >= (c.max or 6) or os.clock() - ah.t0 < (c.from or 0.6) or gore.busy() then return end
   local at, d, bone
   local parts = { { "Bip001-Head", 0 } }
   for _, e in ipairs(SWING_AT) do parts[#parts + 1] = e end
@@ -2838,10 +2885,10 @@ local function hits_after(pawn, mesh)
     if dd and (not d or dd < d) then at, d, bone = l, dd, e[1] end
   end
   if not at or d > (c.reach or 35) then return end
-  ah.armed, ah.n = false, ah.n + 1
+  ah.armedBy[S.addr or 0], ah.n = false, ah.n + 1
   -- the plane: the arc through the last three samples, else the step and the enemy's forward
   local dir = unit(sub(best.q, best.p))
-  local fwd = goreCtx.held(swing.k) and try(function() return vof(swing.actor:GetActorForwardVector()) end)
+  local fwd = goreCtx.held(S.k) and try(function() return vof(S.actor:GetActorForwardVector()) end)
   local n, how
   local cb = best.blade and dir and cross(best.blade, dir)
   if cb and len(cb) > 0.3 then n, how = unit(cb), "blade " .. best.name end
@@ -2862,14 +2909,14 @@ local function hits_after(pawn, mesh)
   end
   local ncut, split = gore.cuts_on(mesh)
   log(string.format("after death (%.1f s in): %s's %s at %.0f cm/s passed %.0f cm from her %s, hit %d of %d%s",
-    os.clock() - ah.t0, tostring(swing.who), best.name, best.v, d, bone, ah.n, c.max or 6,
+    os.clock() - ah.t0, tostring(S.who), best.name, best.v, d, bone, ah.n, c.max or 6,
     split and ", she is split: blood only" or ""))
   gore.on_hit(pawn, mesh, at)
   if split then return end
   gore.aim(dir)
   -- a split needs her whole: once something is off her, a blow through her body is a hit mark instead
   local h = { t = os.clock(), loc = at, dir = dir, fwd = fwd or dir, n = n, how = how, push = dir, attack_dir = 0,
-    bone = bone, noSplit = ncut > 0, attacker = swing.who }
+    bone = bone, noSplit = ncut > 0, attacker = S.who }
   -- (the marks off, as they ship: every hit cuts. The cutChance share alone left a quarter of them showing nothing,
   -- playtest)
   local marks = (g.hitMarks or {}).enabled ~= false
@@ -2920,7 +2967,7 @@ function hm.guard_watch(pawn, mesh)
   end
   local why = hm.guarding(st) and ("stance " .. st)
   if not why then
-    local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+    local gs = goreCtx.statics()
     local pc = valid(gs) and try(function() return gs:GetPlayerController(pawn, 0) end)
     if valid(pc) then
       for _, g in ipairs(hm.guard_keys(pc)) do
@@ -2949,8 +2996,8 @@ end
 -- bladeFollow share of deaths with one), "split" (the odds' split share of the rest) or "odds". The cut at the hit
 -- took the blade every time, and a split share of 100 never split (reported). A blade seen decides first: with the
 -- split share rolled ahead of it a dual blades' cross across both arms and a level swing both split her down her
--- length (playtest)
-function hm.death_roll(seen)
+-- length (playtest). near (gore.near_odds): the split share as pick_kind shapes it, by where the blow landed
+function hm.death_roll(seen, near)
   local g = tune.gore or {}
   local odds, total = g.death or {}, 0
   for _, k in ipairs(KINDS) do total = total + math.max(tonumber(odds[k]) or 0, 0) end
@@ -2958,7 +3005,12 @@ function hm.death_roll(seen)
   -- (odds that are all split still split every death, blade or not)
   local follow = math.min(math.max(tonumber(g.bladeFollow) or 1, 0), 1)
   if seen and not (total > 0 and sp >= total) and math.random() < follow then return "blade" end
-  if g.deathSplit ~= false and total > 0 and math.random() * total < math.max(tonumber(odds.split) or 0, 0) then
+  if near then
+    local nt = 0
+    for _, k in ipairs(KINDS) do nt = nt + math.max(tonumber(odds[k]) or 0, 0) * (near[k] or 0) end
+    if nt > 0 then sp, total = sp * (near.split or 0), nt end
+  end
+  if g.deathSplit ~= false and total > 0 and math.random() * total < sp then
     return "split", odds.split, total
   end
   -- (no blade seen: "blade" still, which gore_cut rolls the odds for as a made-up blow)
@@ -2977,6 +3029,9 @@ end
 function hm.lethal_watch(pawn, mesh)
   local g = tune.gore or {}
   if not gore or g.enabled == false or g.woundAtHit == false or not goreCtx.glass then return end
+  -- (a death came after the hit: the cut was its own, undone with it at its end. A death that began 5 s or more after
+  -- the hit left it on record, gore_cut not taking it, and her first tick up logged "she lived" and cleaned up again)
+  if hm.lethal and hm.lethal.cut and (screen.deathAt or -1) >= hm.lethal.t then hm.lethal.cut = nil end
   if hm.lethal and hm.lethal.cut and os.clock() - hm.lethal.t > hm.LIVED_S then
     hm.lived(pawn, mesh, string.format("no death %d s after her HP bar hit 0", hm.LIVED_S))
   end
@@ -2991,6 +3046,34 @@ function hm.lethal_watch(pawn, mesh)
   if pct > 0.0005 then
     if hm.lethal and hm.lethal.cut then hm.lived(pawn, mesh, string.format("her HP bar back at %.3f", pct)) end
     hm.lethal = nil; hm.armed = true; return
+  end
+  -- a death the mod never saw: the death screen up with her bar at 0 and no ragdoll (a death show without a ragdoll
+  -- key of the pak's). A fall damage death is taken over (hm.take: the mod's ragdoll, the death from there as any):
+  -- from a 16 m drop the game's falling death (Landing_Height_Stiff_Damage, Custom5, P_Eve_Dead_Falling, its key at
+  -- 0 s) gave none, she froze where she landed and the death screen came up at once (playtest, twice). Any other is
+  -- named, so it is found (her swimming deaths and the desert's sand hole play their own animations)
+  local lt = hm.lethal
+  if lt and not lt.missed and os.clock() - lt.t > 0.1 and os.clock() >= (lt.screenAt or 0) then
+    lt.screenAt = os.clock() + 0.1
+    if death_screen() then
+      lt.missed = true
+      local now = os.clock()
+      local land = hm.landAny and math.abs(lt.t - hm.landAny.t) < 1.5 and hm.landAny
+      local dm = hm.deadMsg and now - hm.deadMsg.t < 3 and hm.deadMsg
+      local fall = land or (dm and hm.FALL_FX[dm.effect or -1])
+      local swim = try(function() return pawn.CharacterMovement.MovementMode end) == 4
+      local a = tune.active or {}
+      local what = string.format("%s, %s", land and string.format("%.0f cm drop %.1f s before", land.drop, now - land.t)
+        or "no drop", dm and hm.dead_what(dm) or "no death broadcast")
+      if fall and not swim and a.enabled ~= false and a.fallRagdoll ~= false then
+        hm.take = { why = string.format("fall damage: %s", what), t = now }
+        log(string.format("death: the death screen up %.2f s after her HP bar hit 0 and no ragdoll (%s): the mod's own "
+          .. "ragdoll instead", now - lt.t, what))
+      else
+        log(string.format("death NOT seen: the death screen is up %.1f s after her HP bar hit 0 and she never ragdolled "
+          .. "(%s%s); its death show has no ragdoll key of the pak's", now - lt.t, what, swim and ", swimming" or ""))
+      end
+    end
   end
   -- only a bar seen above 0 while she lived and now at 0: right after a respawn it still reads 0, and the watch cut
   -- her there (playtest)
@@ -3021,7 +3104,8 @@ function hm.lethal_watch(pawn, mesh)
   -- over openTime; a split waits for the death, and so do the blow's further cuts (gore.release_held at the death)
   if g.cutAtHit == false or g.sliceOnDeath == false then return end
   if math.random() > (g.sliceChance or 1.0) then hm.lethal.roll = "none"; return end
-  hm.lethal.roll = hm.death_roll(ws ~= nil)
+  hm.lethal.near = gore.near_odds(mesh, h, at)
+  hm.lethal.roll = hm.death_roll(ws ~= nil, hm.lethal.near)
   -- a blunt blow seen smashes the part it landed on instead, whatever the roll (blunt_of)
   if h and not h.made then
     h.early = true
@@ -3043,10 +3127,12 @@ function hm.lethal_watch(pawn, mesh)
   elseif not ok then log("lethal hit: early cut failed: " .. tostring(err)) end
 end
 
--- tune.gore.lowArm: a hit that leaves her HP bar under lowArm.below (a quarter) takes her left arm off where she stands,
--- once till it is back: it grows back out of her shoulder at a camp rest (lowArm.regrow s), or comes back at her next
--- life (the death's end undoes every cut). With lowArm.noHealGun she can't use heal items or shoot meanwhile
-hm.LOW_BONE = "Bip001-L-UpperArm"
+-- tune.gore.lowArm: a hit that leaves her HP bar under lowArm.below (a quarter) takes an arm off where she stands
+-- (lowArm.side: left, right or either), once till it is back: it grows back out of her shoulder at a camp rest
+-- (lowArm.regrow s), or comes back at her next life (the death's end undoes every cut). Meanwhile, with the left arm
+-- off (lowArm.noHealGun) she can't use heal items or shoot, with the right one (lowArm.noSword) she can't use her sword
+hm.LOW_BONES = { left = "Bip001-L-UpperArm", right = "Bip001-R-UpperArm" }
+hm.lowSide = "left" -- the arm cut off (hm.lowCut), or last cut
 -- s her HP bar holds still under the mark before the arm goes (low_arm: a killing blow slides it on to 0)
 hm.LOW_SETTLE = 0.3
 hm.LOW_ZERO_S = 1.5
@@ -3064,15 +3150,47 @@ hm.GROW_JOINTS = {
   ["Bip001-Head"] = { "Bip001-Head" },
   ["Bip001-Spine1"] = { "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck" },
 }
--- a drop of her HP bar is a blow only with a hit on her mesh this long before it (or while it settles): falls, and
--- whatever else drains it with nothing striking her, take no arm
+-- a drop of her HP bar is a blow unless she landed from LOW_LAND_CM or higher within LOW_LAND_S s of it with no hit on
+-- her mesh this long before it (or while it settles): the landing's fall damage takes no arm
 hm.LOW_HIT_S = 0.5
+hm.LOW_LAND_S, hm.LOW_LAND_CM = 1, 200
+-- her death as the game tells it: SBNetworkPlayerController:ClientBroadcast_ActorDead(inTurn, InActorGUID,
+-- inHitSkillID, inEffectID, inProjectileID, inCauseActorGUID, inDoNotResetSPExp, inHaveRevivalItem) as the SDK dump
+-- declares it. What killed her goes in the log (and a fall damage effect counts for hm.take); the game may not send
+-- it in single player at all (glass.lua's calls of it did nothing), the death screen is what hm.lethal_watch trusts
+hm.FALL_FX = { [8000003] = "Landing_Height_Damage", [8000005] = "Landing_Height_Stiff_Damage" }
+function hm.dead_what(d)
+  return string.format("the game's death broadcast: effect %s%s, skill %s, projectile %s", tostring(d.effect),
+    hm.FALL_FX[d.effect or -1] and (" " .. hm.FALL_FX[d.effect]) or "", tostring(d.skill), tostring(d.proj))
+end
+function hm.on_actor_dead(_, _turn, guid, skill, effect, proj, cause)
+  local function num(p) local v = try(function() return p:get() end); return type(v) == "number" and v or nil end
+  local pawn = os.clock() - pawnSeen < 0.5 and cachedPawn or nil
+  local mine = pawn and try(function() return pawn.BroadcastSpawnInfo.ActorGuid end)
+  local g = num(guid)
+  if not (mine and g and g == mine) then return end
+  hm.deadMsg = { t = os.clock(), skill = num(skill), effect = num(effect), proj = num(proj), cause = num(cause) }
+  log("death: " .. hm.dead_what(hm.deadMsg))
+end
 -- the game's own blocks on her (ESBActorState, counted on her native actor: sbslice a): heal items, and the gun's shots
 -- (they use up bullet items)
 hm.LOW_STATES = { { "heals", 67 }, { "shots", 100 } } -- ActorState_BlockItemUseHeal, ActorState_BlockItemUseBullet
+-- (the right arm's: no sword, the game's own stance for it, tables.lua's sword_gate)
 function hm.low_block(pawn, on, why)
   local b = hm.lowBlock
   local a = valid(pawn) and try(function() return pawn:GetAddress() end)
+  if on and hm.lowSide == "right" then
+    if b or not a or not goreCtx.tables then return end
+    hm.lowBlock = { pawn = a, sword = true }
+    log("low HP arm: " .. why .. ": no sword (" .. tostring(select(2, pcall(goreCtx.tables.sword_gate, true))) .. ")")
+    return
+  end
+  if not on and b and b.sword then
+    -- (its end fired whatever pawn she has now: a dispel of nothing does nothing)
+    hm.lowBlock = nil
+    log("low HP arm: " .. why .. ": sword back (" .. tostring(select(2, pcall(goreCtx.tables.sword_gate, false))) .. ")")
+    return
+  end
   if on then
     if b or not a then return end
     b = { pawn = a, states = {} }
@@ -3116,7 +3234,7 @@ hm.NOTICE = "UStringTable_UI;UI_GetNotice_Fail_ActiveTpsMode"
 function hm.low_notice(pawn)
   local la = (tune.gore or {}).lowArm or {}
   if la.notice == false then hm.noticeDown = nil; return end
-  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local gs = goreCtx.statics()
   local pc = valid(gs) and try(function() return gs:GetPlayerController(pawn, 0) end)
   if not valid(pc) then return end
   if not hm.noticeKeys then
@@ -3211,28 +3329,47 @@ function hm.grow_stop(why)
 end
 -- the parts dissolving back in (lowArm.dissolve, gore.ghost_begin: the cut stays on till they are in, then is undone);
 -- each tick while they do. Done, stopped (her death, photo mode) or gone wrong: the ghost's copies away, the cuts undone
+-- (once in: her own part back under the copy, which dissolves out over it in the last FADE_S, dissolve.fade)
+hm.GHOST_FADE_S = 0.6
 function hm.ghost_tick()
   local h = hm.ghost
   if not h then return end
-  local x = math.min((os.clock() - h.t0) / h.T, 1)
-  if x >= 1 then hm.ghost_stop("dissolved in"); return end
   if screen.photoLive or screen.vtPhoto then hm.ghost_stop("photo mode: back at once"); return end
+  local now = os.clock()
+  if h.handed then
+    local y = (now - h.handed) / h.F
+    if y >= 1 then hm.ghost_stop("dissolved in"); return end
+    try(function() gore.ghost_fade(h.g, y) end)
+    return
+  end
+  local x = math.min((now - h.t0) / h.T, 1)
   try(function() gore.ghost_set(h.g, x) end)
+  if x < 1 then return end
+  if h.F <= 0 then hm.ghost_stop("dissolved in"); return end
+  -- (the cut undone under the copy, kept on: gore.ghost_release)
+  try(function() gore.ghost_release(h.g) end)
+  local ok, err = pcall(gore.cleanup, h.pawn, h.mesh)
+  if not ok then log("regrow: cleanup under the copy: " .. tostring(err)) end
+  h.handed, h.cleaned = now, true
 end
 function hm.ghost_stop(why)
   local h = hm.ghost
   if not h then return end
   hm.ghost = nil
-  try(function() gore.ghost_set(h.g, 1) end)
-  try(function() gore.ghost_end(h.g) end)
-  local ok, err = pcall(gore.cleanup, h.pawn, h.mesh)
-  log(string.format("regrow: %s %s after %.1f s%s", table.concat(h.parts, ", "), why, os.clock() - h.t0,
+  if not h.handed then try(function() gore.ghost_set(h.g, 1) end) end
+  local sk = try(function() return gore.ghost_end(h.g) end) or ""
+  local ok, err = true, nil
+  if not h.cleaned then ok, err = pcall(gore.cleanup, h.pawn, h.mesh) end
+  log(string.format("regrow: %s %s after %.1f s%s%s", table.concat(h.parts, ", "), why, os.clock() - h.t0, sk,
     ok and "" or (", cleanup: " .. tostring(err))))
 end
 -- every part cut off her alive back: dissolving in (lowArm.dissolve.time s), else grown back (lowArm.regrow s) or at
 -- once, the arm's blocks off
 function hm.parts_back(pawn, mesh, why)
   local la = (tune.gore or {}).lowArm or {}
+  -- (not while a cut still opens: its pieces aren't off yet, and the dissolve's copy took the wrong vertices, off
+  -- where the arm was; the rest's sequence and the HP bar are read again next time)
+  if gore.busy() then return end
   if hm.lowCut or hm.lowBlock then hm.lowCut = false; hm.low_block(pawn, false, why) end
   local parts = gore.cut_parts(mesh)
   if #parts == 0 then return end
@@ -3244,7 +3381,8 @@ function hm.parts_back(pawn, mesh, why)
   if fx and T > 0 then
     local ok, g, err = pcall(gore.ghost_begin, pawn, mesh, parts)
     if ok and g then
-      hm.ghost = { g = g, t0 = os.clock(), T = T, pawn = pawn, mesh = mesh, parts = parts }
+      local F = type(d) == "table" and tonumber(d.fade) or hm.GHOST_FADE_S
+      hm.ghost = { g = g, t0 = os.clock(), T = T, F = F, pawn = pawn, mesh = mesh, parts = parts }
       log(string.format("regrow: %s dissolving back in over %.1f s", table.concat(parts, ", "), T))
       return
     end
@@ -3355,10 +3493,13 @@ function hm.low_arm(pawn, mesh)
   end
   local now = os.clock()
   -- the blocks follow the menu's switch while the arm is off
-  local block = hm.lowCut and la.noHealGun ~= false
-  if block and not hm.lowBlock then hm.low_block(pawn, true, "her left arm is off")
-  elseif not block and hm.lowBlock then hm.low_block(pawn, false, hm.lowCut and "No Heals or Gun off" or "the arm is back") end
-  if hm.lowBlock then hm.low_notice(pawn) end
+  local right = hm.lowSide == "right"
+  local block = hm.lowCut and (right and la.noSword ~= false or not right and la.noHealGun ~= false)
+  if block and not hm.lowBlock then hm.low_block(pawn, true, "her " .. hm.lowSide .. " arm is off")
+  elseif not block and hm.lowBlock then
+    hm.low_block(pawn, false, hm.lowCut and (right and "No Sword off" or "No Heals or Gun off") or "the arm is back")
+  end
+  if hm.lowBlock and not hm.lowBlock.sword then hm.low_notice(pawn) end
   if not goreCtx.glass then return end
   -- (the HUD looked for at most every 5 s till found, 35 ms: glass.lua keeps it)
   local pct = goreCtx.glass.bar_pct(false)
@@ -3370,10 +3511,13 @@ function hm.low_arm(pawn, mesh)
     -- kills, over time)
     -- (at least 1% over the mark it came off under: a mark over healAt grew it back the tick after the cut)
     local at = math.max(la.healAt or 0.9, (la.below or 0.25) + 0.01)
-    if la.healBack == true and pct >= at then
+    -- (and only once the bar was under it since the cut, the cut done: the test keys cut at full HP, and the arm and
+    -- her sword were back the same tick, the dissolve begun on a cut still opening, on the wrong vertices; playtest)
+    if pct < at then hm.lowUnder = true end
+    if la.healBack == true and pct >= at and hm.lowUnder and now - (hm.lowT or 0) > 3 and not gore.busy() then
       hm.parts_back(pawn, mesh, string.format("her HP bar back at %.3f (healBack, %.2f)", pct, at))
     -- (undone by something else: a lethal hit she lived through, F8. Not while the cut still opens)
-    elseif now - (hm.lowT or 0) > 3 and not gore.busy() and not gore.has_cut(mesh, hm.LOW_BONE) then
+    elseif now - (hm.lowT or 0) > 3 and not gore.busy() and not gore.has_cut(mesh, hm.LOW_BONES[hm.lowSide]) then
       hm.lowCut = false
       hm.low_block(pawn, false, "the arm came back with the other cuts")
     end
@@ -3401,20 +3545,53 @@ function hm.low_arm(pawn, mesh)
   -- death to start (her death's tick doesn't come here; screen.low_reset drops the wait)
   if now - p.t < (pct <= 0.0005 and hm.LOW_ZERO_S or hm.LOW_SETTLE) then return end
   hm.lowPend = nil
-  -- a blow: a hit on her mesh (the game's physical hit reaction) around the drop
-  if not (meshHit and meshHit.t >= p.t0 - hm.LOW_HIT_S) then
-    log(string.format("low HP arm: her HP bar %.3f -> %.3f with no hit on her mesh since %.1f s before it: not a blow, not cut",
-      p.from, pct, hm.LOW_HIT_S))
+  -- a blow, not a fall: a drop as she lands (a drop of LOW_LAND_CM or more, LOW_LAND_S around it) with no hit on her
+  -- mesh (the game's physical hit reaction) is the landing's damage. Any other drop is a blow: the physical hit
+  -- reaction alone missed most of them (ranged hits, grabs, explosions; Nexus: under 70% it came off now and then)
+  local struck = meshHit and meshHit.t >= p.t0 - hm.LOW_HIT_S
+  local land = hm.landAny
+  if not struck and land and math.abs(land.t - p.t0) < hm.LOW_LAND_S then
+    log(string.format("low HP arm: her HP bar %.3f -> %.3f as she landed from a %.0f cm drop, no hit on her mesh: fall damage, not cut",
+      p.from, pct, land.drop))
     return
   end
-  if gore.has_cut(mesh, hm.LOW_BONE) or gore.busy() then return end
-  if p.dir then gore.aim(p.dir) end
-  local ok, r = pcall(gore.slice_bone, pawn, mesh, hm.LOW_BONE, nil, "low HP")
+  if gore.busy() then return end
+  -- (lowArm.side "either": one at random, the other one when that one is already off, F9's)
+  local side = la.side == "right" and "right" or la.side == "either" and (math.random(2) == 1 and "left" or "right") or "left"
+  if la.side == "either" and gore.has_cut(mesh, hm.LOW_BONES[side]) then side = side == "left" and "right" or "left" end
+  hm.low_cut(pawn, mesh, side, p.dir, string.format("her HP bar %.3f -> %.3f (held %.2f s), under %.2f", p.from, pct,
+    hm.LOW_SETTLE, la.below or 0.25))
+end
+-- the arm off (side "left" or "right"), along dir when given, with its blocks: the low HP hit's, and the test keys'
+function hm.low_cut(pawn, mesh, side, dir, why)
+  local la = (tune.gore or {}).lowArm or {}
+  if gore.has_cut(mesh, hm.LOW_BONES[side]) or gore.busy() then return end
+  if dir then gore.aim(dir) end
+  local ok, r = pcall(gore.slice_bone, pawn, mesh, hm.LOW_BONES[side], nil, "low HP")
   hm.lowCut = ok and r and true or false
-  if hm.lowCut then hm.lowT, hm.restAt = now, nil end
-  log(string.format("low HP arm: her HP bar %.3f -> %.3f (held %.2f s), under %.2f: %s", p.from, pct, hm.LOW_SETTLE,
-    la.below or 0.25, not ok and ("failed: " .. tostring(r)) or r and "her left arm cut off" or "not cut"))
-  if hm.lowCut and la.noHealGun ~= false then hm.low_block(pawn, true, "her left arm is off") end
+  if hm.lowCut then
+    hm.lowT, hm.restAt, hm.lowSide, hm.lowLast, hm.lowPend, hm.lowUnder = os.clock(), nil, side, nil, nil, false
+  end
+  log(string.format("low HP arm: %s: %s", why,
+    not ok and ("failed: " .. tostring(r)) or r and ("her " .. side .. " arm cut off") or "not cut"))
+  if hm.lowCut and (side == "right" and la.noSword ~= false or side == "left" and la.noHealGun ~= false) then
+    hm.low_block(pawn, true, "her " .. side .. " arm is off")
+  end
+end
+-- the test keys (Alt+F7 / Alt+F8): Lose Arm at Low HP's cut now, that arm, as a hit under the mark would. Needs Lose
+-- Arm at Low HP on (off, its tick lifts the blocks) and no arm of its off already
+function hm.low_test(side)
+  local key = "Test: Lose " .. (side == "left" and "Left" or "Right") .. " Arm"
+  local pawn = find_eve()
+  local mesh = pawn and try(function() return pawn.Mesh end)
+  if not (gore and valid(mesh)) then log(key .. ": no Eve or no gore.lua"); return end
+  local g = tune.gore or {}
+  if g.enabled == false or (g.lowArm or {}).enabled ~= true then log(key .. ": Lose Arm at Low HP is off (F3 → Gameplay)"); return end
+  if active then log(key .. ": she is dead"); return end
+  if hm.lowCut then log(key .. ": her " .. hm.lowSide .. " arm is already off (a camp rest or her next life brings it back)"); return end
+  if gore.has_cut(mesh, hm.LOW_BONES[side]) then log(key .. ": that arm is already off (F9)"); return end
+  if hm.regrow or hm.ghost then log(key .. ": an arm is still growing back"); return end
+  hm.low_cut(pawn, mesh, side, nil, key)
 end
 
 -- while she is alive: her HP bar for the marks' healing, and the hit waiting for its mark once its delay is up. The
@@ -3523,7 +3700,7 @@ end
 -- (tune.active.animatedPool) and played over it
 local DEATH_FALLS = { "Knock_Down_Start", "Knock_Down_Start1", "Knock_Down_Forward", "Knock_Down_Backward",
   "KnockDown_S_Fw", "KnockDown_S_Bw", "KnockDown_Tumble_Fw", "KnockDown_Tumble_Bw" }
-local forceFall = nil -- F6: the fall to play next ("own" = her death show's own)
+local forceFall = nil -- the fall to play next ("own" = her death show's own)
 local DEATH_HOST = "/Game/Art/Show/CH_P_EVE_01/Basic/P_Eve_Dead.P_Eve_Dead" -- imports every EveDeath_* (ragdoll_spec.json)
 -- a show (path under Art/Show, e.g. "CH_P_EVE_01/Basic/P_Eve_Dead") on her. PlaySingleShow is only on the game's
 -- show interface, which Lua can't call (it silently did nothing); SBBlueprintLibrary's PlaySBShowToPlayerCharacter
@@ -3566,33 +3743,54 @@ local function play_show(pawn, rel, why)
   return false
 end
 
--- F6: one of her animated death shows on the spot, in turn (P_Eve_Dead, Dead2, Dead3). Its ragdoll key is the
--- data mod's death signal, so everything after runs as on a real death: the fall plays, the death's cut is rolled
--- (or cut along the last hit), blood, recovery after recoverAfter. She isn't dead, so the game's death screen and
--- respawn don't come
-local DEATH_SHOWS = { "P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3" }
-local f5_fall = 0
-local f5_at = nil -- when F5 played its death: that death splits her top to bottom (tune.gore.f5Split)
+-- F6: a death made to test the struggle (struggle.lua): each press the next of STRUGGLE_TESTS, a ragdoll death with
+-- those cuts, so the struggle always comes (deathMoves or not: the test switches it on for that death; a death show
+-- with its cut rolled ended in its animated fall or a split, no struggle, most presses). She lies till F8
+local STRUGGLE_TESTS = {
+  { what = "her right arm off at the shoulder", bones = { "Bip001-R-UpperArm" } },
+  { what = "her left leg off at the hip", bones = { "Bip001-L-Thigh" } },
+  { what = "cut across the waist", bones = { "Bip001-Spine1" } },
+  { what = "her left arm and right leg off", bones = { "Bip001-L-UpperArm", "Bip001-R-Thigh" } },
+  { what = "both legs off", bones = { "Bip001-L-Thigh", "Bip001-R-Thigh" } },
+  { what = "her left forearm off at the elbow", bones = { "Bip001-L-Forearm" } },
+  { what = "no cut: sitting up only", bones = {}, alone = true },
+}
+local f5_n = 0
+local f5_test = nil -- the struggle test F6 asked for: its death starts on the next tick (game_tick)
 local function sandbox_death()
   local pawn = find_eve()
   if not pawn then log("F6: no Eve"); return end
   if active then log("F6: she is already down (F8 gets her up)"); return end
-  -- her three death shows first, then each knockdown fall over the first
-  f5_fall = f5_fall % (#DEATH_SHOWS + #DEATH_FALLS) + 1
-  local show
-  if f5_fall <= #DEATH_SHOWS then show, forceFall = DEATH_SHOWS[f5_fall], "own"
-  else show, forceFall = DEATH_SHOWS[1], DEATH_FALLS[f5_fall - #DEATH_SHOWS] end
-  if (tune.gore or {}).f5Split ~= false then
-    -- a split has no fall before it: the death starts on the next tick, straight into the ragdoll and the cut
-    log("F6: test death, split at once")
-    forceFall = "own"
-    f5_at = os.clock() - ((tune.gore or {}).f5Delay or 0.5)
-    return
-  end
-  log(string.format("F6: test death %d of %d: %s, fall %s", f5_fall, #DEATH_SHOWS + #DEATH_FALLS, show, forceFall))
-  if play_show(pawn, "CH_P_EVE_01/Basic/" .. show, "F5") then f5_at = os.clock() else forceFall = nil end
+  f5_n = f5_n % #STRUGGLE_TESTS + 1
+  f5_test = STRUGGLE_TESTS[f5_n]
+  log(string.format("F6: struggle test %d of %d: %s", f5_n, #STRUGGLE_TESTS, f5_test.what))
 end
 
+-- Test: Animated Death (Alt+F6): the game's own death shows played on her, the next each press, so a mod replacing
+-- their animations (death_anim_P: Result_Stand_Dead, Eve_Stand_Dead2/3, Eve_Dead_DownFaceUp/Down) shows in the mod's
+-- animated death. The death starts with the show (on her alive its ragdoll key never fired: waited for 3 s, the
+-- death and its cut came as the animation ended, playtest), as animated whatever active.animated says, her own fall
+-- (no knockdown fall over it), and no cut: a split, a beheading or a leg takes her to the ragdoll, and the
+-- animation is what is tested. She lies till F8
+-- (on hm: main.lua is at Lua's 200 locals)
+hm.at = { n = 0, on = nil, -- on: { t, what }, the show it played, till its death starts
+  tests = {
+    { show = "CH_P_EVE_01/Basic/P_Eve_Dead", what = "her standing death (P_Eve_Dead)" },
+    { show = "CH_P_EVE_01/Basic/P_Eve_Dead2", what = "a hit's death (P_Eve_Dead2)" },
+    { show = "CH_P_EVE_01/Basic/P_Eve_Dead3", what = "a heavier hit's death (P_Eve_Dead3)" },
+    { show = "CH_P_EVE_01/Basic/Eve_Dead_Down", what = "her death lying down (Eve_Dead_Down)" },
+  } }
+function hm.at.key()
+  local pawn = find_eve()
+  if not pawn then log("Test: Animated Death: no Eve"); return end
+  if active then log("Test: Animated Death: she is already down (F8 gets her up)"); return end
+  if hm.at.on then return end
+  hm.at.n = hm.at.n % #hm.at.tests + 1
+  local t = hm.at.tests[hm.at.n]
+  log(string.format("Test: Animated Death %d of %d: %s", hm.at.n, #hm.at.tests, t.what))
+  if not play_show(pawn, t.show, "Test: Animated Death") then log("Test: Animated Death: the show didn't play"); return end
+  hm.at.on = { t = os.clock(), what = t.what }
+end
 local function gore_cut(pawn, mesh, h, hit)
   local g = tune.gore or {}
   -- cut at the hit already (hm.lethal_watch): the blow's further cuts and her sword's now
@@ -3602,8 +3800,8 @@ local function gore_cut(pawn, mesh, h, hit)
     return
   end
   -- gore.bluntRagdoll: a blunt killing blow (judged at the lethal hit, else now) leaves her whole, a plain ragdoll,
-  -- and hits after it cut nothing either (F6's test death aside)
-  if g.bluntRagdoll == true and not (f5_at and os.clock() - f5_at < 5) then
+  -- and hits after it cut nothing either
+  if g.bluntRagdoll == true then
     local lb = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.blunt
     local b, how = lb, "judged at the lethal hit"
     if not lb and h and not h.made then b, how = sw.blunt_of(h, true) end
@@ -3613,8 +3811,8 @@ local function gore_cut(pawn, mesh, h, hit)
       return
     end
   end
-  -- a laser trap's beam on her: cut along it (sw.laser_hit), F6's test death aside
-  if g.sliceOnDeath ~= false and not (f5_at and os.clock() - f5_at < 5) then
+  -- a laser trap's beam on her: cut along it (sw.laser_hit)
+  if g.sliceOnDeath ~= false then
     local lh = sw.laser_hit(pawn, mesh)
     if lh then
       local ok, cut = pcall(gore.blow, pawn, mesh, lh, "death")
@@ -3629,31 +3827,23 @@ local function gore_cut(pawn, mesh, h, hit)
   fly = fly or try(function() local v = pawn.RagdollInfo.ImpulseValue; return { X = v.X, Y = v.Y, Z = v.Z } end)
   gore.aim(fly)
   -- a blunt killing blow smashes the part it landed on (blunt_of; at the lethal hit already when the blow was seen
-  -- then). smash.always: every death, F6's test death too (no blow: a part at random)
+  -- then). smash.always: every death (no blow: a part at random)
   local judged = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.judged
   local always = (g.smash or {}).always == true
-  -- (F6's test death splits, unless smash.always)
-  local test = f5_at and os.clock() - f5_at < 5 and g.f5Split ~= false
-  if g.sliceOnDeath ~= false and (h or always) and not judged and (always or not test)
-    and sw.smash_kill(pawn, mesh, h or {}, "death") then
-    f5_at = nil
+  if g.sliceOnDeath ~= false and (h or always) and not judged and sw.smash_kill(pawn, mesh, h or {}, "death") then
     return
   end
   if fly then gore.aim(fly) end
-  -- F5's test death: always the split top to bottom, down the middle (her left and right), on her fall
-  local f5 = f5_at and os.clock() - f5_at < 5
-  f5_at = nil
-  if f5 and g.f5Split ~= false then
-    log("death: F5's test death, split top to bottom")
-    gore.split(pawn, mesh, nil, nil, "death")
-    return
-  end
   -- rolled at the lethal hit already, else now. The odds' split share stands whatever the blade (the glass cannon's
   -- too): a blade decides only the rest. It needed a blow from above, which single player never reports, or a blade
   -- down her length, rare: no split in many deaths (reported)
   local roll = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.roll
+  -- (the odds shaped by where the blow landed, gore.near_odds: the killing blow's own if seen, else the lethal hit's)
+  local ok, near = pcall(gore.near_odds, mesh, h, hit)
+  near = ok and near or (roll and hm.lethal.near) or nil
+  if near then log("death: odds by the hit: " .. near.why) end
   if not roll then
-    roll = (g.sliceOnDeath == false or math.random() > (g.sliceChance or 1.0)) and "none" or hm.death_roll(h ~= nil and not h.made)
+    roll = (g.sliceOnDeath == false or math.random() > (g.sliceChance or 1.0)) and "none" or hm.death_roll(h ~= nil and not h.made, near)
   end
   -- a split rolled where the killing blade crossed both her arms: they come off instead, armsOverSplit of the time
   if roll == "split" and h and not h.made and math.random() < (g.armsOverSplit or 0.6) then
@@ -3705,7 +3895,7 @@ local function gore_cut(pawn, mesh, h, hit)
     end
     local normal = split_normal(h)
     -- a death always takes something off
-    local kind = pick_kind(false)
+    local kind = pick_kind(false, near)
     -- from above, the body is cut down through her, not across the waist (a stomp's level cut, playtest). Not on a
     -- made-up blow: it comes from the nearest enemy, mostly "from above", and turned most waist cuts into splits
     if normal and kind == "torso" and not (h and h.made) then
@@ -3765,10 +3955,21 @@ key_on("menu", function() if goreCtx.gui then goreCtx.gui.toggle(find_eve()) end
 -- Photo mode open already (screen.photoOn: its view goes to its own pawn only once its menu is up, seconds after):
 -- the key there is photo mode's own. Asked again it came back busy and let her hold go with photo mode still on:
 -- she woke and answered its pawn again, and the camera pushed her about, 100-350 cm, till she stood up in the air
--- (Nexus log, P pressed in photo mode). A hold this press didn't take isn't let go either
+-- (Nexus log, P pressed in photo mode). A hold this press didn't take isn't let go either.
+-- A hold P took is let go as photo mode closes (screen.photo_unhold), or at once when it didn't open: kept, the death
+-- screen never came back and she couldn't respawn, with nothing to say Shift+F4 was needed (Nexus report). A hold made
+-- with Shift+F4 (before or during photo mode) stays
+function screen.photo_unhold(why)
+  if not screen.photoTook then return end
+  screen.photoTook = nil
+  if not active or not screen.frozen then return end
+  screen.frozen = false
+  screen.allow_photo(false, why)
+  log(string.format("%s: the death P held let go, the death screen and getting up as before %.1f s in", why, polls * POLL_MS / 1000 + ahead))
+end
 function screen.photo_key(label)
   if not active or saved.manual or (camHeld and camHeld.photo) or screen.photoOn or not gore then return end
-  if not screen.frozen then screen.frozen = true; screen.allow_photo(true, label) end
+  if not screen.frozen then screen.frozen, screen.photoTook = true, true; screen.allow_photo(true, label) end
   local pawn = find_eve()
   local mesh = pawn and try(function() return pawn.Mesh end)
   -- (her ragdoll stopped, asleep and deaf to photo mode's pawn first: rag.photo_hold)
@@ -3777,6 +3978,7 @@ function screen.photo_key(label)
   local r = gore.photo_open(mesh)
   log(label .. " in the held death, opening photo mode: " .. r .. string.format(" (%d of her meshes held still)", held))
   if not r:find("entered 1", 1, true) and took then rag.photo_hold(false) end
+  if not r:find("entered 1", 1, true) then screen.photo_unhold("photo mode didn't open") end
   if r:find("entered 1", 1, true) then
     screen.photoOn, screen.photoNext, screen.photoSeen = true, 0, nil
     screen.photoHead = valid(mesh) and try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
@@ -3788,7 +3990,7 @@ key_on("photo", function() screen.photo_key(screen.key_name("photo")) end)
 -- death. Read from her controller's input mappings at each death's first look
 function screen.pad_photo()
   if not active or saved.manual or (camHeld and camHeld.photo) or not gore then screen.padKeys, screen.padWas, screen.holdWas = nil, nil, nil; return end
-  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local gs = goreCtx.statics()
   local pc = valid(gs) and cachedPawn and try(function() return gs:GetPlayerController(cachedPawn, 0) end)
   if not valid(pc) then return end
   if not screen.padKeys then
@@ -3830,6 +4032,7 @@ end
 -- hidden and the death held, no getting up, till pressed again; the game respawning her on its own still ends it
 function screen.hold(why)
   local t = polls * POLL_MS / 1000 + ahead
+  screen.photoTook = nil
   if screen.hiding(t) then screen.frozen, screen.shown = false, true else screen.frozen = true end
   screen.allow_photo(screen.frozen, why)
   log(string.format("%s: death %s %.1f s in", why, screen.frozen and "held, no death screen or getting up till Shift+F4 (or the pad combo) again" or "screen shown", t))
@@ -3864,7 +4067,7 @@ key_on("mark", function()
   local a = try(function() return vof(mesh:GetSocketLocation(FName(w.bone))) end)
   local b = try(function() return vof(mesh:GetSocketLocation(FName(w.to))) end)
   local cam = try(function()
-    local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+    local gs = goreCtx.statics()
     return vof(gs:GetPlayerCameraManager(pawn, 0):GetCameraLocation())
   end)
   if not (a and b and cam) then log("F10: no bone or camera"); return end
@@ -3878,6 +4081,9 @@ end)
 key_on("split", sandbox_split)
 end
 key_on("death", sandbox_death)
+key_on("animDeath", hm.at.key)
+key_on("loseLeft", function() hm.low_test("left") end)
+key_on("loseRight", function() hm.low_test("right") end)
 key_on("blade", sandbox_blade)
 -- the enemy spawner (enemies.lua): F5 spawns the kind picked in front of her, Insert picks the next, Home opens
 -- the spawner window, End kills the one nearest her
@@ -4068,6 +4274,12 @@ local function hook_once()
   for _, f in ipairs({ "NotifyBP_ReInitActor", "NotifyBP_InitActor", "NotifyBP_SetMesh", "ApplyMeshInfo" }) do
     h(bp .. f, f)
   end
+  local dead_fn = "/Script/SB.SBNetworkPlayerController:ClientBroadcast_ActorDead"
+  local okd, errd = pcall(RegisterHook, dead_fn, function(...)
+    local ok2, e = pcall(hm.on_actor_dead, ...)
+    if not ok2 then log("death broadcast hook error: " .. tostring(e)) end
+  end)
+  log("hook ClientBroadcast_ActorDead: " .. (okd and "ok" or tostring(errd)))
   local hit_fn = "/Script/SB.SBNetworkPlayerController:ClientBroadcast_SkillHitResult"
   local ok, err = pcall(RegisterHook, hit_fn, function(...)
     local ok2, e = pcall(on_skill_hit, ...)
@@ -4120,7 +4332,7 @@ end
 local anim_fall
 local function animated_death(pawn, mesh, push)
   local a = tune.active or {}
-  if a.enabled == false or a.animated == false then return false end
+  if a.enabled == false or (a.animated == false and not hm.at.on) then return false end
   -- with the cuts off nothing would ever switch her fall to the ragdoll: a plain ragdoll, as the menu says (reported)
   if (tune.gore or {}).enabled == false then
     log("death: cuts off, the ragdoll")
@@ -4196,7 +4408,7 @@ anim_fall = function(pawn, mesh, push)
   return true
 end
 
--- the glass cannon mode's death when the game doesn't take HP 0 as one: as F6's, straight into the fall and
+-- the glass cannon mode's death when the game doesn't take HP 0 as one: straight into the fall and
 -- the cut (gore_cut asks glass which)
 goreCtx.death = function(pawn, mesh)
   if active then return end
@@ -4214,10 +4426,13 @@ end
 -- a slow tick's time by part (tp.mark), logged by game_tick: the death's own start held a frame 82 ms besides the
 -- cut's stages (twenty-fifth playtest)
 local tp = { t = 0 }
+-- (and summed by part for the minute's frame cost line, screen.cost_tick)
+tp.sum = {}
 function tp.mark(what)
   local t = os.clock()
   local ms = (t - tp.t) * 1000
   if ms >= 1 then tp[#tp + 1] = string.format("%s %.0f", what, ms) end
+  if ms > 0 then tp.sum[what] = (tp.sum[what] or 0) + ms end
   tp.t = t
 end
 -- while photo mode is on (entered with P, or the game's key with a piece off her): it pauses the game but not this
@@ -4264,6 +4479,7 @@ function screen.photo_watch(pawn, mesh)
   if rag and rag.photo_hold then rag.photo_hold(false) end
   sw.drop()
   log("photo mode closed: the enemy's weapon trail starts over")
+  screen.photo_unhold("photo mode closed")
   return false
 end
 
@@ -4280,7 +4496,7 @@ end
 -- (through the player's camera manager, not her controller: photo mode possesses its own pawn, and her Controller
 -- went with it, so the view target read off her never matched)
 function screen.view(pawn, gs)
-  gs = gs or StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  gs = gs or goreCtx.statics()
   local vt = valid(gs) and try(function() return gs:GetPlayerCameraManager(pawn, 0).ViewTarget.Target end)
     or try(function() return pawn.Controller.PlayerCameraManager.ViewTarget.Target end)
   local va = valid(vt) and vt:GetAddress() or 0
@@ -4487,7 +4703,7 @@ function screen.head_end()
   end
 end
 function screen.photo_freeze(pawn, mesh)
-  local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+  local gs = goreCtx.statics()
   local paused = valid(gs) and try(function() return gs:IsGamePaused(pawn) end)
   screen.view(pawn, gs)
   local stopped = screen.time_stopped(pawn, gs)
@@ -4529,7 +4745,7 @@ function screen.photo_unhide(pawn)
       local n = gore.photo_hide(pawn, screen.ownHide)
       log(string.format("photo mode %s her: %d cap(s) and stub(s) with her", screen.ownHide and "hides" or "shows", n))
     end
-    local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+    local gs = goreCtx.statics()
     local cls = function(o) return valid(o) and (try(function() return o:GetClass():GetFName():ToString() end) or "?") or "none" end
     local pp = valid(gs) and cls(try(function() return gs:GetPlayerPawn(pawn, 0) end)) or "?"
     local vt = valid(gs) and cls(try(function() return gs:GetPlayerCameraManager(pawn, 0).ViewTarget.Target end)) or "?"
@@ -4617,7 +4833,7 @@ function screen.photo_unhide(pawn)
   local now = os.clock()
   if now >= u.next then
     u.next = now + 0.25
-    local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+    local gs = goreCtx.statics()
     local cam = valid(gs) and try(function() return vof(gs:GetPlayerCameraManager(pawn, 0):GetCameraLocation()) end)
     local head = valid(mesh) and try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
     local d = cam and head and dist(cam, head)
@@ -4770,8 +4986,8 @@ local function tick()
   if goreCtx.tables then goreCtx.tables.tick() end
   if goreCtx.gui then goreCtx.gui.tick(pawn) end
   screen.held.tick()
-  if goreCtx.enemies then goreCtx.enemies.tick(pawn, mesh, tp.mark) end
-  tp.mark("enemies")
+  -- (the enemies' part runs half a poll later, on a frame of its own: game_tick)
+  if goreCtx.enemies then screen.enemiesDue = { pawn = pawn, mesh = mesh } end
   if gore then
     gore.tick(pawn, tp.mark)
     tp.mark("gore")
@@ -4829,6 +5045,8 @@ local function tick()
     elseif hm.airTop then
       -- landed: the drop from the top of the fall, for a fall damage death on the ground (animated_death)
       if z and hm.airTop - z >= ((tune.active or {}).landDrop or 400) then hm.land = { t = os.clock(), drop = hm.airTop - z } end
+      -- (any drop that may hurt her, Lose Arm at Low HP's fall check: low_arm)
+      if z and hm.airTop - z >= hm.LOW_LAND_CM then hm.landAny = { t = os.clock(), drop = hm.airTop - z } end
       hm.airTop = nil
     end
     tp.mark("lethal")
@@ -4849,24 +5067,74 @@ local function tick()
   -- this tick: read it again, or the death looked like it had no fall and no ragdoll and ended (she was put back
   -- whole 0.9 s into a beheading, a leg cut after it)
   if not sim and animDeath == nil and active then sim = simulating() end
-  if f5_at and not sim and not active and os.clock() - f5_at >= ((tune.gore or {}).f5Delay or 0.5) then
-    -- the show's ragdoll key does nothing while she is alive (F5 played the fall, then nothing): the death starts
-    -- here, on her animated fall, as if the key had fired
-    log("F6: the test death starts here (a show's ragdoll key does nothing while she is alive)")
+  -- a fall damage death with no ragdoll from its show (hm.lethal_watch): her bodies simulate here, as the show's key
+  -- would have made them, and the death starts below on this tick as any other
+  if hm.take and not sim and not active then
+    local tk = hm.take
+    hm.take = nil
+    hm.takeColl = ragdoll_collision(mesh)
+    try(function() mesh:SetSimulatePhysics(true) end)
+    try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
+    try(function() mesh:WakeAllRigidBodies() end)
+    sim = simulating()
+    log(string.format("death: taken over (%s), pelvis simulating %s", tk.why, tostring(sim)))
+    if not sim then
+      local c = hm.takeColl
+      hm.takeColl = nil
+      try(function() mesh:SetCollisionObjectType(c.obj) end)
+      for ch, r in pairs(c.resp) do try(function() mesh:SetCollisionResponseToChannel(ch, r) end) end
+      try(function() mesh:SetCollisionEnabled(c.enabled) end)
+    end
+  elseif hm.take and (active or os.clock() - hm.take.t > 1) then
+    hm.take = nil
+  end
+  if hm.at.on and not sim and not active then
+    log(string.format("Test: Animated Death: %s: her death starts with it, no cut", hm.at.on.what))
+    hm.at.on = nil
     after = -1
-    -- the split goes straight to the ragdoll, with no death show to set her collision up for it: she stayed
-    -- kinematic and the death ended on the next tick (twelfth playtest)
-    local c = (tune.gore or {}).f5Split ~= false and ragdoll_collision(mesh) or nil
+    local c = ragdoll_collision(mesh)
     saved = {}
     on_start(pawn, mesh)
-    saved.collision = c
+    saved.collision, saved.manual = c, true
+    forceFall = "own"
     anim_fall(pawn, mesh, nil)
-    gore_death(pawn, mesh, nil)
-    f5_at = nil
+  end
+  if f5_test and not sim and not active then
+    -- F6's struggle test: straight into the ragdoll, with no death show to set her collision up for it (she stayed
+    -- kinematic and the death ended on the next tick, twelfth playtest), then its cuts one after the other
+    local t = f5_test
+    f5_test = nil
+    after = -1
+    local c = ragdoll_collision(mesh)
+    saved = {}
+    goreCtx.struggle_test = t
+    on_start(pawn, mesh)
+    goreCtx.struggle_test = nil
+    saved.collision = c
+    -- (a test ragdoll lies there until F8: recoverAfter would get her up mid-struggle)
+    saved.manual = true
+    forceFall = "own"
+    anim_fall(pawn, mesh, nil)
+    ragdoll_now("F6: struggle test")
+    -- (F7's shove, a couple of ticks on once her bodies simulate: she goes down with it instead of folding in place)
+    if (tune.impulse or 0) > 0 or (tune.push or 0) > 0 then f7_push = { pawn = pawn, mesh = mesh, n = F7_WAIT } end
+    if gore and #t.bones > 0 then
+      local n = try(function() return gore.slice_bones(pawn, mesh, t.bones, "death") end) or 0
+      log(string.format("F6: struggle test: %d of %d cuts started", n, #t.bones))
+    end
   elseif sim and not active then
     after = -1
     saved = {}
     on_start(pawn, mesh)
+    -- (the mod's own ragdoll for a death with none: her collision put back at its end, as a test ragdoll's)
+    saved.takeColl, hm.takeColl = hm.takeColl, nil
+    local test = hm.at.on
+    if test then
+      -- (Test: Animated Death's, its ragdoll key come before the tick started it: her own fall, no cut, and she lies
+      -- till F8)
+      saved.manual, forceFall = true, "own"
+      log(string.format("Test: Animated Death: %s's ragdoll key %.1f s in, no cut", test.what, os.clock() - test.t))
+    end
     tp.mark("death start")
     if hm.lethal then log(string.format("death: %.2f s after her HP bar hit 0", os.clock() - hm.lethal.t))
     elseif hm.armed then
@@ -4886,12 +5154,14 @@ local function tick()
     tp.mark("death hit")
     if animated_death(pawn, mesh, h and h.push) then goreCtx.pose.hold(mesh)
     elseif rag then rag.start(pawn, mesh, "death", h and h.push) end
+    hm.at.on = nil
     tp.mark("fall")
     -- the cut is chosen the next frame: with the death's own setup it was one 30-80 ms frame (playtest)
     pending[#pending + 1] = function()
       if not (active and valid(mesh)) then return end
       local t0 = os.clock()
-      local ok, err = pcall(gore_death, pawn, mesh, h)
+      local ok, err = true, nil
+      if not test then ok, err = pcall(gore_death, pawn, mesh, h) end
       if not ok then log("death cut failed: " .. tostring(err)) end
       if goreCtx.pose.held then goreCtx.pose.held.cut = true end
       if not (gore and gore.splitting()) then goreCtx.pose.free("no split: the fall plays on") end
@@ -5024,7 +5294,8 @@ end
 -- it about the old pawn crashed the game on the new one's first tick. The script now follows the actor whose tick
 -- it runs on: a different one is taken once ours has been silent for a second (never two at once), and everything
 -- held from the old one is dropped without touching it.
-local function forget_world()
+-- pawn: the new Eve
+local function forget_world(pawn)
   active, polls, after, respawned, lastRecover = false, 0, -1, false, -100
   saved, hits, pending, animDeath = {}, {}, {}, nil
   rel.loc, rel.rot = nil, nil
@@ -5039,7 +5310,7 @@ local function forget_world()
   screen.photoOn, screen.frozenMesh, screen.frozenHair, screen.watchFreeze, screen.photoW = false, nil, nil, false, nil
   screen.clock, screen.stopped, screen.uvClean = nil, nil, nil
   -- a held death (Shift+F4) or a hidden HUD went with the old level: none carried into the new one
-  screen.frozen, screen.hudHid, screen.hudMaster, screen.hpBack = false, nil, nil, 0
+  screen.frozen, screen.hudHid, screen.hudMaster, screen.hpBack, screen.photoTook = false, nil, nil, 0, nil
   -- the photo watch's async loop read the old pawn's parts (freed with the level)
   screen.unhide, screen.unhideSig = nil, nil
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
@@ -5047,7 +5318,9 @@ local function forget_world()
   skip, ahead = nil, 0
   -- the old face may be gone: dropped without touching it
   dface.on, dface.known, faceCheck = nil, {}, nil
-  if gore then gore.forget() end
+  -- (a regrow's copy went with the old level)
+  hm.ghost, hm.regrow = nil, nil
+  if gore then gore.forget(pawn) end
   if goreCtx.enemies then goreCtx.enemies.forget() end
   if goreCtx.glass then goreCtx.glass.forget() end
   if rag then rag.forget() end
@@ -5063,7 +5336,7 @@ local function adopt(ctx)
   if a == pawnAddr then pawnSeen = now; return true end
   if pawnAddr and now - pawnSeen < 1.0 then return false end
   if pawnAddr then goreCtx.levelAt = os.clock(); log(string.format("new Eve %x (was %x, the level reloaded): dropped everything held from the old one", a, pawnAddr)) end
-  if pawnAddr then forget_world() end
+  if pawnAddr then forget_world(self) end
   pawnAddr, pawnSeen, cachedPawn = a, now, self
   return true
 end
@@ -5173,10 +5446,27 @@ local function game_tick(ctx)
     local ok, err = pcall(gore.pump)
     if not ok then log("cut stage failed: " .. tostring(err)) end
   end
+  -- the enemies' part of the last poll, half a poll after it: the poll was 3-6 ms on one frame every ~5 at 144 fps
+  -- (a Nexus report of microstutter), the enemies ~1 ms of it
+  local ed = screen.enemiesDue
+  if ed and now >= nextTick - POLL_MS / 2000 then
+    screen.enemiesDue = nil
+    if not screen.photoOn and valid(ed.pawn) and valid(ed.mesh) then
+      tp.t = now
+      local ok, err = pcall(goreCtx.enemies.tick, ed.pawn, ed.mesh, tp.mark)
+      if not ok then log("enemies: " .. tostring(err)) end
+      tp.mark("enemies")
+      local ms = (os.clock() - now) * 1000
+      screen.cost.pollMs = screen.cost.pollMs + ms
+      if ms >= ((tune.gore or {}).slowMs or 15) then screen.perf_note("slow", ms, string.format("slow tick: %.0f ms: enemies (on its own frame)", ms)) end
+    end
+    return
+  end
   if now < nextTick then return end
   nextTick = now + POLL_MS / 1000
   local ok, err = xpcall(tick, debug and debug.traceback or tostring)
   lastTick = { t = os.clock(), ms = (os.clock() - now) * 1000 }
+  screen.cost.polls, screen.cost.pollMs = screen.cost.polls + 1, screen.cost.pollMs + lastTick.ms
   if lastTick.ms >= ((tune.gore or {}).slowMs or 15) then
     screen.perf_note("slow", lastTick.ms, string.format("slow tick: %.0f ms: %s", lastTick.ms, table.concat(tp, ", ")))
   end
@@ -5240,8 +5530,10 @@ local TICK_FN = "/Game/Art/Character/PC/CH_P_EVE_01/Blueprints/CH_P_EVE_01_Bluep
 -- a script reloaded mid-game, which sees no ClientRestart: from 20 s on, a name lookup alone
 screen.tickHooked, screen.loadedAt = false, os.clock()
 -- the mod's own time on her tick, logged once a minute (a Nexus report of 24-30 fps with the mod: the log says
--- whether it is this mod's time or not). The UE4SS hook's own cost around it isn't in it
-screen.cost = { n = 0, ms = 0, most = 0, at = os.clock() }
+-- whether it is this mod's time or not). The UE4SS hook's own cost around it isn't in it. Split into the work done
+-- every frame and the poll (every POLL_MS), and the poll by its parts (tp.mark's), the costliest first: a report of
+-- 144 fps down to 100-110 and microstutter, 1.6-2.4 ms a frame in our own log, said nothing of where
+screen.cost = { n = 0, ms = 0, most = 0, at = os.clock(), polls = 0, pollMs = 0 }
 function screen.cost_tick(dt)
   local c = screen.cost
   local ms = dt * 1000
@@ -5250,10 +5542,17 @@ function screen.cost_tick(dt)
   local now = os.clock()
   if now - c.at < 60 then return end
   if c.n > 0 then
-    log(string.format("frame cost: %.2f ms a frame on average over %d frames (%.0f fps), %.1f ms at most%s", c.ms / c.n,
-      c.n, c.n / (now - c.at), c.most, active and " (in a death)" or ""))
+    local parts = {}
+    for k, v in pairs(tp.sum) do parts[#parts + 1] = { k, v } end
+    table.sort(parts, function(a, b) return a[2] > b[2] end)
+    local pl = {}
+    for i = 1, math.min(8, #parts) do pl[#pl + 1] = string.format("%s %.2f", parts[i][1], parts[i][2] / math.max(c.polls, 1)) end
+    log(string.format("frame cost: %.2f ms a frame on average over %d frames (%.0f fps), %.1f ms at most%s; every frame %.2f ms, the poll %.2f ms each (%d polls)%s",
+      c.ms / c.n, c.n, c.n / (now - c.at), c.most, active and " (in a death)" or "", (c.ms - c.pollMs) / c.n,
+      c.pollMs / math.max(c.polls, 1), c.polls, #pl > 0 and ("; the poll's parts, ms each: " .. table.concat(pl, ", ")) or ""))
   end
-  c.n, c.ms, c.most, c.at = 0, 0, 0, now
+  c.n, c.ms, c.most, c.at, c.polls, c.pollMs = 0, 0, 0, now, 0, 0
+  tp.sum = {}
 end
 function screen.hook_tick(how)
   if screen.tickHooked then return true end

@@ -66,7 +66,7 @@ int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (v
 #undef GetTickCount64
 #undef GetCurrentThreadId
 #undef AddVectoredExceptionHandler
-static char lastres[8192];
+static char lastres[65536];
 HANDLE CreateThread_(void *a, u64 b, u32(WINAPI *c)(void *), void *d, u32 e, u32 *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return 0; }
 void Sleep_(u32 x) { (void)x; }
 short GetAsyncKeyState_(int k) { (void)k; return 0; }
