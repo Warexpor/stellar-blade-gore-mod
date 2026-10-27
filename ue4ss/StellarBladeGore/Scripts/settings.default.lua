@@ -136,6 +136,15 @@ return {
                                -- works with the cuts off too
     push = 0,                  -- cm/s every dying enemy is pushed along the blow on top (0: none)
   },
+  bosses = {                   -- Sandbox Bosses (F3 → Sandbox): spawn Tachy, Raven or Scarlet in front of her and kill
+    enabled = false,           -- them like any enemy (no cutscene), cut, struggling and with a dead face
+    pick = "tachy",            -- tachy, raven, scarlet (DLC)
+    hpScale = 0.25,            -- their HP and shield times this
+    struggle = true,           -- their death struggle (with Death Struggle on)
+  },
+  playAs = {
+    who = "eve",               -- Play As: eve, tachy, raven (her suit and hair, Eve's face), scarlet (DLC); each with her own blade
+  },
   smoothAnim = false,          -- every character animated every frame: the engine skips frames on characters further
                                -- off or small on screen, which can look choppy, running most (costs some CPU)
   verboseLog = false,          -- a detailed log, for a bug report when asked for one (the log is made anew each start,

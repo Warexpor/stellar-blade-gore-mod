@@ -407,6 +407,16 @@ do
   else
     log("enemies.lua failed: " .. tostring(en))
   end
+  -- the sandbox: bosses spawned and killed like any enemy (goreCtx.bosses), Eve as another character (goreCtx.playas)
+  for _, m in ipairs({ { "bosses", "bosses.lua" }, { "playas", "playas.lua" } }) do
+    local okm, mod = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/" .. m[2])
+    if okm and type(mod) == "table" then
+      goreCtx[m[1]] = mod
+      mod.init(goreCtx)
+    else
+      log(m[2] .. " failed: " .. tostring(mod))
+    end
+  end
   -- the game's DataTables changed in game (goreCtx.tables): no table in the pak overrides other mods' any more
   local ok7, tb = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/tables.lua")
   if ok7 and type(tb) == "table" then
@@ -572,6 +582,9 @@ end
 -- A mood (tune.gore.deathFace.moods) is picked per death and every weight and time jittered, with her eyes' last
 -- opening, their drift and her jaw's hang picked too, so no two deaths wear the same face. Page Up shows the moods
 -- in turn on her living face, 6 s each.
+-- One per face (goreCtx.make_face; no local to spare here): hers, and each sandbox boss's (bosses.lua, through
+-- goreCtx.new_face); conv: the convulsions' face poses laid over it (by morph target name)
+function goreCtx.make_face(conv)
 local dface = { known = {}, on = nil } -- known: mesh asset addr -> { set of its morph names, count }; on: the face held
 function dface.names(face)
   local sm = try(function() return face.SkeletalMesh end)
@@ -690,7 +703,7 @@ function dface.tick()
   local t = os.clock() - f.t0
   local k = math.min(1, t / f.fade)
   -- the convulsions' face over it (convulse.lua's poses, by morph target name): winces, gasps, tics, flutters
-  local c = goreCtx.convulse and goreCtx.convulse.face() or {}
+  local c = conv() or {}
   for _, e in ipairs(f.list) do
     local w = e[2]
     if e.from and (e.over or 0) > 0 then
@@ -719,6 +732,11 @@ function dface.stop()
   for _, e in ipairs(f.list) do try(function() f.face:SetMorphTarget(e[1], 0, true) end) end
   for _, x in pairs(f.extra or {}) do try(function() f.face:SetMorphTarget(x, 0, true) end) end
 end
+return dface
+end
+local dface = goreCtx.make_face(function() return goreCtx.convulse and goreCtx.convulse.face() or {} end)
+-- a sandbox boss's own (bosses.lua): start(actor, mesh, why), tick(), stop(); no convulsions on its face
+goreCtx.new_face = function() return goreCtx.make_face(function() return {} end) end
 local faceCheck = nil
 -- hits after death (hits_after, below): n so far this death, armedBy the enemies (addresses) whose weapon slowed
 -- after their last hit, t0 the death
@@ -5106,6 +5124,7 @@ local function tick()
   try(function() screen.probe(pawn) end)
   tp.mark("death screen")
   if goreCtx.tables then goreCtx.tables.tick() end
+  if goreCtx.playas then try(function() goreCtx.playas.tick(pawn, mesh, active and true or sim) end) end
   if goreCtx.gui then goreCtx.gui.tick(pawn) end
   screen.held.tick()
   -- (the enemies' part runs half a poll later, on a frame of its own: game_tick)
@@ -5439,6 +5458,8 @@ local function forget_world(pawn)
   hm.ghost, hm.regrow = nil, nil
   if gore then gore.forget(pawn) end
   if goreCtx.enemies then goreCtx.enemies.forget() end
+  if goreCtx.bosses then goreCtx.bosses.forget() end
+  if goreCtx.playas then goreCtx.playas.forget() end
   if goreCtx.glass then goreCtx.glass.forget() end
   if rag then rag.forget() end
   if goreCtx.convulse then goreCtx.convulse.forget() end

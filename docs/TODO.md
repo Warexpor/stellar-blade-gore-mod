@@ -1,5 +1,14 @@
 # To do
 
+## Sandbox: first playtest (untried in game)
+
+Built and passing `ue4ss/test/run.sh bosses playas`; nothing of it seen in game yet. F3 → Sandbox, Sandbox Bosses on, Spawn Boss; the `bosses:` and `play as:` log lines say what happened.
+
+- Does a boss spawned outside its arena fight (its tree may wait on its arena's zone events, or play an entrance show)? Tachy's `M_Tachy_Default` effect plays a show of its own at spawn.
+- Does it die by `M_SkullSword`'s rows with a ragdoll (`... died (the game's death)`), or is it held at a floor (`the next hit takes it down`, then `kill: ..., ragdolled`)? Raven's `bDisableCollisionWhenDead`: does her ragdoll stay on the floor?
+- Its cut: does `enemy_cut` find its face (Tachy: `CH_M_NA_21_Face`; Raven's and Scarlet's faces are in their bodies, so `face (...): none of deathFace.morphs on ...` is expected for them)? Its struggle: `boss struggle:` lines, joints kept.
+- Play As: Tachy's hair physics on Eve's Blueprint (her hair bones may hang stiff), Raven's hair on master pose (its own bones at their reference pose), Scarlet with the DLC, the blades in her hand and in a cut (does a blade on its own skeleton show unfolded and on her hand socket?), an outfit change and a camp rest while on.
+
 ## Parked: diagonal cut
 
 - The diagonal cut (over one shoulder down to the other hip, `gore.diagonal`): built in the 0.5.0 work, parked by the user before it shipped. Off in tune.lua (`diagonal.enabled` false), out of settings.default.lua, F3 and the keys (Alt+Delete); sbslice.c's two fixes for it (`SHEET_OUT`, `NECK_PAST`) off under `DIAG_PARKED`. To pick it up: `DIAG_PARKED` 0, `native/sbslice/test/run.sh diag`, `ue4ss/test/run.sh diag`. Open: CH_P_EVE_10's shoulder gear about 5 cm past the copy's plane; the upper piece's thin hip tip (maybe real wedge geometry).

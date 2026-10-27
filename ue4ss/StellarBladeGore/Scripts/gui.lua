@@ -103,6 +103,18 @@ M.ROWS = {
   { key = "gore.lowArm.healBack", label = "   Grows Back With HP", kind = "bool", help = "Off by default. With Lose Arm at Low HP: the arm also grows back once her HP is back up to Grows Back At, however she healed (gear that restores HP on kills or over time; heal items too with No Heals or Gun off). Off: only a camp rest or her next life bring it back." },
   { key = "gore.lowArm.healAt", label = "   Grows Back At", kind = "num", min = 0.3, max = 1, step = 0.01, pct = true, help = "With Grows Back With HP: the share of her HP bar at which the arm grows back (90% by default)." },
   { key = "gore.lowArm.effect", label = "Regrow Effect", kind = "bool", help = "On by default. A part cut off her alive (Lose Arm at Low HP's arm, F9's) dissolves back in with a glow when it comes back (a camp rest, Grows Back With HP). Off: it is back at once, with no effect." },
+  { section = "Sandbox" },
+  { key = "playAs.who", label = "Play As", kind = "list", values = { "eve", "tachy", "raven", "scarlet" },
+    names = { eve = "Eve", tachy = "Tachy", raven = "Raven (Suit and Hair)", scarlet = "Scarlet (DLC)" }, apply = "playas.apply_now",
+    help = "Eve wears another character: her animations, cuts, struggle and death face stay. Tachy: her body, hair and face. Raven: her suit and hair (the game has no Raven head for Eve's rig, so the face is Eve's). Scarlet: needs the DLC. Each fights with her own blade. Overrides the outfit menu while on; Eve puts her own outfit back." },
+  { key = "bosses.enabled", label = "Sandbox Bosses", kind = "bool", help = "Off by default. Spawn Tachy, Raven or Scarlet in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
+  { key = "bosses.pick", label = "   Boss", kind = "list", values = { "tachy", "raven", "scarlet" },
+    names = { tachy = "Tachy", raven = "Raven", scarlet = "Scarlet (DLC)" }, help = "With Sandbox Bosses on: the one Spawn Boss brings in." },
+  { key = "bosses.hpScale", label = "   Boss HP", kind = "num", min = 0.05, max = 1, step = 0.05, pct = true, help = "With Sandbox Bosses on: their HP and shield, as a share of the game's (25%: a quarter). Takes effect for the next boss once none you spawned is up." },
+  { key = "bosses.struggle", label = "   Boss Struggle", kind = "bool", help = "With Sandbox Bosses and Death Struggle on: a boss with a limb cut off struggles on the floor before it dies, as Eve does." },
+  { key = "bosses.face", label = "   Boss Death Expression", kind = "bool", help = "With Sandbox Bosses and Death Expression on: a dead face held on the boss's face." },
+  { button = "call", call = "bosses.spawn_pick", label = "Spawn Boss", help = "With Sandbox Bosses on: the boss picked above, 7 m in front of Eve, facing her. It fights at once." },
+  { button = "call", call = "bosses.remove", label = "Remove Spawned", help = "Every boss and enemy spawned here goes, corpses too." },
   { section = "Camera" },
   { key = "cameraStill", label = "Free Camera", kind = "bool", help = "At a death the camera stops riding her pawn and holds where it is until she gets up. Turn it with the mouse or right stick; fly it with WASD, Q/E or the left stick and triggers (Shift: faster)." },
   { key = "cameraMouse", label = "   Mouse Sensitivity", kind = "num", min = 0.5, max = 10, step = 0.5, help = "How fast the mouse turns the death camera." },
@@ -806,8 +818,11 @@ local function step(dir)
   s.changed[row.key] = true
   if row.key == "dev" then M.refresh() end
   -- (a row whose change shows at once on what is already out: its function on gore)
-  if row.apply and ctx.gore and ctx.gore[row.apply] then
-    local ok, err = pcall(ctx.gore[row.apply])
+  -- ("mod.fn": that module's, else gore's)
+  local am, af = (row.apply or ""):match("^(%w+)%.([%w_]+)$")
+  local afn = row.apply and (am and ctx[am] and ctx[am][af] or ctx.gore and ctx.gore[row.apply])
+  if afn then
+    local ok, err = pcall(afn)
     if not ok then log("menu: " .. row.apply .. " failed: " .. tostring(err)) end
   end
   render()
@@ -816,7 +831,17 @@ local function press(pawn)
   local s = M.state
   local row = M.ROWS[s.sel]
   if not row then return end
-  if row.button == "close" then M.close(pawn)
+  if row.call then
+    -- (a module's function: "bosses.spawn_pick" is ctx.bosses.spawn_pick(pawn))
+    local m, f = row.call:match("^(%w+)%.([%w_]+)$")
+    local fn = m and ctx[m] and ctx[m][f]
+    if fn then
+      local ok, err = pcall(fn, pawn)
+      log("menu: " .. row.label .. (ok and "" or (" failed: " .. tostring(err))))
+    else
+      log("menu: " .. row.label .. ": " .. tostring(row.call) .. " not loaded")
+    end
+  elseif row.button == "close" then M.close(pawn)
   elseif row.button == "reset" then
     os.remove(M.PATH)
     s.changed = {}

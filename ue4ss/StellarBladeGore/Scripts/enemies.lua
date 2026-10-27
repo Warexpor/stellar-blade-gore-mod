@@ -47,14 +47,26 @@ local function addr(o) return try(function() return o:GetAddress() end) end
 local FN = setmetatable({}, { __index = function(t, b) local f = FName(b); t[b] = f; return f end })
 local function bone_loc(mesh, b) return try(function() return vof(mesh:GetSocketLocation(FN[b])) end) end
 
-local function kinds() return cfg().kinds or {} end
+-- the kinds followed: tune.enemies.kinds, then the sandbox bosses (tune.bosses.kinds, bosses.lua: spawned from F3 →
+-- Sandbox, cut as these are)
+local allKinds, allFor, allForB = {}, nil, nil
+local function kinds()
+  local a, b = cfg().kinds or {}, (ctx.tune.bosses or {}).kinds or {}
+  if allFor ~= a or allForB ~= b then
+    allKinds, allFor, allForB = {}, a, b
+    for _, k in ipairs(a) do allKinds[#allKinds + 1] = k end
+    for _, k in ipairs(b) do allKinds[#allKinds + 1] = k end
+  end
+  return allKinds
+end
 -- a kind's Blueprint class name: the asset's name with _C
 local function class_of(k) return (k.bp or ""):match("([^/]+)$") .. "_C" end
 local byClass, byClassFor = nil, nil
 local function kind_of(cls)
-  if byClassFor ~= cfg().kinds then
-    byClass, byClassFor = {}, cfg().kinds
-    for _, k in ipairs(kinds()) do byClass[class_of(k)] = k end
+  local ks = kinds()
+  if byClassFor ~= ks then
+    byClass, byClassFor = {}, ks
+    for _, k in ipairs(ks) do byClass[class_of(k)] = k end
   end
   return byClass[cls]
 end
@@ -71,7 +83,7 @@ function M.init(c)
   ctx, try, valid = c, c.try, c.valid
   write_list()
 end
-function M.reload() write_list(); byClassFor = nil end
+function M.reload() allFor, byClassFor = nil, nil; write_list() end
 
 -- ---- spawning ----
 local function controller(pawn)
@@ -91,6 +103,12 @@ local function spawn(pawn, k, count)
   local yaw = math.rad(rot and rot.Yaw or 0)
   local fwd, right = vec(math.cos(yaw), math.sin(yaw), 0), vec(-math.sin(yaw), math.cos(yaw), 0)
   local d, spread = cfg().spawnDistance or 450, cfg().spawnSpread or 160
+  -- a sandbox boss: its CharacterTable row made mortal first (bosses.lua), and set further off (they lunge)
+  if k.row and ctx.bosses then
+    local why = ctx.bosses.prepare(k)
+    if why then log(string.format("spawn %s: not spawned: %s", k.alias, why)); return false end
+    d = k.distance or d
+  end
   local ok_n = 0
   for i = 1, count do
     local off = (i - (count + 1) / 2) * spread
@@ -395,12 +413,14 @@ local function adopt(o, a, cls, k, cuts)
   end
   ;(mine[a] and log or vlog)(string.format("following %s %x (%s)%s%s", k.alias, a, cls, mine[a] and ", spawned here" or "",
     e.slice ~= nil and string.format(", its own slicer %s -> off", tostring(e.slice)) or ""))
+  if k.row and ctx.bosses then ctx.bosses.adopted(a, e, mine[a] == true) end
   return e
 end
 
 -- how: nil (the corpse is still there), "destroyed" (being destroyed) or "vanished" (see gore.enemy_gone)
 local function gone(a, e, how, why)
   known[a] = nil
+  if e.kind.row and ctx.bosses then ctx.bosses.gone(a, e) end
   if e.cut and ctx.gore then try(function() ctx.gore.enemy_gone(a, e.mesh, how) end) end
   if e.cut then log(string.format("%s %x %s: its gore removed", e.kind.alias, a, why)) end
 end
@@ -516,7 +536,16 @@ function M.kill_nearest(pawn)
     if d and d < (cfg().reach or 2500) and (not bd or d < bd) then best, bd, ba = e, d, a end
   end
   if not best then log("kill: no live one followed near her"); return end
-  local e = best
+  M.kill_one(best, her, ba, string.format("%.0f cm off", bd))
+end
+-- one followed character down as a ragdoll, its AI stopped (the tick takes the ragdoll for its death; the cut follows).
+-- her: where she is (it is knocked away from her)
+function M.kill_one(e, her, ba, why)
+  local ctl = try(function() return e.obj.Controller end)
+  if valid(ctl) then
+    try(function() ctl.BrainComponent:StopLogic("SBGore") end)
+    try(function() ctl:StopMovement() end)
+  end
   try(function() e.obj.CharacterMovement:DisableMovement() end)
   try(function() e.obj.CapsuleComponent:SetCollisionEnabled(0) end)
   try(function() e.mesh:SetCollisionProfileName(FName("Ragdoll"), true) end)
@@ -524,9 +553,9 @@ function M.kill_nearest(pawn)
   try(function() e.mesh:WakeAllRigidBodies() end)
   -- knocked away from her
   local p = bone_loc(e.mesh, "Bip001-Spine2")
-  local d = p and unit(vec(p.X - her.X, p.Y - her.Y, 0))
+  local d = p and her and unit(vec(p.X - her.X, p.Y - her.Y, 0))
   if d then try(function() e.mesh:AddImpulseToAllBodiesBelow(vec(d.X * 350, d.Y * 350, 120), FName("Bip001-Pelvis"), true, true) end) end
-  log(string.format("kill: %s %x, %.0f cm off, ragdolled", e.kind.alias, ba, bd))
+  log(string.format("kill: %s %x, %s, ragdolled", e.kind.alias, ba or 0, why or ""))
 end
 
 -- Enemies attack her while she is knocked down (tune.enemies.attackDown): the game's enemy behaviour trees hold the
@@ -1151,6 +1180,8 @@ function M.tick(pawn, mesh, tm)
   tm("enemies dev reads")
   smooth_tick()
   tm("enemies smooth")
+  if ctx.bosses then ctx.bosses.tick(pawn) end
+  tm("enemies bosses")
   local g = cfg()
   local gore = ctx.gore
   -- the cuts, or only the death's push (cuts off: the ragdolls still get it)
@@ -1192,6 +1223,7 @@ function M.tick(pawn, mesh, tm)
             if near then poll_hit(e) end
             if sim and not hidden(e) then
               e.dead, e.t, e.still, e.looks = true, os.clock(), 0, looks(e.mesh)
+              if k.row and ctx.bosses then ctx.bosses.died(pawn, c.addr, e) end
               if near and pushes then death_push(pawn, e, pel) end
               local cut_now = cuts and near and math.random() <= (g.cutChance or 1.0)
               local corpses = 0
@@ -1243,6 +1275,11 @@ function M.tick(pawn, mesh, tm)
     if not seen[a] then gone(a, e, "vanished", "gone") end
   end
 end
+-- (bosses.lua: spawning a kind, and a followed character by its address)
+M.spawn_kind = function(pawn, k, count) return spawn(pawn, k, count or 1) end
+function M.entry(a) return known[a] end
+-- every one spawned here still followed (Remove all, and the sandbox's own Remove)
+function M.remove_spawned() remove_all() end
 
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()

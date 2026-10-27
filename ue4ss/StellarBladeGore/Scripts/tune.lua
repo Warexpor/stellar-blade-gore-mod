@@ -948,6 +948,31 @@ return {
       { alias = "N_AirborneSquad", label = "Airborne Squad angel", id = 30030, face = true, bp = "/Game/Art/Character/NPC/CH_NPC_AirborneSquad/Blueprints/CH_NPC_AirborneSquad" },
     },
   },
+  bosses = {                   -- Sandbox Bosses (bosses.lua, F3 → Sandbox): humanoid bosses spawned and killed like any enemy
+    enabled = false,           -- off by default: while on, a boss you spawn is mortal (its CharacterTable row changed in game)
+    pick = "tachy",            -- the one Spawn Boss makes (a kinds key)
+    hpScale = 0.25,            -- its MaxHP and MaxShield times this (1: the game's)
+    deadAs = "M_SkullSword",   -- the death rows it dies by (CharacterDeadTable: the common deaths, each with a ragdoll)
+    despawn = 120,             -- s its corpse stays at least (Raven's went after 1 s)
+    floorKill = true,          -- held at a sliver of HP by its phases' floors: the next hit takes it down (the mod's kill)
+    floor = 0.05,              --   the boss bar's share at or under which that counts
+    zeroWait = 1.5,            --   s the bar may read 0 with it still up before it is taken down
+    struggle = true,           -- its death struggle on the floor (struggle.lua's, with Death Struggle on)
+    face = true,               -- a dead face held on its face mesh (with Death Expression on)
+    -- each: key (pick), alias, label, CharacterTable ID and row, its Blueprint, face (cut with Eve's rules: the face
+    -- goes with the head), distance (cm in front of her). All on Bip001 skeletons Eve's cuts know (Scarlet on hers)
+    kinds = {
+      { key = "tachy", alias = "B_Tachy", label = "Tachy (boss)", id = 50210, row = "M_Tachy", face = true, distance = 700,
+        bp = "/Game/Art/Character/Monster/CH_M_NA_21/Blueprints/CH_M_NA_21_Blueprint" },
+      { key = "raven", alias = "B_Raven", label = "Raven (boss)", id = 50530, row = "M_Raven", face = true, distance = 700,
+        bp = "/Game/Art/Character/Monster/CH_M_NA_53/Blueprints/CH_M_NA_53_Blueprint" },
+      { key = "scarlet", alias = "B_Scarlet", label = "Scarlet (boss, DLC)", id = 59610, row = "M_Scarlet", face = true, distance = 700,
+        bp = "/Game/DLC_2/Art/Character/Monster/CH_M_NA_961/Blueprints/CH_M_NA_961_Blueprint" },
+    },
+  },
+  playAs = {                   -- Play As (playas.lua, F3 → Sandbox): Eve wears another character
+    who = "eve",               -- eve, tachy, raven (her suit and hair: no Raven head on Eve's skeleton), scarlet (DLC)
+  },
   glassCannon = {              -- realistic glass cannon (glass.lua); Page Down turns it on and off in game (dev only)
     enabled = false,           -- off by default
     shieldGuard = true,        -- while her shield is up a hit takes the shield, never HP; with it down any hit kills

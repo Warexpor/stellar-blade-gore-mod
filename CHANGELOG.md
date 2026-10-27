@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Sandbox Bosses (F3 → Sandbox, `bosses.enabled`, off by default): Spawn Boss brings Tachy, Raven or Scarlet (DLC) in 7 m in front of Eve, anywhere, fighting at once; Remove Spawned takes them away. Killed, a boss dies like any enemy: no death cutscene, no phase change to wait out. It is cut as the humanoid enemies are (the three are on the Bip001 skeleton Eve's cuts know, Scarlet on Eve's own), struggles on the floor with a struggle of its own (Boss Struggle, with Death Struggle on) and wears a dead face (Boss Death Expression; Tachy's face has the morph targets for it). Boss HP (`bosses.hpScale`, 25%) scales their HP and shield. How: while one you spawned is up, its CharacterTable row is changed in game (its deaths those of a common enemy, each with a ragdoll; Passive_Immortal swapped for its dispel; HP and shield scaled; Raven's corpse kept 120 s, not 1) and put back exactly once none is left; a boss held at a sliver of HP by its phases' floors is taken down by the mod at the next hit (`bosses: ... the next hit takes it down` in the log). Nothing in the pak. A story fight with that boss while one of yours is up gets the same changes.
+- Play As (F3 → Sandbox, `playAs.who`): Eve as Tachy (her NPC body, hair and face, built on Eve's skeleton), Raven (her suit and her own hair on Eve's pose; the game has no Raven head for Eve's rig, so the face is Eve's) or Scarlet (DLC; her body, head and hair). Her own components take the meshes, so her animations, ragdoll, cuts, struggle and death face all stay. Each fights with her own blade from the game's equipment (Tachy_Sword, Raven_Blade, Scarlet_Sword) in place of Eve's drawn sword. Whatever the game puts back (a level, a respawn, the outfit menu) is set again within a second; never while she is dead or a cut on her alive is out. Eve puts her own outfit, face, hair and sword back.
+- F3 menu rows can call a module's function (`call = "bosses.spawn_pick"`) and apply through one (`apply = "playas.apply_now"`).
+- Tests: `ue4ss/test/run.sh bosses` (a boss row made mortal and put back exactly, the floor take-down, its face and struggle) and `playas` (each look on and off, the game putting things back, her blade).
+
 ## 0.5.0
 
 - F3: Attacks After Death is labelled (experimental).
