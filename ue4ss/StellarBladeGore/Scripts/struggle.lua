@@ -1016,14 +1016,14 @@ function M.start(pawn, mesh)
   M.stop()
   -- (main.lua's F6 struggle test: on whatever deathMoves says, its plan sit-up only when it has no cut)
   local test = ctx.struggle_test
-  if not test and (cfg().enabled == false or ctx.tune.deathMoves ~= true) then return end -- (parked: tune.deathMoves)
+  if not test and (cfg().enabled == false or ctx.tune.deathMoves == false) then return end
   st = { pawn = pawn, mesh = mesh, t = 0, last = os.clock(), acc = 0, alone = test and test.alone or nil }
 end
 
 local function begin(mesh, plan)
   local tt = cfg().time or { 5, 8 }
   st.plan, st.began, st.t = plan, true, 0
-  st.total = rnd(tt[1], tt[2] or tt[1])
+  st.total = rnd(tt[1], tt[2] or tt[1]) * math.max(cfg().length or 1, 0.1)
   st.legClock = { L = { next = rnd(0.2, 0.8) }, R = { next = rnd(0.5, 1.3) } }
   st.pulses, st.reflexAt, st.reflexes, st.draws, st.tries = {}, {}, 0, 0, 0
   st.trace, st.hold, st.step, st.kept, st.keptN, st.err, st.errN = {}, {}, 0, 0, 0, 0, 0

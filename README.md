@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.4.6. See the [changelog](CHANGELOG.md).
+Version 0.5.0. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,13 +10,13 @@ Version 0.4.6. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.4.6.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.5.0.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death, her death face and voice;
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.4.6`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.0`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -53,7 +53,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
 | `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. F3 → Gameplay → Lose Arm at Low HP. |
-| `gore.lowArm.side` | `"left"` | Which arm comes off: `"left"`, `"right"` or `"either"` (one at random each time). F3 → Gameplay → Which Arm. |
+| `gore.lowArm.side` | `"hit"` | Which arm comes off: `"hit"` the one on the side of her the blow landed on (one at random when it landed on her middle or the game gave no hit), `"left"`, `"right"` or `"either"` (one at random each time). F3 → Gameplay → Which Arm (Side Hit, Left, Right, Either). |
 | `gore.lowArm.below` | `0.25` | The share of her HP (25%) a hit has to leave her under for the arm to come off. F3 → Gameplay → Arm Comes Off Below, in 1% steps. |
 | `gore.lowArm.noHealGun` | `true` | While her left arm is off she can't use heal items or shoot the gun (both need her left hand). F3 → Gameplay → No Heals or Gun Without It. |
 | `gore.lowArm.notice` | `true` | With `noHealGun`: pressing her aim or heal key while the arm is off shows the game's own "Cannot use right now." notice, with its sound. F3 → Gameplay → 'Cannot Use' Notice. |
@@ -62,7 +62,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.lowArm.effect` | `true` | A part cut off her alive (that arm, F9's) dissolves back in with a glow when it comes back. Off: it is back at once, with no effect. F3 → Gameplay → Regrow Effect. |
 | `gore.throw` | 250 | How fast a cut-off piece flies off, cm a second (`0`: it just drops). |
 | `active.animated` | `true` | Light deaths play her own fall animation, and only the cut-off pieces fall by physics; heavy hits, explosions, falls and fall damage, waist cuts and splits are ragdolls anyway. `false`: every death is a full ragdoll. |
-| `active.fallRagdoll` | `true` | A death within 2 s of landing from a 4 m drop or more is a ragdoll, not her animated stand death. A minor fall itself leaves her at 1 HP, as in the unmodded game; a high one plays the game's falling death, a ragdoll already. F3 → Fall Damage Ragdoll. |
+| `active.fallRagdoll` | `true` | A death within 2 s of landing from a 4 m drop or more is a ragdoll, not her animated stand death. A fall damage death cuts nothing. A minor fall itself leaves her at 1 HP, as in the unmodded game; a high one plays the game's falling death, a ragdoll already. F3 → Fall Damage Ragdoll. |
 | `gore.headRagdoll` / `legRagdoll` / `armRagdoll` | `false` / `true` / `false` | A beheading, a leg cut or an arm cut during her animated fall turns it into a full ragdoll (`false`: she falls on without it). |
 | `gore.armRagdollChance` | `0.4` | With `armRagdoll` off, the chance an arm cut during her animated fall ragdolls her anyway (each arm rolled). |
 | `gore.headRagdollChance` | `0.6` | With `headRagdoll` off, the chance a beheading during her animated fall ragdolls her (the rest play the fall on headless). |
@@ -75,8 +75,11 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `convulse.voice.enabled` | `true` | The quiet breaths and moans after her death (`false`: silent). |
 | `convulse.voice.volume` | `1.0` | How loud those breaths and moans are, times the default (`0.5`: half). |
 | `convulse.neck.enabled` | `true` | Her neck straining after her death: her head trying to lift or turn, shaking with the effort, dropping back, then sharp jerks (`false`: her head lies still). |
-| `deathMoves` | `false` | Being tested: after a ragdoll death with a limb cut off, or cut across the waist, she struggles on the floor over her last seconds (a hand on the stump or going out to it, trying to sit up or crawl; after a waist cut her upper body clutches the wound and crawls), and her arms swing in her last movements. In game her body hasn't visibly followed it yet. F3 → Death → Death Struggle (Testing). |
+| `deathMoves` | `true` | After a ragdoll death with a limb cut off, or cut across the waist, she struggles on the floor over her last seconds (a hand on the stump or going out to it, trying to sit up or crawl; after a waist cut her upper body clutches the wound and crawls), and her arms swing in her last movements (`false`: her body lies still, her face and breathing still move). F3 → Death → Death Struggle. |
 | `struggle.strength` | `1.0` | How hard she moves in the struggle, times the default. F3 → Death → Struggle Strength. |
+| `struggle.length` | `1.0` | How long the struggle lasts, times the default (5-8 s). F3 → Death → Struggle Length. |
+| `struggle.rise.alone` | `0.5` | The share of ragdoll deaths with nothing cut off in which she still tries to sit up or prop herself up (`0`: they lie still). F3 → Death → Sit Up Uncut. |
+| `convulse.armSwing.enabled` | `true` | With `deathMoves`: her arms lift and drop, or make a crawl's stroke, now and then in her last movements (`false`: only the struggle moves them). F3 → Death → Arm Swings. |
 | `active.stiffness` | `1.0` | How stiff her ragdoll is: `0` limp as a sack, `1` as made, `2`-`3` she keeps her shape as she falls and lies. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` (On Press in the F3 menu) only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
 | `fewerGC` | `false` | Fewer garbage collection hitches: the engine no longer forces a pass every time it unloads part of the map (its regular pass once a minute still runs). Off puts the game's own behaviour back. |
@@ -95,10 +98,10 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `enemies.pushScale` | `1.0` | Times the game's own throw of a dying enemy (`0`: it drops on the spot, `2`: twice as far). Works with the cuts off too. |
 | `enemies.push` | 0 | Cm a second every dying enemy is pushed along the blow on top. |
 | `enemies.attackDown` | `true` | Enemies keep attacking her while she is knocked down (`false`: they wait till she is up, as in the game). Still in the works (it does little yet): settings.lua only, out of the F3 menu. |
-| `enemies.afterDeath.enabled` | `false` | Being tested: after her death the enemies around her keep at her body for `time` (10) s, playing their own attacks at it, and their weapons cut it (Hits After Death). F3 → Attacks After Death. |
+| `enemies.afterDeath.enabled` | `false` | Being tested: after her death the enemies around her keep at her body for `time` (10) s, playing their own attacks at it, and their weapons cut it (Hits After Death). F3 → Attacks After Death (experimental). |
 | `smoothAnim` | `false` | Every character animated every frame. The engine skips animation frames on characters further off or small on screen, which can look choppy next to a smooth world, most when they run. Costs some CPU with many characters around. |
 | `verboseLog` | `false` | A detailed log (every death's bone speeds, each cut stage, every slow frame...), for a bug report when asked for one. Off, slow frames are summed up once a minute. |
-| `dev` | `false` | Test keys, the enemy spawner and the glass cannon mode (see below). |
+| `dev` | `false` | Test keys and the enemy spawner (see below). |
 
 In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the world goes on (she doesn't move), Q/E (LB/RB) switch the tab, the arrow keys pick (Up/Down) and change (Left/Right, or < and >), R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. The mouse works too: hover picks, click presses (or steps, on a value's arrows), the wheel scrolls. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over (a change to a setting the menu no longer has is dropped from it as the menu starts) ("Reset to settings.lua" deletes it). The menu needs no `FText_Constructor.lua` in `UE4SS_Signatures` (leave it as UE4SS shipped it, `dFText_Constructor.lua`: turned on, it closes the game at launch with the Steam overlay on). If F3 does nothing, the log's `menu:` lines say why; `settings.lua` sets everything without the menu.
 
@@ -136,7 +139,6 @@ With `dev = true` in `settings.lua`:
 | F5 / Insert | Spawn an enemy / pick the next kind |
 | Home | The spawner window |
 | End | Kill the enemy nearest her |
-| Page Down | Glass cannon mode: the shield takes the hits, then one hit kills |
 
 For testing a game without this mod, the repo has the spawner on its own (`minimods/SBSpawner`, `./build.sh`; not released).
 
@@ -164,7 +166,7 @@ On Linux, with `git`, `cargo`, `clang`, `llvm-dlltool`, `python3` and `curl`. Th
 ./package.sh
 ```
 
-That builds the release zip in `release/`. Its paks are built without the other mods. `native/sbslice/test/run.sh` runs the cut tests on real meshes and must print `PASS`. `ue4ss/test/run.sh` runs the scripts against a made-up game (no game needed: a fall death, the regrow, the struggle, attacks after death, a level reload with an arm or her head off, and a sweep of every key and many deaths) and must print `PASS` for each scenario.
+That builds the release zip in `release/`. Its paks are built without the other mods. `native/sbslice/test/run.sh` runs the cut tests on real meshes and must print `PASS`. `ue4ss/test/run.sh` runs the scripts against a made-up game (no game needed: a fall death, the regrow, the struggle, attacks after death, a level reload with an arm or her head off, the stumps' left-right mirroring, a cape on an arm cut, and a sweep of every key and many deaths) and must print `PASS` for each scenario.
 
 How it all works: [docs/TECHNICAL.md](docs/TECHNICAL.md).
 

@@ -20,6 +20,7 @@ OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
 [[ $# -eq 0 ]] && SEL=" unit weapon stats rows addr alive phys split waist arm head mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
+# (diag: the parked diagonal cut, never in the default run)
 fail=0
 if on unit; then
   clang -O1 -g -fsanitize=address,undefined -w -o "$OUT" test_cut.c
@@ -90,6 +91,13 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
                "real split $m across the waist just over the pelvis$p|ACROSS=1 LOW=9 POSED=$posed|$m"
                "real split $m beside the neck after the left arm (blocking)$p|ARMSPLIT=L BESIDE=2 POSED=$posed|$m"
                "real split $m beside the neck after the right arm (blocking)$p|ARMSPLIT=R BESIDE=2 POSED=$posed|$m")
+      fi
+      # (the diagonal, parked: only asked for by name, with sbslice.c's DIAG_PARKED 0)
+      if on diag; then
+        jobs+=("real split $m diagonal over the right shoulder$p|DIAG=R POSED=$posed|$m"
+               "real split $m diagonal over the left shoulder$p|DIAG=L POSED=$posed|$m"
+               "real split $m diagonal over the left shoulder, steepest jitter$p|DIAG=L DIAGLIFT=8 DIAGHIP=6 POSED=$posed|$m"
+               "real split $m diagonal over the right shoulder, flattest jitter$p|DIAG=R DIAGLIFT=4 DIAGHIP=10 POSED=$posed|$m")
       fi
       on waist && jobs+=("real waist cut $m$p|WAIST=1 POSED=$posed|$m")
       on waist && [[ -z $posed ]] && jobs+=("real waist cut $m after the left arm|WAIST=1 ARMFIRST=1|$m")

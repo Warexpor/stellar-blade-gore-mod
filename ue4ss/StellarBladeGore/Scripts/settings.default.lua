@@ -13,10 +13,14 @@ return {
       head = 25,               --   beheaded
       torso = 15,              --   cut in half at the waist
       split = 18,              --   cut in half top to bottom (when the blow doesn't decide; a blade down her length splits too)
+      -- diagonal = 15,        --   (parked for now) cut diagonally from over a shoulder to the other hip
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
     bladeFollow = 0.75,        -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
                                -- roll the odds above (1: always the blade, mostly waist cuts and splits)
+    -- diagonal = {          (parked for now)
+    --   enabled = true,          -- diagonal cuts, rolled or from a slanting blade (false: never)
+    -- },
     oddsNear = {
       enabled = true,          -- the odds above follow where the blow landed: a part far from the hit isn't rolled
                                -- (a waist swing never beheads). Odds whose only kind is far from it still roll it
@@ -40,7 +44,8 @@ return {
     lowArm = {
       enabled = false,         -- a hit that leaves her HP under a quarter cuts an arm off; she fights on without
                                -- it (it dissolves back in at a camp rest, or comes back at her next life)
-      side = "left",           -- which arm: "left", "right" or "either" (one at random each time)
+      side = "hit",            -- which arm: "hit" the one on the side the blow landed on, "left", "right" or
+                               -- "either" (one at random each time)
       below = 0.25,            -- the share of her HP (0-1) a hit has to leave her under for it to come off
       noHealGun = true,        -- while the left one is off: no heal items, no gun (both need her left hand)
       notice = true,           -- and trying either shows the game's "Cannot use right now." with its sound
@@ -72,17 +77,24 @@ return {
       enabled = true,          --   quiet breaths and moans along (false: silent)
       volume = 1.0,            --   how loud, times the default (0.5: half)
     },
+    armSwing = {
+      enabled = true,          --   with deathMoves: her arms lifting and dropping now and then (false: only the
+    },                         --   struggle moves them)
     neck = {
       enabled = true,          --   her neck straining and twitching: her head trying to lift or turn, shaking, and
                                --   dropping back, sharp jerks after (false: her head lies still)
     },
   },
-  deathMoves = false,          -- being tested: her body moving after a ragdoll death. Maimed (a limb off, or cut across the waist), she struggles
-                               -- on the floor over her last seconds: a hand on the stump or going out to it,
-                               -- trying to sit up or crawl; her arms swing in her last movements too. Off by
-                               -- default: in game her ragdoll hasn't visibly followed it yet (the log's "struggle:" lines)
+  deathMoves = true,           -- her body moving after a ragdoll death. Maimed (a limb off, or cut across the waist),
+                               -- she struggles on the floor over her last seconds: a hand on the stump or going out
+                               -- to it, trying to sit up or crawl; her arms swing in her last movements too
+                               -- (false: she lies still, her face and breathing alone moving)
   struggle = {
     strength = 1.0,            --   how hard she moves in it, times the default
+    length = 1.0,              --   how long it lasts, times the default (5-8 s)
+    rise = {
+      alone = 0.5,             --   share of ragdoll deaths with nothing cut off that still try to sit up (0: none)
+    },
   },
   cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, and fly it with
                                -- WASD, Q/E (down/up), Shift (faster) or the left stick and triggers, till the death

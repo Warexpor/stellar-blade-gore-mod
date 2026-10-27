@@ -406,20 +406,85 @@ local function stand_in(pawn, w)
   local posed = try(function() c:CopyPoseFromSkeletalComponent(w); return true end)
   return c, posed and "posed" or "ref pose"
 end
+-- the copy lying on the floor gone, with the box it rides
+local function standin_copy_gone(s)
+  local a = addr(s.copy)
+  for i = #dropped, 1, -1 do
+    local d = dropped[i]
+    if addr(d.comp) == a then
+      if valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
+      table.remove(dropped, i)
+    end
+  end
+  if valid(s.copy) then try(function() s.copy:K2_DestroyComponent(s.copy) end) end
+  s.copy = nil
+end
+-- the real sword hidden only while it is out: the game folds it back into her hairpin later (the stance without a
+-- sword, or out of battle), the same mesh at her head, and hidden there her pin was gone (playtest). Told by where it
+-- is: on its way to her head (under STANDIN_OUT_CM after being further) the copy on the floor flies up to her hair,
+-- shrinking (STANDIN_FLY_S), as her sword folds itself back into the pin by itself; at her head (STANDIN_HEAD_CM,
+-- SHOW_S on end) hers is shown and the copy gone. Away from it again (drawn, No Sword Without It off) hidden, in a
+-- hand that isn't there. (Not by her cut hand: that lies on the floor with the piece)
+local STANDIN_HEAD_CM, STANDIN_OUT_CM, STANDIN_SHOW_S, STANDIN_FLY_S, STANDIN_FLY_END = 40, 60, 0.3, 0.6, 0.15
+local function v3_of(f) return try(function() local v = f(); return vec(v.X, v.Y, v.Z) end) end
+local function standin_fly(s, dt, head)
+  local f = s.fly
+  f.t = f.t + dt
+  local k = math.min(1, f.t / STANDIN_FLY_S)
+  local e = k * k * (3 - 2 * k)
+  local to = v3_of(function() return s.mesh:GetSocketLocation(FName("SC_HairACC")) end) or head
+  local at = vec(f.from.X + (to.X - f.from.X) * e, f.from.Y + (to.Y - f.from.Y) * e, f.from.Z + (to.Z - f.from.Z) * e)
+  local r = 1 + (STANDIN_FLY_END - 1) * e
+  try(function() f.root:K2_SetWorldLocation(at, false, {}, true) end)
+  try(function() s.copy:SetWorldScale3D(vec(r, r, r)) end)
+  return k >= 1
+end
+local function standin_fly_start(s)
+  local d = nil
+  for _, x in ipairs(dropped) do if addr(x.comp) == addr(s.copy) then d = x end end
+  local root = d and valid(d.box) and d.box or s.copy
+  -- (off its box's physics: carried, not falling)
+  if root ~= s.copy then try(function() root:SetSimulatePhysics(false) end); try(function() root:SetCollisionEnabled(0) end) end
+  local from = v3_of(function() return root:K2_GetComponentLocation() end)
+  if not from then return end
+  s.fly = { t = 0, from = from, root = root }
+  log("her sword folds back into her hair: its copy flies up off the floor")
+end
+local function standins_watch(dt)
+  for _, s in ipairs(standins) do
+    if valid(s.real) and valid(s.mesh) then
+      local h = v3_of(function() return s.mesh:GetSocketLocation(FName("Bip001-Head")) end)
+      local at = v3_of(function() return s.real:K2_GetComponentLocation() end)
+      if h and at then
+        local d = math.sqrt((at.X - h.X) ^ 2 + (at.Y - h.Y) ^ 2 + (at.Z - h.Z) ^ 2)
+        s.age = (s.age or 0) + dt
+        if not s.told and s.age >= 2 then s.told = true; log(string.format("her hidden sword %.0f cm from her head 2 s after the cut", d)) end
+        s.near = d < STANDIN_HEAD_CM and (s.near or 0) + dt or 0
+        s.wasOut = s.wasOut or d > STANDIN_OUT_CM
+        if s.hidden and not s.fly and valid(s.copy) and (s.wasOut and d < STANDIN_OUT_CM or s.near > 0) then
+          standin_fly_start(s)
+        end
+        local landed = s.fly and valid(s.copy) and standin_fly(s, dt, h)
+        local change
+        if s.hidden and s.near >= STANDIN_SHOW_S and (not s.fly or landed) then change = false
+        elseif not s.hidden and d > STANDIN_OUT_CM then change = true end
+        if change ~= nil then
+          s.hidden = change
+          try(function() s.real:SetHiddenInGame(change, false) end)
+          if not change and s.copy then standin_copy_gone(s) end
+          log(string.format("her sword %s (%.0f cm from her head)", change and "drawn again, no hand to hold it: hidden"
+            or "put away in her hair: shown", d))
+        end
+      end
+    end
+  end
+end
 -- the sword cut off her alive back with the arm: the copy gone, the real one shown
 local function standins_back()
   local n = 0
   for _, s in ipairs(standins) do
     if valid(s.real) and try(function() s.real:SetHiddenInGame(false, false); return true end) then n = n + 1 end
-    local a = addr(s.copy)
-    for i = #dropped, 1, -1 do
-      local d = dropped[i]
-      if addr(d.comp) == a then
-        if valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
-        table.remove(dropped, i)
-      end
-    end
-    if valid(s.copy) then try(function() s.copy:K2_DestroyComponent(s.copy) end) end
+    standin_copy_gone(s)
   end
   standins = {}
   return n
@@ -1658,6 +1723,7 @@ local function fall_assist(dt)
 end
 
 function M.tick(dt)
+  if #standins > 0 then standins_watch(dt) end
   -- (an animated death's hand too: its animation kept the fist as well)
   if not (run and run.held) then grip_ease(dt) end
   if not run then return end
@@ -1804,7 +1870,7 @@ function M.on_cut(mesh, bone, alive)
           local c, why = stand_in(pawn, w)
           if c then
             try(function() w:SetHiddenInGame(true, false) end)
-            standins[#standins + 1] = { copy = c, real = w }
+            standins[#standins + 1] = { copy = c, real = w, mesh = mesh, hand = "Bip001-" .. side .. "-Hand", hidden = true }
             copies[#copies + 1] = c
           end
           how[#how + 1] = why

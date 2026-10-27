@@ -47,11 +47,12 @@ M.ACTIONS = {
   { id = "death", label = "Test: Struggle", def = "F6", dev = true, help = "Developer Keys: a ragdoll death with set cuts to test the struggle, the next each press: right arm, left leg, waist, left arm and right leg, both legs, left forearm, no cut (sitting up only), with Test: Ragdoll's shove. She lies till F8." },
   { id = "animDeath", label = "Test: Animated Death", def = "Alt+F6", dev = true, help = "Developer Keys: kills her with the game's own death animations, the next each press: standing, two hit deaths, lying down (death animation mods show in them). Always the animated death, with no cut. She lies till Test: Get Up." },
   { id = "blade", label = "Test: Blade Death", def = "DEL", dev = true, help = "Developer Keys: ragdolls her and cuts along a made-up blade." },
+  -- (parked) { id = "diagonal", label = "Test: Diagonal Cut", def = "Alt+DEL", dev = true, help = "Developer Keys: ragdolls her and cuts her diagonally, from over one shoulder down to the other hip: her right shoulder, then her left, each press." },
   { id = "spawn", label = "Test: Spawn Enemy", def = "F5", dev = true, help = "Developer Keys: spawns the enemy kind picked in front of her." },
   { id = "nextEnemy", label = "Test: Next Enemy Kind", def = "INS", dev = true, help = "Developer Keys: picks the next enemy kind to spawn." },
   { id = "spawner", label = "Test: Spawner Window", def = "HOME", dev = true, help = "Developer Keys: opens the enemy spawner window." },
   { id = "kill", label = "Test: Kill Nearest Enemy", def = "END", dev = true, help = "Developer Keys: kills the enemy nearest her." },
-  { id = "glass", label = "Test: Glass Cannon", def = "PAGE_DOWN", dev = true, help = "Developer Keys: glass cannon mode on and off." },
+  -- (hidden for now) { id = "glass", label = "Test: Glass Cannon", def = "PAGE_DOWN", dev = true, help = "Developer Keys: glass cannon mode on and off." },
 }
 M.BY_ID = {}
 for _, a in ipairs(M.ACTIONS) do M.BY_ID[a.id] = a end

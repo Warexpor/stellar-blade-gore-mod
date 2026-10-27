@@ -42,6 +42,8 @@ function E.make(F)
 
   local movement = F.obj("CharMoveComp", "SBCharacterMovementComponent", {
     IsFalling = function() return s.falling end,
+    -- (the player's input: s.input cm/s2 along X)
+    GetCurrentAcceleration = function() return vec(s.input or 0, 0, 0) end,
   })
   -- (the properties the scripts read: answered live)
   local mvt = setmetatable({}, {
@@ -138,7 +140,12 @@ function E.make(F)
   local function widget(name, cls)
     local w = { vis = 4 }   -- 4 SelfHitTestInvisible; 1 collapsed, 2 hidden
     local o
+    -- (its animations: the intro, playing while w.intro)
+    local intro = F.obj("YouDie", "WidgetAnimation")
+    local wcls = F.obj(cls, "Class", { Animations = { ForEach = function(_, fn) fn(1, { get = function() return intro end }) end } })
     o = F.obj(name, cls, {
+      GetClass = function() return wcls end,
+      IsAnimationPlaying = function(_, a) return w.intro == true and a == intro end,
       GetVisibility = function() return w.vis end,
       SetVisibility = function(_, v) w.vis = v; w.log = (w.log or "") .. tostring(v) end,
       IsVisible = function() return w.vis ~= 1 and w.vis ~= 2 end,
@@ -170,11 +177,13 @@ function E.make(F)
     if hp > 0 then return end
     E.die(ragdoll)
   end
+  -- (her movement stays on, walking: the game's falling death left it so, playtest)
   function E.die(ragdoll)
     s.dead = true
     if ragdoll then s.sim = true end
-    -- the death screen, made and put up at once (the death table's UI delay 0)
+    -- the death screen, made and put up at once (the death table's UI delay 0), its intro playing
     local w = widget("WB_MainHUD_Dead_C_0", "WB_MainHUD_Dead_C")
+    w.__w.intro = true
     E.deadScreen = w
     F.classes.WB_MainHUD_Dead_C = { w }
     for _, n in ipairs(F.notify) do
@@ -183,10 +192,19 @@ function E.make(F)
     F.fire("/Script/SB.SBNetworkPlayerController:ClientBroadcast_ActorDead", F.param(controller), F.param(1), F.param(4242),
       F.param(0), F.param(8000005), F.param(0), F.param(0), F.param(false), F.param(false))
   end
+  -- the death screen's widget made with the level, as the game does: it reads visible all along, alive or not
+  function E.dead_widget()
+    local w = widget("WB_MainHUD_Dead_C_0", "WB_MainHUD_Dead_C")
+    E.deadScreen = w
+    F.classes.WB_MainHUD_Dead_C = { w }
+    for _, n in ipairs(F.notify) do
+      if n.cls == "/Script/UMG.UserWidget" then pcall(n.cb, w) end
+    end
+  end
   -- the game's respawn after a death (its death screen's Retry): her actor re-made in place (NotifyBP_ReInitActor),
   -- whole and standing, the death screen gone
   function E.respawn()
-    s.dead, s.sim, s.simBelow, s.hp, s.z, s.falling, s.mode = false, false, {}, 1.0, 0, false, 1
+    s.dead, s.sim, s.simBelow, s.hp, s.z, s.falling, s.mode, s.input = false, false, {}, 1.0, 0, false, 1, nil
     if E.deadScreen then E.deadScreen.__w.vis = 1; E.deadScreen.__dead = true end
     F.classes.WB_MainHUD_Dead_C = nil
     E.deadScreen = nil

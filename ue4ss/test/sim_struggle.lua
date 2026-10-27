@@ -1,4 +1,4 @@
--- A maimed Eve's struggle on the floor (struggle.lua, F3's Death Struggle, deathMoves: switched on here). Her right arm
+-- A maimed Eve's struggle on the floor (struggle.lua, F3's Death Struggle, deathMoves: on by default, set here too). Her right arm
 -- comes off alive (Lose Arm at Low HP's test key, Alt+F8), then she dies a ragdoll. On the made-up ragdoll (rag.lua:
 -- joints that turn, no gravity, floor or limits) the struggle's acts must start, steer her joints towards their
 -- targets and keep most of each turn they set (in game the log said 0% kept: there the engine or something of the
@@ -13,7 +13,7 @@ math.randomseed(7)
 local pawn = E.make(F)
 local print = F.say
 local DIR = "ue4ss/Mods/StellarBladeGore/Scripts/"
--- Death Struggle on (settings.lua's deathMoves, F3 -> Death; off by default)
+-- Death Struggle on (settings.lua's deathMoves, F3 -> Death; on by default)
 local f = assert(io.open(DIR .. "settings.lua", "w"))
 f:write(string.format([[
 local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")

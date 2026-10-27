@@ -88,6 +88,9 @@ return {
       head = 25,               --   beheaded (the face goes with the head, the neck gets a stump)
       torso = 15,              --   cut in half at the waist
       split = 18,              --   cut in half top to bottom; rolled when no blade decides (bladeFollow)
+      diagonal = 0,            --   cut diagonally from over a shoulder down to the other hip (see diagonal; 0 here so
+                               --   a settings.lua from before it, its odds set to one kind alone, still does that one
+                               --   every death; settings.default.lua has 15)
       moreLimbs = 0.35,        --   a limb cut takes another nearest limb with this chance, and a third with it again
     },                         --   (0.35: 35 % two or more, 12 % three)
     bladeFollow = 0.75,        -- share of deaths with a blade seen that the blade decides; the rest roll the odds above
@@ -102,8 +105,20 @@ return {
       far = 35,                --   cm from it at which they are down to floor (her skin is 10-15 cm off the bones)
       floor = 0,               --   share of its odds a part this far from the hit keeps (0: never; 1: as if off)
       across = 0.25,           --   share of the waist cut's a blade down her length keeps (a blade across her: no split)
-      noPlane = 0.5,           --   share of the split's with no blade's plane to go by
+      noPlane = 0.5,           --   share of the split's (and the diagonal's) with no blade's plane to go by
+      offSlant = 0.3,          --   share of the diagonal's from a blade not slanting diagonal.bladeFrom-bladeTo
     },                         --   (odds whose only kinds above 0 are all far from the hit are rolled as they are)
+    diagonal = {               -- the diagonal cut (gore.lua's diag_plane): from over one shoulder down across her to over
+      enabled = false,         --   the other hip, her half keeping the head and the other arm, the copy that arm and
+                               --   both legs (false: none, rolled or from a blade). Parked: off, out of F3 and the
+                               --   keys, sbslice.c's fixes for it off (DIAG_PARKED)
+      lift = 6,                --   cm over the shoulder's joint the cut starts
+      hip = 8,                 --   cm over the other hip's joint it ends
+      out = 7,                 --   and cm out past it (6 / 8 / 7: about 36 degrees off her spine)
+      jitter = 2,              --   cm lift and hip each move at random (33-40 degrees)
+      bladeFrom = 20,          --   a blade through her body this many degrees off her spine
+      bladeTo = 60,            --   up to this many cuts diagonally (else across her, or a split down her length)
+    },
     bladeJitter = 15,          -- for variety, each blade is turned up to this many degrees at random
     bladeShift = 10,           --   and moved up to this many cm along its normal
     bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
@@ -286,7 +301,8 @@ return {
                                --   either. Goes before smash; blades still cut
     lowArm = {                 -- a hit that leaves her HP under a quarter takes an arm off as she fights on
       enabled = false,         --   (once till it is back: it grows back at a camp rest, or at her next life)
-      side = "left",           --   which: "left", "right" or "either" (one at random each time)
+      side = "hit",            --   which: "hit" the side of her the blow landed on (at random when it landed on her
+                               --   middle or nothing tells), "left", "right" or "either" (one at random each time)
       below = 0.25,            --   the share of her HP bar under which it goes
       noHealGun = true,        --   while it is off she can't use heal items or shoot (the game's own blocks on her,
                                --   ActorState_BlockItemUseHeal and _BlockItemUseBullet)
@@ -580,10 +596,9 @@ return {
     borrow = true,             -- a mesh with no physics asset (no ragdoll) gets <mesh>_Physics, else fallback
     fallback = "/Game/Art/Character/PC/CH_P_EVE_01/CH_P_EVE_01_Physics.CH_P_EVE_01_Physics",
   },
-  deathMoves = false,          -- her body moving after death (convulse.lua's arm swings, struggle.lua; not the neck's):
-                               -- being tested, off by default (settings.lua's deathMoves, F3 -> Death -> Death Struggle).
-                               -- Pushes set on her bodies never visibly moved her in game (probes: an arm turned 1 deg on
-                               -- a 138 deg/s swing); her face and voice play either way
+  deathMoves = true,           -- her body moving after death (convulse.lua's arm swings, struggle.lua; not the neck's;
+                               -- settings.lua's deathMoves, F3 -> Death -> Death Struggle); her face and voice play
+                               -- either way
   struggle = {                 -- struggle.lua: a maimed Eve fighting on the floor after a ragdoll death, as a run of
     enabled = true,            --   acts picked by what the cuts left her and how she lies (a hand on the stump,
                                --   a hand going out to the stump, rolling onto her front and crawling, trying to sit
@@ -592,7 +607,8 @@ return {
                                --   it. Ragdoll deaths with a limb cut off (rise.alone of those without), not beheaded,
                                --   split or cut at the waist
     strength = 1.0,            -- times every speed and strength below (settings.lua's struggle.strength)
-    time = { 5, 8 },           -- s it lasts, from her coming to rest to her death (8-12 dragged on, playtest)
+    time = { 5, 8 },           -- s it lasts, from her coming to rest to her death (8-12 dragged on, playtest)...
+    length = 1.0,              --   ...times this (F3 -> Struggle Length)
     startMax = 0.8,            -- s into the ragdoll it starts at the latest (else once she has come to rest; 2.5
                                --   came far too late, playtest)
     rate = 60,                 -- times a second she is steered at most

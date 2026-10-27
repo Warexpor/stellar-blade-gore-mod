@@ -1,4 +1,4 @@
--- F6's struggle tests (main.lua's STRUGGLE_TESTS) with Death Struggle off (deathMoves false, the default): each press
+-- F6's struggle tests (main.lua's STRUGGLE_TESTS) with Death Struggle off (deathMoves false; on by default): each press
 -- a ragdoll death with its set cuts, and the struggle must begin every time on what they left her (the stumps it
 -- names), then F8 gets her up for the next
 local F = require("fake")

@@ -1,5 +1,9 @@
 # To do
 
+## Parked: diagonal cut
+
+- The diagonal cut (over one shoulder down to the other hip, `gore.diagonal`): built in the 0.5.0 work, parked by the user before it shipped. Off in tune.lua (`diagonal.enabled` false), out of settings.default.lua, F3 and the keys (Alt+Delete); sbslice.c's two fixes for it (`SHEET_OUT`, `NECK_PAST`) off under `DIAG_PARKED`. To pick it up: `DIAG_PARKED` 0, `native/sbslice/test/run.sh diag`, `ue4ss/test/run.sh diag`. Open: CH_P_EVE_10's shoulder gear about 5 cm past the copy's plane; the upper piece's thin hip tip (maybe real wedge geometry).
+
 ## Planned: the head and hair split down their length
 
 Parked for later (2026-10-26). A vertical split carried on up through her head, or a head alone split in two. Harness: `HEADSPLIT=1` in `native/sbslice/test/real/real_split.c` on her face mesh (`CH_P_EVE_Face_Jali3`, the one in game):
@@ -30,7 +34,7 @@ Parked for now (2026-10-26), in the game but not a main feature: off by default 
 - Waist cuts that still tear or stretch: CH_P_EVE_14 (`waist high blade arms`: 4 torn, 3 stretched), CH_P_EVE_08 and CH_P_EVE_09_V02.
 - CH_P_EVE_DX left upper arm at 0.3, leaned 45 deg (dir 7): 6 more triangles stretch (up to 19 cm, shoulder sink) since the 0.4.1 seam move inside the rim.
 
-- Enemies attacking her body after her death (`enemies.afterDeath`, off by default, F3 → Attacks After Death): unparked in 0.4.7. Its swings never found an attack because UE4SS has no `GetPathName` (every enemy's mesh read `in no monster folder`); paths come from `GetFullName` now, and `ue4ss/test/run.sh after` passes end to end on made-up enemies. Still to see in game: an enemy's own attack animation played on its mesh by hand (`PlayAnimation`) moving its weapon through her, with its animation Blueprint taken off meanwhile, and whether the Sawshark's mesh is under /Game/Art/Character/Monster/.
-- The struggle and the arm swings (`deathMoves`, off by default, F3 → Death → Death Struggle (Testing) since 0.4.7): on the test's made-up ragdoll the struggle keeps 86% of each turn and plays out; in game 0%. Next playtest with it on (Alt+F8 then a death, or any limb death): each act's `(N% read back at once)` and `meanwhile her turns zeroed N times` say whether the engine never took the turns or something undid them between steps.
+- Enemies attacking her body after her death (`enemies.afterDeath`, off by default, F3 → Attacks After Death (experimental)): unparked in 0.5.0. Its swings never found an attack because UE4SS has no `GetPathName` (every enemy's mesh read `in no monster folder`); paths come from `GetFullName` now, and `ue4ss/test/run.sh after` passes end to end on made-up enemies. Still to see in game: an enemy's own attack animation played on its mesh by hand (`PlayAnimation`) moving its weapon through her, with its animation Blueprint taken off meanwhile, and whether the Sawshark's mesh is under /Game/Art/Character/Monster/.
+- The struggle and the arm swings (`deathMoves`, on by default since 0.5.0, F3 → Death → Death Struggle): on the test's made-up ragdoll the struggle keeps 86% of each turn and plays out; in game 0%. Next playtest with it on (Alt+F8 then a death, or any limb death): each act's `(N% read back at once)` and `meanwhile her turns zeroed N times` say whether the engine never took the turns or something undid them between steps.
 
 Rerun the outfit sweep (`native/sbslice/test/real/sweep/sweep.sh`, ~25 min) and check `compare.sh` against the 0.4.1 results (`results-0.4.1.txt.gz`: 2,985 of 28,408 cuts fail) so nothing that passes now regresses.

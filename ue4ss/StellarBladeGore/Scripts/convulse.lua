@@ -796,7 +796,7 @@ local SWING_WAYS = { "up", "up", "front", "out", "in" }
 local SWING_BACK = { up = "down", front = "back", out = "in", ["in"] = "out" }
 function swing_on() -- (the local declared above face_event)
   local a = cfg().armSwing
-  if ctx.tune.deathMoves ~= true then return false end -- (parked: tune.deathMoves)
+  if ctx.tune.deathMoves == false then return false end
   return type(a) == "table" and a.enabled ~= false
 end
 -- struggle.lua has her limbs (a hand on a stump, her legs pushing): only her face and neck move here meanwhile

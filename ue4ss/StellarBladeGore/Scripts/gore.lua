@@ -729,13 +729,23 @@ end
 -- first rim point, its fitted ellipse) and Tachy's core was turned, not mirrored, onto the other side: the stump and
 -- the cut piece showed different cross-sections, the bone in one place on the arm and elsewhere on the shoulder. With
 -- this the piece's side is the stump's mirror image, as the two faces of one cut are
-function M.pair(ob, ol)
+-- back: her back on the cut's plane (back_on), the frame's x, else the opening's own x (the DLL's rim axis, which is
+-- any way round per cut: the bone stood at a random place on each stump, left and right thighs unlike each other,
+-- playtest). side: -1 for her right's limbs, whose frame is the left's mirror image (y the other way), so the cores of
+-- her two thighs or arms mirror across her midline as she does
+function M.pair(ob, ol, back, side)
   local z = ob and ob.z and norm(ob.z)
-  local x = z and ob.x and norm(sub(ob.x, scale(z, dot(ob.x, z))))
+  local function on(v) return z and v and norm(sub(v, scale(z, dot(v, z)))) end
+  local x = on(back) or on(ob and ob.x)
   if not x then return end
   local y = cross(z, x)
+  if side and side < 0 then y = scale(y, -1) end
   ob.tx, ob.ty = x, y
   if ol then ol.tx, ol.ty = x, y end
+end
+-- a cut bone's side for M.pair: -1 on her right, 1 on her left and down her middle
+function M.side_of(bone)
+  return bone and bone:find("%-R%-") and -1 or 1
 end
 -- an opening's frame for the tachy look: x along it, y across it (the shared one, M.pair), and whether that is
 -- mirrored (the cut piece's side: y = -(z cross x))
@@ -2563,12 +2573,18 @@ local function kept_chains(mesh, bone, a, b, at, n)
     for _, d in ipairs(out) do if d ~= c and under(c, d) then inner = true end end
     if not inner then
       -- a strap: on the body if its top is behind the plane, else it goes with the limb (not kept)
-      local far = 0
+      -- (a chain reaching further from its top than the limb is long, or named a Cape, is never one: along the limb
+      -- was read in the pose, and with her arm out or up CH_P_EVE_09's 80 cm cape hung across it, inside its length,
+      -- and was taken for a strap: it went with the arm, its top band still on her shoulder's helpers, or stayed on her
+      -- with its bones riding the arm, and stretched from her shoulder to the arm on the floor, playtest screenshot)
+      local far, reach = 0, 0
+      local top = bone_loc(mesh, c)
       for _, d in ipairs(list) do
         local l = (d == c or under(d, c)) and bone_loc(mesh, d)
         if l and axis and span > 0 then far = math.max(far, dot(sub(l, a), axis) / span) end
+        if l and top then reach = math.max(reach, len(sub(l, top))) end
       end
-      local top = bone_loc(mesh, c)
+      if c:find("Cape") or reach > span then far = math.huge end
       if far <= 1 and top and at and n then
         if dot(sub(top, at), n) <= 0 then tops[#tops + 1] = c; stay[c] = true end
       else
@@ -2578,6 +2594,7 @@ local function kept_chains(mesh, bone, a, b, at, n)
   end
   return tops, stay
 end
+M.kept_chains = kept_chains -- (test/sim_cape.lua)
 
 -- a skirt's chains with no physics body anywhere on them (their tops: a Skirt bone whose parent isn't one), by bone
 -- index. CH_P_EVE_37 (Black Rose) hangs its front and side panels off the thighs' twist bones, animated only: a thigh
@@ -2916,7 +2933,6 @@ local function stage_cut(q)
     return most
   end
   if fb and not (q.ob and round(q.c.result) >= 14 and wide(q.ob) > wide(fb)) then q.ob, q.obFace = fb, true end
-  M.pair(q.ob, q.ol)
   -- the caps and stubs ride the bone each opening's rim rides (the DLL's bb / lb): a thigh's stump follows the hip's
   -- twist helpers, not the pelvis, and a stub on the pelvis slid off to the stump's edge as she moved
   local function ride(key, fallback)
@@ -2934,6 +2950,11 @@ local function stage_cut(q)
   -- (and the spine bones the stubs look for her back on: back_on, and the cut bone's far end: the stump bone's axis)
   local far = PARTS[q.bone] and PARTS[q.bone].to
   q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL, q.parent or q.bone, q.bone, "Bip001-Spine1", far } } })
+  -- (the openings' shared frame from her back as posed at the cut, the snap's Spine1 or the spine bone cut)
+  M.posed = q.posed
+  local back = q.ob and q.ob.z and norm(q.ob.z) and back_on(q.mesh, norm(q.ob.z), q.bone, true)
+  M.posed = nil
+  M.pair(q.ob, q.ol, back, M.side_of(q.bone))
   q.caps, q.kinds, q.stubs = {}, {}, {}
   return true
 end
@@ -3654,7 +3675,18 @@ end
 -- off a limb (those go with it) or the head (kept whole by the half that keeps it), on the side of the plane where
 -- its bodies lie on average. Each half keeps the chains on its side whole and drops the others whole: halved, the
 -- neck chain's swinging half stretched to the flattened sheet across the opening (fifteenth playtest)
-local function split_chains(comp, at, n)
+-- A chain hanging off a Dm- driver of an arm's or leg's side goes with the half that keeps that limb (back: the limbs
+-- behind the plane), whichever side it lies: the driver follows the limb. A diagonal over her shoulder left the
+-- shoulder's gear (under Dm-R-Trape) on her half and the arm on the copy's: it flew off with the arm (harness)
+function M.limb_keys(list)
+  local t = {}
+  for _, b in ipairs(list or {}) do
+    local sd, part = b:match("^Bip001%-([LR])%-(%a+)")
+    if sd then t[sd .. ((part == "Thigh" or part == "Calf") and "leg" or "arm")] = true end
+  end
+  return t
+end
+local function split_chains(comp, at, n, back_limbs)
   local pa = ctx.physics_of(comp)
   if not valid(pa) then return {}, {} end
   local list, has = {}, {}
@@ -3665,9 +3697,10 @@ local function split_chains(comp, at, n)
     local p = parent_bone(comp, c)
     -- a top: its parent has no body of its own outside Bip001
     local top = not c:find("^Bip001")
-    local q = p
+    local q, drv = p, nil
     while top and q and not q:find("^Bip001") do
       if has[q] then top = false end
+      if q:sub(1, 3) == "Dm-" or q:sub(1, 3) == "Dm_" then drv = q end
       q = parent_bone(comp, q)
     end
     local anchored = top and q and q ~= "Bip001-Head"
@@ -3680,6 +3713,8 @@ local function split_chains(comp, at, n)
           if l then sum = sum + dot(sub(l, at), n); k = k + 1 end
         end
       end
+      local dk = drv and M.driver_limb(drv)
+      if dk and back_limbs then sum = M.limb_keys(back_limbs)[dk] and -1 or 1 end
       if k >= 2 then
         if sum >= 0 then front[#front + 1] = c else back[#back + 1] = c end
       end
@@ -4081,7 +4116,7 @@ end
 -- down her length (through her middle, left from right). A blade within 45 degrees of her spine's line goes down it,
 -- else across. Whatever angle the blade had, the cut snaps to one of them: free angles cut slabs off her chest and
 -- slivers off her flank, each with a rule of its own to clean it up.
--- (A third kind, diagonal from a shoulder to the other hip at a set ~45 degrees, is left out for now.)
+-- A third kind runs diagonally from over a shoulder to the other hip (M.diag_plane), set by the joints, not snapped.
 M.ALONG = math.sqrt(0.5)
 -- her right, square to her spine (axis): from her left hip and shoulder joints to her right ones, which move with
 -- her pelvis and chest whatever her arms and legs do
@@ -4093,6 +4128,24 @@ function M.her_right(mesh, axis, bl)
     if l and rr then r = add(r, sub(rr, l)) end
   end
   return norm(sub(r, scale(axis, dot(r, axis))))
+end
+
+-- which side of her a hit landed on, "left" or "right" (tune.gore.lowArm.side "hit"): a bone of one side named (the
+-- mesh's hit bone), else where it landed off her spine, her right (M.her_right) one way; nil within mid cm of the
+-- spine, or nothing to go by
+function M.hit_side(mesh, at, bone, mid)
+  bone = bone and tostring(bone) or ""
+  if bone:find("%-L%-") then return "left", "on " .. bone end
+  if bone:find("%-R%-") then return "right", "on " .. bone end
+  if not at then return nil, "nowhere" end
+  local p0, p1 = bone_loc(mesh, "Bip001-Pelvis"), bone_loc(mesh, "Bip001-Neck")
+  if not (p0 and p1) then return nil, "no spine" end
+  local ax = norm(sub(p1, p0))
+  local r = ax and M.her_right(mesh, ax)
+  if not r then return nil, "no spine" end
+  local d = dot(sub(at, p0), r)
+  if math.abs(d) < (mid or 3) then return nil, string.format("%.0f cm off her spine", d) end
+  return d > 0 and "right" or "left", string.format("%.0f cm to her %s", math.abs(d), d > 0 and "right" or "left")
 end
 
 -- the plane: through the spine, its normal square to the spine (from the swing, else her right)
@@ -4147,6 +4200,46 @@ local function split_plane(q)
   return at, n, from
 end
 
+-- a diagonal cut (tune.gore.diagonal): from lift cm over one shoulder's joint ("R" or "L") down across her to hip cm
+-- over the other hip's joint and out cm out past it, the plane holding her front-to-back axis, as she is now. Her half
+-- keeps the head and the other arm, the copy that arm and both legs. By the joints, not an angle, so the limbs always
+-- fall to those halves: 33-40 degrees off her spine with jitter cm on lift and hip (jit). At 30 her far hip's skin rode
+-- her chest once her spine broke and shifted 9 cm at the cut on a bent spine (harness, real_split.c DIAG). Returns
+-- the plane's point and normal (the head's side), its angle off her spine, lift and hip
+function M.diag_plane(mesh, side, jit)
+  local d = cfg().diagonal or {}
+  local pel, head = bone_loc(mesh, "Bip001-Pelvis"), bone_loc(mesh, "Bip001-Head")
+  local sh = bone_loc(mesh, side == "R" and "Bip001-R-UpperArm" or "Bip001-L-UpperArm")
+  local hp = bone_loc(mesh, side == "R" and "Bip001-L-Thigh" or "Bip001-R-Thigh")
+  if not (pel and head and sh and hp) then return nil end
+  local axis = norm(sub(head, pel))
+  local r = axis and M.her_right(mesh, axis)
+  if not r then return nil end
+  local j = jit and math.max(tonumber(d.jitter) or 2, 0) or 0
+  local lift = (tonumber(d.lift) or 6) + (math.random() * 2 - 1) * j
+  local hip = (tonumber(d.hip) or 8) + (math.random() * 2 - 1) * j
+  local s = side == "R" and 1 or -1
+  local top = add(sh, scale(axis, lift))
+  local bot = sub(add(hp, scale(axis, hip)), scale(r, s * (tonumber(d.out) or 7)))
+  local dl = norm(sub(bot, top))
+  local n = dl and norm(cross(dl, cross(axis, r)))
+  if not n then return nil end
+  if dot(n, axis) < 0 then n = scale(n, -1) end
+  return top, n, math.deg(math.acos(math.max(-1, math.min(1, -dot(dl, axis))))), lift, hip
+end
+-- a blade's plane n against her (axis: up her spine, r: her right): the angle its line across her front runs off her
+-- spine (0 down her length, 90 across), whether it faces her front or back more than ALONG (a slab, not a cut through
+-- her), and the shoulder it comes down from ("R" when it runs down towards her left)
+function M.blade_slant(axis, r, n)
+  local f = norm(cross(axis, r))
+  if not (f and n) then return nil end
+  local np = norm(sub(n, scale(f, dot(n, f))))
+  if not np then return nil, true end
+  local deg = math.deg(math.asin(math.min(1, math.abs(dot(np, axis)))))
+  local d = cross(np, f)
+  if dot(d, axis) > 0 then d = scale(d, -1) end
+  return deg, math.abs(dot(norm(n), f)) > M.ALONG, dot(d, r) > 0 and "L" or "R"
+end
 -- the outfit's post-process AnimBP (CH_P_EVE_09_AnimBP) poses the rig's Dm- drivers after her arms and legs. A split
 -- half has too few other helpers, so some of its sinks are on drivers of the limbs it keeps (Dm-R-Trape, Dm-R-AX2-Root:
 -- "a sink ... a Dm- driver moves" in the harness): as those limbs flailed in the ragdoll the drivers carried the
@@ -4233,7 +4326,15 @@ end
 
 local function stage_split_cut(q)
   local at, n, from
-  if q.plane then
+  if q.plane and q.plane.diag then
+    local deg, lift, hip
+    at, n, deg, lift, hip = M.diag_plane(q.mesh, q.plane.diag, true)
+    if at then
+      from = string.format("diagonal from over her %s shoulder, %.0f deg off her spine (%.1f cm over the shoulder, %.1f over the hip)",
+        q.plane.diag == "R" and "right" or "left", deg, lift, hip)
+      q.spine = spine_break(q.mesh, at, n)
+    end
+  elseif q.plane then
     at, n, from = q.plane.at, q.plane.n, "blade"
     local f = q.plane.rel and body_frame(q.mesh)
     if f then
@@ -4300,7 +4401,7 @@ local function stage_split_cut(q)
   -- limb_sides, above)
   -- her half keeps the head, face and hair whole, on their own animation; the copy's neck closes. The DLL holds one
   -- neck plane, for the next split cut of that component
-  local front, back = split_chains(q.mesh, at, n)
+  local front, back = split_chains(q.mesh, at, n, q.gone1)
   local keep1, keep2 = {}, {}
   for _, b in ipairs(q.gone2) do keep1[#keep1 + 1] = b end
   for _, b in ipairs(front) do keep1[#keep1 + 1] = b end
@@ -4733,7 +4834,7 @@ split_stage = function(q)
     if before then log("split (" .. q.why .. "): her earlier cut stays, no waist cut on top of it") end
   end
   if q.degenerate and not before then
-    if q.kind == "split" and not q.middle then
+    if q.kind == "split" and not q.middle and not (q.plane and q.plane.diag) then
       log("split (" .. q.why .. "): once more, straight down her middle")
       M.splitMiddle = true
       local ok = start(q.pawn, q.mesh, q.hit, q.why, "split")
@@ -5309,6 +5410,26 @@ function M.torso_legs(blade)
 end
 -- normal: the split plane's normal (made square to her spine, the plane goes through it), or nil for her left/right
 function M.split(pawn, mesh, hit, normal, why) return start(pawn, mesh, hit, why, "split", normal) end
+-- a diagonal cut (M.diag_plane) from over one shoulder to the other hip, a split of its own. side: "R", "L", or nil:
+-- the shoulder on the hit's side when it landed over her waist, else the other one (the hip's end on its side); with
+-- no hit, either
+function M.diagonal(pawn, mesh, hit, why, side)
+  if not side then
+    local pel, sp = bone_loc(mesh, "Bip001-Pelvis"), bone_loc(mesh, "Bip001-Spine1")
+    local head = pel and bone_loc(mesh, "Bip001-Head")
+    local axis = head and norm(sub(head, pel))
+    local r = axis and M.her_right(mesh, axis)
+    if hit and r and sp then
+      local right = dot(sub(hit, sp), r) >= 0
+      if dot(sub(hit, sp), axis) < 0 then right = not right end
+      side = right and "R" or "L"
+    else
+      side = math.random() < 0.5 and "R" or "L"
+    end
+  end
+  return start(pawn, mesh, hit, why, "split", nil, { at = bone_loc(mesh, "Bip001-Spine1") or vec(0, 0, 0), n = vec(0, 0, 1), diag = side })
+end
+
 
 -- ---- a living hit's mark (tune.gore.hitMarks) ----
 -- A hit she lives through leaves a slash of blood on her skin, no cut: a deferred decal (the cinematic floor blood's
@@ -5570,12 +5691,20 @@ function M.near_odds(mesh, h, hit)
     head = already_cut(mesh, "Bip001-Head") and 0 or f(dh),
     torso = already_cut(mesh, "Bip001-Spine1") and 0 or f(db),
     split = f(ds),
+    diagonal = f(ds),
   }
   local n = real and blade_plane(h)
   local dn = real and h.dir and norm(h.dir)
   local p0, p1 = bl("Bip001-Pelvis"), bl("Bip001-Neck")
   local ax = p0 and p1 and norm(sub(p1, p0))
   local how
+  -- (a diagonal: in full from a blade slanting diagonal.bladeFrom-bladeTo degrees off her spine, else offSlant of it;
+  -- noPlane of it with no plane, as a split)
+  local dg = cfg().diagonal or {}
+  local hr = n and ax and M.her_right(mesh, ax, bl)
+  local deg = hr and M.blade_slant(ax, hr, norm(n))
+  if not n then w.diagonal = w.diagonal * (o.noPlane or 0.5)
+  elseif not (deg and deg >= (dg.bladeFrom or 20) and deg <= (dg.bladeTo or 60)) then w.diagonal = w.diagonal * (o.offSlant or 0.3) end
   if dn and dn.Z < -(cfg().splitDown or 0.6) then
     w.torso, how = 0, "from above"
   elseif n and ax and math.abs(dot(ax, norm(n))) < M.ALONG then
@@ -5585,6 +5714,7 @@ function M.near_odds(mesh, h, hit)
   else
     w.split, how = w.split * (o.noPlane or 0.5), "no plane"
   end
+  if deg then how = how .. string.format(", %.0f deg off her spine", deg) end
   local function cm(d) return d and string.format("%.0f", d) or "?" end
   w.why = string.format("hit %s cm from a limb, %s from the neck, %s from the waist; %s", cm(dl), cm(dh), cm(db), how)
   return w
@@ -5992,6 +6122,20 @@ function M.blow(pawn, mesh, h, why)
   -- whichever way the blade went, and rolled the odds the rest (a waist cut square to her spine and nothing else,
   -- though the weapon went through her arms, playtest)
   local splits = what == "slice"
+  -- a blade slanting across her body (diagonal.bladeFrom to bladeTo degrees off her spine), not facing her front or
+  -- back: cut diagonally from over the shoulder it came down from (M.diagonal), the limbs going with the halves. Snapped
+  -- to across or down her length at 45 degrees, a slash from her shoulder to her hip came out a waist cut or a split
+  local dg = cfg().diagonal or {}
+  if splits and not c.shave and dg.enabled ~= false and axis and not nosplit and not h.noSplit then
+    local r = M.her_right(mesh, axis, bl)
+    local deg, slab, side
+    if r then deg, slab, side = M.blade_slant(axis, r, n) end
+    if deg and not slab and deg >= (dg.bladeFrom or 20) and deg <= (dg.bladeTo or 60) then
+      log(string.format("blade (%s): %s plane %.0f deg off her spine: a diagonal from over her %s shoulder", why, how, deg,
+        side == "R" and "right" or "left"))
+      return go(at, why, "split", nil, { at = at, n = n, diag = side })
+    end
+  end
   if splits and (not lengthwise or c.shave) then
     local body = not h.noSplit and mc.body ~= false and body_blade()
     if not body then

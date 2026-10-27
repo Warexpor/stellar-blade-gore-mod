@@ -334,6 +334,10 @@ static const short *keep_to_on;
 #define NECK_BAND 2.5f  // cm under the plane where the kept head's other half of the neck closes into a point
 #define NECK_IN 0.5f    // cm under the plane that point sits (on the neck axis), under the neck's lid
 #define NECK_SINK 30    // btype of a sink that collapses into the neck
+#define SHEET_OUT 1.0f   // cm a split's sheet may carry skin out from her spine as it flattens it, else it collapses to a point
+// the diagonal cut's two fixes (SHEET_OUT, NECK_PAST), parked with it: 1 leaves every split as before them
+#define DIAG_PARKED 1
+#define NECK_PAST 6.0f  // cm past a split half's plane its neck's closing point lies at most, else it closes on the plane
 // the kept neck's far side (past the split's plane) shaved at a curve: kept no deeper than neck_shave cm at its foot,
 // rising to the whole neck neck_shave_h cm up it; the shaved skin closes into the neck like the far side under the
 // neck plane. Whole, the neck stood out past the cut edge in a sharp step (playtest). 0: whole
@@ -1432,6 +1436,24 @@ static int side_sink_pass(const sink_args *a, int s, const float *target, int wa
         }
         if (best >= 0 && !borrow_bone(a->secs, s, best, (unsigned char *)c->inmap, nb)) best = -2;
     }
+#ifdef SBSLICE_HOSTED
+    // SINKWHY=<bone>,<bone>...: why those weren't picked (the harness's debug)
+    if (getenv("SINKWHY")) {
+        static int shown;
+        if (shown++ < 60) {
+            fprintf(stderr, "side_sink sec %d want %d band %d drv %d -> %d:", s, want, a->band, driven_ok, best);
+            for (const char *q = getenv("SINKWHY"); *q; ) {
+                int i = atoi(q);
+                if (i > 0 && i < nb) fprintf(stderr, " [%d inmap %d nosink %d limb %d onplane %d gone %d keep %d head %d drv %d ride %d btype %d sink %d]", i,
+                    c->inmap[(u64)s * nb + i], a->nosink ? a->nosink[i] : 0, a->limb[i], a->onplane ? a->onplane[i] : 0, a->gone[i], a->keep[i],
+                    a->headused ? a->headused[i] : 0, drivenb[i], a->rideof ? a->rideof[i] : -9, a->btype[i], is_sink(c, i));
+                while (*q && *q != ',') q++;
+                if (*q) q++;
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+#endif
     if (best >= 0) a->btype[best] = (unsigned char)want;
     if (best >= 0 && want == 1 && a->carryb && a->carryk >= 0) a->carryb[best] = (signed char)a->carryk;
     return best;
@@ -1838,7 +1860,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     int variable = *(unsigned char *)(sw + SW_VARIABLE) && lookup;
     u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
     int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
-    int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0, unbanded = 0, widened = 0;
+    int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0, unbanded = 0, widened = 0, outward = 0;
+    // a split half's spine (its top ride bone to its lowest): skin its sheet would flatten out past her side, further
+    // from the spine on the plane than it is now, collapses to its band's point inside instead. A plane slanting across
+    // her (a diagonal) flattened her flank's skin out past her side along its normal, a sheet standing out of the cut
+    // face a hand's width (harness render); across her or down her length the flattening never moves skin outward
+    float spo[3] = { 0, 0, 0 }, spd[3] = { 0, 0, 0 };
+    int hasspine = 0;
+    if (!DIAG_PARKED && mode == MODE_SIDE && limbs_comp == comp && nride >= 2) {
+        const float *ta = pose_of(&c, ride_bones[0]), *tb = pose_of(&c, ride_bones[nride - 1]);
+        float l = 0;
+        if (ta && tb) for (int k = 0; k < 3; k++) { spo[k] = tb[4 + k]; spd[k] = ta[4 + k] - tb[4 + k]; l += spd[k] * spd[k]; }
+        l = __builtin_sqrtf(l);
+        if (l > 1e-4f) { for (int k = 0; k < 3; k++) spd[k] /= l; hasspine = 1; }
+    }
     for (int s = 0; s < c.nsec; s++) {
         u64 sec = secs + (u64)s * 0xe8;
         int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
@@ -1891,6 +1926,12 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     if (hmode && headsub[mb]) wh += w;
                 }
                 vkind[v] = wg > 127 ? 2 : wk > 127 ? 0 : wd > 127 || h <= -sheet_far / tm[8] ? 3 : h <= 0 ? 1 : 0;
+                if (vkind[v] == 1 && hasspine) {
+                    float e0[3], e1[3], a0 = 0, a1 = 0, r0 = 0, r1 = 0;
+                    for (int k = 0; k < 3; k++) { e0[k] = x[k] - spo[k]; e1[k] = e0[k] - h * n[k]; a0 += e0[k] * spd[k]; a1 += e1[k] * spd[k]; }
+                    for (int k = 0; k < 3; k++) { r0 += (e0[k] - a0 * spd[k]) * (e0[k] - a0 * spd[k]); r1 += (e1[k] - a1 * spd[k]) * (e1[k] - a1 * spd[k]); }
+                    if (__builtin_sqrtf(r1) > __builtin_sqrtf(r0) + SHEET_OUT / tm[8]) { vkind[v] = 3; outward++; }
+                }
                 if (hmode && wg <= 127 && wk <= 127 && wd <= 127) {
                     float e[3] = { x[0] - p2[0], x[1] - p2[1], x[2] - p2[2] }, h2 = e[0] * n2[0] + e[1] * n2[1] + e[2] * n2[2];
                     float rad2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2] - h2 * h2;
@@ -2177,6 +2218,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     static signed char carryb[MAX_BONES];  // the band each flattening sink carries, -1 none
     // where the neck closes: on its axis, NECK_IN under the plane
     float neckc[3] = { p2[0] - n2[0] * NECK_IN / tm[8], p2[1] - n2[1] * NECK_IN / tm[8], p2[2] - n2[2] * NECK_IN / tm[8] };
+    // a half whose whole neck lies past its plane (a diagonal's copy: the plane runs under the neck): the neck closes on
+    // the plane instead, in the opening. On its axis, the neck's skin fanned from the opening up to it, a fin over the
+    // shoulder (harness render)
+    if (!DIAG_PARKED && mode == MODE_SIDE) {
+        float hn = (neckc[0] - pin[0]) * n[0] + (neckc[1] - pin[1]) * n[1] + (neckc[2] - pin[2]) * n[2];
+        if (hn * tm[8] < -NECK_PAST) for (int k = 0; k < 3; k++) neckc[k] -= hn * n[k];
+    }
     if (mode == MODE_SIDE) {
         float mc[3] = { 0, 0, 0 }, cov[3][3] = { { 0 } }, ev[3][3], ax[3] = { 0, 0, 0 }, lo_t = 1e30f, hi_t = -1e30f;
         int m = 0;
@@ -2892,6 +2940,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             quat_rot(iq, d, l);
             for (int k = 0; k < 3; k++) sinks[nsinks].at[k] = t[8 + k] != 0 ? l[k] / t[8 + k] : 0;
             npoint++;
+            // a band's point on a bone that doesn't ride that band's bone: held on it, as the sheets are. A diagonal's
+            // copy found nothing by her neck (her half's neck skin uses those helpers) and put its neck's point on a
+            // hip helper: as her spine bent the point stayed with the pelvis and stuck out through the lid (harness)
+            int bk = btype[i] - 10;
+            if (sa.rideof && bk >= 0 && bk < nride && rideof[i] != bk) { sink_anchor(&c, nsinks, ride_bones[bk]); nheldband += sinks[nsinks].anchor >= 0; }
         }
         nsinks++; nnew++;
     }
@@ -2929,6 +2982,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     o = put(o, " vanished="); o = put_int(o, vanished);
     o = put(o, " unsunk="); o = put_int(o, unsunk);
     if (unbanded) { o = put(o, " unbanded="); o = put_int(o, unbanded); }
+    if (outward) { o = put(o, " outward="); o = put_int(o, outward); }
     if (widened) { o = put(o, " widened="); o = put_int(o, widened); }
     o = put(o, " reweighted="); o = put_int(o, moved);
     o = put(o, " stuck="); o = put_int(o, stuck);

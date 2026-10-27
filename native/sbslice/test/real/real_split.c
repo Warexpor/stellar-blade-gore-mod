@@ -1,4 +1,5 @@
 // Real-mesh harness: runs the vertical split (both halves, as gore.lua does) on a packed outfit mesh (pack.py) and
+#include <math.h>
 // checks what each half shows once the shared mesh asset's sinks are collapsed. Both halves are components of the
 // same mesh asset, so a sink one half collapses moves every vertex the other half still weights to it.
 //   real_split <mesh.bin> [obj prefix]   writes <prefix>_a.obj / _b.obj (posed halves) when given
@@ -261,6 +262,7 @@ static int fold_head(skin_info *o, int head)
 // a vertex the vanilla skin ties to a limb this half lets go (hip skin on the other half's thigh twist): it has to
 // stay with the body, so it may shift; not counted
 static unsigned char *gone_sub[2], *keep_sub[2];
+#define POP_DIAG_CM 6.0f // a diagonal's: the wedge's tip on her far hip (pelvis weight) rides her chest once the spine breaks, 5.9 cm at most in the posed run's 30 degree bend
 #define POP_CM 4.0f // see the kept skin check: how far skin on the free side of a broken spine may shift at the cut
 // a flag from the environment: set and not empty (test/run.sh passes ACROSS= for "no")
 // the longest run of empty directions in a 16-direction mask, round the circle
@@ -2492,6 +2494,7 @@ int main(int argc, char **argv)
     for (int k = 0; k < 3; k++) n[k] -= axis[k] * d;
     float ln = __builtin_sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
     for (int k = 0; k < 3; k++) n[k] /= ln;
+    float rgt[3] = { n[0], n[1], n[2] }; // her right
     // FLIP=1: the plane's other way round, the head's side swapped (a right arm cut, then her half keeping her left)
     if (env_on("FLIP")) for (int k = 0; k < 3; k++) n[k] = -n[k];
     // ACROSS=1: the blade level through Spine1 (a cut across the waist; the half with the head keeps the front)
@@ -2517,6 +2520,25 @@ int main(int argc, char **argv)
         for (int k = 0; k < 3; k++) { if (sg < 0) m[k] = -m[k]; hs += (hp[k] - pp[k]) * m[k]; }
         for (int k = 0; k < 3; k++) { n[k] = hs < 0 ? -m[k] : m[k]; atb[k] = pp[k]; }
         at = atb;
+    }
+    // DIAG=R|L: the diagonal cut, as gore.lua's diag_plane: from DIAGLIFT cm (6) over that shoulder's joint down across
+    // her to DIAGHIP cm (8) over the other hip's joint and DIAGOUT cm (7) out past it, the plane holding her
+    // front-to-back axis: the head and the other arm on A's side, that arm and both legs on B's
+    float atd[3];
+    if (getenv("DIAG")) {
+        int right = getenv("DIAG")[0] == 'R';
+        float lift = getenv("DIAGLIFT") ? (float)atof(getenv("DIAGLIFT")) : 6, hip = getenv("DIAGHIP") ? (float)atof(getenv("DIAGHIP")) : 8;
+        float out = getenv("DIAGOUT") ? (float)atof(getenv("DIAGOUT")) : 7, sg = right ? 1.f : -1.f, in = getenv("DIAGIN") ? (float)atof(getenv("DIAGIN")) : 0;
+        float *sp = space + bone(right ? "Bip001-R-UpperArm" : "Bip001-L-UpperArm") * 12 + 4;
+        float *hq = space + bone(right ? "Bip001-L-Thigh" : "Bip001-R-Thigh") * 12 + 4, bot[3], dd[3], f[3], m[3];
+        for (int k = 0; k < 3; k++) { atd[k] = sp[k] + axis[k] * lift - rgt[k] * sg * in; bot[k] = hq[k] + axis[k] * hip - rgt[k] * sg * out; dd[k] = bot[k] - atd[k]; }
+        f[0] = axis[1] * rgt[2] - axis[2] * rgt[1]; f[1] = axis[2] * rgt[0] - axis[0] * rgt[2]; f[2] = axis[0] * rgt[1] - axis[1] * rgt[0];
+        m[0] = dd[1] * f[2] - dd[2] * f[1]; m[1] = dd[2] * f[0] - dd[0] * f[2]; m[2] = dd[0] * f[1] - dd[1] * f[0];
+        float lm = __builtin_sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]), up = 0, dl = __builtin_sqrtf(dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]), ca = 0;
+        for (int k = 0; k < 3; k++) { m[k] /= lm; up += m[k] * axis[k]; ca -= dd[k] / dl * axis[k]; }
+        for (int k = 0; k < 3; k++) n[k] = up < 0 ? -m[k] : m[k];
+        at = atd;
+        printf("diagonal from over the %s shoulder, %.0f deg off her spine\n", right ? "right" : "left", acosf(ca) * 57.29578f);
     }
     float neg[3] = { -n[0], -n[1], -n[2] };
     const char *roots[4] = { "Bip001-L-UpperArm", "Bip001-R-UpperArm", "Bip001-L-Thigh", "Bip001-R-Thigh" };
@@ -2548,16 +2570,26 @@ int main(int argc, char **argv)
                 if (above) brk = bone(chain[i]);
             }
     }
-    // the copy's break, as gore.lua's copy_break: one bone up when its own legs hang off it (Biped thighs: off Spine)
+    // her break, as gore.lua's her_break: only when every limb she keeps hangs off it. The copy's, as its copy_break:
+    // up the chain while any limb the copy keeps hangs off it (Biped thighs: off Spine; on a diagonal, its arm: off the
+    // neck, so it breaks at the head)
+    for (int r = 0; r < ng2 && brk >= 0; r++) {
+        int on = 0;
+        for (int j = bparent[gone2[r]]; j >= 0 && !on; j = bparent[j]) on = j == brk;
+        if (!on) brk = -1;
+    }
     int brk2 = brk;
     if (brk >= 0) {
         static const char *chain[] = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck", "Bip001-Head" };
-        for (int r = 0; r < ng1 && brk2 == brk; r++)
-            for (int j = gone1[r]; j >= 0; j = bparent[j])
-                if (j == brk && j != gone1[r]) {
-                    for (int i = 0; i < 5; i++) if (bone(chain[i]) == brk) brk2 = bone(chain[i + 1]);
-                    break;
-                }
+        int si = 0;
+        while (si < 6 && bone(chain[si]) != brk) si++;
+        brk2 = -1;
+        for (; si < 6 && brk2 < 0; si++) {
+            int free_ = 1, cb = bone(chain[si]);
+            for (int r = 0; r < ng1 && free_; r++)
+                for (int j = bparent[gone1[r]]; j >= 0; j = bparent[j]) if (j == cb) { free_ = 0; break; }
+            if (free_) brk2 = cb;
+        }
     }
     printf("spine breaks at %s, the copy's at %s\n", brk >= 0 ? bname[brk] : "none", brk2 >= 0 ? bname[brk2] : "none");
 
@@ -2589,6 +2621,18 @@ int main(int argc, char **argv)
             chain[j] = sum >= 0 ? 1 : 2; // fixed below
         }
         if (k < 2) { for (int j = 0; j < NB; j++) { int in = 0; for (int t = j; t >= 0 && !in; t = bparent[t]) in = t == i; if (in) chain[j] = 0; } continue; }
+        // on a driver of a limb's side (a shoulder's gear under Dm-R-Trape): with the half that keeps that limb, which
+        // the driver follows, whichever side of the plane it lies (a diagonal over that shoulder)
+        if (side_driver(i, gone_sides(gone1, ng1))) sum = -1;
+        else if (side_driver(i, gone_sides(gone2, ng2))) sum = 1;
+        // round the neck (a collar, its top within 12 cm of the neck's joint) with the neck well off the plane (a diagonal
+        // under it): with the neck (gore.lua's split_chains). By its bodies, the copy kept a collar standing past its plane
+        else {
+            float *nk = space + bone("Bip001-Neck") * 12 + 4, *tp = space + i * 12 + 4;
+            float hn = (nk[0] - at[0]) * n[0] + (nk[1] - at[1]) * n[1] + (nk[2] - at[2]) * n[2];
+            float dn = (tp[0] - nk[0]) * (tp[0] - nk[0]) + (tp[1] - nk[1]) * (tp[1] - nk[1]) + (tp[2] - nk[2]) * (tp[2] - nk[2]);
+            if ((hn > 6 || hn < -6) && dn < 144) sum = hn;
+        }
         for (int j = 0; j < NB; j++) { int in = 0; for (int t = j; t >= 0 && !in; t = bparent[t]) in = t == i; if (in) chain[j] = sum >= 0 ? 1 : 2; }
         if (sum >= 0 && nchf < 32) chf[nchf++] = i; else if (sum < 0 && nchb < 32) chb[nchb++] = i;
     }
@@ -2825,9 +2869,9 @@ int main(int argc, char **argv)
                heads && strstr(h ? res_b : res_a, " np=") ? " (neck lid)" : "");
         // her waist is about 270 cm2 across, the torso 1100 lengthwise; leaned past the neck, it leaves through a
         // shoulder (bent, CH_P_EVE_09's measured 487 and 557)
-        FAILIF(m < 12 || cross > 0 || -area < (env_on("ACROSS") ? 200 : getenv("BESIDE") ? 400 : 800), "rim outline");
+        FAILIF(m < 12 || cross > 0 || -area < (env_on("ACROSS") ? 200 : getenv("BESIDE") || getenv("DIAG") ? 400 : 800), "rim outline");
         // a plane up the spine reaches the neck: both halves get its lid (one leaned past the neck reaches none)
-        if (heads && !env_on("ACROSS") && !getenv("BESIDE")) FAILIF(!strstr(h ? res_b : res_a, " np="), "no neck lid");
+        if (heads && !env_on("ACROSS") && !getenv("BESIDE") && !getenv("DIAG")) FAILIF(!strstr(h ? res_b : res_a, " np="), "no neck lid");
         if (getenv("OUTLINE_OBJ")) {
             char fn[512]; snprintf(fn, sizeof fn, "%s_%c.txt", getenv("OUTLINE_OBJ"), h ? 'b' : 'a');
             FILE *f = fopen(fn, "w"); fprintf(f, "%s\n", h ? res_b : res_a); fclose(f);
@@ -2877,7 +2921,7 @@ int main(int argc, char **argv)
         // the other side of a broken spine (free in game): kept skin on it moves to a kept bone, which isn't posed as
         // it was, so that skin may shift a little at the cut (POP_CM), never stretch after the free bones
         unsigned char *fr = calloc(NB, 1);
-        int fb = h ? brk2 : brk, popped = 0;
+        int fb = h ? brk2 : brk, popped = 0, popv = -1;
         float pop = 0;
         if (fb >= 0) {
             unsigned char *sp = calloc(NB, 1);
@@ -2914,7 +2958,7 @@ int main(int argc, char **argv)
                 kept++;
                 int onfree = 0;
                 { skin_info vo; orig_info(v, &vo); for (int i = 0; i < 8; i++) if (vo.weights[i] && fr[vo.bones[i]]) onfree = 1; }
-                if (onfree && mv > 0.5f) { popped++; if (mv > pop) pop = mv; }
+                if (onfree && mv > 0.5f) { popped++; if (mv > pop) { pop = mv; popv = v; } }
                 else if (mv > 0.5f) { kept_moved++; if (mv > worst) { worst = mv; worst_v = v; } }
             } else {
                 gone++;
@@ -2943,9 +2987,13 @@ int main(int argc, char **argv)
         if (heads) printf(", head kept %d of %d", head_kept, head_all);
         printf("\n");
         // the other half's skin left standing on this one (no sink found for it); A keeps all of the head, B none
-        if (fb >= 0) printf("half %c: %d kept vertices on the free side of the spine shifted at the cut, %.1f cm at most\n", h ? 'B' : 'A', popped, pop);
+        if (fb >= 0) {
+            printf("half %c: %d kept vertices on the free side of the spine shifted at the cut, %.1f cm at most", h ? 'B' : 'A', popped, pop);
+            if (popv >= 0) { skin_info vo; orig_info(popv, &vo); printf(" (v%d at %.0f %.0f %.0f, was", popv, pos[popv * 3], pos[popv * 3 + 1], pos[popv * 3 + 2]); for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]); printf(")"); }
+            printf("\n");
+        }
         free(fr);
-        FAILIF(kept_moved > kept / 200, "kept skin moved"); FAILIF(behind_kept > kept / 200, "kept skin behind"); FAILIF(pop > POP_CM, "spine pop");
+        FAILIF(kept_moved > kept / 200, "kept skin moved"); FAILIF(behind_kept > kept / 200, "kept skin behind"); FAILIF(pop > (getenv("DIAG") ? POP_DIAG_CM : POP_CM), "spine pop");
         if (heads) FAILIF(h == 0 ? head_kept < head_all : head_kept > head_all / 200, "head kept");
     }
     // posed: she keeps falling after the cut (the spine and head turn further): kept skin must still match the
@@ -3109,6 +3157,14 @@ int main(int argc, char **argv)
                 // ahead of the lid: towards the gone side (-n) past the lid's push
                 float ahead = -((x1[0] - lp[0]) * nw[0] + (x1[1] - lp[1]) * nw[1] + (x1[2] - lp[2]) * nw[2]) - (SHEET_IN + 0.2f);
                 if (ahead > 0.5f) { poke++; if (ahead > pworst) { pworst = ahead; pv = v; } }
+                // SHEETDBG=<n>: the first n poking out, where they were and their weights before
+                if (ahead > 0.5f && getenv("SHEETDBG") && poke <= atoi(getenv("SHEETDBG"))) {
+                    skin_info vo; orig_info(v, &vo);
+                    printf("  out %.1f cm: v%d at (%.0f %.0f %.0f), on", ahead, v, pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
+                    for (int i = 0; i < MAX_INF; i++) if (o[v].weights[i]) printf(" %s=%d", bname[o[v].bones[i]], o[v].weights[i]);
+                    printf(" | was"); for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]);
+                    printf(" | lid seg %s-%s\n", bname[chain[ja]], bname[chain[jb]]);
+                }
                 p1 += ahead > 1; p2 += ahead > 2; p3 += ahead > 3;
             }
             printf("half %c bent: %d of %d sheet verts out through the lid (%d / %d / %d over 1 / 2 / 3 cm, worst %.1f cm", h ? 'B' : 'A', poke, sheet, p1, p2, p3, pworst);
@@ -3177,6 +3233,13 @@ int main(int argc, char **argv)
         char fn[512];
         snprintf(fn, sizeof fn, "%s_a.obj", argv[2]); write_obj(fn, ov_a);
         snprintf(fn, sizeof fn, "%s_b.obj", argv[2]); write_obj(fn, ov_b);
+        // and which vertices each half let go (1 a line), for a look at what shows (regrow/render.py's kind)
+        for (int h = 0; h < 2; h++) {
+            snprintf(fn, sizeof fn, "%s_%c.gone", argv[2], h ? 'b' : 'a');
+            FILE *g = fopen(fn, "w");
+            for (int v = 0; v < NV; v++) fputc(vanished_in(h ? &ov_b[v] : &ov_a[v], h ? (u64)comp_b : (u64)comp_a) ? '1' : '0', g);
+            fclose(g);
+        }
     }
     // "R": the split failed after all (gore.lua's undo): her weights back as they were after the arm cut, her split
     // sinks dropped (collapsed ones' matrices back), the copy no co-owner of the arm's sinks. The copy's own sinks
