@@ -22,6 +22,8 @@ s.deathMoves = true
 s.gore = s.gore or {}
 s.gore.lowArm = s.gore.lowArm or {}
 s.gore.lowArm.enabled = true
+-- (a stage a frame, as the seeds were picked: chained stages roll the dice in another order)
+s.gore.stageBudgetMs = 0
 s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
 s.struggle = s.struggle or {}
 s.struggle.weights = { clutch = 0, reach = 0, turn = 0, crawl = 3, rise = 0, prop = 0, push = 3, curl = 0, lie = 0 }

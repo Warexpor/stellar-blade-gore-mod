@@ -121,6 +121,8 @@ for line in res.stdout.splitlines():
                           "sec": [float(x) for x in f[10:13]], "motions": f[13], "nocoll": f[14] == "true"}
     elif f[0] == "L":
         cur["L"].append((f[1], f[2]))
+    elif f[0] == "N":
+        cur["N"] = (int(f[1]), " ".join(f[2:]))
 
 
 def close(a, b, tol):
@@ -166,6 +168,8 @@ for name, w in want.items():
                 errs.append(f"{b} joint {m}, build {j}")
         if g["L"]:
             errs.append(f"still loose: {g['L']}")
+        if g.get("N", (1, "none"))[0]:
+            errs.append(f"neutral pose off ({g.get('N', (1, 'none'))[1]})")
     print(f"{'ok ' if not errs else 'BAD'} {name}" + ("" if not errs else ": " + "; ".join(errs[:4]) + (f" (+{len(errs) - 4})" if len(errs) > 4 else "")))
     bad += bool(errs)
 print(f"physics parity: {len(want) - bad} of {len(want)} assets as the build makes them")

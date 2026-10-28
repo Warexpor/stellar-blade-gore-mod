@@ -1,6 +1,7 @@
 -- Sandbox Bosses (bosses.lua): a boss's CharacterTable row made mortal while one spawned here is up, and put back
 -- exactly as the game had it once none is; the boss bar held at its floor and hit again takes it down; its death gets
--- a face and a struggle of its own (a fresh struggle.lua) that ticks without error; off, nothing is changed
+-- a face and a struggle of its own (a fresh struggle.lua) that ticks without error; one held invincible (blows landing on
+-- nothing) taken down; off, nothing is changed
 local F = require("fake")
 local print = F.say
 local fails = 0
@@ -45,8 +46,17 @@ end
 local dt = F.obj("CharacterTable", "DataTable", { RowStruct = rs })
 F.objects["/Game/Local/Data/CharacterTable.CharacterTable"] = dt
 local cmds = {}
+local hpOf = {} -- actor address -> { hp, mhp, sh, msh } read by vb (none: "none")
 local function command(s)
   cmds[#cmds + 1] = s
+  if s:sub(1, 2) == "vb" then
+    local a = tonumber(s:match("^vb(%x+)"), 16)
+    local h = hpOf[a]
+    if not h then return "none" end
+    local r = string.format("ok %s%.2f %.2f %.2f %.2f", h.told and "" or "found ", h[1], h[2], h[3], h[4])
+    h.told = true
+    return r
+  end
   local c = s:sub(1, 1)
   local f = {}
   for x in s:sub(2):gmatch("[^,]+") do f[#f + 1] = tonumber(x, 16) end
@@ -112,9 +122,44 @@ pawn.K2_GetActorLocation = function() return { X = 0, Y = 0, Z = 0 } end
 local bar = { Percent = 0.4 }
 local hud = F.obj("WB_MainHUD_EnemyInfo_C_0", "WB_MainHUD_EnemyInfo_C", { ProgressBar_HP = bar })
 hud.IsVisible = function() return true end
-F.classes["WB_MainHUD_EnemyInfo_C"] = { hud }
+-- (its class's default object found first: never the one read)
+local cdo = F.obj("Default__WB_MainHUD_EnemyInfo_C", "WB_MainHUD_EnemyInfo_C", { ProgressBar_HP = { Percent = 1 } })
+cdo.IsVisible = function() return false end
+F.classes["WB_MainHUD_EnemyInfo_C"] = { cdo, hud }
 F.t = F.t + 1; B.tick(pawn)
 check(#kills == 0, "its bar at 0.40: up")
+-- Passive Bosses: its own tree (on the pawn, as the game has it: the controller's BrainComponent is none) stopped
+-- and its controller lets go of it while on (again if the game starts the tree or possesses it again); off, taken
+-- back and its tree started over
+local brain = { running = true, stops = 0, restarts = 0 }
+brain.IsRunning = function() return brain.running end
+brain.StopLogic = function() brain.running, brain.stops = false, brain.stops + 1 end
+brain.RestartLogic = function() brain.running, brain.restarts = true, brain.restarts + 1 end
+local ai = F.obj("BossAI", "SBAIController", { StopMovement = function() end, lets = 0, takes = 0 })
+ai.UnPossess = function() ai.lets = ai.lets + 1; boss.Controller = nil end
+ai.Possess = function(_, p) ai.takes = ai.takes + 1; p.Controller = ai end
+local montage = 0
+mesh.GetAnimInstance = function() return { Montage_Stop = function() montage = montage + 1 end } end
+boss.Controller = ai
+boss.BrainComponent = F.obj("BossBrain", "SBBehaviorTreeComponent", brain)
+brain = boss.BrainComponent
+tune.bosses.passive = true
+F.t = F.t + 0.3; B.tick(pawn)
+check(brain.stops == 1 and ai.lets == 1 and boss.Controller == nil and montage == 1
+  and has("stands still %(Passive Bosses%): its tree SBBehaviorTreeComponent stopped, its SBAIController let go"),
+  "passive: its own tree stopped, its controller let go of it, its attack cut short")
+boss.Controller = ai
+F.t = F.t + 0.3; B.tick(pawn)
+check(ai.lets == 2 and boss.Controller == nil and has("possessed again, let go again"), "passive: let go again when the game possesses it")
+brain.running = true
+F.t = F.t + 0.3; B.tick(pawn)
+check(brain.stops == 2 and not brain.running and montage == 3 and has("its tree started again, stopped again"), "passive: its tree stopped again when the game starts it")
+F.t = F.t + 0.3; B.tick(pawn)
+check(ai.lets == 2 and montage == 3, "passive: left alone while stopped and let go")
+tune.bosses.passive = false
+F.t = F.t + 0.3; B.tick(pawn)
+check(ai.takes == 1 and boss.Controller == ai and brain.restarts == 1 and brain.running and has("fights again %(possessed, its tree started over%)"),
+  "passive off: taken back, its tree started over")
 bar.Percent = 0.03
 F.t = F.t + 0.1; B.tick(pawn)
 check(#kills == 0 and has("the next hit takes it down"), "its bar at 0.03: waiting for the next hit")
@@ -142,6 +187,72 @@ for i = 1, 4 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
 check(#kills == k0 + 1, "taken down once")
 B._live()[0x5ca1] = nil
 
+-- one far off (40 m) with the bar at 0: another enemy's bar, never taken for its
+local e4 = { obj = F.obj("CH_M_NA_21_Blueprint_C_4", "CH_M_NA_21_Blueprint_C", { Mesh = F.obj("BossMesh4", "SkeletalMeshComponent") }), kind = kinds.tachy }
+e4.mesh = e4.obj.Mesh
+e4.obj.K2_GetActorLocation = function() return { X = 4000, Y = 0, Z = 0 } end
+B.adopted(0xfa4, e4, true)
+bar.Percent = 0
+k0 = #kills
+for i = 1, 10 do F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0, "40 m off, the bar at 0: not taken down")
+B._live()[0xfa4] = nil
+
+-- held invincible (a phase change waiting on its stopped tree: Tachy and Scarlet took no more damage partway down,
+-- playtest): her blade through it (enemies.struck), no hit reaction, its bar unmoved. Passive: stuckHits such blows
+-- over stuckS s take it down; blows it reacts to never do; one that fights needs twice that
+local strikes = {}
+ctx.enemies.struck = function(_, x, since) local t = strikes[x]; if t and t > (since or -1) then return t end end
+local function boss_at(a, name)
+  local x = { obj = F.obj(name, "CH_M_NA_21_Blueprint_C", { Mesh = F.obj(name .. "Mesh", "SkeletalMeshComponent") }), kind = kinds.tachy }
+  x.mesh = x.obj.Mesh
+  x.obj.K2_GetActorLocation = function() return { X = 300, Y = 0, Z = 0 } end
+  x.obj.BrainComponent = F.obj(name .. "Brain", "SBBehaviorTreeComponent",
+    { IsRunning = function() return false end, StopLogic = function() end, RestartLogic = function() end })
+  B.adopted(a, x, true)
+  return x
+end
+local function blows(x, n, react)
+  for _ = 1, n do
+    strikes[x] = F.t
+    if react then x.hit = { t = F.t + 0.05 }; bar.Percent = bar.Percent - 0.01 end
+    F.t = F.t + 0.5; B.tick(pawn)
+  end
+end
+bar.Percent = 0.6
+local e5 = boss_at(0x1a5, "CH_M_NA_21_Blueprint_C_5")
+tune.bosses.passive = true
+k0 = #kills
+blows(e5, 10, true)
+check(#kills == k0 and B._live()[0x1a5].passive, "passive, struck 10 times, each taken: up")
+blows(e5, 6, false)
+check(#kills == k0 and has("struck, no hit taken %(its bar 0.500%)"), "passive, 6 blows taken by nothing over 2.5 s: not yet")
+blows(e5, 4, false)
+check(#kills == k0 + 1 and kills[#kills]:find("no hit taken"), "passive, held invincible through blows over 4 s: taken down (" .. tostring(kills[#kills]) .. ")")
+B._live()[0x1a5] = nil
+tune.bosses.passive = false
+local e6 = boss_at(0x1a6, "CH_M_NA_21_Blueprint_C_6")
+k0 = #kills
+blows(e6, 12, false)
+check(#kills == k0, "fighting, 12 blows over 5.5 s taken by nothing (guarded): up")
+blows(e6, 6, false)
+check(#kills == k0 + 1, "fighting, blows taken by nothing over 8 s: taken down")
+B._live()[0x1a6] = nil
+-- its HP read in memory (vb): blows that take HP or shield are taken, though it shows no hit reaction (Tachy reacted
+-- to blows that took nothing, and the other way round); blows that take nothing take it down, though it reacts
+tune.bosses.passive = true
+local e7 = boss_at(0x1a7, "CH_M_NA_21_Blueprint_C_7")
+hpOf[0x1a7] = { 5000, 5456, 0, 166 }
+k0 = #kills
+for _ = 1, 10 do strikes[e7] = F.t; hpOf[0x1a7][1] = hpOf[0x1a7][1] - 100; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0 and has("B_Tachy 1a7: its HP found in memory %(by its maximum%): 4900.00 5456.00"), "HP read: blows that take HP, no hit reaction: up")
+for _ = 1, 10 do strikes[e7] = F.t; e7.hit = { t = F.t + 0.05 }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0 + 1 and kills[#kills]:find("no hit taken") and has("struck, no hit taken %(its HP 4000/5456"),
+  "HP read: blows it reacts to, its HP unmoved: taken down (" .. tostring(kills[#kills]) .. ")")
+B._live()[0x1a7] = nil
+tune.bosses.passive = false
+ctx.enemies.struck = nil
+
 -- its death: face and struggle
 B.died(pawn, 0xb055, e)
 check(B._dead()[0xb055] ~= nil and B._dead()[0xb055].struggle ~= nil, "its death: a struggle of its own")
@@ -149,7 +260,12 @@ for _ = 1, 40 do F.t = F.t + 0.05; B.tick(pawn) end
 check(has("face started"), "its dead face started")
 check(B._dead()[0xb055] and B._dead()[0xb055].struggle ~= nil and not has("struggle: .*:%d+:"), "its struggle ticks without error")
 
--- gone: the rows put back after 15 s, exactly
+-- gone: the rows put back after 15 s, exactly; a Raven destroyed without enemies.lua telling (the spawner window's
+-- Remove) no longer counted
+local e3 = { obj = F.obj("CH_M_NA_53_Blueprint_C_1", "CH_M_NA_53_Blueprint_C", { Mesh = F.obj("BossMesh3", "SkeletalMeshComponent") }), kind = kinds.raven }
+e3.mesh = e3.obj.Mesh
+B.adopted(0x7a5e, e3, true)
+e3.obj.bActorIsBeingDestroyed = true
 B.gone(0xb055, e)
 for _ = 1, 20 do F.t = F.t + 1; B.tick(pawn) end
 local after = snapshot()

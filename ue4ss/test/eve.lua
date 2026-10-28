@@ -122,6 +122,8 @@ function E.make(F)
       K2_DestroyComponent = function(self) self.__dead = true; F.event(self.__name .. " destroyed") end,
       K2_AttachToComponent = function(self, parent, sock, l, r, sc) self.parent, self.attachRules = parent, { l, r, sc } end,
       GetNumMaterials = function() return 4 end,
+      SetDisablePostProcessBlueprint = function(self, off) self.noPost = off end,
+      SetSkeletalMesh = function(self, m) self.SkeletalMesh = m; self.postAtMesh = self.noPost == true end,
       GetBoneIndex = function(_, b) return E.INDEX[b:ToString()] or -1 end,
       CreateDynamicMaterialInstance = function(self, i)
         local p = {}

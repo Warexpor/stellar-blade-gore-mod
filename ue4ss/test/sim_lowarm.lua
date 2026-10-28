@@ -20,7 +20,19 @@ return s
 f:close()
 F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
 F.sbslice.f = "ok photo shield 1"
+-- (main.lua's context, caught from gore.lua's init: the menu's reload of the settings, case 11)
+local ctx
+local dofile0 = dofile
+dofile = function(p, ...)
+  local r = dofile0(p, ...)
+  if type(p) == "string" and p:find("gore%.lua$") and type(r) == "table" then
+    local init = r.init
+    r.init = function(c, ...) ctx = c; return init(c, ...) end
+  end
+  return r
+end
 local ok, err = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua")
+dofile = dofile0
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -258,6 +270,39 @@ if fails > 0 then dump(at, "cut") end
 F.run(10, pawn)
 E.respawn()
 F.run(8, pawn)
+
+-- 11: Lose Arm at Low HP switched in F3 mid session (the menu's close: menu.lua saved, the settings read again):
+-- (the HP bar is case 7's new one: newPct) off, a hit under the mark takes nothing; on again, it does; off with the arm off, its blocks lift at once
+local function menu(on)
+  local m = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/menu.lua", "w"))
+  m:write(string.format('return { ["gore.lowArm.enabled"] = %s }\n', tostring(on)))
+  m:close()
+  ctx.reload_tune()
+  F.run(0.5, pawn)
+end
+check(ctx ~= nil and ctx.reload_tune ~= nil, "11: the menu's reload found")
+if ctx and ctx.reload_tune then
+  E.s.hp, newPct = 1, 1
+  F.run(2, pawn)
+  menu(false)
+  at = mark()
+  newPct = 0.2
+  hit("Bip001-R-Forearm", -20, 0.2)
+  check(F.find("arm cut off", at) == nil, "11: off mid session: a hit under the mark takes no arm")
+  E.s.hp, newPct = 1, 1
+  F.run(2, pawn)
+  menu(true)
+  at = mark()
+  newPct = 0.2
+  hit("Bip001-R-Forearm", -20, 0.2)
+  check(F.find("her right arm cut off", at) ~= nil, "11: on again: the arm comes off")
+  check(F.find("no sword", at) ~= nil, "11: no sword with it off")
+  at = mark()
+  menu(false)
+  check(F.find("Lose Arm at Low HP off", at) ~= nil, "11: off with the arm off: its blocks lifted at once")
+  if fails > 0 then dump(at - 40, "low HP") end
+  os.remove("ue4ss/Mods/StellarBladeGore/Scripts/menu.lua")
+end
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")

@@ -121,6 +121,28 @@ F.run(1.5, pawn)
 check(F.find("her other meshes' collision as before it: put back on SBHair ch5 2>0", at) ~= nil, "4: her hair's response to her bodies put back")
 check(hair.resp[5] == 0 and hair.en == 3, "4: her hair ignores PhysicsBody again (" .. tostring(hair.resp[5]) .. ")")
 if fails > 0 then dump(at, "photo") end
+next_life()
+
+-- 5: the same opened by the game's own key on her ragdoll (F7's, nothing cut: P never ran): held as its pawn is
+-- made, put back as it closes (playtest: her hair and capsule came back blocking her bodies, and she bent, stretched
+-- and flew about)
+hair.en, hair.resp[5] = 3, 0
+at = mark()
+E.die(true)
+F.run(2, pawn)
+photo = true
+F.new_object(F.obj("SBPhotoModePawn_0", "SBPhotoModePawn", {}), "/Script/SB.SBPhotoModePawn")
+check(F.find("photo mode opening on her ragdoll by the game's own key: %d+ of her meshes held still", at) ~= nil,
+  "5: her ragdoll held as photo mode's pawn is made")
+F.run(1, pawn)
+hair.en = 1
+F.run(2, pawn)
+hair.en, hair.resp[5] = 3, 2
+photo = false
+F.run(1.5, pawn)
+check(F.find("her other meshes' collision as before it: put back on SBHair ch5 2>0", at) ~= nil, "5: her hair's response to her bodies put back")
+check(hair.resp[5] == 0 and hair.en == 3, "5: her hair ignores PhysicsBody again (" .. tostring(hair.resp[5]) .. ")")
+if fails > 0 then dump(at, "photo") end
 rawset(pawn, "RootComponent", nil)
 rawset(F.objects[SMC], "__path", smcPath)
 rawset(E.mesh, "__isa", meshIsa)

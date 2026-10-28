@@ -1,12 +1,73 @@
 -- physfix.lua's runtime fix on a vanilla outfit's physics asset, made up from its JSON (parity.py): the asset as
 -- UE4SS hands it over (UObjects with fields, FNames with ToString), sbslice.dll's "b" and "t" answered from the data.
 -- Prints what the fix left: B bodies, C main joints, T the table asked for, J the joints it added ("j"), L the bodies
--- still loose after it.
+-- still loose after it, N the neutral pose's drives (tune.active.neutral) that miss their pose: each target turned
+-- into a quaternion as UE's FRotator does must move the joint's far end front and out by as much as the pose asks.
 --   lua parity.lua <Scripts dir> <data.lua>...  (its physfix.lua with its tune.lua's physfix settings)
 local physfix_path, tune = arg[1] .. "/physfix.lua", dofile(arg[1] .. "/tune.lua")
 FName = function(s) return { ToString = function() return s end } end
 local function fname(s) return { ToString = function() return s end } end
 local function vec(v) return { X = v[1], Y = v[2], Z = v[3] } end
+local function cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
+local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function unit(a) local l = math.sqrt(dot(a, a)); return { a[1] / l, a[2] / l, a[3] / l } end
+local function sub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
+local function qrot(q, v)
+  local u, w = { q[1], q[2], q[3] }, q[4]
+  local c0 = cross(u, v); local m = cross(u, { c0[1] + v[1] * w, c0[2] + v[2] * w, c0[3] + v[3] * w })
+  return { v[1] + 2 * m[1], v[2] + 2 * m[2], v[3] + 2 * m[3] }
+end
+local function quat(r)
+  local p, y, ro = math.rad(r.Pitch) / 2, math.rad(r.Yaw) / 2, math.rad(r.Roll) / 2
+  local sp, cp, sy, cy, sr, cr = math.sin(p), math.cos(p), math.sin(y), math.cos(y), math.sin(ro), math.cos(ro)
+  return { cr * sp * sy - sr * cp * cy, -cr * sp * cy - sr * cp * sy, cr * cp * sy - sr * sp * cy, cr * cp * cy + sr * sp * sy }
+end
+local function v3(v) return { v.X, v.Y, v.Z } end
+local function frame(q, pri, sec) local x, y = qrot(q, pri), qrot(q, sec); return { x, y, cross(x, y) } end
+-- the neutral pose's targets on the real frames: -> how many joints miss, what each got
+local function neutral_check(d, cons, tune, nw)
+  local bad, total = 0, 0
+  local n, ranges = tune.active.neutral, tune.physfix.ranges
+  local B = d.bones
+  local fwd = unit({ B["Bip001-L-Toe0"].t[1] - B["Bip001-L-Foot"].t[1], B["Bip001-L-Toe0"].t[2] - B["Bip001-L-Foot"].t[2], 0 })
+  local up = { 0, 0, 1 }
+  local lat0 = cross(fwd, up)
+  local line = {}
+  for _, c in ipairs(cons) do
+    local di = c.DefaultInstance
+    local child = di.ConstraintBone1:ToString()
+    local p = n.pose[child]
+    local ad = di.ProfileInstance.AngularDrive
+    if p and ad and ad.OrientationTarget.Roll then
+      total = total + 1
+      local bc, ba, be = B[child], B[di.ConstraintBone2:ToString()], B[ranges[child].e]
+      local f1 = frame(bc.q, v3(di.PriAxis1), v3(di.SecAxis1))
+      local f2 = frame(ba.q, v3(di.PriAxis2), v3(di.SecAxis2))
+      local dir = unit(sub(be.t, bc.t))
+      local loc = { dot(dir, f1[1]), dot(dir, f1[2]), dot(dir, f1[3]) }
+      local inF2 = qrot(quat(ad.OrientationTarget), loc)
+      local w = { 0, 0, 0 }
+      for i = 1, 3 do for k = 1, 3 do w[k] = w[k] + inF2[i] * f2[i][k] end end
+      local lat = lat0
+      if dot(sub(bc.t, B["Bip001-Pelvis"].t), lat) < 0 then lat = { -lat[1], -lat[2], -lat[3] } end
+      local function ang(a, b, ax)
+        local function u2(x, y) local l = math.sqrt(x * x + y * y); return { x / l, y / l } end
+        local pa, pb = u2(dot(a, ax), dot(a, up)), u2(dot(b, ax), dot(b, up))
+        local x = math.deg(math.acos(math.max(-1, math.min(1, pa[1] * pb[1] + pa[2] * pb[2]))))
+        return (dot(b, ax) >= dot(a, ax)) and x or -x
+      end
+      local fr, ou = ang(dir, w, fwd), ang(dir, w, lat)
+      local tot = math.deg(math.acos(math.max(-1, math.min(1, dot(dir, w)))))
+      local want = math.sqrt((p.front or 0) ^ 2 + (p.out or 0) ^ 2)
+      -- (front's sign must be right; out's when only out is asked; the whole turn as asked)
+      local ok = math.abs(tot - want) < 3 and (p.front or 0) * fr >= 0 and ((p.front or 0) ~= 0 or math.abs(ou - p.out) < 3)
+      if not ok then bad = bad + 1 end
+      line[#line + 1] = string.format("%s%s f%+.0f/%+d o%+.0f/%+d t%.0f", ok and "" or "!!", child:gsub("Bip001%-", ""), fr, p.front or 0, ou, p.out or 0, tot)
+    end
+  end
+  if total == 0 then return 1, "no drives: " .. nw end
+  return bad, table.concat(line, " ")
+end
 
 for i = 2, #arg do
   local d = dofile(arg[i])
@@ -52,7 +113,8 @@ for i = 2, #arg do
   for _, c in ipairs(d.cons) do
     cons[#cons + 1] = { DefaultInstance = { ConstraintBone1 = fname(c.child), ConstraintBone2 = fname(c.parent),
       PriAxis1 = vec(c.pri1), SecAxis1 = vec(c.sec1), PriAxis2 = vec(c.pri2), SecAxis2 = vec(c.sec2),
-      ProfileInstance = { ConeLimit = c.cone, TwistLimit = c.twist } } }
+      ProfileInstance = { ConeLimit = c.cone, TwistLimit = c.twist,
+        AngularDrive = { OrientationTarget = {}, SwingDrive = {}, TwistDrive = {} } } } }
     cons[#cons].addr = 0x10000 + #cons * 0x100
     cons[#cons].GetAddress = function(self) return self.addr end
   end
@@ -98,5 +160,7 @@ for i = 2, #arg do
       p.LinearLimit.ZMotion, p.ConeLimit.Swing1Motion, p.ConeLimit.Swing2Motion, p.TwistLimit.TwistMotion, tostring(p.bDisableCollision)))
   end
   for _, l in ipairs(M.loose_bodies(pa, mesh)) do print("L " .. l[1] .. " " .. l[2]) end
+  local nbad, nsay = neutral_check(d, cons, tune, M.neutral_drives(pa, mesh, sk))
+  print("N " .. nbad .. " " .. nsay)
   print("E")
 end

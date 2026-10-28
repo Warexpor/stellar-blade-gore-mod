@@ -5,7 +5,7 @@
 #     (CH_M_NA_961, her head in it: a lengthwise split's half keeping the head has no neck lid to send, and a beheading
 #     cuts it with the body), Tachy's and Raven's faces as Eve's is cut (HEAD=1 FACESINK=1; Raven's CH_M_NA_53_Facial
 #     goes on Eve's face component), Raven's hair (CH_M_NA_53_Hair, at Eve's head) cut at the neck; Raven's suit is CH_P_EVE_11, in the sweep already, and Eve's base body (CH_P_EVE_01_Body)
-#     runs with them as the reference. Compared with results-playas.txt.gz: a job that passed there and fails now is
+#     runs with them as the reference; the Sandbox Bosses' bodies, Tachy's (CH_M_NA_21_Body) and Raven's (CH_M_NA_53). Compared with results-playas.txt.gz: a job that passed there and fails now is
 #     a regression (the fails there are the sweep's leaned-cap class, as on Eve's own body)
 #   ragdoll: physfix.lua's runtime fix of Tachy's and Scarlet's physics assets held to what the build's outfits job
 #     would make of them (phys/parity.py: damping, joint ranges, the collision table, Tachy's loose thigh twists
@@ -24,22 +24,26 @@ mkdir -p "$OUT" "$RS"
 # their packages, extracted once next to the vanilla cache (a dir named vanilla, as test/real/run.sh wants)
 X=$C/work/playas/vanilla
 CT=$X/SB/Content
-if [[ ! -f $CT/DLC_2/Art/Character/Monster/CH_M_NA_961/CH_M_NA_961.uasset ]]; then
+if [[ ! -f $CT/DLC_2/Art/Character/Monster/CH_M_NA_961/CH_M_NA_961.uasset || ! -f $CT/Art/Character/Monster/CH_M_NA_21/CH_M_NA_21_Body.uasset ]]; then
   "$C/retoc/target/release/retoc" to-legacy --no-shaders --no-script-objects -f Content/Art/Character/NPC/CH_NPC_TachyNPC/ \
-    -f Content/Art/Character/Monster/CH_M_NA_53/ -f Content/DLC_2/Art/Character/Monster/CH_M_NA_961/ "$C/source" "$X" >/dev/null
+    -f Content/Art/Character/Monster/CH_M_NA_53/ -f Content/Art/Character/Monster/CH_M_NA_21/ -f Content/DLC_2/Art/Character/Monster/CH_M_NA_961/ "$C/source" "$X" >/dev/null
 fi
 TACHY=Art/Character/NPC/CH_NPC_TachyNPC/CH_NPC_TachyNPC_Body
 TFACE=Art/Character/NPC/CH_NPC_TachyNPC/CH_NPC_TachyNPC_Face_Jali2
 SCARLET=DLC_2/Art/Character/Monster/CH_M_NA_961/CH_M_NA_961
 RHAIR=Art/Character/Monster/CH_M_NA_53/CH_M_NA_53_Hair
 RFACE=Art/Character/Monster/CH_M_NA_53/CH_M_NA_53_Facial
-for p in $TACHY $TFACE $SCARLET $RHAIR $RFACE; do
+# the Sandbox Bosses' bodies (the gore mod's F3 → Sandbox: Tachy's and Raven's bosses, cut as enemies; Scarlet's boss is
+# CH_M_NA_961 above)
+TBOSS=Art/Character/Monster/CH_M_NA_21/CH_M_NA_21_Body
+RBOSS=Art/Character/Monster/CH_M_NA_53/CH_M_NA_53
+for p in $TACHY $TFACE $SCARLET $RHAIR $RFACE $TBOSS $RBOSS; do
   [[ -f $RS/$(basename $p).bin ]] || VANILLA=$X PKG=vanilla/SB/Content/$p ARM=1 "$HERE/run.sh" "$(basename $p)" >/dev/null 2>&1 || true
 done
 for p in CH_P_EVE_11/CH_P_EVE_11 CH_P_EVE_01/CH_P_EVE_01_Body; do
   [[ -f $RS/$(basename $p).bin ]] || PKG=vanilla/SB/Content/Art/Character/PC/$p ARM=1 "$HERE/run.sh" "$(basename $p)" >/dev/null 2>&1 || true
 done
-for m in CH_NPC_TachyNPC_Body CH_NPC_TachyNPC_Face_Jali2 CH_M_NA_961 CH_M_NA_53_Hair CH_M_NA_53_Facial CH_P_EVE_11 CH_P_EVE_01_Body; do
+for m in CH_NPC_TachyNPC_Body CH_NPC_TachyNPC_Face_Jali2 CH_M_NA_961 CH_M_NA_21_Body CH_M_NA_53 CH_M_NA_53_Hair CH_M_NA_53_Facial CH_P_EVE_11 CH_P_EVE_01_Body; do
   [[ -f $RS/$m.bin ]] || { echo "no mesh dump for $m"; exit 1; }
 done
 
@@ -48,6 +52,7 @@ J=$OUT/jobs.txt
 {
   PC=$CT/Art/Character MESHES=<(echo NPC/CH_NPC_TachyNPC/CH_NPC_TachyNPC_Body) bash "$HERE/sweep/jobs.sh"
   PC=$CT/DLC_2/Art/Character/Monster MESHES=<(echo CH_M_NA_961/CH_M_NA_961) bash "$HERE/sweep/jobs.sh"
+  PC=$CT/Art/Character/Monster MESHES=<(printf '%s\n' CH_M_NA_21/CH_M_NA_21_Body CH_M_NA_53/CH_M_NA_53) bash "$HERE/sweep/jobs.sh"
   MESHES=<(printf '%s\n' CH_P_EVE_11/CH_P_EVE_11 CH_P_EVE_01/CH_P_EVE_01_Body) bash "$HERE/sweep/jobs.sh"
   for at in 0.5 0.7 1.0 1.2; do echo "CH_NPC_TachyNPC_Face_Jali2|face $at|HEAD=1 FACESINK=1 HEADAT=$at"; done
   for at in 0.5 0.7 1.0 1.2; do echo "CH_M_NA_53_Facial|face $at|HEAD=1 FACESINK=1 HEADAT=$at"; done

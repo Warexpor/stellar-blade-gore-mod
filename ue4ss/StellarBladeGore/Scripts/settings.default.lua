@@ -16,6 +16,8 @@ return {
       -- diagonal = 15,        --   (parked for now) cut diagonally from over a shoulder to the other hip
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
+    followUpCuts = true,       -- one swing cuts everything it went through (both arms and her body); false: one cut
+                               -- a swing, her body when it went through it (a laser trap still cuts along its beam)
     bladeFollow = 0.75,        -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
                                -- roll the odds above (1: always the blade, mostly waist cuts and splits)
     -- diagonal = {          (parked for now)

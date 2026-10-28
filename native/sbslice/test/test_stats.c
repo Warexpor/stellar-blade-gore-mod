@@ -235,6 +235,34 @@ int main(void)
         check(!strncmp(res, "ok found=1 paths=6a8,158,30 hp=500.00", 37), "a second reading tells them apart");
     }
 
+    // a boss spawned here (bosses.lua, vb): found by the MaxHP and MaxShield its row was given, whatever its HP; a
+    // decoy of another maximum never; then read through the kept path; by their ratio when a difficulty scaled both;
+    // her paths and candidates (glass.lua's) left as they were
+    {
+        int keepn = npaths, keepc = ncand;
+        unsigned char *bo;
+        float *bs = actor(&bo, 3100, 5456, 0, 166);
+        float *bd = (float *)(bo + 0x300);
+        bd[S_HP] = 400; bd[S_MAXHP] = 400; bd[S_SHIELD] = 0; bd[S_MAXSHIELD] = 10;
+        char s6[64];
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo, 5456, 166);
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "ok found 3100.00 5456.00 0.00 166.00"), "boss: found by its row's maximum");
+        check(npaths == keepn && ncand == keepc, "boss: her paths and candidates left as they were");
+        bs[S_HP] = 2900;
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "ok 2900.00 5456.00 0.00 166.00"), "boss: read again through its path");
+        unsigned char *bo2;
+        actor(&bo2, 8000, 8184, 249, 249);
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo2, 5456, 166);
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "ok found by ratio 8000.00 8184.00 249.00 249.00"), "boss: both scaled by 1.5: found by their ratio");
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo2, 7000, 166);
+        nboss = 0;
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "none"), "boss: no maximum or ratio of its: none");
+    }
+
     printf("%s\n", fails ? "FAIL" : "PASS");
     return fails != 0;
 }

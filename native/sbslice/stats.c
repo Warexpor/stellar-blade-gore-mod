@@ -265,12 +265,41 @@ static void found(int n, u32 o0, u32 o1, u32 o2)
     for (int i = 0; i < n; i++) path_off[npaths][i] = o[i];
     npaths++;
 }
+// a boss spawned here (bosses.lua): its stats found by the MaxHP and MaxShield its row was given (any HP and shield
+// under them; 1), else by their ratio within BOSS_RATIO (a difficulty scaling both; 2), and kept per actor. The
+// search (boss_mode) leaves the paths and candidates glass.lua follows as they were
+#define MAX_BOSS 8
+#define BOSS_RATIO 0.005f
+static struct { u64 a; int n; u32 off[3]; float mhp, msh; } boss[MAX_BOSS];
+static int nboss, boss_mode, boss_best, boss_n;
+static u32 boss_off[3];
+static float boss_mhp, boss_msh;
+static int boss_match(const float *f)
+{
+    if (!shaped(f)) return 0;
+    if (fabs_(f[S_MAXHP] - boss_mhp) <= 0.51f && fabs_(f[S_MAXSHIELD] - boss_msh) <= 0.51f) return 1;
+    return boss_msh > 0 && f[S_MAXSHIELD] > 0 && f[S_MAXHP] > 1 &&
+           fabs_((f[S_MAXHP] / f[S_MAXSHIELD]) / (boss_mhp / boss_msh) - 1) <= BOSS_RATIO ? 2 : 0;
+}
+static void boss_seen(int n, u32 o0, u32 o1, u32 o2, const float *f)
+{
+    int m = boss_match(f);
+    if (!m || (boss_best && m >= boss_best)) return;
+    boss_best = m; boss_n = n; boss_off[0] = o0; boss_off[1] = o1; boss_off[2] = o2;
+}
 // stat arrays in [p, p + n): their offsets from p
 static void scan_block(u64 p, u64 n, int depth, u32 o0, u32 o1)
 {
     u64 len = readable_len(p, n);
     if (len < 4 * (S_MAXSHIELD + 1)) return;
     for (u64 o = 0; o + 4 * (S_MAXSHIELD + 1) <= len; o += 4) {
+        if (boss_mode) {
+            const float *x = (const float *)(p + o);
+            if (depth == 0) boss_seen(1, (u32)o, 0, 0, x);
+            else if (depth == 1) boss_seen(2, o0, (u32)o, 0, x);
+            else boss_seen(3, o0, o1, (u32)o, x);
+            continue;
+        }
         if (cand_mode) {
             if (!shaped((const float *)(p + o))) continue;
             if (depth == 0) cand_add(1, (u32)o, 0, 0, (const float *)(p + o));
@@ -413,6 +442,49 @@ static u64 s_parse(const u16 *t, int len, u64 *f, int max)
     return (u64)k;
 }
 
+static const float *boss_at(int i)
+{
+    cand_t c; c.n = (unsigned char)boss[i].n;
+    for (int k = 0; k < 3; k++) c.off[k] = boss[i].off[k];
+    const float *f = (const float *)cand_at(boss[i].a, &c);
+    return f && shaped(f) && f[S_MAXHP] == boss[i].mhp && f[S_MAXSHIELD] == boss[i].msh ? f : 0;
+}
+// "vb<actor>,<maxhp>,<maxshield>": "ok [found [by ratio]] HP MaxHP Shield MaxShield", or "none"
+static void boss_cmd(const u16 *txt, int len)
+{
+    u64 f[3] = { 0, 0, 0 };
+    s_parse(txt, len, f, 3);
+    char msg[160], *o = msg;
+    if (f[0] < 0x10000 || !readable(f[0], 0x100) || !f[1]) { stats_result("err bad actor"); return; }
+    int i = 0;
+    while (i < nboss && boss[i].a != f[0]) i++;
+    const float *s = i < nboss ? boss_at(i) : 0;
+    if (!s) {
+        if (i < nboss) boss[i] = boss[--nboss];
+        boss_mhp = (float)f[1]; boss_msh = (float)f[2]; boss_best = 0;
+        int keepn = npaths;
+        boss_mode = 1;
+        stats_find(f[0]);
+        boss_mode = 0;
+        npaths = keepn;
+        if (!boss_best) { stats_result("none"); return; }
+        if (nboss >= MAX_BOSS) nboss = MAX_BOSS - 1;
+        i = nboss++;
+        boss[i].a = f[0]; boss[i].n = boss_n;
+        for (int j = 0; j < 3; j++) boss[i].off[j] = boss_off[j];
+        boss[i].mhp = boss[i].msh = -1;
+        cand_t c; c.n = (unsigned char)boss_n; for (int j = 0; j < 3; j++) c.off[j] = boss_off[j];
+        s = (const float *)cand_at(f[0], &c);
+        if (!s) { nboss--; stats_result("none"); return; }
+        boss[i].mhp = s[S_MAXHP]; boss[i].msh = s[S_MAXSHIELD];
+        o = s_put(o, boss_best == 1 ? "ok found " : "ok found by ratio ");
+    } else o = s_put(o, "ok ");
+    o = s_f(o, s[S_HP]); *o++ = ' '; o = s_f(o, s[S_MAXHP]); *o++ = ' ';
+    o = s_f(o, s[S_SHIELD]); *o++ = ' '; o = s_f(o, s[S_MAXSHIELD]);
+    *o = 0;
+    stats_result(msg);
+}
+
 // a "v..." command; 1 when it was one
 int stats_cmd(const u16 *txt, int len, const float *loc, const float *dir)
 {
@@ -423,6 +495,7 @@ int stats_cmd(const u16 *txt, int len, const float *loc, const float *dir)
     char msg[512], *o = msg;
     if (c == 'z') { nfol = 0; stats_result("ok"); return 1; }
     if (c == 't') { stats_tick(); return 1; }
+    if (c == 'b') { boss_cmd(txt + 2, len - 2); return 1; }
     if (f[0] < 0x10000 && !(c == 'y' && f[0] == 0)) { stats_result("err bad actor"); return 1; }
     if (c == 's') {
         int keepn = npaths;

@@ -24,3 +24,6 @@ GetTickCount64
 AddVectoredExceptionHandler
 GetCurrentThreadId
 GetCurrentProcessId
+CreateEventW
+SetEvent
+WaitForSingleObject

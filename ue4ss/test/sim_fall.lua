@@ -26,6 +26,28 @@ end
 local function screen_hidden() local w = E.deadScreen.__w; return w.vis == 1 or w.vis == 2 end
 local function next_life() F.run(14, pawn); E.respawn(); F.run(6, pawn) end
 
+-- her outfit's post-process AnimBP: two KawaiiPhysics nodes and a ControlRig one (Raven's suit, CH_P_EVE_11): the
+-- KawaiiPhysics ones off (Alpha 0) while she is a ragdoll, back after; the ControlRig one left alone
+local kp = { Alpha = 1 }
+local kp1 = { Alpha = 0.7 }
+local cr = { Alpha = 1 }
+local function prop(n, st)
+  return { GetFName = function() return F.fname(n) end,
+    GetStruct = function() return { GetFName = function() return F.fname(st) end } end }
+end
+local animInst = F.obj("AnimInstance", "Class", { GetFName = function() return F.fname("AnimInstance") end })
+local abp = F.obj("CH_P_EVE_11_AnimBP_C", "Class", {
+  GetFName = function() return F.fname("CH_P_EVE_11_AnimBP_C") end,
+  ForEachProperty = function(_, cb)
+    cb(prop("AnimGraphNode_KawaiiPhysics", "AnimNode_KawaiiPhysics"))
+    cb(prop("AnimGraphNode_KawaiiPhysics_1", "AnimNode_KawaiiPhysics"))
+    cb(prop("AnimGraphNode_ControlRig", "AnimNode_ControlRig"))
+  end,
+  GetSuperStruct = function() return animInst end })
+local post = F.obj("CH_P_EVE_11_AnimBP_C_0", "CH_P_EVE_11_AnimBP_C", { AnimGraphNode_KawaiiPhysics = kp,
+  AnimGraphNode_KawaiiPhysics_1 = kp1, AnimGraphNode_ControlRig = cr, GetClass = function() return abp end })
+rawset(E.mesh, "GetPostProcessInstance", function() return post end)
+
 -- 1: the 16 m drop, no ragdoll from the game
 local at = mark()
 E.fall(1600, 1.8, 0, false)
@@ -41,8 +63,11 @@ check(screen_hidden(), "the death screen held hidden 3 s in")
 F.run(7.5, pawn)
 check(not screen_hidden(), "the death screen shown at 10 s")
 check(not F.find("death NOT seen", at), "no 'death NOT seen'")
+check(kp.Alpha == 0 and kp1.Alpha == 0 and cr.Alpha == 1 and F.find("KawaiiPhysics off %(2 of 2 nodes%)", at) ~= nil,
+  "her outfit's KawaiiPhysics off on her ragdoll, its ControlRig on")
 if fails > 0 then dump(at, "death") end
 next_life()
+check(kp.Alpha == 1 and kp1.Alpha == 0.7 and F.find("KawaiiPhysics back on", at) ~= nil, "back on as it was once she is up")
 
 -- 2: the same drop, the show's ragdoll key working
 at = mark()

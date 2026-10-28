@@ -1702,7 +1702,17 @@ int main(int argc, char **argv)
                     float hd = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
                     int wa = 0;
                     for (int i = 0; i < 8; i++) if (vo.weights[i] && armb[vo.bones[i]]) wa += vo.weights[i];
-                    if (onarm && hd < -1) behind_gone++;
+                    if (onarm && hd < -1) {
+                        behind_gone++;
+                        // (DBGARM=2: which of the arm's bones carry what goes from behind the plane)
+                        if (env_on("DBGARM") && getenv("DBGARM")[0] == '2' && behind_gone <= 400 && behind_gone % 20 == 1) {
+                            printf("arm dbg: behind %.1f cm:", hd);
+                            for (int i = 0; i < MAX_INF; i++) if (ov_a[v].weights[i]) printf(" %s%s=%d", bname[ov_a[v].bones[i]], armb[ov_a[v].bones[i]] ? "*" : "", ov_a[v].weights[i]);
+                            printf(" | vanilla");
+                            for (int i = 0; i < 8; i++) if (vo.weights[i]) printf(" %s=%d", bname[vo.bones[i]], vo.weights[i]);
+                            printf("\n");
+                        }
+                    }
                     if (!onarm && hd > 1 && wa > 127) front_kept++;
                     if (!onarm && wa > 127) { near_kept++; if (hd < minb) minb = hd; if (hd > maxb) maxb = hd; }
                 }

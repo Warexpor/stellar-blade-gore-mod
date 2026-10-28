@@ -21,11 +21,12 @@
 --   * prop: the same with an arm: the elbow got under her, pushing her chest up, held shaking, collapsing.
 --   * push: no arm left: on her back her knees bend and her heels drive into the floor, shoving her along; face down
 --     her legs scrabble and she tries to turn over; on her side she first rolls onto her back.
---   * curl: curling up tight, the knees drawn to her chest, the arms in round her head.
+--   * curl: doubling over on her side, her arms hugging her belly, one knee coming partway up and the other hardly,
+--     shaking (it was a tight tuck, knees to her chest and arms round her head, held: comic, not dying).
 --   * lie: a moment lying still, only breathing.
 -- A death with no limb cut (rise.alone of them) only tries to sit up or prop up, between convulse.lua's arm swings.
 -- A waist cut: her upper body, a piece of its own from the cut bone up, fights on with its arms (clutching the wound,
--- a hand going out to it, turning over, crawling, curling up); no sitting up or pushing, which need her hips.
+-- a hand going out to it, turning over, crawling, doubling over); no sitting up or pushing, which need her hips.
 -- Nothing on a beheading, a split, or an animated death (her fall's end pose) unless animated is on.
 --
 -- How: each joint moved has a target direction for its bone (a hand's or foot's place solved into its two bones
@@ -526,17 +527,20 @@ local function leg_to(mesh, f, ls, d, k, dt, front)
   local drawn = add(hip, add(scale(f.up, -0.45 * L), scale(f.front, (front or 0.4) * L)))
   reach(mesh, ls, "leg", lerp(o, drawn, d), f.front, k, dt)
 end
--- each leg drawing up and kicking out on its own clock
+-- each leg drawing up and kicking out on its own clock: partway (kick.depth) and not held long; drawn all the way
+-- and held there 1.4-3 s, both knees ended up at her chest together, a tuck that read as comic (playtest)
 local function kick(mesh, f, legs, k, dt)
+  local c = sub_cfg("kick")
   for _, ls in ipairs(legs) do
     local l = st.legClock[ls]
     if st.t >= l.next then
       l.drawn = not l.drawn
-      l.next = st.t + (l.drawn and rnd(1.4, 3.0) or rnd(1.0, 2.0)) / st.pace
+      l.next = st.t + (l.drawn and range(c.held, { 0.7, 1.5 }) or range(c.out, { 1.0, 2.2 })) / st.pace
       l.from, l.at = l.k or 0, st.t
+      l.depth = l.drawn and range(c.depth, { 0.3, 0.65 }) or 0
       if l.drawn then st.draws = st.draws + 1 end
     end
-    l.k = (l.from or 0) + ((l.drawn and 1 or 0) - (l.from or 0)) * smooth((st.t - (l.at or 0)) / 0.9)
+    l.k = (l.from or 0) + ((l.depth or 0) - (l.from or 0)) * smooth((st.t - (l.at or 0)) / 0.9)
     leg_to(mesh, f, ls, l.k, k * 0.8, dt)
   end
 end
@@ -847,28 +851,34 @@ ACT.push = {
   end,
 }
 
--- curling up tight: knees to her chest, arms in round her head, rocking a little
+-- doubling over in pain on her side: her arms hugging her belly, one knee partway up and the other hardly, her back
+-- rounding, shaking. (Was a tight tuck, knees to her chest and arms round her head, rocking: comic, playtest)
 ACT.curl = {
   start = function(a, f)
-    a.dur = range(sub_cfg("acts").curl, { 1.5, 2.5 }) / st.pace
+    a.dur = range(sub_cfg("acts").curl, { 1.0, 1.8 }) / st.pace
     a.rockT = rnd(1.6, 2.4)
     a.way = math.random() < 0.5 and 1 or -1
+    a.knee = {}
+    local first = math.random() < 0.5
+    for i, ls in ipairs(st.plan.legs) do a.knee[ls] = ((i == 1) == first) and rnd(0.4, 0.6) or rnd(0.1, 0.25) end
+    a.shakeT = rnd(0.11, 0.16)
     -- (her back's rounding fixed in the world as she lay: a target riding her own frame ran on ahead)
     a.back = norm(add(scale(f.up, math.cos(math.rad(20))), scale(f.front, math.sin(math.rad(20)))))
-    return "curling up"
+    return "doubling over"
   end,
   tick = function(a, f, k, dt)
     local mesh = st.mesh
-    local e = smooth(a.t / 0.6)
-    local head = loc(mesh, P .. "Head")
+    local e = smooth(a.t / 0.8)
+    local belly = loc(mesh, P .. "Spine1")
+    local shake = 2 * math.sin(2 * math.pi * a.t / a.shakeT)
     for _, h in ipairs(st.plan.arms) do
-      if head then
-        local t = sum(head, scale(f.front, 14), scale(out(f, h), 8), scale(f.up, -6))
-        reach(mesh, h, "arm", t, add(scale(f.up, -1), scale(out(f, h), 0.4)), k * e, dt)
+      if belly then
+        local t = sum(belly, scale(f.front, 10 + shake), scale(out(f, h), 3), scale(f.up, 4))
+        reach(mesh, h, "arm", t, add(scale(f.up, -0.5), out(f, h)), k * e, dt)
       end
     end
-    for _, ls in ipairs(st.plan.legs) do leg_to(mesh, f, ls, 1, k * e, dt, 0.55) end
-    roll(mesh, f, a.way * (60 + 15 * math.sin(2 * math.pi * a.t / a.rockT)), k * 0.8, dt)
+    for _, ls in ipairs(st.plan.legs) do leg_to(mesh, f, ls, a.knee[ls] or 0.2, k * 0.7 * e, dt, 0.35) end
+    roll(mesh, f, a.way * (40 + 6 * math.sin(2 * math.pi * a.t / a.rockT)), k * 0.6, dt)
     -- (her back rounding a little)
     if st.plan.waist ~= P .. "Spine2" then servo(mesh, P .. "Spine2", a.back, k * 0.6 * e, dt) end
     return a.t >= a.dur
@@ -1021,6 +1031,8 @@ function M.start(pawn, mesh)
 end
 
 local function begin(mesh, plan)
+  local r = rag()
+  if r and r.neutral_off then r.neutral_off("for the struggle") end
   local tt = cfg().time or { 5, 8 }
   st.plan, st.began, st.t = plan, true, 0
   st.total = rnd(tt[1], tt[2] or tt[1]) * math.max(cfg().length or 1, 0.1)
@@ -1030,7 +1042,8 @@ local function begin(mesh, plan)
   st.now, st.nowN, st.probeN = 0, 0, 0
   local tries = sub_cfg("rise").tries or { 1, 3 }
   st.triesMax = math.random(tries[1], tries[2] or tries[1])
-  st.acts, st.pace, st.nextTry = {}, 1, rnd(1.0, 2.5)
+  -- (her first try at once: 1-2.5 s of lying there first, on top of the wait for her to land, read as a delay)
+  st.acts, st.pace, st.nextTry = {}, 1, rnd(0.1, 0.3)
   st.start = body_at(mesh)
   try(function() mesh:WakeAllRigidBodies() end)
   local f = frame(mesh)
@@ -1071,7 +1084,8 @@ local function step(mesh, dt)
   if not a then
     if st.plan.alone and st.t < st.nextTry then return end
     local name = choose(f, vitality(st.t, true))
-    if st.plan.alone and name == "lie" then st.nextTry = st.t + rnd(1.5, 3.0); return end
+    -- (never lying still for her first: picked again a moment later)
+    if st.plan.alone and name == "lie" then st.nextTry = st.t + (#st.acts == 0 and 0.2 or rnd(1.5, 3.0)); return end
     a = { name = name, t = 0 }
     local what = ACT[name].start(a, f)
     if not what then st.lastAct = name; return end -- (nothing to do it with: picked again next step)

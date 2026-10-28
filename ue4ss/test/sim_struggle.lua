@@ -22,6 +22,8 @@ s.deathMoves = true
 s.gore = s.gore or {}
 s.gore.lowArm = s.gore.lowArm or {}
 s.gore.lowArm.enabled = true
+-- (a stage a frame, as the seeds were picked: chained stages roll the dice in another order)
+s.gore.stageBudgetMs = 0
 -- (her death takes a limb, not her head or body: the struggle needs her whole; or her waist, WAIST_CUT)
 s.gore.death = { limb = %d, head = 0, torso = %d, split = 0, moreLimbs = 0 }
 return s

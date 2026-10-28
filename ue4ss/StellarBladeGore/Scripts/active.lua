@@ -350,6 +350,59 @@ local function tone_stop()
   run.pac = nil
 end
 
+-- the neutral pose (tune.active.neutral): the drives physfix.lua put in her asset pull each posed joint towards a
+-- relaxed, curled body (knees and elbows bent, arms forward: the neutral body posture of a body in free fall), so a
+-- hard push doesn't throw her limbs out straight to their limits (the tone has faded by then, and never held her
+-- shoulders, neck or head). On while she flies: off as she lands, as she settles, or after neutral.most seconds
+-- Every joint's twist and swing drives, position (stiffness) and velocity (damping, towards no turn): only the posed
+-- ones are TwistAndSwing with a stiffness (physfix.lua), the rest are the engine's default SLERP drive, which these
+-- calls don't touch (no vanilla asset sets a drive). SetNamedMotorsAngularPositionDrive's bone list failed: UE4SS
+-- didn't take a Lua table for the TArray (playtest)
+local function neutral_set(mesh, on)
+  return try(function()
+    mesh:SetAllMotorsAngularPositionDrive(on, on, false)
+    mesh:SetAllMotorsAngularVelocityDrive(on, on, false)
+    return true
+  end) == true
+end
+
+local function neutral_start(mesh, kind)
+  local n = cfg().neutral or {}
+  if n.enabled == false then return "" end
+  -- (a quiet one starts from an animated fall's end pose, on the floor already)
+  if kind == "quiet" then return "" end
+  if not (ctx.has_neutral and ctx.has_neutral(mesh)) then return ", no neutral pose (not in her physics asset)" end
+  if not neutral_set(mesh, true) then return ", neutral pose NOT on (the call failed)" end
+  run.neutral = true
+  return string.format(", neutral pose on (%.0f, up to %.1f s)", n.stiffness or 250, n.most or 4)
+end
+
+local function neutral_stop(why)
+  if not (run and run.neutral) then return end
+  run.neutral = nil
+  if valid(run.mesh) then neutral_set(run.mesh, false) end
+  if why then log(string.format("neutral pose off %s at %.2f s", why, run.t)) end
+end
+
+-- her own movements take over (struggle.lua, convulse.lua's spasms): the pose off, not pulling against them
+function M.neutral_off(why) neutral_stop(why) end
+
+-- while she flies: off as she lands (her pelvis fell faster than fallSpeed cm/s, then slowed under landSpeed, as
+-- the tone's landOff) or after neutral.most seconds
+local function neutral_tick()
+  if not run.neutral then return end
+  local n = cfg().neutral or {}
+  if run.t >= (n.most or 4) then neutral_stop("after its time"); return end
+  if n.landOff == false then return end
+  local vz = try(function() return run.mesh:GetPhysicsLinearVelocity(FN["Bip001-Pelvis"]).Z end)
+  if not vz then return end
+  run.nfall = math.min(run.nfall or 0, vz)
+  local t = (cfg().tone or {})
+  if run.nfall < -(n.fallSpeed or t.fallSpeed or 150) and vz > -(n.landSpeed or t.landSpeed or 40) then
+    neutral_stop(string.format("on landing (fell at %.0f cm/s)", -run.nfall))
+  end
+end
+
 local WEAPON_SLOTS = { [5] = true, [6] = true, [7] = true, [8] = true }
 local function weapons(pawn)
   local out = {}
@@ -1210,6 +1263,7 @@ function M.start(pawn, mesh, kind, dir)
   -- (not on a quiet one, from an animated fall's end pose: her animation goes on to a standing pose under it, and
   -- the tone would pull her towards that)
   if not plain and kind ~= "quiet" then parts[#parts + 1] = tone_start(pawn, mesh, g) end
+  if not plain then parts[#parts + 1] = neutral_start(mesh, kind) end
   if kind == "death" and not plain then
     parts[#parts + 1] = grip_start(mesh, g)
     parts[#parts + 1] = drop_weapons(pawn, mesh, g, function(w) return not gripped[addr(w) or 0] end)
@@ -1394,6 +1448,7 @@ function M.add_body(comp)
   local had = valid(run.pac)
   tone_stop()
   run.toneDone = true
+  neutral_stop("at the split")
   log(string.format("split: %s, her half%s", had and "tone off" or "no tone", run.variant == 2 and "" or cap_spin(run.mesh, g, nil, true)))
 end
 
@@ -1570,6 +1625,7 @@ local function settle(dt)
     if run.still == 0 then
       -- no tone pulling her against the floor while she comes to rest
       run.toneHeld = true
+      neutral_stop("as she settles")
       tone_set(0)
     end
     run.still = run.still + dt
@@ -1722,7 +1778,8 @@ local function fall_assist(dt)
   run.fallTop = math.max(run.fallTop or 0, -want)
 end
 
-function M.tick(dt)
+function M.tick(dt, mark)
+  mark = mark or function() end
   if #standins > 0 then standins_watch(dt) end
   -- (an animated death's hand too: its animation kept the fist as well)
   if not (run and run.held) then grip_ease(dt) end
@@ -1754,11 +1811,17 @@ function M.tick(dt)
     run.buzzed = true
     log(string.format("buzz over the first 2 s%s: %s", run.variant and (" (variant " .. run.variant .. ")") or "", buzz_report()))
   end
+  mark("ragdoll")
+  neutral_tick()
+  mark("ragdoll: neutral pose")
   settle(dt)
+  mark("ragdoll: settle")
   if not run then return end
   hang_watch()
   fall_assist(dt)
+  mark("ragdoll: hang, fall")
   clamp_spin()
+  mark("ragdoll: spin cap")
   if run.impactAt and run.t >= run.impactAt then
     run.impactAt = nil
     local d, from = blow(run.pawn, run.mesh, run.hint)
@@ -1920,6 +1983,7 @@ function M.stop(pawn, restart)
   end
   if not run then return end
   tone_stop()
+  neutral_stop()
   local mesh = run.mesh
   for _, pc in ipairs(run.hung or {}) do
     if valid(pc) then try(function() pc:BreakConstraint() end); try(function() pc:K2_DestroyComponent(pc) end) end

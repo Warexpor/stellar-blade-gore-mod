@@ -2,7 +2,7 @@
 -- drives, and objects that answer what the scripts ask of them. Anything not made up answers nil (a no-op call), as
 -- an engine call inside the scripts' try() that comes to nothing. sbslice.dll is faked at its command boundary (the
 -- cheat manager's repointed UFunction): every command is recorded, and answered by F.sbslice (a scenario can add).
-local F = { calls = {}, cmds = {}, hooks = {}, notify = {}, loops = {}, t = 1000.0, errors = {} }
+local F = { calls = {}, cmds = {}, hooks = {}, notify = {}, loops = {}, t = 1000.0, errors = {}, all = {} }
 
 -- the scripts' time: os.clock, advanced by F.step
 os.clock = function() return F.t end
@@ -44,14 +44,29 @@ function F.obj(name, cls, props)
   o.__name, o.__cls = name, cls or "Object"
   o.__addr = nextAddr
   nextAddr = nextAddr + 0x1000
+  -- (every object made, for a scenario to free the old level's: F.free_world)
+  F.all[#F.all + 1] = o
   return setmetatable(o, OMT)
 end
 -- __freed: its memory released (a level gone); UE4SS's IsValid reads the object, which crashes the game
 Base.IsValid = function(self)
-  if rawget(self, "__freed") then F.errors[#F.errors + 1] = "IsValid on freed " .. tostring(rawget(self, "__name")) .. " (crashes the game)" end
+  if rawget(self, "__freed") then F.errors[#F.errors + 1] = "IsValid on freed " .. tostring(rawget(self, "__name")) .. " (crashes the game)" .. (F.trace and debug.traceback("", 2) or "") end
   return rawget(self, "__dead") ~= true
 end
 Base.GetAddress = function(self) return rawget(self, "__addr") end
+-- the level gone (a load, a quit to the title): every object made so far freed but the classes, assets and CDOs
+-- (what StaticFindObject / LoadAsset find) and what a scenario keeps; FindAllOf no longer finds the old ones
+function F.free_world(keep)
+  local live = {}
+  for _, o in pairs(F.objects) do live[o] = true end
+  for _, o in ipairs(keep or {}) do live[o] = true end
+  local n = 0
+  for _, o in ipairs(F.all) do
+    if not live[o] and rawget(o, "__cls") ~= "Class" then rawset(o, "__dead", true); rawset(o, "__freed", true); n = n + 1 end
+  end
+  F.classes = {}
+  return n
+end
 Base.GetFName = function(self) return F.fname(rawget(self, "__name")) end
 Base.GetFullName = function(self) return rawget(self, "__cls") .. " " .. rawget(self, "__name") end
 Base.GetClass = function(self)
@@ -121,10 +136,16 @@ F.sbslice = {
   -- (a piece onto its copy: gore.hide_pieces)
   P = function(s) return "ok piece 40 of 160" end,
   V = function(s) return "ok vanish 100 kept 50 on 1 borrowed 0 stuck 0 mats -" end,
-  -- held objects' liveness: every one alive, at a made-up index
+  -- held objects' liveness, at a made-up index: alive unless freed (F.free_world: its GUObjectArray item reused)
   G = function(s)
     local out, n = {}, 0
-    for _ in s:sub(2):gmatch("(%x+),(%x+)") do n = n + 1; out[#out + 1] = "1:" .. (1000 + n) .. " " end
+    local byAddr = {}
+    for _, o in ipairs(F.all) do byAddr[rawget(o, "__addr")] = o end
+    for a in s:sub(2):gmatch("(%x+),(%x+)") do
+      n = n + 1
+      local o = byAddr[tonumber(a, 16)]
+      out[#out + 1] = (o and rawget(o, "__freed") and "0" or "1") .. ":" .. (1000 + n) .. " "
+    end
     return "ok " .. table.concat(out)
   end,
 }

@@ -106,7 +106,8 @@ function M.prepare(k)
     was.DespawnTimeAfterDeath = ds
     out[#out + 1] = string.format("despawns after %.0f s (was %.1f)", want, u2f(ds))
   end
-  rows[k.row] = { dt = addr(dt), was = was, off = off, t = os.clock() }
+  local mhp, msh = field(dt, rs, k.row, off.MaxHP), field(dt, rs, k.row, off.MaxShield)
+  rows[k.row] = { dt = addr(dt), was = was, off = off, t = os.clock(), mhp = mhp, msh = msh }
   log(string.format("%s's row made mortal while one of yours is up: %s", k.row, table.concat(out, ", ")))
   return nil
 end
@@ -130,19 +131,25 @@ local function put_back(row, why)
 end
 
 -- enemies.lua: a boss kind followed (mine: spawned here)
+-- one spawned here standing still (Passive Bosses): its hand by her is no grab (enemies.grab_tick)
+function M.is_passive(a) local x = live[a]; return x ~= nil and x.passive == true end
 function M.adopted(a, e, mine)
   if not mine then return end
   live[a] = { e = e, k = e.kind, at = os.clock() }
   if rows[e.kind.row] then rows[e.kind.row].t = os.clock() end
 end
 
--- the boss bar: the HUD's enemy info widget's HP bar (0..1), nil when none shows
+-- the boss bar: the HUD's enemy info widget's HP bar (0..1), nil when none shows. Its class's default object is
+-- never the one: FindFirstOf could hand that back, kept for good (valid), and no bar was ever read. Looked for every
+-- 5 s while none is held (a scan of every object)
 local hud = { w = nil, next = 0 }
 local function bar()
   local now = os.clock()
   if not valid(hud.w) and now >= hud.next then
-    hud.next = now + 1
-    hud.w = try(function() return FindFirstOf(M.HUD) end)
+    hud.next, hud.w = now + 5, nil
+    for _, x in ipairs(try(function() return FindAllOf(M.HUD) end) or {}) do
+      if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then hud.w = x; break end
+    end
   end
   local w = hud.w
   if not valid(w) then return nil end
@@ -220,6 +227,67 @@ local function take_down(pawn, a, x, why)
   ctx.enemies.kill_one(x.e, her, a, why)
 end
 
+-- bosses.passive: one spawned here stands where it is and never fights back. Its behaviour tree is its own: an
+-- SBBehaviorTreeComponent on the pawn (SBCharacter.BrainComponent), its SBAIController's BrainComponent is none. Its
+-- controller's tree stopped and the controller letting go of it did nothing (playtests: Raven fought on, grabbed her
+-- and killed her, never possessed again), so the pawn's own tree is stopped, its controller still lets go of it
+-- (UnPossess: no moving to her) and the attack it is in is cut short; looked at every AI_EVERY s (the game starting
+-- its tree or possessing it again: stopped, let go again). Off again, the controller takes it back and both trees
+-- start over
+M.AI_EVERY = 0.25
+local function cls_of(o) return valid(o) and try(function() return o:GetClass():GetFName():ToString() end) or "none" end
+local function hold_ai(a, x, on, now)
+  if now < (x.aiAt or 0) then return end
+  x.aiAt = now + M.AI_EVERY
+  local o = x.e.obj
+  if not valid(o) then return end
+  local ctl = try(function() return o.Controller end)
+  if not valid(ctl) then ctl = nil end
+  local own = try(function() return o.BrainComponent end)
+  if not valid(own) then own = nil end
+  if on then
+    local running = own and try(function() return own:IsRunning() end)
+    if own and running ~= false then try(function() own:StopLogic("SBGore passive") end) end
+    if ctl then
+      local br = try(function() return ctl.BrainComponent end)
+      if valid(br) then try(function() br:StopLogic("SBGore passive") end) end
+      try(function() ctl:StopMovement() end)
+      try(function() ctl:UnPossess() end)
+    end
+    local held = valid(try(function() return o.Controller end))
+    -- (the attack it was in, its montage, cut short; its movement stopped where it stands)
+    if ctl or running == true or not x.passive then
+      try(function() o.Mesh:GetAnimInstance():Montage_Stop(0.25, nil) end)
+      try(function() o.CharacterMovement:StopMovementImmediately() end)
+    end
+    if not x.passive then
+      if not ctl and not own then
+        if not x.noCtl then x.noCtl = true; log(string.format("%s %x: no tree or controller to stop (Passive Bosses)", x.k.alias, a)) end
+        return
+      end
+      x.passive, x.ctl, x.own = true, ctl, own
+      log(string.format("%s %x stands still (Passive Bosses): its tree %s stopped%s, %s", x.k.alias, a, cls_of(own),
+        own and running == nil and " (running unknown)" or "",
+        ctl and string.format("its %s let go of it%s", cls_of(ctl), held and " NOT (still possessed)" or "") or "no controller"))
+    else
+      if ctl and not held then log(string.format("%s %x: possessed again, let go again", x.k.alias, a)) end
+      if running == true then log(string.format("%s %x: its tree started again, stopped again", x.k.alias, a)) end
+      if ctl then x.ctl = ctl end
+    end
+  elseif x.passive then
+    x.passive = nil
+    local c, b = x.ctl, x.own
+    x.ctl, x.own = nil, nil
+    if not ctl and valid(c) then try(function() c:Possess(o) end) end
+    local br = valid(c) and try(function() return c.BrainComponent end)
+    if valid(br) then try(function() br:RestartLogic() end) end
+    if valid(b) then try(function() b:RestartLogic() end) end
+    log(string.format("%s %x fights again (%s, its tree %s)", x.k.alias, a,
+      valid(try(function() return o.Controller end)) and "possessed" or "NOT possessed",
+      valid(b) and (try(function() return b:IsRunning() end) == false and "NOT running" or "started over") or "none"))
+  end
+end
+
 M.next = 0
 M.STUCK_CM = 50
 -- its bar and place since they last changed, and the hits on it meanwhile: stood through stuckHits over stuckS s
@@ -233,29 +301,101 @@ local function stuck(x, p, l, hit, now)
   if hit and hit ~= h.hit then h.hit, h.hits = hit, h.hits + 1 end
   return h.hits >= (tonumber(cfg().stuckHits) or 3) and now - h.t >= (tonumber(cfg().stuckS) or 4)
 end
+-- its HP, read where the game keeps it (sbslice vb: its stats found by the MaxHP and MaxShield its row was given, else
+-- their ratio). The boss bar is no help on one spawned here: it never showed for a passive one (playtest, "its bar not
+-- shown"), and a hit reaction is no sign of damage (Tachy reacted to blows that took nothing). Read every HP_EVERY s;
+-- the search (a scan of its memory, a frame's worth) is tried at most HP_TRIES times, HP_RETRY s apart
+M.HP_EVERY, M.HP_TRIES, M.HP_RETRY = 0.2, 3, 5
+local function read_hp(a, x, now)
+  local r = rows[x.k.row]
+  if not (r and r.mhp and r.mhp > 0) or (x.hpTries or 0) >= M.HP_TRIES and not x.hp then return x.hp end
+  if now < (x.hpAt or 0) then return x.hp end
+  local cmd = string.format("vb%x,%x,%x", a, r.mhp, r.msh or 0)
+  local got = x.hp ~= nil
+  local res = ctx.gore.command(cmd)
+  local hp, mhp, sh, msh = res:match("^ok [%a ]*(%-?[%d.]+) (%-?[%d.]+) (%-?[%d.]+) (%-?[%d.]+)$")
+  if hp then
+    x.hp = { hp = tonumber(hp), mhp = tonumber(mhp), sh = tonumber(sh), msh = tonumber(msh) }
+    x.hpAt = now + M.HP_EVERY
+    if res:find("found") then
+      log(string.format("%s %x: its HP found in memory (%s): %s", x.k.alias, a, res:find("ratio") and "by its ratio" or "by its maximum",
+        res:match("^ok [%a ]*(.+)$")))
+    end
+  else
+    x.hp = nil
+    if not got then x.hpTries = (x.hpTries or 0) + 1 end
+    x.hpAt = now + (got and M.HP_EVERY or M.HP_RETRY)
+    if got or x.hpTries >= M.HP_TRIES then
+      log(string.format("%s %x: its HP %s (%s)", x.k.alias, a, got and "lost" or "not found in memory", res))
+    end
+  end
+  return x.hp
+end
+
+-- blows that land on nothing: her blade through one (enemies.struck) with no hit reaction on it (its mesh's,
+-- enemies poll_hit) and its bar unmoved since the blow before. A phase change can hold one invincible until its
+-- behaviour tree plays the change: one standing still (Passive Bosses) never does (playtest: Tachy and Scarlet took no
+-- more damage partway down, their bars above the floor, no hit reaction for the stuck check to count). stuckHits such
+-- blows over stuckS s take it down (twice that while it fights: a guarded blow lands on nothing too)
+local function unanswered(pawn, a, x, p, now)
+  local t = ctx.enemies and ctx.enemies.struck and ctx.enemies.struck(pawn, x.e, (x.blow or {}).t)
+  if not t then return false end
+  local b = x.blow
+  local h = x.hp
+  local life = h and h.hp + h.sh
+  -- (its HP read: only HP or shield lost counts as a blow taken; else its hit reaction or its bar moving)
+  local took
+  if life then took = b and b.life and life < b.life - 0.01
+  else
+    local hit = x.e.hit and x.e.hit.t
+    took = b and ((hit and hit > b.t - 0.1) or (p and b.p and math.abs(p - b.p) > 0.0005))
+  end
+  if not b or took or (life ~= nil) ~= (b.life ~= nil) then
+    x.blow = { t = t, p = p, life = life, n = 0, from = t }
+    return false
+  end
+  b.t, b.p, b.n = t, p, b.n + 1
+  if b.n == 1 then
+    log(string.format("%s %x: struck, no hit taken (%s)", x.k.alias, a, h and string.format("its HP %.0f/%.0f, shield %.0f/%.0f",
+      h.hp, h.mhp, h.sh, h.msh) or p and string.format("its bar %.3f", p) or "its bar not shown, its HP not read"))
+  end
+  local k = x.passive and 1 or 2
+  return b.n >= (tonumber(cfg().stuckHits) or 3) * k and now - b.from >= (tonumber(cfg().stuckS) or 4) * k
+end
 function M.tick(pawn)
   local now = os.clock()
-  -- the rows put back once none of their kind spawned here is left (and none asked for in the last 15 s)
+  -- the rows put back once none of their kind spawned here is left (and none asked for in the last 15 s); one whose
+  -- actor went without enemies.lua telling (removed from the spawner window, destroyed) isn't left counted: its row
+  -- stayed mortal for good
   if now >= M.next then
     M.next = now + 1
     local up = {}
-    for _, x in pairs(live) do up[x.k.row] = true end
+    for a, x in pairs(live) do
+      if valid(x.e.obj) and try(function() return x.e.obj.bActorIsBeingDestroyed end) ~= true then up[x.k.row] = true
+      else live[a] = nil end
+    end
     for _, d in pairs(dead) do up[d.e.kind.row] = true end
     for row, r in pairs(rows) do
       if not up[row] and now - r.t > 15 then put_back(row, "none of yours left") end
     end
     if cfg().enabled ~= true then for row in pairs(rows) do put_back(row, "Sandbox Bosses off") end end
   end
+  local passive = cfg().passive == true and cfg().enabled == true
+  for a, x in pairs(live) do if not x.downed then hold_ai(a, x, passive, now) end end
   -- their floors: the nearest live one spawned here is the one the boss bar shows
   if next(live) and cfg().floorKill ~= false then
     local p = bar()
     local her = try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
     local best, bd, ba, bl
+    local reach = tonumber(cfg().barReach) or 3000
     for a, x in pairs(live) do
       local l = her and valid(x.e.obj) and try(function() local v = x.e.obj:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
       local d = l and math.sqrt((l.X - her.X) ^ 2 + (l.Y - her.Y) ^ 2)
-      if d and (not bd or d < bd) then best, bd, ba, bl = x, d, a, l end
+      -- (one far off isn't the one the bar shows: another enemy's bar at 0 took it down from across the level)
+      if d and d <= reach and (not bd or d < bd) then best, bd, ba, bl = x, d, a, l end
     end
+    -- (its own HP, read, before the bar: the bar shows whichever boss the game has in its fight)
+    if best and best.hp and best.hp.mhp > 0 then p = best.hp.hp / best.hp.mhp end
     if best and p then
       local floor = tonumber(cfg().floor) or 0.05
       local hit = best.e.hit and best.e.hit.t
@@ -265,7 +405,7 @@ function M.tick(pawn)
           log(string.format("%s %x: its bar at %.3f (floor %.2f): the next hit takes it down", best.k.alias, ba, p, floor))
         elseif hit and hit ~= best.floorHit and hit > best.floorT then
           take_down(pawn, ba, best, string.format("its bar held at %.3f and hit again", p))
-        elseif p <= 0.001 and now - best.floorT > (tonumber(cfg().zeroWait) or 1.5) then
+        elseif p <= 0.001 and now - best.floorT > (tonumber(cfg().zeroWait) or 1.5) and hit and now - hit < 10 then
           take_down(pawn, ba, best, "its bar at 0 and still up")
         end
       else
@@ -274,6 +414,16 @@ function M.tick(pawn)
           take_down(pawn, ba, best, string.format("its bar held at %.3f, standing in place, through %d hits over %.1f s "
             .. "(a phase change waiting on its arena)", p, best.held.hits, now - best.held.t))
         end
+      end
+    end
+  end
+  if next(live) and cfg().floorKill ~= false then
+    local p = bar()
+    for a, x in pairs(live) do
+      local h = not x.downed and read_hp(a, x, now)
+      if not x.downed and unanswered(pawn, a, x, h and h.mhp > 0 and h.hp / h.mhp or p, now) then
+        take_down(pawn, a, x, string.format("struck %d times over %.1f s, no hit taken (held invincible: a phase change "
+          .. "waiting on its AI or its arena)", x.blow.n + 1, now - x.blow.from))
       end
     end
   end

@@ -53,6 +53,10 @@ local PARTS = {
 local CUT_AT_DEFAULT = 0.4
 -- a blade's cut never lands closer to the limb's root than this
 local BLADE_AT_MIN = 0.3
+-- an enemy's limb cut that takes fewer vertices than this off it took no limb: its mesh has none there (the Tachy
+-- boss's body has no left arm, her wing mesh is it: a cut there took 41 shoulder plate vertices and left a cap
+-- floating where an arm would be, the Play As slice sweep). The next nearest part is tried instead
+M.ENEMY_LIMB_MIN = 150
 -- a vertical split: the body and face are cloned, each copy keeps one side of a plane through the spine (MODE_SIDE)
 -- and the copy becomes its own ragdoll. The face's eyes, teeth and brows only know the head bone, so its vanished
 -- side collapses onto a borrowed bone no face vertex uses (Spine1), made to follow the head
@@ -635,6 +639,50 @@ local function already_cut(mesh, bone)
     end
   end
   return false
+end
+-- a limb's next joint, for its segment (a cut's plane, the blade's pick of a limb): one cut off before lies wherever its
+-- piece went. Raven's calf flew off at 1210 cm/s, and the thigh's plane, 38% of the way to it, lay 100 cm off her body,
+-- met no skin and changed her weights for nothing: her stumps and pieces drawn in the wrong places (playtest). It is
+-- put where it was on its parent as it came off (M.stub_note, at the cut), turned with the parent now
+M.already_cut = already_cut
+M.stubs = {}  -- mesh address -> bone -> { up (its parent), off (in the parent's frame, unscaled) }
+function M.qturn(q, v)
+  local tx, ty, tz = 2 * (q.Y * v.Z - q.Z * v.Y), 2 * (q.Z * v.X - q.X * v.Z), 2 * (q.X * v.Y - q.Y * v.X)
+  return vec(v.X + q.W * tx + q.Y * tz - q.Z * ty, v.Y + q.W * ty + q.Z * tx - q.X * tz, v.Z + q.W * tz + q.X * ty - q.Y * tx)
+end
+function M.bone_xf(mesh, b)
+  return try(function()
+    local x = mesh:GetSocketTransform(FName(b), 0) -- RTS_World
+    local t, r, sc = x.Translation, x.Rotation, x.Scale3D
+    return { t = vec(t.X, t.Y, t.Z), q = { X = r.X, Y = r.Y, Z = r.Z, W = r.W },
+      s = sc and vec(sc.X ~= 0 and sc.X or 1, sc.Y ~= 0 and sc.Y or 1, sc.Z ~= 0 and sc.Z or 1) or vec(1, 1, 1) }
+  end)
+end
+function M.stub_note(mesh, bone)
+  local ma = addr(mesh)
+  if not ma then return end
+  local s = M.stubs[ma] or {}
+  M.stubs[ma] = s
+  -- (by its mesh asset too: the address can be another mesh's after a level change or an outfit's)
+  local sm = try(function() return mesh.SkeletalMesh:GetAddress() end)
+  if s[bone] and s[bone].sm == sm then return end
+  local up = try(function() return mesh:GetParentBone(FName(bone)):ToString() end)
+  local p, c = up and up ~= "None" and M.bone_xf(mesh, up), bone_loc(mesh, bone)
+  if not (p and c) then return end
+  local o = M.qturn({ X = -p.q.X, Y = -p.q.Y, Z = -p.q.Z, W = p.q.W }, vec(c.X - p.t.X, c.Y - p.t.Y, c.Z - p.t.Z))
+  s[bone] = { up = up, off = vec(o.X / p.s.X, o.Y / p.s.Y, o.Z / p.s.Z), sm = sm }
+end
+function M.joint(mesh, b)
+  local s = M.stubs[addr(mesh) or 0]
+  local x = s and s[b]
+  if x and x.sm == try(function() return mesh.SkeletalMesh:GetAddress() end) and M.already_cut(mesh, b) then
+    local p = M.bone_xf(mesh, x.up)
+    if p then
+      local o = M.qturn(p.q, vec(x.off.X * p.s.X, x.off.Y * p.s.Y, x.off.Z * p.s.Z))
+      return vec(p.t.X + o.X, p.t.Y + o.Y, p.t.Z + o.Z)
+    end
+  end
+  return bone_loc(mesh, b)
 end
 
 -- the parts to try, closest to the hit first; only the one tune names, if it names one
@@ -2267,11 +2315,13 @@ local function send_nosink(comp, limbs, driven, after)
     for h in (s .. "," .. limbs_list(comp, own)):gmatch("[^,]+") do if not seen[h] then seen[h] = true; out[#out + 1] = h end end
     s = table.concat(out, ",")
   end
+  mark("lua: nosink, limbs")
   local nc = nocarry_list(comp)
   -- her bodies only for a limb or the head (a cut through the torso keeps its sinks where they were)
   local bl = {}
   if limbs ~= true then for i in pairs(bodies_of(comp)) do bl[#bl + 1] = string.format("%x", i) end end
   local dr = (limbs == true or driven) and not enemy.cur and M.driven_list(comp) or ""
+  mark("lua: nocarry, bodies, driven")
   -- (fffc's bones after fffd's: they are driven too, the later list wins)
   local r = command(string.format("n%x,%s,ffff%s%s%s%s", comp:GetAddress(), s, nc ~= "" and ("," .. nc) or "",
     #bl > 0 and (",fffe," .. table.concat(bl, ",")) or "", dr ~= "" and (",fffd," .. dr) or "",
@@ -2287,7 +2337,9 @@ local function cut_command(comp, index, mode, radius, at, n, depth, limbs)
   -- on Dm-*-Thigh-point itself (playtest). The cut's weights stay for the cuts after it. (Not an arm's: its drivers
   -- shape the shoulder its rim runs round, and a bent arm's cut lost half its opening in the test harness)
   local leg = type(limbs) == "string" and not enemy.cur and (limbs:find("Thigh") or limbs:find("Calf") or limbs:find("Foot"))
-  send_nosink(comp, limbs, leg and true or nil, leg and M.side_drivers(comp, { limbs }) or nil)
+  local after = leg and M.side_drivers(comp, { limbs }) or nil
+  mark("lua: side drivers")
+  send_nosink(comp, limbs, leg and true or nil, after)
   local s = string.format("c%x,0,%x,%x,%x", comp:GetAddress(), index, mode or 0, math.floor((radius or 0) * 10 + 0.5))
   if depth then s = s .. string.format(",%x", math.floor(depth * 10 + 0.5)) end
   return command(s, at, n)
@@ -2303,6 +2355,73 @@ function native.root(path, o)
   local r = command(string.format("o%x", o:GetAddress()))
   native.rooted[path] = r:sub(1, 2) == "ok"
   if not native.rooted[path] then log("keeping " .. path .. " loaded refused: " .. r) end
+end
+
+-- the preloads loaded by the game's async loader (sbslice "J", tune.gore.asyncLoad): loaded on the game thread one a
+-- look, the first blood effect held a frame 1.4 s and every sound 30 ms, a minute of stutters at the start (playtest).
+-- Asked for, then found by path once in: loaded (no NeedLoad / NeedPostLoad, not async loading) on two looks in a row,
+-- kept (native.root). One not in after ASYNC_S s is loaded as before. Off (as before) when the DLL hasn't the command or
+-- the library's parameters aren't laid out as it builds them
+native.async = { pending = {}, seen = {}, on = nil, asked = 0, got = 0, late = 0 }
+native.ASYNC_S = 20
+-- MakeSoftObjectPath's PathString 0, ReturnValue 0x10 (0x28 in all); LoadAsset's WorldContextObject 0, Asset 8, OnLoaded
+-- 0x30, LatentInfo 0x40 (0x58)
+native.ASYNC_LAYOUT = "ok 0,16 size 40 / 0,8,48,64 size 88"
+function native.async_ready()
+  local a = native.async
+  if a.on ~= nil then return a.on end
+  if native.state ~= "ready" then return false end
+  if cfg().asyncLoad == false then a.on = false; return false end
+  local why
+  local cdo = try(function() return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary") end)
+  local mk = try(function() return StaticFindObject("/Script/Engine.KismetSystemLibrary:MakeSoftObjectPath") end)
+  local la = try(function() return StaticFindObject("/Script/Engine.KismetSystemLibrary:LoadAsset") end)
+  if not (valid(cdo) and valid(mk) and valid(la)) then why = "the library's MakeSoftObjectPath / LoadAsset not found"
+  else
+    -- (UE4SS's Lua UFunction has no ForEachProperty: the DLL reads their parameters' offsets and sizes)
+    local r = command(string.format("J?%x,%x", mk:GetAddress(), la:GetAddress()))
+    if r ~= native.ASYNC_LAYOUT then why = "parameters laid out otherwise (" .. tostring(r) .. ")" end
+  end
+  a.on, a.cdo, a.mk, a.la = not why, cdo, mk, la
+  log("async loads: " .. (why and ("off, " .. why .. ": loaded as before") or "on (the game's LoadAsset)"))
+  return a.on
+end
+-- asked for: true, else nil (and the async loads off: a refusal means the DLL can't)
+function native.async_load(path, world)
+  local a = native.async
+  if not (a.on and valid(a.cdo) and valid(a.mk) and valid(a.la) and valid(world)) then return nil end
+  local r = command(string.format("J%x,%x,%x,%x;%s", a.cdo:GetAddress(), a.mk:GetAddress(), a.la:GetAddress(),
+    world:GetAddress(), path))
+  if r:sub(1, 2) ~= "ok" then
+    a.on = false
+    log("async loads: off, asking for " .. path .. " refused (" .. r .. "): loaded as before")
+    return nil
+  end
+  a.pending[path], a.asked = os.clock(), a.asked + 1
+  return true
+end
+-- the ones asked for that are in now: kept; one past ASYNC_S handed back (true: load it as before)
+function native.async_poll(budget)
+  local a, now, late = native.async, os.clock(), nil
+  for path, t in pairs(a.pending) do
+    if budget <= 0 then break end
+    budget = budget - 1
+    local o = try(function() return StaticFindObject(path) end)
+    local done = valid(o) and try(function() return o:HasAnyFlags(0x1400) end) == false
+      and try(function() return o:HasAnyInternalFlags(0x08000000) end) == false
+    if done and a.seen[path] then
+      a.pending[path], a.seen[path], a.got = nil, nil, a.got + 1
+      native.root(path, o)
+      if a.got <= 3 or now - t > 5 then log(string.format("async loads: %s in after %.1f s", path, now - t)) end
+    elseif done then a.seen[path] = true
+    elseif now - t > native.ASYNC_S then
+      a.pending[path], a.seen[path], a.late = nil, nil, a.late + 1
+      log(string.format("async loads: %s not in after %d s: loaded as before", path, native.ASYNC_S))
+      late = late or {}
+      late[#late + 1] = path
+    end
+  end
+  return late
 end
 
 local function ok_cut(r) return r:sub(1, 2) == "ok" and (num(r, "seam") or 0) + (num(r, "limb") or 0) > 0 end
@@ -2596,32 +2715,60 @@ local function chain_reach(mesh, tops, anchor)
 end
 
 -- returns the tops, and those of them that are straps above the plane (hung on the body, never cut off on their own)
-local function kept_chains(mesh, bone, a, b, at, n)
-  local pa = ctx.physics_of(mesh)
-  if not valid(pa) then return {}, {} end
-  local list, has = {}, {}
-  try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then local n = bs.BoneName:ToString(); list[#list + 1] = n; has[n] = true end end) end)
-  local axis = norm(sub(b, a))
+-- (each physics asset's bodies and chains, which don't change with the pose, worked out once: walking every body,
+-- its parents through the engine and every other body under it, each cut, was most of a cut's 13 ms of Lua before
+-- sbslice.dll, playtest)
+M.chainCache = {}
+function M.chain_info(mesh, pa)
+  local key = addr(pa)
   local t = M.bone_tree(mesh)
+  local ci = key and M.chainCache[key]
+  if ci and (ci.tree or not t) then return ci end
+  local list = {}
+  try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then list[#list + 1] = bs.BoneName:ToString() end end) end)
   local function under(x, y)
     if t and t.index[x] then return x ~= y and M.under(t, t.index[x], y) end
     return try(function() return mesh:BoneIsChildOf(FName(x), FName(y)) end) == true
   end
-  local out = {}
+  local function parent(x)
+    if t and t.index[x] then local p = t.pname[t.index[x]]; return p ~= "None" and p or nil end
+    return parent_bone(mesh, x)
+  end
+  ci = { list = list, chain = {}, tree = t ~= nil }
   for _, c in ipairs(list) do
     -- (nor a twist bone with a body of its own, CH_P_EVE_14's Ab-L-Thigh-Tw0: the off-axis test is the pose's, and
     -- with the leg turned it stood 3 cm off, the thigh's own skin and both straps under it kept on her, playtest)
-    if not c:find("^Bip001") and not c:find("%-Tw%d+$") and under(c, bone) then
-      local p, anchor = parent_bone(mesh, c), nil
+    if not c:find("^Bip001") and not c:find("%-Tw%d+$") then
+      local p, anchor = parent(c), nil
       while p and not anchor do
-        if p:find("^Bip001") then anchor = p else p = parent_bone(mesh, p) end
+        if p:find("^Bip001") then anchor = p else p = parent(p) end
       end
-      local n = 0
-      for _, d in ipairs(list) do if d == c or under(d, c) then n = n + 1 end end
+      local below = {}
+      for _, d in ipairs(list) do if d == c or under(d, c) then below[#below + 1] = d end end
+      ci.chain[c] = { anchor = anchor, below = below }
+    end
+  end
+  if key and t then M.chainCache[key] = ci end
+  return ci
+end
+local function kept_chains(mesh, bone, a, b, at, n)
+  local pa = ctx.physics_of(mesh)
+  if not valid(pa) then return {}, {} end
+  local ci = M.chain_info(mesh, pa)
+  local list, t = ci.list, M.bone_tree(mesh)
+  local function under(x, y)
+    if t and t.index[x] then return x ~= y and M.under(t, t.index[x], y) end
+    return try(function() return mesh:BoneIsChildOf(FName(x), FName(y)) end) == true
+  end
+  local axis = norm(sub(b, a))
+  local out = {}
+  for _, c in ipairs(list) do
+    local ch = ci.chain[c]
+    if ch and ch.anchor == bone and #ch.below >= CHAIN_BODIES then
       local l = bone_loc(mesh, c)
       local off = 0
       if l and axis then local v = sub(l, a); off = len(sub(v, scale(axis, dot(v, axis)))) end
-      if anchor == bone and n >= CHAIN_BODIES and off > CHAIN_OFF then out[#out + 1] = c end
+      if off > CHAIN_OFF then out[#out + 1] = c end
     end
   end
   -- only the top of each chain
@@ -2638,8 +2785,8 @@ local function kept_chains(mesh, bone, a, b, at, n)
       -- with its bones riding the arm, and stretched from her shoulder to the arm on the floor, playtest screenshot)
       local far, reach = 0, 0
       local top = bone_loc(mesh, c)
-      for _, d in ipairs(list) do
-        local l = (d == c or under(d, c)) and bone_loc(mesh, d)
+      for _, d in ipairs(ci.chain[c].below) do
+        local l = bone_loc(mesh, d)
         if l and axis and span > 0 then far = math.max(far, dot(sub(l, a), axis) / span) end
         if l and top then reach = math.max(reach, len(sub(l, top))) end
       end
@@ -2758,8 +2905,10 @@ end
 local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   local g = cfg()
   local part = PARTS[bone]
-  local a, b = bone_loc(mesh, part.from or bone), bone_loc(mesh, part.to)
+  local a, b = bone_loc(mesh, part.from or bone), M.joint(mesh, part.to)
   if not (a and b) then log("cut skipped: no bone transform for " .. tostring(bone)); return nil end
+  -- (where it is on its parent, for a later cut of the parent: M.joint)
+  if part.kind == "limb" then M.stub_note(mesh, bone) end
   local axis = norm(sub(b, a))
   if not axis then return nil end
   -- (Eve's head: higher once her face is cut with it, see below)
@@ -2827,6 +2976,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   end
   local index = try(function() return mesh:GetBoneIndex(FName(bone)) end)
   if not index or index < 0 then log("cut skipped: no bone " .. bone); return nil end
+  mark("lua: plane")
   -- a head takes the face along first; without that its neck would stretch from the body to the head. Cut on the
   -- neck's plane instead (MODE_PLANE), 8300 face vertices vanished into the stump and the head flew off faceless.
   -- Cut like a limb (faceCut), the face's neck stays on her: its eyes, teeth and brows know only the head bone, so
@@ -2859,6 +3009,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   local kept, gone, stay = {}, {}, {}
   if (part.kind == "limb" or part.kind == "torso") and (part.mode == nil or part.mode == MODE.cut) then
     if part.kind == "limb" then kept, stay = kept_chains(mesh, bone, a, b, at, n) end
+    mark("lua: kept chains")
     local tree, ma = M.bone_tree(mesh), addr(mesh)
     for _, c in ipairs(cuts) do
       if c.addr == ma and c.bone ~= bone and PARTS[c.bone] then
@@ -2868,6 +3019,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
       end
     end
     local rigid = part.kind == "limb" and bone:find("Thigh") and M.skirt_chains(mesh) or {}
+    mark("lua: gone, skirts")
     local f = { string.format("g%x", mesh:GetAddress()) }
     if #kept > 0 or #gone > 0 or #rigid > 0 then
       f[#f + 1] = "0"
@@ -2910,7 +3062,11 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   end
   local faceneck = facecut and (num(fr, "seam") or 0) > 0
   if r:sub(1, 2) ~= "ok" or ((num(r, "seam") or 0) == 0 and not faceneck)
-    or ((part.kind ~= "head" or (enemy.cur and not fr)) and (num(r, "limb") or 0) == 0) then
+    or ((part.kind ~= "head" or (enemy.cur and not fr)) and (num(r, "limb") or 0) == 0)
+    or (enemy.cur and part.kind == "limb" and (num(r, "limb") or 0) < M.ENEMY_LIMB_MIN) then
+    if enemy.cur and part.kind == "limb" and r:sub(1, 2) == "ok" and (num(r, "limb") or 0) > 0 then
+      log(string.format("cut %s: only %d vertices on it, no limb there on this mesh: the next part instead", bone, num(r, "limb")))
+    end
     if fr then log("face put back: " .. command(string.format("x%x,0", face:GetAddress()))) end
     -- an enemy cut that changed weights but took nothing off (what was past the plane had nothing to close on and
     -- vanished): its weights off again when nothing else was cut on it, and kept on record, so its sinks go back
@@ -2978,6 +3134,7 @@ local function stage_cut(q)
   cuts[#cuts + 1] = q.entry
   -- (each with its mesh asset: the face's sinks are its own asset's, put back with it, cleanup_eve)
   if q.c.face then cuts[#cuts + 1] = { mesh = q.c.face, addr = addr(q.c.face), bone = "face", sm = enemy.asset(q.c.face) } end
+  mark("lua: entry")
   q.parent = parent_bone(q.mesh, q.bone)
   -- a head's own opening is the bottom of the face's neck
   q.ob, q.ol = opening(q.c.result, "b"), q.c.face_result and opening(q.c.face_result, "l") or opening(q.c.result, "l")
@@ -3006,14 +3163,17 @@ local function stage_cut(q)
     q.rideB = (nm and nm ~= "None") and nm or q.parent or q.bone
   end
   q.rideL = q.c.face_result and q.bone or ride("lb", q.bone)
+  mark("lua: openings, ride bones")
   -- (and the spine bones the stubs look for her back on: back_on, and the cut bone's far end: the stump bone's axis)
   local far = PARTS[q.bone] and PARTS[q.bone].to
   q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL, q.parent or q.bone, q.bone, "Bip001-Spine1", far } } })
+  mark("lua: snap")
   -- (the openings' shared frame from her back as posed at the cut, the snap's Spine1 or the spine bone cut)
   M.posed = q.posed
   local back = q.ob and q.ob.z and norm(q.ob.z) and back_on(q.mesh, norm(q.ob.z), q.bone, true)
   M.posed = nil
   M.pair(q.ob, q.ol, back, M.side_of(q.bone))
+  mark("lua: back, pair")
   q.caps, q.kinds, q.stubs = {}, {}, {}
   return true
 end
@@ -3562,6 +3722,12 @@ local function clone_of(pawn, src)
   clones[#clones + 1] = c
   try(function() c:SetCollisionEnabled(0) end)
   try(function() c:SetHiddenInGame(true, false) end)
+  -- (no post-process AnimBP of its mesh's made on it: it never ticks, so it never moved anything, and Play As's Scarlet
+  -- (the NIKKE outfit's KawaiiPhysics AnimBP on her body's mesh) froze the game as her cut-off head went onto it in
+  -- photo mode, playtest. Off before the mesh goes on, so it isn't made at all)
+  if not try(function() c:SetDisablePostProcessBlueprint(true); return true end) then
+    try(function() c.bDisablePostProcessBlueprint = true end)
+  end
   try(function() c:SetSkeletalMesh(src.SkeletalMesh, true) end)
   local nm = try(function() return src:GetNumMaterials() end) or 0
   for i = 0, nm - 1 do
@@ -4326,6 +4492,56 @@ end
 -- collapsed skin out through the lid, spikes and patches over the cut face (playtest). Off on both halves before the
 -- cut (prep waits 3 frames), so the drivers hold their place on the spine and pelvis as the harness has them; back on
 -- for her when the split is undone or she is reused
+-- the outfit's KawaiiPhysics (its post-process AnimBP: Raven's suit, CH_P_EVE_11, swings its front flap, back tail and
+-- thigh charm with it) off while the body is a ragdoll: it chased bones the ragdoll flung about, and her front flap,
+-- a chain with no bodies of its own, jumped about like crazy (playtest, Play As Raven). Each node's Alpha 0 (the bones
+-- then ride their parents as animated), back to what it was with on. The ControlRig node moving her Dm- drivers runs
+-- on. Nodes found by their struct type, once a class (up through its parents). Returns how many were switched
+-- (class address -> its nodes' names; "instance:node" -> its Alpha before. Module fields: gore.lua is at Lua's local limit)
+M.kawaiiNodes, M.kawaiiWas = {}, {}
+function M.kawaii(mesh, on)
+  local kawaiiNodes, kawaiiWas = M.kawaiiNodes, M.kawaiiWas
+  local inst = valid(mesh) and try(function() return mesh:GetPostProcessInstance() end)
+  if not valid(inst) then return 0 end
+  local cls = try(function() return inst:GetClass() end)
+  local ca = cls and try(function() return cls:GetAddress() end)
+  if not ca then return 0 end
+  local names = kawaiiNodes[ca]
+  if not names then
+    names = {}
+    local c = cls
+    for _ = 1, 4 do
+      if not valid(c) then break end
+      try(function() c:ForEachProperty(function(p)
+        local st = try(function() return p:GetStruct():GetFName():ToString() end)
+        if st == "AnimNode_KawaiiPhysics" then names[#names + 1] = p:GetFName():ToString() end
+      end) end)
+      c = try(function() return c:GetSuperStruct() end)
+      local cn = valid(c) and try(function() return c:GetFName():ToString() end)
+      if not cn or cn == "AnimInstance" or cn == "SBAnimInstance" then break end
+    end
+    kawaiiNodes[ca] = names
+  end
+  local ia = try(function() return inst:GetAddress() end) or 0
+  local n = 0
+  for _, nm in ipairs(names) do
+    local key = string.format("%x:%s", ia, nm)
+    local ok = try(function()
+      local node = inst[nm]
+      if not on then
+        if kawaiiWas[key] == nil then kawaiiWas[key] = node.Alpha end
+        node.Alpha = 0
+      else
+        node.Alpha = kawaiiWas[key] or 1
+        kawaiiWas[key] = nil
+      end
+      return true
+    end)
+    if ok then n = n + 1 end
+  end
+  return n, #names
+end
+
 function M.rig(mesh, on)
   if not valid(mesh) then return false end
   local ok = try(function() mesh:SetDisablePostProcessBlueprint(not on); return true end) == true
@@ -5079,7 +5295,7 @@ function M.smash_part(mesh, at)
   for _, c in ipairs(cands) do
     local bone, p = c.bone, c.p
     local seg = M.SMASH_SEG[bone]
-    local a, b = bone_loc(mesh, seg and seg[1] or p.from or bone), bone_loc(mesh, seg and seg[2] or p.to)
+    local a, b = bone_loc(mesh, seg and seg[1] or p.from or bone), M.joint(mesh, seg and seg[2] or p.to)
     -- (the head's own bone is the skull's base: its segment runs on up past it, to the top of her head)
     if a and b and p.kind == "head" then b = vec(b.X + (b.X - a.X) * 3, b.Y + (b.Y - a.Y) * 3, b.Z + (b.Z - a.Z) * 3) end
     if a and b then
@@ -5508,6 +5724,7 @@ function M.slice(pawn, mesh, hit, why, kind) return start(pawn, mesh, hit, why, 
 -- a rolled limb cut's further limbs (tune.gore.death.moreLimbs): each one more with that chance, at most two more,
 -- queued after it; each takes the arm or thigh nearest the hit not cut yet and flies the way the first one did
 function M.more_limbs(pawn, mesh, hit, why)
+  if cfg().followUpCuts == false then return 0 end
   local k = math.min(math.max(tonumber((cfg().death or {}).moreLimbs) or 0, 0), 1)
   local n = 0
   while n < 2 and math.random() < k do n = n + 1 end
@@ -5795,7 +6012,7 @@ function M.near_odds(mesh, h, hit)
   local function bl(b)
     local x = P and P[b]
     if x then return x.t end
-    return bone_loc(mesh, b)
+    return M.joint(mesh, b)
   end
   local function seg(a, b)
     local pa, pb = bl(a), bl(b)
@@ -5871,7 +6088,7 @@ function M.blow(pawn, mesh, h, why)
   local function bl(b)
     local x = P and P[b]
     if x then return x.t end
-    return bone_loc(mesh, b)
+    return M.joint(mesh, b)
   end
   local function go(at, why, kind, out, plane, blade)
     -- a cut at the hit, before her death is reported (h.early, main.lua): a limb, the head or her body, which come off
@@ -6071,6 +6288,8 @@ function M.blow(pawn, mesh, h, why)
   local mc = cfg().multiCut or {}
   -- a laser's beam (main.lua's sw.laser_hit) takes everything its plane goes through, however far from where it met her
   if h.laser then mc = setmetatable({ reach = 1e4, max = 8, bodyReach = 1e4 }, { __index = mc }) end
+  -- followUpCuts off: the swing makes one cut, its body cut over the limbs it crossed (a laser still takes everything)
+  local one = cfg().followUpCuts == false and not h.laser
   local reach, most = mc.reach or 40, mc.max or 3
   -- her body cut along the blade, where its plane goes through her spine below the neck within bodyReach cm of the
   -- hit, or passes within bodyGraze cm beside it, through her flank; nil when it doesn't or her body is cut already.
@@ -6186,6 +6405,7 @@ function M.blow(pawn, mesh, h, why)
   -- the rest, queued in her own frame (the ragdoll moves on while the first cut opens)
   local function queue(list)
     if #list == 0 then return "" end
+    if one then return string.format(" (%d more left whole: followUpCuts off)", #list) end
     M.queue_gap = cfg().queueGap or 1
     local f = body_frame(mesh)
     local names = {}
@@ -6224,7 +6444,7 @@ function M.blow(pawn, mesh, h, why)
     return go(at, why, "limb", nil, nil, first)
   end
   if h.armsOnly then
-    local arms = mc.enabled ~= false and both_arms()
+    local arms = mc.enabled ~= false and not one and both_arms()
     if not arms then return false end
     return arms_cut(arms, "with a split rolled")
   end
@@ -6347,6 +6567,13 @@ function M.blow(pawn, mesh, h, why)
     blade and (" " .. blade.bone .. string.format(" at %.2f", blade.t)) or ""))
   if what == "limb" then
     if not blade then return false end
+    -- one cut a swing: her body when the plane goes on through it, else the limb
+    local body = one and (why == "death" or why == "enemy") and mc.body ~= false and body_blade()
+    if body then
+      log(string.format("blade (%s): %s plane through %s and her body: her body at %s %.2f alone (followUpCuts off)",
+        why, how, blade.bone, body.bone, body.t))
+      return go(bl(body.bone) or at, why, "torso", nil, nil, body)
+    end
     local more = (why == "death" or why == "enemy") and queue(extras({ kind = "limb", bone = blade.bone })) or ""
     if more ~= "" then log("blade (" .. why .. "): one swing" .. more) end
     return go(at, why, "limb", nil, nil, blade)
@@ -6375,7 +6602,7 @@ function M.blow(pawn, mesh, h, why)
     arms[#arms + 1] = two
     names[#names + 1] = string.format("%s at %.2f (the second blade)", two.bone, two.t)
   end
-  local cut_arms = #arms > 0 and why == "death" and cfg().splitArms ~= false and mc.enabled ~= false
+  local cut_arms = #arms > 0 and why == "death" and cfg().splitArms ~= false and mc.enabled ~= false and not one
   if cut_arms and #arms >= 2 and math.random() < (cfg().armsOverSplit or 0.6) then
     local two2 = both_arms() or arms
     return arms_cut(two2, "plane down her length")
@@ -6576,16 +6803,29 @@ function M.watch(mesh, tm)
   end
   -- and a cap or stub actor made ahead, one a look (M.pool), none while a cut is opening, nor before the preloads
   -- have the cap's material (a lid made first loaded it there and then, untimed: a look held a frame 551 ms, playtest)
-  if not pending and w.next >= w.sounds then
+  -- (and with no async load still coming in: the cap's material may be one of them)
+  if not pending and w.next >= w.sounds and not next(native.async.pending) then
     local owner = try(function() return mesh:GetOwner() end)
     if valid(owner) then M.pool_fill(owner) end
     tm("bone watch pool")
   end
+  -- (the async ones in so far kept; one that never came in goes back to be loaded as before)
+  if next(native.async.pending) then
+    for _, p in ipairs(native.async_poll(4) or {}) do w.late = w.late or {}; w.late[#w.late + 1] = p end
+    tm("bone watch async")
+  end
   local path = w.preload[w.next]
   if path and w.next >= w.sounds and os.clock() - w.t0 < 30 then path = nil end
-  if path and native.rooted[path] then w.next = w.next + 1
-  elseif path and os.clock() >= w.at and ctx.may_load() then
+  local late = not path and w.late and #w.late > 0 and table.remove(w.late, 1)
+  if late then path = late end
+  if path and native.rooted[path] then if not late then w.next = w.next + 1 end
+  elseif path and not late and native.async.pending[path] then w.next = w.next + 1
+  elseif path and not late and os.clock() >= w.at and ctx.may_load() and native.async_ready()
+    and native.async_load(path, mesh) then
     w.next = w.next + 1
+    tm("bone watch async ask")
+  elseif path and os.clock() >= w.at and ctx.may_load() then
+    if not late then w.next = w.next + 1 end
     w.at = os.clock() + w.gap
     local t0 = os.clock()
     load_obj(path)
@@ -6594,11 +6834,13 @@ function M.watch(mesh, tm)
     if ms >= (cfg().slowMs or 15) then log(string.format("cut asset load took %.0f ms: %s", ms, path)) end
     tm("bone watch load")
   end
-  if path and w.next > #w.preload and not w.told then
+  if w.next > #w.preload and not next(native.async.pending) and not (w.late and #w.late > 0) and not w.told then
     w.told = true
     local n = 0
     for _, ok in pairs(native.rooted) do if ok then n = n + 1 end end
-    log(string.format("cut assets loaded and kept: %d of %d", n, #w.preload))
+    local a = native.async
+    log(string.format("cut assets loaded and kept: %d of %d%s", n, #w.preload, a.asked > 0
+      and string.format(" (%d by the async loader, %d late and loaded as before)", a.got, a.late) or ""))
   end
 end
 
@@ -6737,13 +6979,25 @@ function M.pump_once()
   if not q then return end
   if not valid(q.mesh) then pending = nil; return end
   if q.wait > 0 then q.wait = q.wait - 1; return end
-  -- a stage that throws would run again on every frame and block every later cut: it ends the cut instead
-  local ok, err = xpcall(enemy.run, debug and debug.traceback or tostring, q.owner, stage_tick, q)
-  if not ok then
-    if pending == q then pending = nil end
-    log(string.format("%s (%s) failed at stage %s, dropped: %s", q.kind, q.why, tostring(q.stage), tostring(err)))
+  -- and the next stage in the same frame while the stages so far left room (under half of stageBudgetMs): a cut's
+  -- six stages a frame each, the piece came off 32-63 ms after the blow (playtest). Never past the cut itself or a
+  -- chain's cut (sbslice.dll's work and the engine's weights, the heavy ones), nor a split's stages, nor a wait
+  local t0, budget, n = os.clock(), (cfg().stageBudgetMs or 8) / 1000, 0
+  while true do
+    local stage = q.stage
+    -- a stage that throws would run again on every frame and block every later cut: it ends the cut instead
+    local ok, err = xpcall(enemy.run, debug and debug.traceback or tostring, q.owner, stage_tick, q)
+    if not ok then
+      if pending == q then pending = nil end
+      log(string.format("%s (%s) failed at stage %s, dropped: %s", q.kind, q.why, tostring(q.stage), tostring(err)))
+      return
+    end
+    n = n + 1
+    if pending ~= q or q.wait > 0 or q.kind == "split" or budget <= 0 or not M.CHAINED[stage] or not M.CHAINED[q.stage]
+      or (os.clock() - t0) * 2 > budget or n >= 6 or not valid(q.mesh) then return end
   end
 end
+M.CHAINED = { caps = true, caps2 = true, stubs = true, stubs2 = true, open = true }
 
 -- an early cut's (h.early) further cuts of the blow and her sword's, held till her death (main.lua's gore_cut)
 M.held = {}
@@ -7395,6 +7649,7 @@ function M.state() return native.state end
 -- nothing cut). Only those, by asset: the DLL drops its records of an asset gone with the old level by itself
 -- (assets_prune), and one of an enemy kind still around stays on its corpses' records till they go
 function M.forget(pawn)
+  M.stubs = {}
   local wears = {}
   if pawn and native.state == "ready" then
     local comps = {}

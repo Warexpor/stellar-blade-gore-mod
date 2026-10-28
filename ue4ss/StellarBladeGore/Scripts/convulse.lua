@@ -915,6 +915,8 @@ local function next_event(x, anim)
     end
   end
   if only or cfg().body == false or struggling() then return face_event(x) end
+  local r = rag()
+  if r and r.neutral_off then r.neutral_off("for her spasms") end
   local c = cfg()
   local agonal, total = c.agonal or 4, c.duration or 8
   local s = c.strength or 1.0

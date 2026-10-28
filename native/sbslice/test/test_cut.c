@@ -451,8 +451,10 @@ int main(void)
         free(override_w); override_w = 0;
         float qz[4] = { 0, 0, 0.70710678f, 0.70710678f };
         for (int i = 0; i < NB; i++) for (int k = 0; k < 4; k++) space[i * 12 + k] = qz[k];
-        float sn2[3] = { 0, 1, 0 };
-        skin_cut((u64)comp_buf, 0, SPINE, sp, sn2, MODE_SIDE, 0, 0, -1);
+        // (the plane 0.01 mm off the column of vertices it would pass through: which side a vertex exactly on it
+        // goes to is float rounding, and the cut's pose sums differ from this test's in the last bit)
+        float sn2[3] = { 0, 1, 0 }, sp2[3] = { sp[0], sp[1] + 0.001f, sp[2] };
+        skin_cut((u64)comp_buf, 0, SPINE, sp2, sn2, MODE_SIDE, 0, 0, -1);
         skin_collapse();
         int off2 = 0;
         for (int v = 0; v < NV; v++) {

@@ -206,6 +206,63 @@ function M.joint_ranges(cons, bind, ranges)
   return out, notes
 end
 
+-- UE's FQuat::Rotator: { Pitch, Yaw, Roll } in degrees of q {x, y, z, w}
+local function rotator(q)
+  local x, y, z, w = q[1], q[2], q[3], q[4]
+  local sing = z * x - w * y
+  local yaw = math.deg(atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
+  if sing < -0.4999995 then return { Pitch = -90, Yaw = yaw, Roll = -yaw - math.deg(2 * atan2(x, w)) } end
+  if sing > 0.4999995 then return { Pitch = 90, Yaw = yaw, Roll = yaw - math.deg(2 * atan2(x, w)) } end
+  return { Pitch = math.deg(math.asin(2 * sing)), Yaw = yaw, Roll = math.deg(atan2(-2 * (w * x + y * z), 1 - 2 * (x * x + y * y))) }
+end
+M.rotator = rotator
+
+-- the neutral pose's drive targets (tune.active.neutral.pose: front / out degrees from the bind pose, as the ranges
+-- count them) in each joint's frames as they are now (after fix_joints turned them, or the data mod did): the joint's
+-- rotation at the bind pose, its twist (the bend) moved front, then turned out about her front axis.
+-- cons, bind as joint_ranges; ends: child -> the bone its far end is (tune.physfix.ranges' e). -> child -> rotator
+-- (the drive's OrientationTarget: frame 1 in frame 2, as PhysX's drive pose), notes
+function M.neutral_targets(cons, bind, pose, ends)
+  local out, notes = {}, {}
+  local toe, foot, pel = bind["Bip001-L-Toe0"], bind["Bip001-L-Foot"], bind["Bip001-Pelvis"]
+  if not (toe and foot and pel) then return out, { "no Bip001-L-Toe0 / Foot / Pelvis (no front)" } end
+  local f = vsub(toe.t, foot.t)
+  local fwd = unit({ f[1], f[2], 0 })
+  for _, c in ipairs(cons) do
+    local p, bc, ba, e = pose[c.child], bind[c.child], bind[c.parent], ends[c.child]
+    local be = e and bind[e]
+    if p and not (bc and ba and be) then
+      notes[#notes + 1] = c.child .. ": no bind pose for it"
+    elseif p then
+      local f1, f2 = frame(bc.q, c.pri1, c.sec1), frame(ba.q, c.pri2, c.sec2)
+      local rl = {}
+      for i = 1, 3 do rl[i] = {}; for j = 1, 3 do rl[i][j] = dot(f2[i], f1[j]) end end
+      local qw = math.sqrt(math.max(0, 1 + rl[1][1] + rl[2][2] + rl[3][3])) / 2
+      local ahead = dot(cross(f1[1], unit(vsub(be.t, bc.t))), fwd)
+      if qw < 1e-3 then
+        notes[#notes + 1] = c.child .. ": turned half round at the bind pose"
+      elseif math.abs(ahead) < 0.5 then
+        notes[#notes + 1] = string.format("%s: its twist doesn't bend it front to back (%+.2f)", c.child, ahead)
+      else
+        local q = { (rl[3][2] - rl[2][3]) / (4 * qw), (rl[1][3] - rl[3][1]) / (4 * qw), (rl[2][1] - rl[1][2]) / (4 * qw), qw }
+        local n = math.sqrt(q[1] * q[1] + q[4] * q[4])
+        local sw = qmul(q, { -q[1] / n, 0, 0, q[4] / n })
+        local tw = 2 * atan2(q[1], q[4]) + math.rad((ahead > 0 and 1 or -1) * (p.front or 0))
+        if (p.out or 0) ~= 0 then
+          -- out: about her front axis (in frame 2's terms), whichever way takes its far end away from her midline
+          local lat = cross(fwd, { 0, 0, 1 })
+          if dot(vsub(bc.t, pel.t), lat) < 0 then lat = { -lat[1], -lat[2], -lat[3] } end
+          local sign = dot(cross(fwd, unit(vsub(be.t, bc.t))), lat) > 0 and 1 or -1
+          local a, ax = math.rad(sign * p.out) / 2, { dot(fwd, f2[1]), dot(fwd, f2[2]), dot(fwd, f2[3]) }
+          sw = qmul({ ax[1] * math.sin(a), ax[2] * math.sin(a), ax[3] * math.sin(a), math.cos(a) }, sw)
+        end
+        out[c.child] = rotator(qmul(sw, { math.sin(tw / 2), 0, 0, math.cos(tw / 2) }))
+      end
+    end
+  end
+  return out, notes
+end
+
 -- frame 2's secondary axis turned by deg about its primary one (the twist then reads deg less: the range moves by it)
 function M.turned(pri, sec, deg)
   local c, t = cross(pri, sec), math.rad(deg)
@@ -290,6 +347,52 @@ local function bind_pose(mesh, sk, names)
   return out
 end
 
+local dll -- (below)
+
+-- the neutral pose's drives in the asset (tune.active.neutral): each posed main joint's angular drive in twist and
+-- swing mode, its target from M.neutral_targets, its strength set but its position drive off, so nothing simulated
+-- while she lives (convulsions, struggle, jiggle) feels it; active.lua turns them on while her ragdoll flies.
+-- Patched or not: the targets are read off the frames as they are. -> what it did, done (false: try again later)
+local function neutral_drives(pa, mesh, sk)
+  -- (set whether it is enabled or not: off in the asset either way, so the F3 toggle works at once)
+  local n = ctx.tune.active and ctx.tune.active.neutral
+  if not n then return "", true end
+  local d = dll()
+  if d ~= "ready" then return d == "failed" and "; no neutral pose (no sbslice.dll for the bind pose)" or "", d == "failed" end
+  local joints, ranges, ends = main_joints(pa), cfg().ranges or {}, {}
+  local names = { ["Bip001-L-Toe0"] = true, ["Bip001-L-Foot"] = true, ["Bip001-Pelvis"] = true }
+  for _, j in ipairs(joints) do
+    local p = (n.pose or {})[j.child]
+    ends[j.child] = p and (p.e or (ranges[j.child] or {}).e)
+    if ends[j.child] then names[j.child], names[j.parent], names[ends[j.child]] = true, true, true end
+  end
+  local bind, err = bind_pose(mesh, sk, names)
+  if not bind then return "; no neutral pose: " .. tostring(err), true end
+  local targets, notes = M.neutral_targets(joints, bind, n.pose or {}, ends)
+  local k, c, done = n.stiffness or 250, n.damping or 25, {}
+  for _, j in ipairs(joints) do
+    local r, s = targets[j.child], ((n.pose or {})[j.child] or {}).k or 1
+    if r and try(function()
+      local ad = j.t.DefaultInstance.ProfileInstance.AngularDrive
+      ad.AngularDriveMode = 1 -- TwistAndSwing
+      ad.OrientationTarget.Pitch, ad.OrientationTarget.Yaw, ad.OrientationTarget.Roll = r.Pitch, r.Yaw, r.Roll
+      for _, dr in ipairs({ ad.SwingDrive, ad.TwistDrive }) do
+        dr.Stiffness, dr.Damping, dr.MaxForce = k * s, c * s, 0
+        dr.bEnablePositionDrive, dr.bEnableVelocityDrive = false, false
+      end
+      return true
+    end) then done[#done + 1] = string.format("%s %.0f/%.0f/%.0f", j.child:gsub("^Bip001%-", ""), r.Pitch, r.Yaw, r.Roll) end
+  end
+  return string.format("; neutral pose drives on %d joints (%s)%s", #done, table.concat(done, ", "),
+    #notes > 0 and (": " .. table.concat(notes, "; ")) or ""), true, #done
+end
+
+-- the asset has the neutral pose's drives (active.lua: only then turned on)
+local neutraled, neutralTried = {}, {} -- physics asset address -> true: it has them / neutral_drives is done with it
+function M.has_neutral(pa)
+  local a = valid(pa) and try(function() return pa:GetAddress() end)
+  return a and neutraled[a] == true or false
+end
 
 -- a locked joint for each loose body (M.loose_bodies) to the body above it, as the data mod adds them (outfits.py
 -- orphan_joints, patch_shows.py add_joints): a new PhysicsConstraintTemplate, frame 1 the child bone, frame 2 the
@@ -337,7 +440,7 @@ function M.add_joints(pa, loose, bind)
 end
 
 -- sbslice.dll: "ready", "failed" (or no gore: as failed), else still starting
-local function dll()
+function dll()
   local g = ctx.gore
   return g and g.native_state and g.native_state() or "failed"
 end
@@ -508,6 +611,7 @@ local function fix_defaults(pa, mesh, sk)
 end
 
 M.fix_asset = fix_defaults -- (test/run.sh phys runs it on the vanilla outfits)
+M.neutral_drives = neutral_drives -- (and this after it)
 
 -- her mesh's physics asset: the component's, else the mesh's, else the one given to this mesh here. A null
 -- UObject comes back from UE4SS as an invalid wrapper, which is truthy, so `a() or b()` never reached b().
@@ -652,6 +756,20 @@ function M.check(pawn, mesh, live)
       end
     end
   end
+  -- the neutral pose's drives, once an asset (after fix_defaults on an unpatched one: its frames turn there)
+  local function neutral_pass()
+    if not paddr or neutralTried[paddr] then return "", false end
+    local s, fin, cnt = neutral_drives(pa, mesh, sk)
+    if fin then neutralTried[paddr] = true end
+    if (cnt or 0) > 0 then neutraled[paddr] = true end
+    return s, (cnt or 0) > 0
+  end
+  local function remake_for(s, ch)
+    if not ch or live then return s end
+    local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
+    remade(ok)
+    return s .. (ok and ", bodies re-made" or ", bodies NOT re-made")
+  end
   -- an asset fixed here reads as patched from then on: it isn't
   state = { patched = valid(pa) and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa, borrowed = borrowed:find("gave it") ~= nil }
   M.seen[addr] = { name = name(sk), state = state }
@@ -659,12 +777,18 @@ function M.check(pawn, mesh, live)
   local forced = ctx and ctx.cpu_forced
   local what = string.format("outfit %s, physics %s%s: %s, LOD0 CPU access %s%s", name(sk), name(pa), borrowed,
     state.patched and "patched" or "NOT patched", forced and "kept by sbslice.dll" or cpu == nil and "unknown" or tostring(cpu), weld)
-  if state.patched and (cpu ~= false or forced) then log(what); return end
+  -- (the neutral pose needs the bind pose from sbslice.dll: a patched asset waits for it as an unpatched one does)
+  local nt = ctx.tune.active and ctx.tune.active.neutral
+  if state.patched and paddr and not neutralTried[paddr] and nt and dll() ~= "ready" and dll() ~= "failed" then
+    seenMesh, M.seen[addr] = nil, nil
+    return
+  end
+  if state.patched and (cpu ~= false or forced) then log(what .. remake_for(neutral_pass())); return end
   local note = forced and " (an outfit the build didn't see: its physics fixed from here)"
     or " (an outfit mod the build didn't see, or one that loads after this mod: rerun ./build.sh --install)"
   -- the flag isn't the whole story: InnerSuit read false and still cut (nineteenth playtest)
   if cpu == false and not forced then note = note .. "; cuts may not read this mesh (a failed cut logs 'no CPU copy')" end
-  if not valid(pa) or state.patched then log(what .. note); return end
+  if not valid(pa) or state.patched then log(what .. note .. (valid(pa) and remake_for(neutral_pass()) or "")); return end
   if paddr and not fixed[paddr] then
     -- the ranges and the collision table need sbslice.dll: it answers within a few seconds of the game starting
     local d = dll()
@@ -674,7 +798,7 @@ function M.check(pawn, mesh, live)
       return
     end
     fixed[paddr] = true
-    what = what .. "; " .. fix_defaults(pa, mesh, sk)
+    what = what .. "; " .. fix_defaults(pa, mesh, sk) .. (neutral_pass())
     -- (the ends' turn damping again: fix_defaults set every main body's to angularDamping)
     if steadied[paddr] then steady(pa) end
   elseif weld == "" then

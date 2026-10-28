@@ -2,7 +2,7 @@
 -- and dev: the test keys, the spawner and the glass cannon only work with it on). The top ones apply to F7 test
 -- ragdolls; the collision switches also apply to real deaths.
 return {
-  push = 200,                  -- F7: cm/s the whole body is shoved (its centre of mass moves; 0 = none; 450 threw
+  push = 300,                  -- F7: cm/s the whole body is shoved (its centre of mass moves; 0 = none; 450 threw
                                --   her 5-8 m/s, far harder than any death)
   impulse = 400,               --   cm/s the upper body gets on top (spread over chest, neck, head, arms; 0 = none)
   legKick = 250,               --   cm/s her feet (calves less) are swept the other way, so she goes over and lands on
@@ -100,6 +100,9 @@ return {
                                --   every death; settings.default.lua has 15)
       moreLimbs = 0.35,        --   a limb cut takes another nearest limb with this chance, and a third with it again
     },                         --   (0.35: 35 % two or more, 12 % three)
+    followUpCuts = true,       -- one swing cuts every arm, leg, her body and neck it went through (multiCut), and a
+                               --   rolled limb cut takes more (death.moreLimbs); false: one cut a swing, her body over
+                               --   the limbs it crossed (laserCut still cuts along the beam)
     bladeFollow = 0.75,        -- share of deaths with a blade seen that the blade decides; the rest roll the odds above
                                -- (a blade mostly crosses her body: at 1 nearly every death was a waist cut or a split)
                                -- A death whose killing hit the game reported, or whose enemy's weapon swing was
@@ -156,6 +159,8 @@ return {
     openSwing = 35,            -- and its swing, degrees (twist half that)
     openPush = 40,             -- a nudge out along the cut as it starts, cm/s
     queueGap = 1,              -- frames between one cut of a swing and the next (the engine catches up in between)
+    stageBudgetMs = 8,         -- ms of a cut's caps, stubs and opening run in one frame: the next stage goes on in the
+                               --   same frame while the ones so far took under half of it (0: a stage a frame)
     sliceTilt = 45,            -- a limb cut along a blade leans with it at most this many degrees off square
     bodyTilt = 15,             -- a cut across her body (under her bust) leans at most this many degrees off square to
                                --   her spine, whatever the blade or blow did: more ran through a breast
@@ -218,6 +223,9 @@ return {
                                --   half-closed lids)
       gaze = 0.35,             --   most her eyes drift off (up, down or aside, both the same way), picked per death
       jawSide = 0.25,          --   most her slack jaw hangs to one side
+      mouthMax = { jaw_open = 0.5, jawOpen = 0.5, lowerLip_down = 0.45, wholeMouth_down = 0.35 }, -- most her mouth drops open, the
+                               --   mood and the convulsions' gasps and winces added up (a gasp's 0.55 x faceOpen on a
+                               --   shocked face's 0.3 opened it all the way, playtest)
       moods = {                --   one picked per death by weight (Page Up shows them in turn); the same twice
                                --   running only when there is no other
         { name = "agony", weight = 3, morphs = {   -- brows knit, eyes squeezed, nose and lips pulled, slackening
@@ -361,7 +369,9 @@ return {
     },
     afterHits = {              -- an enemy's weapon swinging through her once she is dead cuts her again: a limb, the
       enabled = true,          --   head or (while she is whole) her body in two along the swing, else a hit mark
-      reach = 35,              --   cm its fastest bone (a hand or weapon bone) passes from a part of her
+      reach = 25,              --   cm its fastest bone (a hand or weapon bone) passes from a part of her
+      minSpeed = 500,          --   cm/s it moves at least, in an attack (one of its montages that isn't a walk, turn,
+                               --   hit reaction...): 300 and any weapon passing by cut her (a brush, reported)
       max = 6,                 --   hits a death
       from = 0.6,              --   s into the death before the first (the killing swing itself doesn't count twice)
       cutChance = 0.75,        --   share that cut (the rest leave a hit mark, see hitMarks; with the marks off all cut)
@@ -395,6 +405,9 @@ return {
                                --   CPU at 0.5 and 2 s, a stutter of its own), the helper drift and the masses read
                                --   back (dev turned them on too, and stuttered every playtest)
     slowMs = 15,               -- a split stage or sbslice command taking this long is logged (stutter hunt)
+    asyncLoad = true,          -- the cuts' effects, materials and sounds loaded ahead by the game's async loader
+                               --   (sbslice "J"), not on the game thread (the first blood effect held a frame 1.4 s,
+                               --   each sound 30 ms, playtest); false: one a look on the game thread as before
     splitAnim = 0,             -- a split on her death fall (tune.active.animated): her fall plays on while it is cut,
                                -- then both halves play on with it for this many seconds once it opens and come apart
                                -- by physics at the speed it had. 0 = they come apart as it opens
@@ -639,7 +652,7 @@ return {
   struggle = {                 -- struggle.lua: a maimed Eve fighting on the floor after a ragdoll death, as a run of
     enabled = true,            --   acts picked by what the cuts left her and how she lies (a hand on the stump,
                                --   a hand going out to the stump, rolling onto her front and crawling, trying to sit
-                               --   or prop up, heels shoving her along with no arms, curling up, lying still), over
+                               --   or prop up, heels shoving her along with no arms, doubling over, lying still), over
                                --   her bleeding out: frantic, weakening, dying. Breathing and stump reflexes through
                                --   it. Ragdoll deaths with a limb cut off (rise.alone of those without), not beheaded,
                                --   split or cut at the waist
@@ -678,11 +691,16 @@ return {
       clutch = 3, reach = 1.5, --   clutch, crawl and push go on)
       turn = 0.8, crawl = 3,
       rise = 1, prop = 1,
-      push = 3, curl = 0.8, lie = 0.6,
+      push = 3, curl = 0.5, lie = 0.6,
     },
     acts = {                   -- s each act takes at full strength (slower as she weakens)
       clutch = { 2, 3.5 }, reach = { 1.8, 2.5 }, turn = { 2, 2.8 }, crawl = { 2.5, 4 },
-      push = { 2.5, 4 }, curl = { 1.5, 2.5 }, lie = { 0.6, 1.2 },
+      push = { 2.5, 4 }, curl = { 1.0, 1.8 }, lie = { 0.6, 1.2 },
+    },
+    kick = {                   -- her legs drawing up and kicking out (clutching, reaching, turning), each on its own
+      depth = { 0.3, 0.65 },   --   clock: how far up a knee comes (1: to her chest, a tuck that read as comic)
+      held = { 0.7, 1.5 },     --   s it stays drawn up
+      out = { 1.0, 2.2 },      --   s it stays out
     },
     reach = {
       within = 1.3,            -- a stump gone out to when it lies within this many of the hand's arm lengths (it
@@ -891,6 +909,22 @@ return {
       fallSpeed = 150,         --   under landSpeed): towards a standing pose on the floor every joint jittered
       landSpeed = 40,
     },
+    neutral = {                -- the neutral pose: while her ragdoll flies, each joint below is pulled towards a relaxed,
+      enabled = true,          --   curled body (knees and elbows bent, arms forward: a body's pose in free fall), so a
+      stiffness = 250,         --   hard push doesn't throw her limbs out straight. Drives physfix.lua puts in her
+      damping = 25,            --   physics asset (needs sbslice.dll's bind pose), on from the ragdoll's start
+      most = 4,                --   s at most
+      landOff = true,          --   off as she lands (as the tone's landOff), and as she settles
+      pose = {                 --   degrees from the bind pose its far end swings towards her front (- her back) and
+                               --   out (- in), as physfix.ranges count them; k: a share of the strength
+        ["Bip001-L-UpperArm"] = { front = 30, out = 5, k = 0.6 }, ["Bip001-R-UpperArm"] = { front = 30, out = 5, k = 0.6 },
+        ["Bip001-L-Forearm"] = { front = 70, k = 0.5 }, ["Bip001-R-Forearm"] = { front = 70, k = 0.5 },
+        ["Bip001-L-Thigh"] = { front = 35, out = 5 }, ["Bip001-R-Thigh"] = { front = 35, out = 5 },
+        ["Bip001-L-Calf"] = { front = -50, k = 0.7 }, ["Bip001-R-Calf"] = { front = -50, k = 0.7 },
+        ["Bip001-Spine1"] = { front = 5 }, ["Bip001-Spine2"] = { front = 5 },
+        ["Bip001-Neck"] = { front = 10, k = 0.5 },
+      },
+    },
     spin = {                   -- deg/s a body may turn at most: lying still, her head and hands shook at 500-5000
       enabled = true,          -- deg/s (thirteenth playtest), and anything cut off with them
       main = 720,              --   torso, arms and legs
@@ -936,6 +970,12 @@ return {
       swingReach = 450,        --   at a dead target); within this many cm of her body, lunging in to lunge cm
       lunge = 120,             --   off it as the swing starts (their trees stop them at their attack range)
       scanClear = 1500,        --   cm: the trees are looked up ahead (not in the death) when no enemy is this near her
+    },
+    grab = {                   -- a death in an enemy's grab (Raven holding her and hitting) waits for the grab to end:
+      enabled = true,          --   the killing blow wounds her, the cut and the ragdoll come as it lets go (they came
+      reach = 40,              --   at once, and Raven went on hitting thin air). Held: its hand within reach cm of
+      hold = 0.4,              --   her body (or her attached to it) for hold s; it lasts while its montage plays,
+      most = 6,                --   without one (Raven's grab) while its hand stays on her; waits at most `most` s
     },
     nativeSlice = false,       -- the game's own monster slicer on them (off: it hides parts its own way, on top of ours)
     reach = 2500,              -- cm from Eve: enemies further off are left alone (their hits aren't followed)
@@ -993,10 +1033,12 @@ return {
     despawn = 120,             -- s its corpse stays at least (Raven's went after 1 s)
     floorKill = true,          -- held at a sliver of HP by its phases' floors: the next hit takes it down (the mod's kill)
     floor = 0.05,              --   the boss bar's share at or under which that counts
-    zeroWait = 1.5,            --   s the bar may read 0 with it still up before it is taken down
+    zeroWait = 1.5,            --   s the bar may read 0 with it still up before it is taken down (hit in the last 10 s)
+    barReach = 3000,           --   cm: only one this near her is taken for the one the bar shows
     stuckHits = 3,             -- a phase change waiting on its arena (Scarlet's Phase2 cutscene, never played outside it:
     stuckS = 4,                --   she stood, reported): its bar unchanged and it standing in place through stuckHits
                                --   hits over stuckS s or more takes it down too (floorKill on)
+    passive = false,           -- one spawned here stands still and never attacks (its AI stopped), for cutting at will
     struggle = true,           -- its death struggle on the floor (struggle.lua's, with Death Struggle on)
     face = true,               -- a dead face held on its face mesh (with Death Expression on)
     -- each: key (pick), alias, label, CharacterTable ID and row, its Blueprint, face (cut with Eve's rules: the face

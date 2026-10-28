@@ -15,6 +15,9 @@ typedef void *HANDLE;
 #define WINAPI __stdcall
 __declspec(dllimport) HANDLE WINAPI CreateThread(void *, u64, u32(WINAPI *)(void *), void *, u32, u32 *);
 __declspec(dllimport) void WINAPI Sleep(u32);
+__declspec(dllimport) HANDLE WINAPI CreateEventW(void *, int, int, const u16 *);
+__declspec(dllimport) int WINAPI SetEvent(HANDLE);
+__declspec(dllimport) u32 WINAPI WaitForSingleObject(HANDLE, u32);
 __declspec(dllimport) short WINAPI GetAsyncKeyState(int);
 __declspec(dllimport) HANDLE WINAPI GetForegroundWindow(void);
 __declspec(dllimport) u32 WINAPI GetWindowThreadProcessId(HANDLE, u32 *);
@@ -438,6 +441,8 @@ typedef struct {
     const unsigned char *inmap;      // [section * nb + bone]: bone is in that section's BoneMap
     const u16 *vsec;                 // section of each vertex
     const short *carry;              // bone -> the bone whose cut-time pose it stands in for (a stub's carrier), or 0
+    const float *skm;                // per bone its skinning matrix (skin_matrices: pose * inverse bind), 12 floats, or 0
+    const unsigned char *sinkt;      // per bone is_sink 1, is_carrier 2, own_sink 4 (sink_table), or 0: the list walked
 } cut_ctx;
 
 static int parent_of(const cut_ctx *c, int bone) { return *(int *)(c->binfo + bone * 0xc + 8); }
@@ -476,9 +481,47 @@ static int watched_still(const cut_ctx *c, int i)
 }
 
 // skinned position of bind position vp under weights o (mesh bone indices), current pose
+// each bone's skinning as one 3x4 matrix (rows: x, y, z; the 4th column the offset), its pose * its inverse bind, so
+// a vertex is 9 multiplies an influence: skin_point did the inverse bind, the scale and a quaternion turn per vertex
+// per influence, half the cut's time (a cut held the frame 11-23 ms, playtest). ok[bone] 0: no pose for it
+static float skm_buf[MAX_BONES * 12];
+static void skin_matrices(cut_ctx *c)
+{
+    c->skm = 0;
+    if (c->nb <= 0 || c->nb > MAX_BONES || !c->refinv) return;
+    for (int b = 0; b < c->nb; b++) {
+        const float *t = pose_of(c, b), *m = c->refinv + (u64)b * 16;
+        float *o = skm_buf + (u64)b * 12;
+        if (!t) { for (int k = 0; k < 12; k++) o[k] = 0; o[11] = 1e30f; continue; }
+        // each axis turned and scaled as the bind's linear part takes it, and the bind's offset the same plus the
+        // bone's (no difference of two transformed points: that lost the last bits, and a vertex on the plane fell
+        // to the other side)
+        for (int e = 0; e < 4; e++) {
+            float r[3] = { m[e * 4 + 0] * t[8], m[e * 4 + 1] * t[9], m[e * 4 + 2] * t[10] }, q[3];
+            quat_rot(t, r, q);
+            for (int k = 0; k < 3; k++) o[k * 4 + (e < 3 ? e : 3)] = q[k] + (e == 3 ? t[4 + k] : 0);
+        }
+    }
+    c->skm = skm_buf;
+}
 static void skin_point(const cut_ctx *c, const skin_info *o, const float *vp, float *x)
 {
     x[0] = x[1] = x[2] = 0;
+    if (c->skm) {
+        for (int i = 0; i < MAX_INF; i++) {
+            unsigned char w = o->weights[i];
+            int mb = o->bones[i];
+            if (!w || mb < 0 || mb >= c->nb) continue;
+            if (c->carry && c->carry[mb] >= 0) mb = c->carry[mb];
+            const float *m = c->skm + (u64)mb * 12;
+            if (m[11] > 1e29f) continue;
+            float k = w / 255.0f;
+            x[0] += (vp[0] * m[0] + vp[1] * m[1] + vp[2] * m[2] + m[3]) * k;
+            x[1] += (vp[0] * m[4] + vp[1] * m[5] + vp[2] * m[6] + m[7]) * k;
+            x[2] += (vp[0] * m[8] + vp[1] * m[9] + vp[2] * m[10] + m[11]) * k;
+        }
+        return;
+    }
     for (int i = 0; i < MAX_INF; i++) {
         unsigned char w = o->weights[i];
         int mb = o->bones[i];
@@ -561,6 +604,7 @@ static int is_proj_sink(const cut_ctx *c, int bone)
 
 static int is_sink(const cut_ctx *c, int bone)
 {
+    if (c->sinkt && bone >= 0 && bone < c->nb) return c->sinkt[bone] & 1;
     for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == c->sm && sinks[i].bone == bone) return 1;
     return 0;
 }
@@ -568,6 +612,7 @@ static int is_sink(const cut_ctx *c, int bone)
 // a stub's carrier (recorded with the sinks, but its skin shows: it isn't collapsed, only held)
 static int is_carrier(const cut_ctx *c, int bone)
 {
+    if (c->sinkt && bone >= 0 && bone < c->nb) return (c->sinkt[bone] >> 1) & 1;
     for (int i = 0; i < nsinks; i++) if (sinks[i].mesh == c->sm && sinks[i].bone == bone && sinks[i].carry) return 1;
     return 0;
 }
@@ -575,10 +620,28 @@ static int is_carrier(const cut_ctx *c, int bone)
 // a sink an earlier cut on this very component made (its seam vertices are already on it)
 static int own_sink(const cut_ctx *c, int bone)
 {
+    if (c->sinkt && bone >= 0 && bone < c->nb) return (c->sinkt[bone] >> 2) & 1;
     for (int i = 0; i < nsinks; i++)
         if (sinks[i].mesh == c->sm && sinks[i].bone == bone
             && (sinks[i].comp == c->comp || sinks[i].also[0] == c->comp || sinks[i].also[1] == c->comp)) return 1;
     return 0;
+}
+// the three above as a table a cut reads while the sinks stay as they are: each walked the whole list, every influence
+// of every vertex in several passes, and the list grows with every cut (a death's third cut on her: 8 sinks and more)
+static unsigned char sinkt_buf[MAX_BONES];
+static void sink_table(cut_ctx *c)
+{
+    c->sinkt = 0;
+    if (c->nb <= 0 || c->nb > MAX_BONES) return;
+    for (int i = 0; i < c->nb; i++) sinkt_buf[i] = 0;
+    for (int i = 0; i < nsinks; i++) {
+        int b = sinks[i].bone;
+        if (sinks[i].mesh != c->sm || b < 0 || b >= c->nb) continue;
+        sinkt_buf[b] |= 1;
+        if (sinks[i].carry) sinkt_buf[b] |= 2;
+        if (sinks[i].comp == c->comp || sinks[i].also[0] == c->comp || sinks[i].also[1] == c->comp) sinkt_buf[b] |= 4;
+    }
+    c->sinkt = sinkt_buf;
 }
 
 // symmetric 3x3 eigen decomposition (cyclic Jacobi): a becomes diagonal, columns of v the eigenvectors
@@ -1585,6 +1648,96 @@ static unsigned char *cut_scratch(int k, u64 bytes)
     if (scratch_mem[k]) scratch_len[k] = len;
     return scratch_mem[k];
 }
+// a cut's work split over threads (par_for): PAR_WORKERS threads made once, each waiting on its own event, and the
+// game thread taking a share itself. The cut's first pass (her weights read and every vertex posed) was a third of
+// sbslice's time a cut (the real-mesh harness), every vertex on its own. Serial with no threads (one that failed to
+// start, or a range too small to share)
+#define PAR_WORKERS 3
+#define PAR_MIN 8192
+typedef void (*range_fn)(void *ctx, int lo, int hi);
+static struct par_slot { HANDLE go, done; range_fn fn; void *ctx; int lo, hi; } par_w[PAR_WORKERS];
+static int par_n = -1;
+#ifndef SBSLICE_HOSTED
+static u32 WINAPI par_main(void *arg)
+{
+    struct par_slot *w = (struct par_slot *)arg;
+    for (;;) {
+        WaitForSingleObject(w->go, 0xffffffff);
+        w->fn(w->ctx, w->lo, w->hi);
+        SetEvent(w->done);
+    }
+    return 0;
+}
+static void par_init(void)
+{
+    par_n = 0;
+    for (int i = 0; i < PAR_WORKERS; i++) {
+        par_w[i].go = CreateEventW(0, 0, 0, 0);
+        par_w[i].done = CreateEventW(0, 0, 0, 0);
+        if (!par_w[i].go || !par_w[i].done || !CreateThread(0, 0, par_main, &par_w[i], 0, 0)) return;
+        par_n = i + 1;
+    }
+}
+static void par_wait(int i) { WaitForSingleObject(par_w[i].done, 0xffffffff); }
+static void par_go(int i) { SetEvent(par_w[i].go); }
+#else
+// (the harness: a thread a share, made and joined each call)
+#include <pthread.h>
+static pthread_t par_t[PAR_WORKERS];
+static void *par_host(void *arg) { struct par_slot *w = (struct par_slot *)arg; w->fn(w->ctx, w->lo, w->hi); return 0; }
+static void par_init(void) { par_n = getenv("SERIAL") ? 0 : PAR_WORKERS; }
+static void par_go(int i) { pthread_create(&par_t[i], 0, par_host, &par_w[i]); }
+static void par_wait(int i) { pthread_join(par_t[i], 0); }
+#endif
+static void par_for(int n, range_fn fn, void *ctx)
+{
+    if (par_n < 0) par_init();
+    int k = par_n + 1;
+    if (n < PAR_MIN || k < 2) { fn(ctx, 0, n); return; }
+    int per = (n + k - 1) / k;
+    for (int i = 0; i < par_n; i++) {
+        par_w[i].fn = fn; par_w[i].ctx = ctx;
+        par_w[i].lo = (i + 1) * per; par_w[i].hi = (i + 2) * per < n ? (i + 2) * per : n;
+        if (par_w[i].lo > n) par_w[i].lo = n;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        par_go(i);
+    }
+    fn(ctx, 0, per < n ? per : n);
+    for (int i = 0; i < par_n; i++) par_wait(i);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+// the first pass's own part, per vertex: its weights read (mesh bone indices) and the vertex posed with them
+typedef struct {
+    const cut_ctx *c;
+    skin_info *out; float *xs; unsigned char *vcn; const u16 *vsec;
+    const unsigned char *data, *pos; const u32 *lookup; u32 pstride, maxinf; int variable, wide;
+    unsigned short *const *bmap; const int *nbmap;
+} pose_job;
+static void pose_range(void *ctx, int lo, int hi)
+{
+    const pose_job *j = (const pose_job *)ctx;
+    for (int v = lo; v < hi; v++) {
+        int s = j->vsec[v];
+        if (s == 0xffff) continue;
+        skin_info *o = &j->out[v];
+        u32 off, cn;
+        if (j->variable) { off = j->lookup[v] >> 8; cn = j->lookup[v] & 0xff; }
+        else { off = (j->wide ? 3 : 2) * j->maxinf * (u32)v; cn = j->maxinf; }
+        if (cn > MAX_INF) cn = MAX_INF;
+        j->vcn[v] = (unsigned char)cn;
+        const unsigned short *bmap = j->bmap[s];
+        u32 nbmap = (u32)j->nbmap[s];
+        for (u32 i = 0; i < cn; i++) {
+            u32 li = j->wide ? ((const unsigned short *)(j->data + off))[i] : j->data[off + i];
+            o->bones[i] = li < nbmap ? bmap[li] : 0;
+            o->weights[i] = j->data[off + (j->wide ? 2 : 1) * cn + i];
+        }
+        skin_point(j->c, o, (const float *)(j->pos + (u64)v * j->pstride), j->xs + (u64)v * 3);
+    }
+}
+#define POSE_SECS 512
+static unsigned short *pose_bmap[POSE_SECS];
+static int pose_nbmap[POSE_SECS];
 static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw, int mode, float radius, int forced_sink, int remap)
 {
     // the cut's cost in CPU cycles (rdtsc, no import): the weights worked out, the engine's override built from them,
@@ -1620,6 +1773,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     if (b <= 0 || b >= nb || !c.refinv || *(int *)(c.sm + SM_REF_BASES_INV + 8) != nb) { skin_result("err bad bone"); return; }
     if (mode < MODE_CUT || mode > MODE_SIDE || mode == 3) { skin_result("err bad mode"); return; }
     if (forced_sink >= nb || forced_sink < 0) { skin_result("err bad sink"); return; }
+    sink_table(&c); // (till the new sinks are recorded, below)
 
     // pose source: the master pose component when there is one, its bones matched by name (the engine's
     // MasterBoneMap of a clone made this tick can still be empty or short, and was read unchecked: a split's face and
@@ -1877,6 +2031,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         l = __builtin_sqrtf(l);
         if (l > 1e-4f) { for (int k = 0; k < 3; k++) spd[k] /= l; hasspine = 1; }
     }
+    skin_matrices(&c); // (this pass only: the sinks' inverse binds change further on)
+    // (the weights read and the vertices posed first, over threads, pose_range; the rest of the pass as it was)
+    int threaded = c.nsec <= POSE_SECS;
+    if (threaded) {
+        for (int s = 0; s < c.nsec; s++) {
+            u64 sec = secs + (u64)s * 0xe8;
+            int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
+            pose_bmap[s] = *(unsigned short **)(sec + SEC_BONE_MAP);
+            pose_nbmap[s] = *(int *)(sec + SEC_BONE_MAP + 8);
+            for (int v = base; v < base + cnt && v < nv; v++) vsec[v] = (u16)s;
+        }
+        pose_job pj = { &c, out, xs, vcn, vsec, data, pos, lookup, pstride, maxinf, variable, wide, pose_bmap, pose_nbmap };
+        par_for(nv, pose_range, &pj);
+    }
     for (int s = 0; s < c.nsec; s++) {
         u64 sec = secs + (u64)s * 0xe8;
         int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
@@ -1885,21 +2053,26 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         for (int v = base; v < base + cnt && v < nv; v++) {
             skin_info *o = &out[v];
             vsec[v] = (u16)s;
-            u32 off, cn;
-            if (variable) { off = lookup[v] >> 8; cn = lookup[v] & 0xff; }
-            else { off = (wide ? 3 : 2) * maxinf * (u32)v; cn = maxinf; }
-            if (cn > MAX_INF) cn = MAX_INF;
-            vcn[v] = (unsigned char)cn;
+            u32 off = 0, cn;
+            if (threaded) cn = vcn[v];
+            else {
+                if (variable) { off = lookup[v] >> 8; cn = lookup[v] & 0xff; }
+                else { off = (wide ? 3 : 2) * maxinf * (u32)v; cn = maxinf; }
+                if (cn > MAX_INF) cn = MAX_INF;
+                vcn[v] = (unsigned char)cn;
+            }
             float sub = 0, hang = 0, kept = 0, with = 0, *x = xs + (u64)v * 3;
             for (u32 i = 0; i < cn; i++) {
-                u32 li = wide ? ((unsigned short *)(data + off))[i] : data[off + i];
-                unsigned char w = data[off + (wide ? 2 : 1) * cn + i];
-                int mb = li < (u32)nbmap ? bmap[li] : 0;
-                o->bones[i] = mb;
-                o->weights[i] = w;
+                if (!threaded) {
+                    u32 li = wide ? ((unsigned short *)(data + off))[i] : data[off + i];
+                    o->bones[i] = li < (u32)nbmap ? bmap[li] : 0;
+                    o->weights[i] = data[off + (wide ? 2 : 1) * cn + i];
+                }
+                int mb = o->bones[i];
+                unsigned char w = o->weights[i];
                 if (w && mb < nb) { usage[mb]++; if (limb[mb]) sub += w; if (freeb[mb]) hang += w; if (anykeep && keepcut[mb]) kept += w; if (anywith && withcut[mb]) with += w; }
             }
-            skin_point(&c, o, (const float *)(pos + (u64)v * pstride), x);
+            if (!threaded) skin_point(&c, o, (const float *)(pos + (u64)v * pstride), x);
             float d[3] = { x[0] - p[0], x[1] - p[1], x[2] - p[2] }, h = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
             float q2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - h * h; // squared distance from the axis
             // mostly on a kept accessory chain: on the body, wherever it lies (its edge on the arm too)
@@ -1963,6 +2136,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             if (side[v] && !seclimb[s]) { side[v] = 0; seam[v] = 1; vanished++; }
         }
     }
+    c.skm = 0;
     // a helper the head's skin hangs on is the head's, wherever it lies (CH_P_EVE_09's Ab-NeckSub swings past the plane
     // when she is posed): the kept head lets go of nothing
     // (but not one the broken spine lets go of: it is free)
@@ -2735,9 +2909,14 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         }
     }
 
+    // a cut whose plane met none of the skin (no seam) is no cut, Lua drops it, but its weights were worked out all the
+    // same and put on: an earlier cut's limb under it (drop roots) went onto this one's nothing. Raven's right thigh
+    // after her calf was off (no skin of its own at the plane): 6905 vertices moved, never undone, her stumps and
+    // pieces drawn in the wrong places (playtest). Left as they were ("empty" in the answer)
+    int empty = mode == MODE_CUT && nseam == 0;
     tarray arr = { out, nv, nv };
     tc1 = __builtin_ia32_rdtsc();
-    ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(comp, lod, &arr);
+    if (!empty) ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(comp, lod, &arr);
     tc2 = __builtin_ia32_rdtsc();
 
     // does the opening go round the plane point? A chain cut off on its own (a cape off her shoulder: its plane through
@@ -2769,6 +2948,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         round_p = filled >= 27;
     }
     // the new sinks, kept for skin_restore; "k" collapses them (zero scale at their own origin)
+    c.sinkt = 0;
     int nnew = 0, full = 0, moved_sinks = 0, own_mid = 0;
     for (int i = 0; i < 2 * c.nsec; i++) {
         int bone = secsink[i];
@@ -2987,7 +3167,8 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     if (unbanded) { o = put(o, " unbanded="); o = put_int(o, unbanded); }
     if (outward) { o = put(o, " outward="); o = put_int(o, outward); }
     if (widened) { o = put(o, " widened="); o = put_int(o, widened); }
-    o = put(o, " reweighted="); o = put_int(o, moved);
+    o = put(o, " reweighted="); o = put_int(o, empty ? 0 : moved);
+    if (empty && moved) { o = put(o, " empty="); o = put_int(o, moved); }
     o = put(o, " stuck="); o = put_int(o, stuck);
     if (ncarry) { o = put(o, " carried="); o = put_int(o, carried); o = put(o, " carrier="); o = put_int(o, cbone); if (carry_loose) o = put(o, "~"); }
     else if (miss >= 0) {
@@ -5566,7 +5747,7 @@ static void joints_cmd(const u64 *f, int k)
     skin_result(msg);
 }
 
-// ---- photo mode in a held death (main.lua, Shift+F4) -----------------------------------------------------------------
+// ---- photo mode in a held death (main.lua, Shift+F2) -----------------------------------------------------------------
 // The game's named constants: a singleton (RVA_SB_CONFIG) whose part at +0x378 is filled at 0x25d3ad0 with defaults,
 // its bools a TMap<u32, bool> at +0xf0 (TSet elements of 16 bytes: key, value, hash links), keyed by
 // FCrc::Strihash_DEPRECATED of the name (RVA_STRIHASH, called for the keys). The shipping cheat that overrides one (SBConfigOverrideBool) is a
@@ -6583,6 +6764,82 @@ static void text_cmd(const u16 *txt, int len)
     int *cnt = (int *)(ft.ctl + 8);
     if (*cnt > 1) __atomic_fetch_sub(cnt, 1, __ATOMIC_ACQ_REL);
 }
+// "J<library default object>,<MakeSoftObjectPath>,<LoadAsset>,<world context>;<asset path>": an asset loaded by
+// the game's async loader, not on the game thread: the first blood effect held a frame 1.4 s and every sound of the
+// preloads 30 ms (playtest). UE4SS can't hand Lua's soft object pointer or delegate to UKismetSystemLibrary::LoadAsset,
+// so the call is made here: the path made a soft object path by the engine's own MakeSoftObjectPath, then LoadAsset
+// with no delegate and its latent action on the library's default object (never destroyed; one on nothing is dropped
+// unrun), with no function to call back. The script finds the asset by its path once it is in. Parameter offsets as
+// UE 4.26 lays them out (the script checks them against the functions' own before it asks). "ok <uuid>" or "err ..."
+static int load_uuid = 0x5b000000;
+// "J?<fn>,<fn>": each UFunction's parameters' offsets in order (UStruct ChildProperties +0x50, FField Next +0x20,
+// FProperty Offset_Internal +0x4c) and its PropertiesSize (+0x58): the layout LoadAsset is called with, checked
+// (UE4SS's Lua UFunction has no ForEachProperty)
+static void layout_cmd(const u16 *txt, int len)
+{
+    u64 f[2] = { 0, 0 };
+    int nf = parse_fields(txt, len, f, 2);
+    char out[160], *o = put(out, "ok");
+    for (int i = 0; i < nf; i++) {
+        if (f[i] < 0x10000 || !mem_readable(f[i], 0x60)) { skin_result("err bad function"); return; }
+        o = put(o, i ? " / " : " ");
+        u64 p = *(u64 *)(f[i] + 0x50);
+        for (int k = 0; p && k < 12; k++) {
+            if (p < 0x10000 || !mem_readable(p, 0x50)) { skin_result("err bad property"); return; }
+            if (k) o = put(o, ",");
+            o = put_int(o, *(int *)(p + 0x4c));
+            p = *(u64 *)(p + 0x20);
+        }
+        o = put(o, " size "); o = put_int(o, *(int *)(f[i] + 0x58));
+    }
+    *o = 0;
+    skin_result(out);
+}
+static void load_cmd(const u16 *txt, int len)
+{
+    if (len > 1 && txt[1] == '?') { layout_cmd(txt + 2, len - 2); return; }
+    int semi = 1;
+    while (semi < len && txt[semi] && txt[semi] != ';') semi++;
+    if (semi >= len || txt[semi] != ';') { skin_result("err want J<cdo>,<make>,<load>,<world>;<path>"); return; }
+    u64 f[4] = { 0, 0, 0, 0 };
+    parse_fields(txt + 1, semi - 1, f, 4);
+    for (int i = 0; i < 4; i++) if (f[i] < 0x10000 || !mem_readable(f[i], 8)) { skin_result("err bad object"); return; }
+    if (!RVA_GMALLOC || !*(u64 *)(exe + RVA_GMALLOC)) { skin_result("err no GMalloc"); return; }
+    u64 vt = *(u64 *)f[0];
+    if (!mem_readable(vt + PROCESS_EVENT_SLOT * 8, 8)) { skin_result("err no ProcessEvent"); return; }
+    process_event_fn pe = (process_event_fn)(*(u64 *)(vt + PROCESS_EVENT_SLOT * 8));
+    const u16 *src = txt + semi + 1;
+    int n = 0;
+    while (semi + 1 + n < len && src[n]) n++;
+    if (n <= 0 || n > 1000) { skin_result("err bad path"); return; }
+    u16 *data = (u16 *)ue_malloc((u64)(n + 1) * 2);
+    if (!data) { skin_result("err out of memory"); return; }
+    for (int i = 0; i < n; i++) data[i] = src[i];
+    data[n] = 0;
+    // MakeSoftObjectPath(const FString& PathString) -> FSoftObjectPath { FName AssetPathName; FString SubPathString }
+    struct { u16 *data; int num, max; u64 name; u16 *sub; int snum, smax; } mp = { data, n + 1, n + 1, 0, 0, 0, 0 };
+    pe(f[0], f[1], &mp);
+    ue_free(data);
+    if (!mp.name) { if (mp.sub) ue_free(mp.sub); skin_result("err no soft path made"); return; }
+    // LoadAsset(UObject* WorldContextObject, TSoftObjectPtr<UObject> Asset, FOnAssetLoaded OnLoaded,
+    // FLatentActionInfo LatentInfo): 0x00, 0x08 (weak pointer, tag, path), 0x30 (delegate), 0x40 (linkage, UUID,
+    // function, callback target)
+    unsigned char lp[0x58];
+    for (int i = 0; i < 0x58; i++) lp[i] = 0;
+    *(u64 *)(lp + 0x00) = f[3];
+    *(u64 *)(lp + 0x18) = mp.name;
+    *(u16 **)(lp + 0x20) = mp.sub; *(int *)(lp + 0x28) = mp.snum; *(int *)(lp + 0x2c) = mp.smax;
+    int uuid = load_uuid++;
+    *(int *)(lp + 0x40) = -1;
+    *(int *)(lp + 0x44) = uuid;
+    *(u64 *)(lp + 0x50) = f[0];
+    pe(f[0], f[2], lp);
+    if (mp.sub) ue_free(mp.sub);
+    char out[48], *o = put(out, "ok ");
+    o = put_int(o, uuid);
+    *o = 0;
+    skin_result(out);
+}
 static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
 {
     (void)context; (void)result;
@@ -6797,6 +7054,7 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         return;
     }
     if (txt[0] == 'T') { text_cmd(txt, len); return; }
+    if (txt[0] == 'J') { load_cmd(txt, len); return; }
     if (txt[0] == 'K') {
         /* K<vk>,<vk>...: "ok " and a 1 or 0 for each key, held down now (the F3 menu's arrow keys: the engine never
            sees them, and UE4SS's binds fire once a press, so holding one didn't repeat), then " fg" and 1 when the

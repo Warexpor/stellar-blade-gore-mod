@@ -51,6 +51,7 @@ check(F.find("piece settled: 1 piece%(s%) onto a copy", at) ~= nil, "1: onto a c
 check(E.hiddenBones[ARM] == true, "1: its bones hidden on her mesh")
 local copy = E.added[#E.added]
 check(copy ~= nil and not copy.hidden and not copy.__dead, "1: the copy shown")
+check(copy ~= nil and copy.postAtMesh == true, "1: no post-process AnimBP made on the copy (off before its mesh went on)")
 local n0 = #E.added
 F.run(3, pawn)
 check(#E.added == n0, "1: made once")

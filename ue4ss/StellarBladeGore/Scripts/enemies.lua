@@ -134,6 +134,7 @@ local function remove_all()
   for a in pairs(mine) do
     local e = known[a]
     local obj = e and e.obj
+    if e and e.kind.row and ctx.bosses then ctx.bosses.gone(a, e) end
     if e and e.cut and ctx.gore then ctx.gore.enemy_gone(a, e.mesh, nil) end
     known[a] = nil
     if obj and valid(obj) and try(function() return obj.bActorIsBeingDestroyed end) == false then
@@ -392,6 +393,40 @@ local function hidden(e)
     or try(function() return e.mesh:IsVisible() end) == false
 end
 
+M.BOSS_FAR = 6000
+-- its weapon on a socket whose bone its ragdoll doesn't move: Raven's sword sits on SC_Weapon (bone
+-- SC_WeaponConstraint, under her right hand) and hung in the air where her hand had been once she went limp
+-- (playtest). Put on the nearest bone up from there that simulates, on the ragdolled mesh, where it is now
+local WEAPON_CLASSES = { "/Script/Engine.SkeletalMeshComponent", "/Script/Engine.StaticMeshComponent" }
+local function weapons_on_ragdoll(e)
+  local o, mesh = e.obj, e.mesh
+  local out = {}
+  for _, cp in ipairs(WEAPON_CLASSES) do
+    local cls = try(function() return StaticFindObject(cp) end)
+    for _, c in ipairs(valid(cls) and try(function() return o:K2_GetComponentsByClass(cls) end) or {}) do
+      local sock = valid(c) and addr(c) ~= addr(mesh) and try(function() return c.AttachSocketName:ToString() end)
+      local nm = sock and (try(function() return (c.SkeletalMesh or c.StaticMesh):GetFName():ToString() end) or "")
+      if sock and sock ~= "None" and (sock:find("Weapon") or nm:find("Weapon")) then
+        local par = try(function() return c:GetAttachParent() end)
+        local bone = valid(par) and try(function() return par:GetSocketBoneName(FName(sock)):ToString() end)
+        local onmesh = valid(par) and addr(par) == addr(mesh)
+        local b, guard = bone, 0
+        while b and b ~= "None" and guard < 16 and try(function() return mesh:IsSimulatingPhysics(FName(b)) end) ~= true do
+          b = try(function() return mesh:GetParentBone(FName(b)):ToString() end)
+          guard = guard + 1
+        end
+        if not (b and b ~= "None") then
+          out[#out + 1] = string.format("%s on %s (%s): no simulated bone above it", nm, sock, tostring(bone))
+        elseif b ~= bone or not onmesh then
+          local ok = try(function() c:K2_AttachToComponent(mesh, FName(b), 1, 1, 1, false); return true end)
+          out[#out + 1] = string.format("%s on %s (%s%s) -> %s%s", nm, sock, tostring(bone), onmesh and "" or ", another mesh", b, ok and "" or " FAILED")
+        end
+      end
+    end
+  end
+  if #out > 0 then log(string.format("%s: its weapon onto its ragdoll: %s", e.kind.alias, table.concat(out, "; "))) end
+end
+M._weapons_on_ragdoll = weapons_on_ragdoll
 local function adopt(o, a, cls, k, cuts)
   local mesh = try(function() return o.Mesh end)
   if not valid(mesh) then return nil end
@@ -402,16 +437,22 @@ local function adopt(o, a, cls, k, cuts)
     e.slice = was
   end
   known[a] = e
-  -- one the spawner asked for: it can be removed again
+  -- one the spawner asked for: it can be removed again. A boss of the kind asked for in the last 10 s is it wherever it
+  -- turns up (BOSS_FAR): Tachy comes in from off where she was asked for, wasn't taken for one spawned here, and
+  -- Passive Bosses never touched her (she attacked, playtest)
+  local miss
   for i = #expect, 1, -1 do
     local x = expect[i]
     if os.clock() - x.t > 10 then table.remove(expect, i)
     elseif x.kind == k then
       local l = try(function() return vof(o:K2_GetActorLocation()) end)
-      if l and len(sub(l, x.at)) < 800 then mine[a] = true; table.remove(expect, i); break end
+      local d = l and len(sub(l, x.at))
+      if d and d < (k.row and M.BOSS_FAR or 800) then mine[a] = true; table.remove(expect, i); break end
+      miss = d
     end
   end
-  ;(mine[a] and log or vlog)(string.format("following %s %x (%s)%s%s", k.alias, a, cls, mine[a] and ", spawned here" or "",
+  ;((mine[a] or miss or k.row) and log or vlog)(string.format("following %s %x (%s)%s%s%s", k.alias, a, cls,
+    mine[a] and ", spawned here" or "", miss and not mine[a] and string.format(", not the one asked for (%.0f cm off)", miss) or "",
     e.slice ~= nil and string.format(", its own slicer %s -> off", tostring(e.slice)) or ""))
   if k.row and ctx.bosses then ctx.bosses.adopted(a, e, mine[a] == true) end
   return e
@@ -524,6 +565,20 @@ local function corpse_hit(pawn, a, e)
     h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb } }
 end
 
+-- her swing through a live one (bosses.lua: a blow struck, whether or not the game let it land): the swing's time, or
+-- nil. The same test as a corpse hit's, past since only
+function M.struck(pawn, e, since)
+  local ch = cfg().corpseHits or {}
+  local sw = valid(e.mesh) and her_swing(pawn, math.max(since or 0, os.clock() - (cfg().swingWindow or 0.5)))
+  if not sw then return nil end
+  local reach, blade = ch.reach or 35, ch.blade or 130
+  for _, p in ipairs(PARTS) do
+    local l = part_at(e.mesh, p)
+    if l and math.abs(dot(sub(l, sw.at), sw.n)) < reach and len(sub(l, sw.at)) < blade then return sw.t end
+  end
+  return nil
+end
+
 -- the spawner's Kill nearest (and End): the followed character nearest her goes down as a ragdoll, which the
 -- tick takes for its death (the cut follows). The Airborne Squad are passive NPCs the player's blows don't hurt
 function M.kill_nearest(pawn)
@@ -546,6 +601,8 @@ function M.kill_one(e, her, ba, why)
     try(function() ctl.BrainComponent:StopLogic("SBGore") end)
     try(function() ctl:StopMovement() end)
   end
+  -- (its own tree, on the pawn: a boss's runs there, its controller's is none)
+  try(function() e.obj.BrainComponent:StopLogic("SBGore") end)
   try(function() e.obj.CharacterMovement:DisableMovement() end)
   try(function() e.obj.CapsuleComponent:SetCollisionEnabled(0) end)
   try(function() e.mesh:SetCollisionProfileName(FName("Ragdoll"), true) end)
@@ -690,7 +747,10 @@ local function down_tick()
   while #batch < 64 and down.pending[1] and down.pending[1].t <= t0 do batch[#batch + 1] = table.remove(down.pending, 1) end
   local ks = {}
   for i, x in ipairs(batch) do ks[i] = x.k end
-  if #batch > 0 and not ctx.alive_ask(ks) then
+  local ta = os.clock()
+  local asked = #batch == 0 or ctx.alive_ask(ks)
+  local askMs = (os.clock() - ta) * 1000
+  if not asked then
     -- (sbslice not up or not answering: the batch again next tick)
     for i = #batch, 1, -1 do table.insert(down.pending, 1, batch[i]) end
     return
@@ -706,9 +766,19 @@ local function down_tick()
     local k = x.k
     if k.alive and k.idx then
       down.done[k.addr] = nil
+      local t1 = os.clock()
       local d1, n1 = attack_down(mode, { k.obj }, true)
       down.nd, down.nn = (down.nd or 0) + d1, (down.nn or 0) + n1
+      local ms = (os.clock() - t1) * 1000
+      if ms >= 50 then log(string.format("attack-down: a decision node took %.0f ms (%s)", ms, tostring(try(function() return k.obj:GetFullName() end)))) end
     end
+  end
+  -- (a 437 ms tick here as Raven spawned, playtest: which part. And 48-56 ms at each death's start with neither part
+  -- over 50, playtest: both, with the batch, from slowMs on)
+  local loopMs = (os.clock() - t0) * 1000
+  if askMs + loopMs >= ((ctx.tune.gore or {}).slowMs or 15) then
+    log(string.format("attack-down: %d decision nodes (%d still to do): asking sbslice %.0f ms, the checks %.0f ms", #batch,
+      #down.pending, askMs, loopMs))
   end
   if #down.pending == 0 and (down.nd or 0) > 0 then
     log(string.format("%s: %d knockdown checks in %d of the enemies' decision nodes", LOG[mode], down.nn, down.nd))
@@ -1222,6 +1292,13 @@ function M.tick(pawn, mesh, tm)
             if near then poll_hit(e) end
             if sim and not hidden(e) then
               e.dead, e.t, e.still, e.looks = true, os.clock(), 0, looks(e.mesh)
+              local okw, ew = pcall(weapons_on_ragdoll, e)
+              if not okw then log("weapon on its ragdoll: " .. tostring(ew)) end
+              -- (its outfit's KawaiiPhysics off on its ragdoll, as hers: gore.kawaii)
+              if ctx.gore and ctx.gore.kawaii then
+                local okk, kn, kall = pcall(ctx.gore.kawaii, e.mesh, false)
+                if okk and (kall or 0) > 0 then log(string.format("%s %x: its KawaiiPhysics off on its ragdoll (%d of %d nodes)", k.alias, c.addr, kn, kall)) end
+              end
               if k.row and ctx.bosses then ctx.bosses.died(pawn, c.addr, e) end
               if near and pushes then death_push(pawn, e, pel) end
               local cut_now = cuts and near and math.random() <= (g.cutChance or 1.0)
@@ -1274,6 +1351,135 @@ function M.tick(pawn, mesh, tm)
     if not seen[a] then gone(a, e, "vanished", "gone") end
   end
 end
+-- ---- her death in an enemy's grab (tune.enemies.grab) ----
+-- Raven grabbed her and hit her again and again; she died on one of the hits, the mod's ragdoll took her out of it at
+-- once and Raven went on hitting thin air (playtest). While she lives, every GRAB_EVERY s an enemy within GRAB_NEAR cm
+-- with a hand within reach cm of her body (or her attached to it) is noted; held for `hold` s it has her (a swing
+-- passing through her is gone in a tenth of that). Raven's grab plays no montage on her (playtest: "no montage", the
+-- grab never seen and her body taken out of the grip at once), so a montage isn't needed: with one, the grab lasts
+-- while it plays (its hand off her between two hits); without, while its hand stays on her (M.grab_holds). main.lua's
+-- death waits for that, so the grab runs out on her and the death comes at its end
+local GRAB_EVERY, GRAB_NEAR = 0.1, 400
+local GRAB_HANDS = { "Bip001-R-Hand", "Bip001-L-Hand" }
+local GRAB_HER = { "Bip001-Pelvis", "Bip001-Spine1", "Bip001-Spine2", "Bip001-Neck", "Bip001-Head" }
+local grab = { next = 0, on = {} }
+local function montage_of(o)
+  local ai = try(function() return o.Mesh:GetAnimInstance() end)
+  local m = valid(ai) and try(function() return ai:GetCurrentActiveMontage() end)
+  if not valid(m) then return nil end
+  return m, ai, try(function() return m:GetFName():ToString() end) or "?"
+end
+M.montage_of = montage_of
+-- its hand on her: the hand, her bone and how far (cm), else nil
+local function hand_on(o, mesh, reach)
+  local her = {}
+  for _, b in ipairs(GRAB_HER) do her[#her + 1] = { b, bone_loc(mesh, b) } end
+  local best, bh, bb
+  for _, hb in ipairs(GRAB_HANDS) do
+    local h = bone_loc(o.Mesh, hb)
+    for _, p in ipairs(h and her or {}) do
+      local d = p[2] and len(sub(h, p[2]))
+      if d and d < reach and (not best or d < best) then best, bh, bb = d, hb, p[1] end
+    end
+  end
+  return bh, bb, best
+end
+function M.grab_tick(pawn, mesh)
+  local c = cfg().grab or {}
+  local now = os.clock()
+  if c.enabled == false or now < grab.next then return end
+  grab.next = now + GRAB_EVERY
+  local at0 = bone_loc(mesh, GRAB_HER[1])
+  if not at0 then return end
+  grab.pawn, grab.mesh = pawn, mesh
+  local me = addr(pawn)
+  local root = try(function() return pawn.RootComponent end)
+  local parent = valid(root) and addr(try(function() return root:GetAttachParentActor() end))
+  local seen = {}
+  for _, ch in ipairs(ctx.live_chars()) do
+    -- (a boss standing still, Passive Bosses: her walking up to it put its hand on her neck, a grab logged, playtest)
+    if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) and not (ctx.bosses and ctx.bosses.is_passive(ch.addr)) then
+      local o = ch.obj
+      local at = try(function() return vof(o:K2_GetActorLocation()) end)
+      if at and len(sub(at, at0)) < GRAB_NEAR then
+        local m, _, mn = montage_of(o)
+        mn = mn or "no montage"
+        local touch, bone, d = parent and parent == ch.addr and "attached", nil, nil
+        if not touch then touch, bone, d = hand_on(o, mesh, c.reach or 40) end
+        local g = grab.on[ch.addr]
+        if touch then
+          if not g or g.mn ~= mn then g = { since = now, mn = mn, obj = o, cls = ch.cls, addr = ch.addr }; grab.on[ch.addr] = g end
+          g.last, g.mont, g.how = now, m, touch .. (bone and string.format(" on her %s (%.0f cm)", bone, d) or "")
+          seen[ch.addr] = true
+          if not g.said and g.last - g.since >= (c.hold or 0.4) then
+            g.said = true
+            log(string.format("grab: %s has her: %s, %s, her %s", ch.cls, g.how, mn,
+              (select(3, montage_of(pawn))) or "no montage"))
+          end
+        elseif g and m and g.mont and g.mn == mn and now - g.last < 1 then
+          seen[ch.addr] = true -- (the same montage, its hand off her between two hits)
+        end
+      end
+    end
+  end
+  for a in pairs(grab.on) do if not seen[a] then grab.on[a] = nil end end
+end
+-- the enemy that has her now (held hold s), else nil
+function M.grab_now()
+  local c = cfg().grab or {}
+  if c.enabled == false then return nil end
+  local now, best = os.clock(), nil
+  for _, g in pairs(grab.on) do
+    if now - g.last < 0.3 and g.last - g.since >= (c.hold or 0.4) and (not best or g.since < best.since) then best = g end
+  end
+  return best
+end
+-- the grab still on: its montage still playing on it; without one, her still attached to it or its hand on her
+-- (a little further than it took: her body sways in its grip)
+function M.grab_holds(g)
+  if not (g and valid(g.obj)) then return false end
+  if g.mont then
+    local m, ai = montage_of(g.obj)
+    if not m or m ~= g.mont then return false end
+    return try(function() return ai:Montage_IsPlaying(m) end) ~= false
+  end
+  local pawn, mesh = grab.pawn, grab.mesh
+  if not (valid(pawn) and valid(mesh)) then return false end
+  local root = try(function() return pawn.RootComponent end)
+  if valid(root) and addr(try(function() return root:GetAttachParentActor() end)) == addr(g.obj) then return true end
+  return hand_on(g.obj, mesh, ((cfg().grab or {}).reach or 40) * 1.5) ~= nil
+end
+-- the montages the enemies near her play, for the log (what a grab's is called)
+function M.near_montages(pawn)
+  local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
+  local out, me = {}, addr(pawn)
+  local mesh = try(function() return pawn.Mesh end)
+  if not valid(mesh) then mesh = nil end
+  for _, ch in ipairs(her and ctx.live_chars() or {}) do
+    local at = ch.addr ~= me and try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+    if at and len(sub(at, her)) < GRAB_NEAR then
+      local _, _, mn = montage_of(ch.obj)
+      -- (its nearest hand to her body: a grab without a montage told from a miss)
+      local hb, bb, hd = mesh and hand_on(ch.obj, mesh, 200)
+      out[#out + 1] = string.format("%s %.0f cm: %s%s", ch.cls, len(sub(at, her)), mn or "no montage",
+        hb and string.format(", %s %.0f cm from her %s", hb, hd, bb) or "")
+    end
+  end
+  return #out > 0 and table.concat(out, "; ") or "none near"
+end
+-- an enemy in an attack: one of its montages playing, not a walk, turn, hit reaction or the like, or one of the
+-- after-death swings at her body (hits after death: a weapon only brushing her body cut her, reported)
+local NOT_ATTACK = { "Idle", "Walk", "Run", "Move", "Turn", "Wait", "Hit_", "Result_", "Groggy", "Down", "StandUp",
+  "Getup", "GetUp", "Caution", "Spawn", "Entrance", "Evasion", "Dodge", "Step", "Guard", "Jump", "Dead", "Die" }
+function M.attacking(o, a)
+  local sw = a and aft.sw[a]
+  if sw and sw.till then return "its swing at her body" end
+  local m, _, mn = montage_of(o)
+  if not m then return nil end
+  for _, w in ipairs(NOT_ATTACK) do if mn:find(w, 1, true) then return nil end end
+  return mn
+end
+
 -- (bosses.lua: spawning a kind, and a followed character by its address)
 M.spawn_kind = function(pawn, k, count) return spawn(pawn, k, count or 1) end
 function M.entry(a) return known[a] end
@@ -1292,6 +1498,7 @@ function M.forget()
     log(string.format("after death: the level reloaded while it was on: %s decision nodes put back", ok and tostring(back) or ("? (" .. tostring(back) .. ")")))
   end
   aft.keys, aft.tasks, aft.undo, aft.sets = {}, nil, nil, 0
+  grab.on, grab.pawn, grab.mesh = {}, nil, nil
   aft.sw, aft.swings, aft.near, aft.anims, aft.scan, aft.loaded = {}, 0, nil, {}, nil, nil
   down.done, down.next, down.pending = {}, 0, {}
   freed = false

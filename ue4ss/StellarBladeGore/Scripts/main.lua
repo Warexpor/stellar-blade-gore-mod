@@ -333,6 +333,8 @@ goreCtx.piece_collision = function(mesh, roots)
   end
   log("cut piece " .. table.concat(roots, ",") .. ": " .. tostring(w))
 end
+-- her asset has the neutral pose's drives (physfix.lua; active.lua turns them on in a ragdoll)
+goreCtx.has_neutral = function(m) return physfix ~= nil and physfix.has_neutral(goreCtx.physics_of(m)) end
 goreCtx.arm_table = function(m, p) return physfix and physfix.arm_table(goreCtx.physics_of(m), p) or "no physfix" end
 -- she is up: none of her pairs collide any more but her hair's (physfix.alive_pairs). The table lives on her physics asset, so a cut on her standing (F9
 -- after F8) took the last ragdoll's pairs, measured in another pose: her hands against her thighs, where they hang
@@ -702,7 +704,7 @@ function dface.start(pawn, mesh, why, hold)
   local has = {}
   for _, e in ipairs(list) do has[e.name] = true end
   dface.on = { face = face, list = list, set = set, has = has, extra = {}, t0 = os.clock(), fade = math.max(df.fade or 0.5, 0.01),
-    till = hold and os.clock() + hold }
+    till = hold and os.clock() + hold, mouth = df.mouthMax or {} }
   log(string.format("face (%s): %s, holding %d of her %d morph targets on %s: %s", why,
     mood and (mood.name .. (flip and " (mirrored)" or "")) or "no mood",
     #list, n, name(face), table.concat(shown, ", ")))
@@ -716,13 +718,15 @@ function dface.tick()
   local k = math.min(1, t / f.fade)
   -- the convulsions' face over it (convulse.lua's poses, by morph target name): winces, gasps, tics, flutters
   local c = conv() or {}
+  -- (the morphs dropping her mouth: at most deathFace.mouthMax, all added up; a sided one by its stem)
+  local function most(m) return f.mouth[m] or f.mouth[m:gsub("_[%a]+$", "")] or 1 end
   for _, e in ipairs(f.list) do
     local w = e[2]
     if e.from and (e.over or 0) > 0 then
       local u = math.min(1, t / e.over)
       w = e.from + (w - e.from) * u * u * (3 - 2 * u)
     end
-    w = math.max(0, math.min(1, w * k + (c[e.name] or 0)))
+    w = math.max(0, math.min(most(e.name), w * k + (c[e.name] or 0)))
     try(function() f.face:SetMorphTarget(e[1], w, false) end)
   end
   -- the ones the death face doesn't hold: set while a pose moves them, back to 0 after
@@ -733,7 +737,7 @@ function dface.tick()
     if not f.has[m] and f.set[m] then
       f.extra[m] = f.extra[m] or FName(m)
       local x = f.extra[m]
-      try(function() f.face:SetMorphTarget(x, math.max(0, math.min(1, d)), false) end)
+      try(function() f.face:SetMorphTarget(x, math.max(0, math.min(most(m), d)), false) end)
     end
   end
 end
@@ -970,6 +974,25 @@ local PELVIS = FName("Bip001-Pelvis")
 local function camera_pelvis(h)
   return valid(h.mesh) and try(function() local v = h.mesh:GetSocketLocation(PELVIS); return { X = v.X, Y = v.Y } end)
 end
+-- her usual view, alive: the field of view and the camera's distance from her most of the polls had. The gun's aim
+-- and a grab's close-up (a boss holding her and hitting) zoom in and come close; a death in one kept that view held
+-- till she got up (playtest), so the held camera eases out to the usual one
+screen.camUsual = { fov = {}, d = {}, EASE_S = 0.6 }
+function screen.camera_learn(pawn)
+  local camUsual = screen.camUsual
+  local pcm = try(function() return pawn.Controller.PlayerCameraManager end)
+  if not valid(pcm) then return end
+  local f = try(function() return pcm:GetFOVAngle() end)
+  local l = try(function() local v = pcm:GetCameraLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  local c = try(function() local v = pawn:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
+  local function count(t, k)
+    local n = (t[k] or 0) + 1
+    t[k] = n
+    if not t.best or n > (t[t.best] or 0) then t.best = k end
+  end
+  if type(f) == "number" and f >= 20 and f <= 140 then count(camUsual.fov, math.floor(f + 0.5)) end
+  if l and c then count(camUsual.d, math.floor(dist(l, c) / 10 + 0.5) * 10) end
+end
 local function camera_hold(pawn)
   camWatch = { t0 = os.clock(), n = 0 }
   -- Customized Ragdoll's death camera instead, when that support is on and the mod is there (customrag.lua)
@@ -1008,7 +1031,19 @@ local function camera_hold(pawn)
     pivot = { X = loc.X + f.X * d, Y = loc.Y + f.Y * d, Z = loc.Z + f.Z * d } }
   camHeld.from = camera_pelvis(camHeld)
   camHeld.home = { X = camHeld.pivot.X, Y = camHeld.pivot.Y, Z = camHeld.pivot.Z }
-  log(string.format("camera: view held at %s (fov %s) till she gets up, target %s", v3(loc), tostring(fov),
+  -- zoomed in (aiming, a grab): out to her usual view over EASE_S
+  local uf, ud = screen.camUsual.fov.best, screen.camUsual.d.best
+  local zoom = ""
+  if valid(cc) and fov and uf and fov < uf - 3 then
+    camHeld.cc, camHeld.fov0, camHeld.fov1 = cc, fov, uf
+    zoom = string.format(", zoomed in: fov out to %d", uf)
+  end
+  if ud and d < ud - 30 then
+    camHeld.d0, camHeld.d1 = d, ud
+    zoom = zoom .. string.format(", %.0f cm out to %d", d, ud)
+  end
+  if camHeld.fov1 or camHeld.d1 then camHeld.e0 = os.clock() end
+  log(string.format("camera: view held at %s (fov %s%s) till she gets up, target %s", v3(loc), tostring(fov), zoom,
     name(try(function() return pcm.ViewTarget.Target end))))
 end
 local function wrap(a) a = (a + 180) % 360 - 180; return a end
@@ -1051,6 +1086,14 @@ local function camera_orbit()
   local dt = math.min(now - h.t, 0.1)
   h.t = now
   local pc = h.pc
+  local eased = false
+  if h.e0 then
+    local k = math.min((now - h.e0) / screen.camUsual.EASE_S, 1)
+    local e = k * k * (3 - 2 * k)
+    if h.fov1 and valid(h.cc) then try(function() h.cc:SetFieldOfView(h.fov0 + (h.fov1 - h.fov0) * e) end) end
+    if h.d1 then h.d, eased = h.d0 + (h.d1 - h.d0) * e, true end
+    if k >= 1 then h.e0 = nil end
+  end
   -- photo mode (a held death) looks through its own pawn and takes the mouse and WASD; once it closes the view goes
   -- back to this camera, where it was left
   if screen.photo or h.photo then
@@ -1120,7 +1163,7 @@ local function camera_orbit()
       moved = true
     end
   end
-  if dy == 0 and dp == 0 and h.placed and not moved then return end
+  if dy == 0 and dp == 0 and h.placed and not moved and not eased then return end
   h.placed = true
   local loc = camera_short(h, h.pivot, { X = -f.X, Y = -f.Y, Z = -f.Z }, h.d)
   try(function() h.cam:K2_SetActorLocationAndRotation(loc, rot, false, {}, true) end)
@@ -1571,14 +1614,20 @@ function screen.hud(t)
 end
 function screen.probe(pawn)
   screen.n = screen.n + 1
+  -- (its parts timed for the slow tick's line: "death screen" was 13-28 ms of slow ticks, playtest)
+  local mk = screen.mark or function() end
+  mk("find")
   try(function() screen.hud(polls * POLL_MS / 1000 + ahead) end)
+  mk("death screen: hud")
   -- (asked while new: a kept object's index is read at its first check, within keepFresh s of being made)
   if dead_hud.w and not dead_hud.w.idx then dead_hud.get("w") end
   if dead_hud.rv and not dead_hud.rv.idx then dead_hud.get("rv") end
   try(function() screen.revive(polls * POLL_MS / 1000 + ahead) end)
+  mk("death screen: revive")
   -- (in a death not before 1 s in: registering them took 166 ms, in the frame the killing blow's cut landed,
   -- playtest; while she plays they're tried too, see the tick)
   if not active or (not saved.manual and polls * POLL_MS / 1000 + ahead >= 1) then screen.hook() end
+  mk("death screen: hook")
   -- only in a death, from 5 s in (the screen fades in at 7)
   if screen.n % 15 ~= 0 or not active or saved.manual or polls * POLL_MS / 1000 + ahead < 5 then return end
   -- gone only once this probe saw it up (the hook saying it came up while the visibility read no screen got her up
@@ -1631,13 +1680,14 @@ function screen.probe(pawn)
 end
 
 local function on_start(pawn, mesh)
+  screen.cloth_give_back()
   log("ragdoll state at start: " .. ragdoll_state(pawn))
   screen.reset()
   -- her voice for any death: a cry as she dies, nothing after (gore.lua, tune.gore.voice)
   if gore then try(function() gore.voice_death(pawn, mesh) end) end
   if goreCtx.convulse then try(function() goreCtx.convulse.start(pawn, mesh) end) end
   if goreCtx.struggle then try(function() goreCtx.struggle.start(pawn, mesh) end) end
-  ah.n, ah.armedBy, ah.t0, ah.blunt = 0, {}, os.clock(), nil
+  ah.n, ah.armedBy, ah.t0, ah.blunt, ah.brushes = 0, {}, os.clock(), nil, 0
   no_snapshot(pawn)
   hold = nil
   hold_capsule(pawn)
@@ -1652,6 +1702,11 @@ local function on_start(pawn, mesh)
   -- an outfit the data mod didn't patch: its loose bodies are locked to the body above them, and a mesh with no
   -- physics asset gets one (physfix.lua)
   if physfix then try(function() physfix.start(pawn, mesh) end) end
+  if gore then
+    local ok, n, all = pcall(gore.kawaii, mesh, false)
+    if ok and (all or 0) > 0 then log(string.format("ragdoll: her outfit's KawaiiPhysics off (%d of %d nodes)", n, all))
+    elseif not ok then log("ragdoll: her outfit's KawaiiPhysics: " .. tostring(n)) end
+  end
   local paObj = goreCtx.physics_of(mesh)
   local pa = name(paObj)
   local selfCol = tune.selfCollision
@@ -1753,6 +1808,10 @@ local function recover(pawn, mesh, why)
   if gore then try(function() gore.cleanup(pawn, mesh) end) end
   if gore and screen.low_reset then try(function() screen.low_reset(pawn, why or "her recovery") end) end
   if physfix then try(function() physfix.stop() end) end
+  if gore then
+    local ok, n, all = pcall(gore.kawaii, mesh, true)
+    if ok and (all or 0) > 0 then log(string.format("recover: her outfit's KawaiiPhysics back on (%d of %d nodes)", n, all)) end
+  end
   local steps = { "unlock(" .. unlock(pawn, mesh) .. ")" }
   -- the game's own ragdoll count stays 1 after a real death till its respawn (NotifyBP_ReInitActor) clears it; the
   -- revive item's "revive here" never respawns her, so she stayed ragdolled to the game: stuck to the floor, and her
@@ -2013,6 +2072,7 @@ end
 -- F7 sandbox ragdoll: what the death show does (Ragdoll profile + simulate + impulse), on demand
 -- a living Eve's gameplay collision has no physics: the Ragdoll profile, and the old setup to put back (on_end)
 local function ragdoll_collision(mesh)
+  screen.cloth_give_back()
   local c = { resp = {} }
   c.obj = try(function() return mesh:GetCollisionObjectType() end)
   c.enabled = try(function() return mesh:GetCollisionEnabled() end)
@@ -2195,7 +2255,12 @@ local function live_chars()
   if goreCtx.newobj.mode() == "off" and os.clock() - (goreCtx.seededAt or -99) > 10 then charsSeeded = false end
   if not charsSeeded then
     charsSeeded, goreCtx.seededAt = true, os.clock()
-    for _, a in ipairs(try(function() return FindAllOf("SBCharacter") end) or {}) do add_char(a) end
+    local t0 = os.clock()
+    local all = try(function() return FindAllOf("SBCharacter") end) or {}
+    for _, a in ipairs(all) do add_char(a) end
+    -- (the whole object array walked: 20-50 ms "following 0 enemies" after outfit changes and level loads, playtest)
+    local ms = (os.clock() - t0) * 1000
+    if ms >= 10 then log(string.format("characters looked up again (%d): %.0f ms", #all, ms)) end
   end
   local out = {}
   for ad, e in pairs(chars) do
@@ -2373,10 +2438,13 @@ local function track_swing(pawn, mesh)
     -- after went unseen, 5 of 9 deaths a playtest)
     local reach = g.swingReach or 500
     local cand = {}
+    local tn = os.clock()
     for _, a in ipairs((sw.near(mesh, reach * (g.swingKeep or 2.5)))) do
       if a.d < reach or had[a.addr] then cand[#cand + 1] = a end
       if #cand >= (g.swingFollow or 3) then break end
     end
+    sw.nearMs = (os.clock() - tn) * 1000
+    tn = os.clock()
     for _, a in ipairs(cand) do
       local S = had[a.addr]
       if not S then
@@ -2406,6 +2474,9 @@ local function track_swing(pawn, mesh)
     end
     sw.list = list
     swing = sw.list[1] or sw.state()
+    sw.newMs = (os.clock() - tn) * 1000
+  else
+    sw.nearMs, sw.newMs = 0, 0
   end
   -- her pose with them, while she is alive: a killing blow is judged on her body as the weapon met it (gore.blow), not
   -- as the death show has moved it by the time the death starts (an arm raised to block had swung away)
@@ -2433,7 +2504,11 @@ local function track_swing(pawn, mesh)
     end
   end
   local ms = (os.clock() - t0) * 1000
-  if ms >= (g.slowMs or 15) then log(string.format("swing: following %d enemies took %.0f ms", #sw.list, ms)) end
+  -- (by part: the 422 ms slow tick of a playtest was all "swing")
+  if ms >= (g.slowMs or 15) then
+    log(string.format("swing: following %d enemies took %.0f ms (who is near %.0f, new ones' bones and weapons %.0f, their trails %.0f)",
+      #sw.list, ms, sw.nearMs or 0, sw.newMs or 0, ms - (sw.nearMs or 0) - (sw.newMs or 0)))
+  end
 end
 -- the swing that killed her, if the weapon moved fast enough: { dir, n, at (the weapon there), speed, bone, fwd }
 function sw.of(swing, mesh)
@@ -2953,7 +3028,20 @@ local function hits_after(pawn, mesh)
     for _, st in ipairs(l and best.steps or {}) do dd = math.min(dd, seg_dist(st[1], st[2], l)) end
     if dd and (not d or dd < d) then at, d, bone = l, dd, e[1] end
   end
-  if not at or d > (c.reach or 35) then return end
+  if not at or d > (c.reach or 25) then return end
+  -- only a blow: the enemy in an attack (a montage of one, or its swing at her body) and its weapon fast. A weapon
+  -- only brushing her as it walked or turned by cut her (reported)
+  local en = goreCtx.enemies
+  local atk = not (en and en.attacking) or (goreCtx.held(S.k) and en.attacking(S.actor, S.addr))
+  if not atk or best.v < (c.minSpeed or 500) then
+    if (ah.brushes or 0) < 3 then
+      ah.brushes = (ah.brushes or 0) + 1
+      log(string.format("after death: %s's %s passed %.0f cm from her %s at %.0f cm/s, %s: not a blow", tostring(S.who),
+        best.name, d, bone, best.v, atk and string.format("under %s cm/s", c.minSpeed or 500) or "not attacking"))
+    end
+    ah.armedBy[S.addr or 0] = false
+    return
+  end
   ah.armedBy[S.addr or 0], ah.n = false, ah.n + 1
   -- the plane: the arc through the last three samples, else the step and the enemy's forward
   local dir = unit(sub(best.q, best.p))
@@ -3122,6 +3210,12 @@ end
 function hm.lethal_watch(pawn, mesh)
   local g = tune.gore or {}
   if not gore or g.enabled == false or g.woundAtHit == false or not goreCtx.glass then return end
+  -- (an enemy's grab on her, followed while she lives: a death in it waits for its end, enemies.grab_now)
+  local en = goreCtx.enemies
+  if en and en.grab_tick and not hm.lethal then
+    local ok, err = pcall(en.grab_tick, pawn, mesh)
+    if not ok then log("grab watch: " .. tostring(err)) end
+  end
   -- (a death came after the hit: the cut was its own, undone with it at its end. A death that began 5 s or more after
   -- the hit left it on record, gore_cut not taking it, and her first tick up logged "she lived" and cleaned up again)
   if hm.lethal and hm.lethal.cut and (screen.deathAt or -1) >= hm.lethal.t then hm.lethal.cut = nil end
@@ -3148,6 +3242,15 @@ function hm.lethal_watch(pawn, mesh)
   local lt = hm.lethal
   if lt and not lt.missed and os.clock() - lt.t > 0.1 and os.clock() >= (lt.screenAt or 0) then
     lt.screenAt = os.clock() + 0.1
+    -- in an enemy's grab: the death waits till it lets go (its montage over) or grab.most s, then comes as any
+    if lt.grab then
+      local most = ((tune.enemies or {}).grab or {}).most or 6
+      local long = os.clock() - lt.grab.t0 >= most
+      if not long and en and en.grab_holds(lt.grab) then return end
+      log(string.format("lethal hit: %s's grab over after %.1f s (%s): her death now", lt.grab.cls,
+        os.clock() - lt.grab.t0, long and string.format("waited the most, %s s", most) or lt.grab.mont and "its montage ended" or "it let go of her"))
+      lt.grab, lt.t = nil, os.clock() - 0.15
+    end
     -- (the death screen's widget is made with the level and reads visible all along: a 16 m fall leaving her at 1 HP,
     -- the bar at 0, was taken for a death and ragdolled her alive, the player walking off from her body, playtest.
     -- Her movement is no proof either: the game's falling death left it on, walking, 1.4 s on and more, and was never
@@ -3206,6 +3309,16 @@ function hm.lethal_watch(pawn, mesh)
   local blunt = h and not h.made and sw.blunt_of(h)
   if at then gore.wound(pawn, mesh, at, blunt and "crunch" or nil) end
   log(string.format("lethal hit: her HP bar at 0, the wound %s", at and ("at " .. v3(at) .. (ws and ws.part and (" (" .. ws.part .. ")") or "")) or "nowhere (no blade seen)"))
+  -- (what the enemies near her play: a grab's montage named in the log)
+  local gb = en and en.grab_now and en.grab_now()
+  if en and en.near_montages then log("lethal hit: near her: " .. tostring(select(2, pcall(en.near_montages, pawn)))) end
+  if gb then
+    hm.lethal.grab = { obj = gb.obj, mont = gb.mont, cls = gb.cls, t0 = os.clock() }
+    -- (no montage: the grab lasts while its hand stays on her, enemies.grab_holds)
+    log(string.format("lethal hit: in %s's grab (%s, %s on her for %.1f s): the cut and her death wait for it to let go",
+      gb.cls, gb.mn, gb.how, gb.last - gb.since))
+    return
+  end
   -- gore.bluntRagdoll: a blunt killing blow cuts nothing, the death is a plain ragdoll (gore_cut)
   if g.bluntRagdoll == true and h and not h.made then
     local b, how = sw.blunt_of(h, true)
@@ -4495,6 +4608,16 @@ function screen.cloth_restore()
   end
   return n
 end
+-- a ragdoll starting inside the 1.5 s her meshes are query only (an outfit's bodies re-made just before: F7 a
+-- second after a change): their collision given back first, before the ragdoll reads and sets it. Given back after
+-- (cloth_tick, the next tick) it put her hair's collision on again over the ragdoll's off, her head's bodies
+-- shoved by her own hair flew her 9 m up (playtest), and the query-only state was what the ragdoll's end put back
+function screen.cloth_give_back()
+  if not screen.clothColl then return end
+  local n = screen.cloth_restore()
+  screen.cloth = nil
+  log(string.format("cloth: her meshes' collision given back before her ragdoll (%d)", n))
+end
 -- the bodies on her mesh that simulate while she lives, not under a simulating Bip001 bone (a piece cut off her):
 -- her hair's (CH_P_EVE_30's ponytail, Ab-TL-HairB01-09)
 function screen.sim_bodies(mesh)
@@ -4785,6 +4908,7 @@ end
 -- a slow tick's time by part (tp.mark), logged by game_tick: the death's own start held a frame 82 ms besides the
 -- cut's stages (twenty-fifth playtest)
 local tp = { t = 0 }
+screen.mark = function(what) tp.mark(what) end
 -- (and summed by part for the minute's frame cost line, screen.cost_tick)
 tp.sum = {}
 function tp.mark(what)
@@ -4821,6 +4945,7 @@ function screen.photo_watch(pawn, mesh)
       head and h0 and string.format("%.0f cm", dist(head, h0)) or "?", seen))
   end
   if on and on ~= 0 then
+    screen.photoWait = nil
     local ri = try(function() return pawn.RagdollInfo end)
     if try(function() return mesh.bLockupSimulatePhysics end) or try(function() return pawn.bLockupSimulatePhysics end)
       or (ri and (try(function() return ri.bPoseSnapshot end) or try(function() return ri.bRegisterPoseSnapshot end))) then
@@ -4831,6 +4956,9 @@ function screen.photo_watch(pawn, mesh)
     return true
   end
   if not on then return true end -- (no answer: try again)
+  -- (held from its pawn on, the game's key: her tick may look before photo mode's state shows it open)
+  if screen.photoWait and now < screen.photoWait then return true end
+  screen.photoWait = nil
   screen.photoOn = false
   screen.photoOpened = nil
   screen.photoAfter = now + ((tune.gore or {}).photoGrace or 0.5)
@@ -4964,6 +5092,17 @@ function screen.photo_widget(o, cls, pawn_made)
     log(string.format("photo mode opening: head %s off where it was", head and h0 and string.format("%.0f cm", dist(head, h0)) or "?"))
   end
   ;(pawn_made and log or lg.v)(string.format("photo mode %s made: %s%s", pawn_made and "pawn" or "widget", cls, cut and "" or " (no piece off her)"))
+  -- the game's own key on her ragdoll (P did this before opening it: screen.photo_key): her bodies stopped, asleep
+  -- and deaf to its pawn, her other meshes' collision kept, both put back as it closes (photo_watch, on her tick's
+  -- first look). Skipped, her hair and capsule came back blocking her bodies and threw her about, bent and
+  -- stretched (playtest, F7's ragdoll)
+  if pawn_made and not screen.photoOn and rag and rag.photo_hold and not rag.photoHeld and rag.view and rag.view() then
+    if valid(pawn) then screen.photo_coll_save(pawn) end
+    local held = rag.photo_hold(true)
+    screen.photoOn, screen.photoNext, screen.photoSeen, screen.photoWait = true, 0, nil, os.clock() + 2
+    screen.photoHead = valid(mesh) and try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
+    log(string.format("photo mode opening on her ragdoll by the game's own key: %d of her meshes held still", held))
+  end
   if cut then
     screen.freeze(pawn, mesh, "photo mode's " .. (pawn_made and "pawn " or "widget ") .. cls, true)
     screen.photoHold = os.clock() + screen.PHOTO_HOLD
@@ -5499,14 +5638,19 @@ function hm.carry_tick(pawn, mesh)
   if hm.lowCut then hm.lowCut = false; hm.low_block(pawn, false, "a save loaded") end
 end
 function hm.alive_watch(pawn, mesh)
+  -- (each part marked: a 417 ms tick logged as "swing" was none of track_swing's, which logs its own over slowMs)
   if gore and gore.decals_back then gore.decals_back("she plays") end
   hm.carry_tick(pawn, mesh)
   hm.carry_note(pawn, mesh)
+  tp.mark("carry")
   if goreCtx.customrag then try(function() goreCtx.customrag.keep(pawn, mesh) end) end
+  tp.mark("customrag")
   hm.swap_watch(pawn, mesh, false)
+  tp.mark("outfit swap")
   track_swing(pawn, mesh)
-  hm.guard_watch(pawn, mesh)
   tp.mark("swing")
+  hm.guard_watch(pawn, mesh)
+  tp.mark("guard")
   if gore then gore.watch(mesh, tp.mark) end
   tp.mark("bone watch")
   if goreCtx.glass then goreCtx.glass.tick(pawn, mesh) end
@@ -5613,6 +5757,7 @@ local function tick()
   -- reset went unchecked, fifteenth playtest)
   if physfix and not sim and not active then physfix.check(pawn, mesh, false) end
   if rag and not sim then rag.track(pawn) end
+  if not sim and not active then screen.camera_learn(pawn) end
   if not sim then poll_mesh_hit(mesh) end
   tp.mark("outfit, hits")
   if hm.regrow and (sim or active) then hm.grow_stop("stopped: her death") end
@@ -5849,7 +5994,7 @@ local function tick()
   if not active and rag then rag.tick(POLL_MS / 1000) end
   if active then
     no_snapshot(pawn)
-    if rag then rag.tick(POLL_MS / 1000) end
+    if rag then rag.tick(POLL_MS / 1000, tp.mark) end
     if polls == 45 then log("ragdoll state at 1.5 s: " .. ragdoll_state(pawn)) end
     local df = (tune.gore or {}).deathFace or {}
     if df.enabled ~= false and polls == math.max(1, math.floor((df.at or 0.3) * 1000 / POLL_MS)) then
@@ -5897,6 +6042,8 @@ local function forget_world(pawn)
   screen.frozen, screen.hudHid, screen.hudMaster, screen.hpBack, screen.photoTook = false, nil, nil, 0, nil
   -- the photo watch's async loop read the old pawn's parts (freed with the level)
   screen.unhide, screen.unhideSig = nil, nil
+  -- the revive screen's intro watch held the old death screen (a quit to the title with it up, Nexus report)
+  screen.introLook = nil
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
   goreCtx.quietUntil = math.max(goreCtx.quietUntil, os.clock() + 5)
   skip, ahead = nil, 0
@@ -6016,16 +6163,28 @@ local function game_tick(ctx)
   -- helper poses it out into a cone. The poll below skips frames, and one is enough
   if gore and gore.hold_seams then gore.hold_seams() end
   if active then
+    -- (every frame of a death, timed: a slow one is logged by part, as the poll's are)
+    local f0 = os.clock()
+    local ft = { os.clock() }
     if goreCtx.customrag then pcall(goreCtx.customrag.tick, screen.photoOn or screen.vtPhoto or screen.photoLive) end
+    ft[2] = os.clock()
     local ok, err = pcall(screen.pad_photo)
     if not ok then log("controller photo key: " .. tostring(err)) end
+    ft[3] = os.clock()
     if goreCtx.convulse then
       local ok2, err2 = pcall(goreCtx.convulse.tick, screen.photoOn or screen.vtPhoto or screen.photoLive or screen.stopped)
       if not ok2 then log("convulse: " .. tostring(err2)) end
     end
+    ft[4] = os.clock()
     if goreCtx.struggle then
       local ok3, err3 = pcall(goreCtx.struggle.tick, screen.photoOn or screen.vtPhoto or screen.photoLive or screen.stopped)
       if not ok3 then log("struggle: " .. tostring(err3)) end
+    end
+    ft[5] = os.clock()
+    local fms = (ft[5] - f0) * 1000
+    if fms >= ((tune.gore or {}).slowMs or 15) then
+      screen.perf_note("slow", fms, string.format("slow frame: %.0f ms of the death's every-frame part: customrag %.0f, photo key %.0f, convulse %.0f, struggle %.0f",
+        fms, (ft[2] - ft[1]) * 1000, (ft[3] - ft[2]) * 1000, (ft[4] - ft[3]) * 1000, (ft[5] - ft[4]) * 1000))
     end
   elseif screen.padKeys then screen.padKeys, screen.padWas = nil, nil end
   -- and a cut's stages, a frame each (on the poll below the piece came off 350 ms after the blow)
@@ -6057,13 +6216,14 @@ local function game_tick(ctx)
   if ed and now >= nextTick - POLL_MS / 3000 then
     screen.enemiesDue = nil
     if not screen.photoOn and valid(ed.pawn) and valid(ed.mesh) then
+      for i = #tp, 1, -1 do tp[i] = nil end
       tp.t = now
       local ok, err = pcall(goreCtx.enemies.tick, ed.pawn, ed.mesh, tp.mark)
       if not ok then log("enemies: " .. tostring(err)) end
       tp.mark("enemies")
       local ms = (os.clock() - now) * 1000
       screen.cost.pollMs = screen.cost.pollMs + ms
-      if ms >= ((tune.gore or {}).slowMs or 15) then screen.perf_note("slow", ms, string.format("slow tick: %.0f ms: enemies (on its own frame)", ms)) end
+      if ms >= ((tune.gore or {}).slowMs or 15) then screen.perf_note("slow", ms, string.format("slow tick: %.0f ms: enemies (on its own frame): %s", ms, table.concat(tp, ", "))) end
     end
     if now < nextTick then return end
     now = os.clock()
