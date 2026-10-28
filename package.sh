@@ -31,6 +31,8 @@ MODS=$STAGE/SB/Binaries/Win64/ue4ss/Mods
 mkdir -p "$PAKS" "$MODS/StellarBladeGore/Scripts" "$MODS/SBSlice/dlls"
 # (not the outfits pak: physfix.lua and sbslice.dll make the same physics fixes in game, on every outfit, any mod's too)
 cp "$PAKDIR"/ZZ_StellarBladeGore_P.{utoc,ucas,pak} "$PAKS/"
+# (her death face on its own: Customized Ragdoll users delete it, its pak has one of its own)
+cp "$PAKDIR"/ZZ_StellarBladeGore_Face_P.{utoc,ucas,pak} "$PAKS/"
 cp "$SCRIPTS"/*.lua "$MODS/StellarBladeGore/Scripts/"
 # (no FText constructor signature: UE4SS calls it as the game starts, and with the Steam overlay on that call
 # closes the game at launch, why Stellar Blade's UE4SS packs ship it disabled as dFText_Constructor.lua; 0.4.1 report)

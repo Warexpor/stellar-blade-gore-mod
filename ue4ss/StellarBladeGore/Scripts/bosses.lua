@@ -15,6 +15,9 @@
 -- Their phases' floors (MinimumHP effects some skills put on) can still hold one at a sliver of HP: when the boss bar
 -- (WB_MainHUD_EnemyInfo's ProgressBar_HP) sits at floor or below and it is hit again, or reads 0 with it still up for
 -- zeroWait s, it is taken down by the mod (enemies.lua kill_one: its AI stopped, ragdolled), as the game would.
+-- A phase change that waits on its arena (Scarlet's goes on with the level's MV_Nikke_Scarlet_Phase2 cutscene, never
+-- played outside it: she stood there, doing nothing, reported) holds the bar above the floor: the bar unchanged and the
+-- boss standing in place (STUCK_CM) through stuckHits hits over stuckS s takes it down too.
 local M = {}
 local ctx, try, valid
 local function cfg() return ctx.tune.bosses or {} end
@@ -211,13 +214,25 @@ end
 
 -- the mod's own kill of a boss the game holds at a sliver of HP
 local function take_down(pawn, a, x, why)
-  if not (ctx.enemies and ctx.enemies.kill_one) then return end
-  x.how = why
+  if x.downed or not (ctx.enemies and ctx.enemies.kill_one) then return end
+  x.how, x.downed = why, true
   local her = try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
   ctx.enemies.kill_one(x.e, her, a, why)
 end
 
 M.next = 0
+M.STUCK_CM = 50
+-- its bar and place since they last changed, and the hits on it meanwhile: stood through stuckHits over stuckS s
+local function stuck(x, p, l, hit, now)
+  local h = x.held
+  local moved = h and l and h.l and math.sqrt((l.X - h.l.X) ^ 2 + (l.Y - h.l.Y) ^ 2) > M.STUCK_CM
+  if not h or math.abs(p - h.p) > 0.0005 or moved then
+    x.held = { p = p, l = l, t = now, hits = 0, hit = hit }
+    return false
+  end
+  if hit and hit ~= h.hit then h.hit, h.hits = hit, h.hits + 1 end
+  return h.hits >= (tonumber(cfg().stuckHits) or 3) and now - h.t >= (tonumber(cfg().stuckS) or 4)
+end
 function M.tick(pawn)
   local now = os.clock()
   -- the rows put back once none of their kind spawned here is left (and none asked for in the last 15 s)
@@ -235,11 +250,11 @@ function M.tick(pawn)
   if next(live) and cfg().floorKill ~= false then
     local p = bar()
     local her = try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
-    local best, bd, ba
+    local best, bd, ba, bl
     for a, x in pairs(live) do
-      local l = her and valid(x.e.obj) and try(function() return x.e.obj:K2_GetActorLocation() end)
+      local l = her and valid(x.e.obj) and try(function() local v = x.e.obj:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
       local d = l and math.sqrt((l.X - her.X) ^ 2 + (l.Y - her.Y) ^ 2)
-      if d and (not bd or d < bd) then best, bd, ba = x, d, a end
+      if d and (not bd or d < bd) then best, bd, ba, bl = x, d, a, l end
     end
     if best and p then
       local floor = tonumber(cfg().floor) or 0.05
@@ -255,6 +270,10 @@ function M.tick(pawn)
         end
       else
         best.floorT = nil
+        if stuck(best, p, bl, hit, now) then
+          take_down(pawn, ba, best, string.format("its bar held at %.3f, standing in place, through %d hits over %.1f s "
+            .. "(a phase change waiting on its arena)", p, best.held.hits, now - best.held.t))
+        end
       end
     end
   end

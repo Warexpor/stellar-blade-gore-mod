@@ -24,3 +24,5 @@ KillTimer
 GetClientRect
 SetWindowPos
 GetAsyncKeyState
+GetForegroundWindow
+GetWindowThreadProcessId

@@ -122,6 +122,26 @@ e.hit = { t = F.t + 0.05 }
 F.t = F.t + 0.2; B.tick(pawn)
 check(#kills == 1 and kills[1]:find("hit again"), "hit again at its floor: taken down (" .. tostring(kills[1]) .. ")")
 
+-- a phase change waiting on its arena (Scarlet's Phase2 cutscene): the bar held above the floor, it standing there
+local e2 = { obj = F.obj("CH_M_NA_961_Blueprint_C_1", "CH_M_NA_961_Blueprint_C", { Mesh = F.obj("BossMesh2", "SkeletalMeshComponent") }), kind = kinds.tachy }
+local at2 = { X = 400, Y = 0, Z = 0 }
+e2.obj.K2_GetActorLocation = function() return at2 end
+e2.mesh = e2.obj.Mesh
+B.adopted(0x5ca1, e2, true)
+bar.Percent = 0.5
+local k0 = #kills
+for i = 1, 6 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0, "held at 0.50 for 3 s through hits: not yet")
+-- (moving about: it fights, not stuck)
+at2 = { X = 300, Y = 100, Z = 0 }
+for i = 1, 6 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0, "moved: its count starts over")
+for i = 1, 6 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0 + 1 and kills[#kills]:find("phase change"), "standing, bar held through hits over 4 s: taken down (" .. tostring(kills[#kills]) .. ")")
+for i = 1, 4 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0 + 1, "taken down once")
+B._live()[0x5ca1] = nil
+
 -- its death: face and struggle
 B.died(pawn, 0xb055, e)
 check(B._dead()[0xb055] ~= nil and B._dead()[0xb055].struggle ~= nil, "its death: a struggle of its own")

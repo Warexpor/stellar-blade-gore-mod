@@ -16,6 +16,9 @@ typedef void *HANDLE;
 __declspec(dllimport) HANDLE WINAPI CreateThread(void *, u64, u32(WINAPI *)(void *), void *, u32, u32 *);
 __declspec(dllimport) void WINAPI Sleep(u32);
 __declspec(dllimport) short WINAPI GetAsyncKeyState(int);
+__declspec(dllimport) HANDLE WINAPI GetForegroundWindow(void);
+__declspec(dllimport) u32 WINAPI GetWindowThreadProcessId(HANDLE, u32 *);
+__declspec(dllimport) u32 WINAPI GetCurrentProcessId(void);
 __declspec(dllimport) HANDLE WINAPI CreateFileW(const u16 *, u32, u32, void *, u32, u32, HANDLE);
 __declspec(dllimport) int WINAPI ReadFile(HANDLE, void *, u32, u32 *, void *);
 __declspec(dllimport) int WINAPI WriteFile(HANDLE, const void *, u32, u32 *, void *);
@@ -3314,8 +3317,15 @@ static void piece_pose(u64 src, u64 dst, const u64 *roots, int nr)
         }
         if (ka && kb >= 0 && !keep[kb]) { keep[kb] = 1; kept++; sinkb++; }
     }
+    // src's pose as drawn (its read buffer) into both of dst's: src's other buffer is the one its tick writes, and
+    // while she plays it held her animated pose, the piece back on her shoulder. The copy drew one buffer, then the
+    // other, the arm on the floor and on her shoulder in turn every frame (playtest: a piece that had lain still,
+    // shifting wildly on the ground under heavy motion blur; photo mode, paused, never showed it)
+    int rd = *(int *)(src + SC_SPACE_READ);
+    if (rd != 0 && rd != 1) { skin_result("err no read buffer"); return; }
+    u64 sa = src + SC_SPACE_BASES + (u64)rd * 0x10;
     for (int buf = 0; buf < 2; buf++) {
-        u64 sa = src + SC_SPACE_BASES + (u64)buf * 0x10, da = dst + SC_SPACE_BASES + (u64)buf * 0x10;
+        u64 da = dst + SC_SPACE_BASES + (u64)buf * 0x10;
         float *sp = *(float **)sa, *dp = *(float **)da;
         int sn = *(int *)(sa + 8), dn = *(int *)(da + 8);
         if (!sp || !dp || sn != dn || sn != nb) { skin_result("err pose buffers differ"); return; }
@@ -6789,11 +6799,18 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
     if (txt[0] == 'T') { text_cmd(txt, len); return; }
     if (txt[0] == 'K') {
         /* K<vk>,<vk>...: "ok " and a 1 or 0 for each key, held down now (the F3 menu's arrow keys: the engine never
-           sees them, and UE4SS's binds fire once a press, so holding one didn't repeat) */
+           sees them, and UE4SS's binds fire once a press, so holding one didn't repeat), then " fg" and 1 when the
+           foreground window is the game's (the menu closes on alt-tab: the game's pause stopped the tick it runs on,
+           frozen over it, reported) */
         u64 kf[8] = { 0 };
         int k = len > 1 ? parse_fields(txt + 1, len - 1, kf, 8) : 0;
-        char km[4 + 8 + 1], *o = put(km, "ok ");
+        char km[4 + 8 + 4 + 1], *o = put(km, "ok ");
         for (int i = 0; i < k; i++) *o++ = (GetAsyncKeyState((int)kf[i]) & 0x8000) ? '1' : '0';
+        u32 pid = 0;
+        HANDLE fw = GetForegroundWindow();
+        if (fw) GetWindowThreadProcessId(fw, &pid);
+        o = put(o, " fg");
+        *o++ = fw && pid == GetCurrentProcessId() ? '1' : '0';
         *o = 0;
         skin_result(km);
         return;

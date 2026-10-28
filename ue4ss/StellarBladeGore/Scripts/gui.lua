@@ -966,6 +966,7 @@ local function mouse(pawn, pc, down)
     end
   end
 end
+M.FG_S = 0.1
 -- every tick of hers: the open combo on the controller, and the menu's keys while it is open (a key held repeats)
 function M.tick(pawn)
   local s = M.state
@@ -983,6 +984,19 @@ function M.tick(pawn)
   if ctx.keys and (not s.open or s.capture) and #ctx.keys.nav > 0 then ctx.keys.nav = {} end
   if not s.open then return end
   local now = os.clock()
+  -- the game's window put behind another (alt-tab): closed, her input given back. Left open, the game's pause on losing
+  -- focus stopped her tick, which this runs on, and the menu stood frozen over it (reported). Asked of sbslice.dll
+  -- (Windows' foreground window) every FG_S s
+  if now >= (s.fgNext or 0) then
+    s.fgNext = now + M.FG_S
+    local g = ctx.gore
+    local r = g and g.native_ready and g.native_ready() and g.command and g.command("K")
+    if type(r) == "string" and r:match(" fg0") then
+      log("menu: the game's window lost focus (alt-tab): closed")
+      M.close(pawn)
+      return
+    end
+  end
   -- waiting for a key to bind: only Backspace / B (cancel) is read, and it gives up after 10 s
   if s.capture and s.capture.pad then
     local c = s.capture

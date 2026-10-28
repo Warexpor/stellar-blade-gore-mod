@@ -23,3 +23,4 @@ GetCurrentProcess
 GetTickCount64
 AddVectoredExceptionHandler
 GetCurrentThreadId
+GetCurrentProcessId

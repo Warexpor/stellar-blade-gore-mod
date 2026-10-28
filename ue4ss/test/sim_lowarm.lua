@@ -64,6 +64,9 @@ local at = mark()
 hit("Bip001-L-Forearm", 20, 0.2)
 check(F.find("her left arm cut off", at) ~= nil, "1: a hit on her left forearm takes the left arm")
 check(F.find("landed on Bip001%-L%-Forearm", at) ~= nil, "1: told by the hit bone")
+-- (her body takes decals while she plays with the arm off: the floor blood's shield kept the Purification Scanner's
+-- grid, a decal, off all of her but the face mesh, reported)
+check(E.s.decalsOff and mesh.bReceivesDecals == true, "1: kept off decals as the cut bled, taking them again as she plays")
 if fails > 0 then dump(at, "low HP") end
 back()
 
@@ -136,7 +139,7 @@ check(F.find("low HP arm: .*: no sword %(", at) ~= nil, "5: ours on")
 STANCE, LEVEL = "P_Eve_BlockSword", "AltesLab_P"
 F.run(1, pawn)
 back()
-check(F.find("in Altess Levoire, gone into with no sword", at) ~= nil, "5: the end waits in Altess Levoire")
+check(F.find("in Altess Levoire with no sword", at) ~= nil, "5: the end waits in Altess Levoire")
 check(F.find("sword back", at) == nil, "5: nothing lifted in it")
 LEVEL = "E03_WasteLand_P"
 F.run(2, pawn)
@@ -154,6 +157,22 @@ STANCE = "P_Eve_Idle"
 F.run(2, pawn)
 check(F.find("the game gave her sword back", at) ~= nil, "6: the game's own end seen")
 check(F.find("sword back %(", at) == nil, "6: no end fired")
+if fails > 0 then dump(at, "low HP") end
+
+-- 6b: the right arm off in Altess Levoire before the game took her sword there (ours on), its block on since: the
+-- end waits too (lifting ours lifted the game's, reported)
+STANCE, LEVEL = "P_Eve_Idle", "AltesLab_P"
+at = mark()
+hit("Bip001-Spine2", -14, 0.2)
+check(F.find("low HP arm: .*: no sword %(", at) ~= nil, "6b: ours on")
+STANCE = "P_Eve_BlockSword"
+F.run(1, pawn)
+back()
+check(F.find("in Altess Levoire with no sword", at) ~= nil, "6b: the end waits")
+check(F.find("sword back %(", at) == nil, "6b: nothing lifted in it")
+LEVEL = "E03_WasteLand_P"
+F.run(2, pawn)
+check(F.find("out of Altess Levoire %(E03_WasteLand_P%): sword back", at) ~= nil, "6b: lifted as she leaves it")
 if fails > 0 then dump(at, "low HP") end
 
 -- 7: the arm off, then a level gone into (Altess Levoire): the new level's HP bar reads full till the game sets it

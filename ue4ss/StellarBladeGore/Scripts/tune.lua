@@ -994,6 +994,9 @@ return {
     floorKill = true,          -- held at a sliver of HP by its phases' floors: the next hit takes it down (the mod's kill)
     floor = 0.05,              --   the boss bar's share at or under which that counts
     zeroWait = 1.5,            --   s the bar may read 0 with it still up before it is taken down
+    stuckHits = 3,             -- a phase change waiting on its arena (Scarlet's Phase2 cutscene, never played outside it:
+    stuckS = 4,                --   she stood, reported): its bar unchanged and it standing in place through stuckHits
+                               --   hits over stuckS s or more takes it down too (floorKill on)
     struggle = true,           -- its death struggle on the floor (struggle.lua's, with Death Struggle on)
     face = true,               -- a dead face held on its face mesh (with Death Expression on)
     -- each: key (pick), alias, label, CharacterTable ID and row, its Blueprint, face (cut with Eve's rules: the face

@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.5.1"
+local VERSION = "0.5.2"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -3293,8 +3293,8 @@ hm.LOW_STATES = { { "heals", 67 }, { "shots", 100 } } -- ActorState_BlockItemUse
 -- (the right arm's: no sword, the game's own stance for it, tables.lua's sword_gate)
 -- The stance is the game's own, and its end ends it whoever put it on: in Altess Levoire (AltesLab_P), where the game
 -- takes her sword, the arm back or her death gave the sword back (reported). So her sword is left to the game when she
--- was in that stance already as the arm went, and when she went into Altess Levoire with the arm off and is still in
--- it as the arm comes back (the game's block may have come on meanwhile: no telling the two apart), the end waits
+-- was in that stance already as the arm went, and when she is in Altess Levoire, swordless, as the arm comes back (the
+-- game's block may have come on since the cut, inside it too: no telling the two apart), the end waits
 -- (hm.swordLater) till she leaves Altess Levoire or is out of the stance (the game gave it back itself)
 hm.BLOCK_STANCE, hm.SWORD_LAB = "P_Eve_BlockSword", "^AltesLab"
 function hm.stance_of(pawn) return try(function() return pawn:GetCurrentStanceName():ToString() end) end
@@ -3340,9 +3340,10 @@ function hm.low_block(pawn, on, why)
     hm.lowBlock = nil
     if b.game then log("low HP arm: " .. why .. ": the sword left to the game (its own block)"); return end
     local lvl = valid(pawn) and hm.level(pawn)
-    if lvl and lvl:find(hm.SWORD_LAB) and not (b.level or ""):find(hm.SWORD_LAB) and hm.stance_of(pawn) == hm.BLOCK_STANCE then
+    -- (cut in it too, before the game took her sword there: its block came on over ours, and lifting ours lifted it)
+    if lvl and lvl:find(hm.SWORD_LAB) and hm.stance_of(pawn) == hm.BLOCK_STANCE then
       hm.swordLater = { at = os.clock() }
-      log("low HP arm: " .. why .. ": in Altess Levoire, gone into with no sword (the game's own block may be on too): " ..
+      log("low HP arm: " .. why .. ": in Altess Levoire with no sword (the game's own block may be on too): " ..
         "the sword comes back as she leaves it, unless the game gives it back first")
       return
     end
@@ -3570,7 +3571,7 @@ function hm.piece_watch(pawn, mesh)
   if not gore or not gore.hide_pieces then return end
   local h = gore.pieceHid
   if h and not h.baked then hm.still = nil; return end -- photo mode's
-  local parts = gore.cut_parts(mesh)
+  local parts = gore.cut_parts(mesh, true)
   local busy = gore.busy() or hm.regrow or hm.ghost
   if h then
     local same = valid(h.mesh) and h.mesh:GetAddress() == mesh:GetAddress() and #parts == #h.roots
@@ -3700,6 +3701,8 @@ end
 function hm.low_arm(pawn, mesh)
   hm.grow_tick()
   hm.ghost_tick()
+  -- (her arm cut again on a new Eve first: till then it reads as back, and the arm was taken for grown back)
+  if hm.carry and not hm.carry.cut then return end
   if hm.swordLater then hm.sword_later_tick(pawn) end
   local g = tune.gore or {}
   local la = g.lowArm or {}
@@ -4733,7 +4736,7 @@ local function animated_death(pawn, mesh, push)
   -- the arm lying on the floor went back to her shoulder with her animation, and flew off it at 72 m/s once the
   -- death's ragdoll turned it on again, a stretch (playtest)
   local kept = {}
-  for _, b in ipairs(gore and gore.cut_parts(mesh) or {}) do
+  for _, b in ipairs(gore and gore.cut_parts(mesh, true) or {}) do
     if try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName(b), true, true); return true end) then kept[#kept + 1] = b end
   end
   if #kept > 0 then log("death: the parts cut off her alive simulate on: " .. table.concat(kept, ", ")) end
@@ -5394,7 +5397,7 @@ end
 function hm.swap_watch(pawn, mesh, dead)
   if not (gore and gore.swapped) or gore.busy() or hm.regrow or hm.ghost or (gore.pieceHid and not gore.pieceHid.baked)
     or screen.photoLive then return end
-  local parts = gore.swapped(mesh)
+  local parts, _, quiet = gore.swapped(mesh)
   if #parts == 0 then return end
   if dead then
     local kept
@@ -5407,10 +5410,98 @@ function hm.swap_watch(pawn, mesh, dead)
   if not dead then
     local ok, err = pcall(gore.cleanup, pawn, mesh)
     if not ok then log("outfit changed: undo failed: " .. tostring(err)) end
+    -- (a part carried over a level change has no piece here: hidden on the new outfit too, hm.carry_tick)
+    local loud = {}
+    for _, b in ipairs(parts) do if not (quiet or {})[b] then loud[#loud + 1] = b end end
+    if #loud < #parts then
+      local q = {}
+      for _, b in ipairs(parts) do if quiet[b] then q[#q + 1] = b end end
+      hm.carry = { parts = q, done = {}, t = os.clock(), why = "outfit changed" }
+      parts = loud
+    end
+    if #parts == 0 then return end
   end
   gore.slice_bones(pawn, mesh, parts, dead and "after" or "outfit changed")
 end
+
+-- A level change while she lives (Altess Levoire gone into, an elevator, a load) brings a new Eve, uncut: the parts
+-- cut off her alive were back on her, the level's cutscene showed her whole and the arm stayed back (Nexus report,
+-- 0.5.0: then came off again as the new HP bar was set, sound and all; 0.5.1 kept it on). The game's cutscenes play on
+-- her own pawn (their sequences bind "Player"), so the new Eve is cut again at once: quietly (gore's "carried": the
+-- stump, the piece hidden, no sound, no blood, no piece falling), Lose Arm at Low HP's blocks on the new pawn with it.
+-- A save loaded is a new Eve too: her HP bar, once the game sets it (a new bar reads full till then, after the
+-- level's cutscene), tells. Set to another value than she had (CARRY_HP off), or still full CARRY_FULL_S s on when she
+-- wasn't, the carried parts are put back at once. A death's reload carries nothing (her next life is whole)
+hm.CARRY_HP, hm.CARRY_FULL_S = 0.02, 60
+-- while she plays: the parts cut off her alive, and her HP bar, for a level change
+function hm.carry_note(pawn, mesh)
+  -- (not while a carry is under way: the new level's HP bar reads full till the game sets it, and that full bar was
+  -- taken for hers, sim)
+  if not gore or hm.regrow or hm.ghost or hm.carry then return end
+  local parts = gore.cut_parts(mesh)
+  if #parts == 0 then hm.carryParts = nil; return end
+  hm.carryParts = parts
+  hm.carryBar = hm.lowLast or (goreCtx.glass and goreCtx.glass.bar_pct(false)) or hm.carryBar
+end
+-- the level gone: what goes on with her into the new one (forget_world)
+function hm.carry_take(dead)
+  local parts, bar = hm.carryParts, hm.carryBar
+  hm.carryParts, hm.carryBar = nil, nil
+  -- (a level gone before the last one's were cut again, or her HP bar was set: those go on, with the bar she had)
+  if hm.carry then parts, bar = hm.carry.parts, hm.carry.bar end
+  -- (blocks on her old pawn's actor went with it; the gun's table gate is the game's, put back: low_arm puts them all
+  -- on the new one)
+  local b = hm.lowBlock
+  hm.lowBlock = nil
+  if b and b.gate and goreCtx.tables then pcall(goreCtx.tables.gun_gate, false) end
+  if dead or not parts or #parts == 0 then hm.carry = nil; return end
+  hm.carry = { parts = parts, done = {}, t = os.clock(), bar = bar, why = "level change" }
+  log(string.format("level change with %s cut off her alive (HP bar %s): cut again on the new Eve", table.concat(parts, ", "),
+    bar and string.format("%.3f", bar) or "unread"))
+end
+-- on the new Eve: each carried part cut again, one at a time (gore's "carried"), then her HP bar watched for a save
+function hm.carry_tick(pawn, mesh)
+  local c = hm.carry
+  if not c or not gore then return end
+  if not c.cut then
+    -- (not while the new level may still stream in: goreCtx.quietUntil, forget_world)
+    if gore.busy() or not gore.native_ready() or os.clock() < (goreCtx.quietUntil or 0) then return end
+    for _, b in ipairs(c.parts) do
+      if not c.done[b] then
+        c.done[b] = true
+        if not gore.has_cut(mesh, b) then
+          local ok, r = pcall(gore.slice_bone, pawn, mesh, b, nil, "carried")
+          log(string.format("carried (%s): %s %s", c.why, b, not ok and ("failed: " .. tostring(r)) or r and "cut again" or "not cut"))
+          return
+        end
+      end
+    end
+    c.cut, c.cutT = true, os.clock()
+    if not c.bar then hm.carry = nil end
+    return
+  end
+  -- (the cut opening first: undone mid-cut, its stages ran on a mesh put back)
+  if gore.busy() or not goreCtx.glass then return end
+  local pct = goreCtx.glass.bar_pct(false)
+  if not pct then return end
+  local why
+  if pct < 0.999 then
+    if math.abs(pct - c.bar) > hm.CARRY_HP then why = string.format("her HP bar set to %.3f, not her %.3f", pct, c.bar) end
+  elseif c.bar < 0.98 then
+    if os.clock() - c.cutT < hm.CARRY_FULL_S then return end
+    why = string.format("her HP bar full %d s on, not her %.3f", hm.CARRY_FULL_S, c.bar)
+  end
+  hm.carry = nil
+  if not why then log(string.format("carried: her HP bar at %.3f as she had it: a level change, the parts stay off", pct)); return end
+  log("carried: " .. why .. ": a save loaded, the parts back")
+  local ok, err = pcall(gore.cleanup, pawn, mesh)
+  if not ok then log("carried: undo failed: " .. tostring(err)) end
+  if hm.lowCut then hm.lowCut = false; hm.low_block(pawn, false, "a save loaded") end
+end
 function hm.alive_watch(pawn, mesh)
+  if gore and gore.decals_back then gore.decals_back("she plays") end
+  hm.carry_tick(pawn, mesh)
+  hm.carry_note(pawn, mesh)
   if goreCtx.customrag then try(function() goreCtx.customrag.keep(pawn, mesh) end) end
   hm.swap_watch(pawn, mesh, false)
   track_swing(pawn, mesh)
@@ -5783,6 +5874,8 @@ end
 -- held from the old one is dropped without touching it.
 -- pawn: the new Eve
 local function forget_world(pawn)
+  -- (her alive cuts go on into the new level: a death's reload takes none)
+  hm.carry_take(active)
   active, polls, after, respawned, lastRecover = false, 0, -1, false, -100
   saved, hits, pending, animDeath = {}, {}, {}, nil
   rel.loc, rel.rot = nil, nil
@@ -5796,6 +5889,10 @@ local function forget_world(pawn)
   screen.allow_photo(false, "level reloaded")
   screen.photoOn, screen.frozenMesh, screen.frozenHair, screen.watchFreeze, screen.photoW = false, nil, nil, false, nil
   screen.clock, screen.stopped, screen.uvClean = nil, nil, nil
+  -- her watches and the enemies' part, queued by the old one's last poll for a frame after it with her pawn and
+  -- mesh: run on the new one's first tick, asking the freed old pawn crashed the game (quit to the main menu with her
+  -- alive, playtest; a death's reload had none queued). And F7's push, and the dev watch, held the old pawn too
+  screen.aliveDue, screen.enemiesDue, screen.watch, f7_push = nil, nil, nil, nil
   -- a held death (Shift+F4) or a hidden HUD went with the old level: none carried into the new one
   screen.frozen, screen.hudHid, screen.hudMaster, screen.hpBack, screen.photoTook = false, nil, nil, 0, nil
   -- the photo watch's async loop read the old pawn's parts (freed with the level)

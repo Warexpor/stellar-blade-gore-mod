@@ -1898,7 +1898,10 @@ function M.splat(pawn, at, life)
   floor_decal(pawn, at, r, POOL_DECALS, life)
 end
 
--- a pool under her would stain her skin: her meshes take no decals while it is down
+-- a pool under her would stain her skin: her meshes take no decals while it is down and she lies in it. Not while
+-- she plays (M.decals_back): an arm lost alive kept her body from every decal till it grew back, the game's own too
+-- (Nexus report: Altess Levoire's Purification Scanner grid, decals projected on her, only on her head and neck, the
+-- face mesh; the hit marks' slashes too)
 local function shield(comp)
   if not valid(comp) then return end
   local a = addr(comp)
@@ -2007,6 +2010,18 @@ local function pools_tick()
       end
     end
   end
+end
+
+-- she plays (alive, main.lua's watch): her meshes take decals again. How many
+function M.decals_back(why)
+  if #no_decals == 0 then return 0 end
+  local n = 0
+  for _, e in ipairs(no_decals) do
+    if valid(e.comp) and addr(e.comp) == e.addr and try(function() e.comp:SetReceivesDecals(e.was ~= false); return true end) then n = n + 1 end
+  end
+  no_decals = {}
+  log(string.format("her meshes take decals again (%s): %d", why, n))
+  return n
 end
 
 local function pools_clear()
@@ -2959,7 +2974,7 @@ local function stage_cut(q)
     if q.c then q.bone = b; break end
   end
   if not q.bone then log("nothing cut (" .. q.why .. ")"); return false end
-  q.entry = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone, sm = enemy.asset(q.mesh), riders = {} }
+  q.entry = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone, sm = enemy.asset(q.mesh), riders = {}, quiet = q.quiet }
   cuts[#cuts + 1] = q.entry
   -- (each with its mesh asset: the face's sinks are its own asset's, put back with it, cleanup_eve)
   if q.c.face then cuts[#cuts + 1] = { mesh = q.c.face, addr = addr(q.c.face), bone = "face", sm = enemy.asset(q.c.face) } end
@@ -3313,6 +3328,18 @@ end
 local function stage_open(q)
   local g = cfg()
   local k = command("k")
+  -- carried over a level change (main.lua's hm.carry_tick): the part came off her in the old level and lies there. On
+  -- the new Eve only her stump: the piece's bones hidden (as a smash's), no piece falling, no sound, no blood
+  if q.quiet then
+    local nb, nv = M.smashed.hide(q)
+    for i, a in pairs(q.caps) do if valid(a) and i ~= 2 then try(function() a:SetActorHiddenInGame(false) end) end end
+    for _, a in pairs(q.stubs or {}) do
+      if valid(a) and a ~= q.pieceStub then try(function() a:SetActorHiddenInGame(false) end) end
+    end
+    log(string.format("%s off (%s): %s, the piece hidden (%d bone(s), %d rider(s)), no sound, no blood", q.bone, q.why,
+      k, nb, nv))
+    return
+  end
   -- on a living Eve the mesh has no physics collision with the world, so the piece would fall through the floor:
   -- give it the death ragdoll's profile until she recovers (her own bodies stay kinematic)
   local world = ""
@@ -4918,7 +4945,8 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
   if face then waited = force_lod(face) or waited end
   pending = { stage = "cut", wait = waited and 2 or 0, t0 = os.clock(), pawn = pawn, mesh = mesh, hit = hit, why = why, kind = kind,
     face = face, out = out, plane = plane, blade = blade, owner = enemy.cur, bone = M.bone_once, middle = M.splitMiddle,
-    smash = M.smash_once and not enemy.cur or nil, fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil }
+    smash = M.smash_once and not enemy.cur or nil, fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil,
+    quiet = why == "carried" or nil }
   aimed = nil
   -- the blade's plane and directions in her own frame, so they move with her until the cut is made
   local f = (plane or blade or out) and body_frame(mesh)
@@ -4988,7 +5016,7 @@ function M.has_cut(mesh, bone) return already_cut(mesh, bone) end
 -- (nothing else of hers wears it now), the caps and bleeds left riding their bones, so they can be cut again; not her
 -- body's (a waist cut: its split's copy holds the other half, and a second split made a second one), returned second
 function M.swapped(mesh, forget)
-  local a, out, olds, kept = addr(mesh), {}, {}, {}
+  local a, out, olds, kept, quiet = addr(mesh), {}, {}, {}, {}
   for i = #cuts, 1, -1 do
     local c = cuts[i]
     if c.addr == a and PARTS[c.bone] and not c.smashed and not enemy.owned[c] and c.sm and enemy.asset(mesh) ~= c.sm then
@@ -4997,6 +5025,7 @@ function M.swapped(mesh, forget)
         c.sm = enemy.asset(mesh)
       else
         out[#out + 1] = c.bone
+        if c.quiet then quiet[c.bone] = true end
         if forget then olds[c.sm] = true; table.remove(cuts, i) end
       end
     end
@@ -5006,7 +5035,7 @@ function M.swapped(mesh, forget)
     for _, c in ipairs(cuts) do if c.sm == sm then shared = true end end
     if not shared then log("cut redone on another asset: the old one's sinks " .. command(string.format("r%x", sm))) end
   end
-  return out, kept
+  return out, kept, quiet
 end
 
 -- ---- smash (tune.gore.smash, experimental) ----
@@ -5299,10 +5328,13 @@ function M.cuts_on(mesh)
   return n, split
 end
 
--- the parts cut off this mesh so far (a limb, the head, her upper body), by their root bone
-function M.cut_parts(mesh)
+-- the parts cut off this mesh so far (a limb, the head, her upper body), by their root bone. lying: only the ones
+-- that lie somewhere as a piece (not one carried over a level change, hidden on her: its piece stayed in the old one)
+function M.cut_parts(mesh, lying)
   local a, out = addr(mesh), {}
-  for _, c in ipairs(cuts) do if c.addr == a and PARTS[c.bone] and not c.smashed then out[#out + 1] = c.bone end end
+  for _, c in ipairs(cuts) do
+    if c.addr == a and PARTS[c.bone] and not c.smashed and not (lying and c.quiet) then out[#out + 1] = c.bone end
+  end
   return out
 end
 -- photo mode with a piece off her alive: her mesh used to stop ticking (its animation pulled the piece back onto her,
@@ -5345,7 +5377,7 @@ function M.hide_pieces(pawn, mesh, on, bake)
     return #h.roots, #h.riders
   end
   if h then return #h.roots, #h.riders end
-  local roots = M.cut_parts(mesh)
+  local roots = M.cut_parts(mesh, true)
   if #roots == 0 then return 0, 0 end
   local idx = {}
   for _, b in ipairs(roots) do
@@ -6749,8 +6781,9 @@ end
 -- once the body has settled, leave a pool under it
 function M.on_settled(pawn, mesh)
   if cfg().enabled == false or cfg().pool == false then return end
-  -- a cut's openings already pool where they lie
-  if #decals > 0 or #trackers > 0 then return end
+  -- a cut's openings already pool where they lie (cut alive, her mesh took decals again as she played: kept off them
+  -- now she lies there)
+  if #decals > 0 or #trackers > 0 then shield(mesh); return end
   -- a pool of the same decals spreading from under her pelvis (the game's looping floor effect read as stretched
   -- particles)
   if not bone_loc(mesh, "Bip001-Pelvis") then return end
@@ -7019,6 +7052,9 @@ function M.ghost_begin(pawn, mesh, parts, path)
       -- stretched between it and her as she moved, reported)
       local lead = try(function() return m.MasterPoseComponent:Get() end)
       try(function() c:SetMasterPoseComponent(valid(lead) and lead or m, true) end)
+      -- (attached to the mesh it copies: clone_of only places it where that mesh is, so a copy on her pose stood where
+      -- the regrow began while she walked off, out of sight, and the arm came back at the end at once, reported)
+      try(function() c:K2_AttachToComponent(m, FName("None"), 2, 2, 2, false) end)
       local vc = command(string.format("V%x,0,1,%s", addr(c), table.concat(roots, ",")))
       local vm = command(string.format("V%x,0,0,%s", addr(m), table.concat(roots, ",")))
       if vc:sub(1, 9) ~= "ok vanish" or vm:sub(1, 9) ~= "ok vanish" then return fail("vanish: copy " .. vc .. ", hers " .. vm) end
@@ -7406,6 +7442,8 @@ function M.forget(pawn)
   -- the pool's cap and stub actors and the split copies were the old level's: asking them anything read freed memory
   M.pool.lid, M.pool.plain = {}, {}
   M.copies.of, M.copies.dirty = {}, {}
+  -- (the bones a smash or a carried cut hid were the old level's meshes')
+  M.smashed.bones, M.smashed.shown = {}, {}
 end
 
 return M

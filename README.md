@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.5.1. See the [changelog](CHANGELOG.md).
+Version 0.5.2. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,13 +10,14 @@ Version 0.5.1. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.5.1.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
-   - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death, her death face and voice;
+2. **This mod.** Extract `StellarBladeGore-0.5.2.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+   - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
+   - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.1`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.2`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -29,7 +30,7 @@ Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/S
 **Updating:** extract the new zip over the old one the same way. Your settings stay: the zip only carries `settings.default.lua`, and the mod makes your `settings.lua` from it on its first start. From a self-built copy, also delete `ZZ_StellarBladeGore_Outfits_P.*` from `Paks/~mods` if it's there: nothing replaces it.
 
 **Uninstalling:** delete these, and the game is as it was:
-- `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas` and `.utoc`;
+- `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas` and `.utoc`, and `ZZ_StellarBladeGore_Face_P` the same;
 - the `StellarBladeGore` and `SBSlice` folders in `SB/Binaries/Win64/ue4ss/Mods`.
 
 UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `ue4ss` folder from `SB/Binaries/Win64` and, on Linux, the launch option. The mod changes none of the game's own files.
@@ -52,7 +53,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 <!-- | `gore.smash.enabled` | `false` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a burst of blood fly out where it was, and the stump stays as a cut's. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always`: with it on, every death smashes, to try it. | -->
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
-| `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. F3 → Gameplay → Lose Arm at Low HP. |
+| `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. It stays off through a level change and its cutscene; a save loaded brings it back. F3 → Gameplay → Lose Arm at Low HP. |
 | `gore.lowArm.side` | `"hit"` | Which arm comes off: `"hit"` the one on the side of her the blow landed on (one at random when it landed on her middle or the game gave no hit), `"left"`, `"right"` or `"either"` (one at random each time). F3 → Gameplay → Which Arm (Side Hit, Left, Right, Either). |
 | `gore.lowArm.below` | `0.25` | The share of her HP (25%) a hit has to leave her under for the arm to come off. F3 → Gameplay → Arm Comes Off Below, in 1% steps. |
 | `gore.lowArm.noHealGun` | `true` | While her left arm is off she can't use heal items or shoot the gun (both need her left hand). F3 → Gameplay → No Heals or Gun Without It. |
@@ -117,9 +118,9 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Outfit and nude mods** work, installed before or after this one: every outfit gets its ragdoll fixes in game when she puts it on, and its look is left alone.
 - **Face mods** for Eve work: the pak carries no face or body mesh of hers or the enemies' (older versions carried her face, and a face replacer stopped the game at launch).
 - **Voice mods** that replace Eve's death cries (`vo_eve_die_*`, e.g. Violent Death Mod) work as they are: her death cry plays their recordings. A mod that adds new sounds instead can be pointed at with `gore.voice.sounds` in `settings.lua`.
-- **Proper Death Expression** by blabmice is built in, credited below. Don't install it alongside.
+- **Proper Death Expression** by blabmice is built in (`ZZ_StellarBladeGore_Face_P`), credited below. To install it anyway, delete `ZZ_StellarBladeGore_Face_P.*` from `Paks/~mods`: two paks with the same asset keep the game loading forever.
 - **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.
-- **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: turn on Customized Ragdoll Support (F3 → Death, `customizedRagdoll`). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
+- **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: turn on Customized Ragdoll Support (F3 → Death, `customizedRagdoll`). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. **Delete `ZZ_StellarBladeGore_Face_P.pak`, `.ucas` and `.utoc` from `Paks/~mods`**: its `death_expression_p` carries a death face of its own (and its camera, so keep that one), and with both the game loads forever (reported). Its face plays then. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
 - **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs).
 - **[ESE](https://www.nexusmods.com/stellarblade/mods/672)** (Shield and Destroyed) works alongside, in any load order: a part cut off her stays off when it puts her in another suit as her shield breaks or she dies.
 - **UUEPBS** (the body slider) works alongside: her sliders stay on through her deaths and cuts (before the next release, her deaths froze where she was cut).

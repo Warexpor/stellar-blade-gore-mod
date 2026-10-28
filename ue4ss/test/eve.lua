@@ -56,6 +56,8 @@ function E.make(F)
 
   local mesh
   mesh = F.obj("CharacterMesh0", "SkeletalMeshComponent", {
+    bReceivesDecals = true,
+    SetReceivesDecals = function(self, on) rawset(self, "bReceivesDecals", on and true or false); s.decalsOff = s.decalsOff or not on end,
     IsSimulatingPhysics = function(_, b)
       local n = b and b:ToString() or "Bip001-Pelvis"
       if s.simBelow[n] then return true end
@@ -118,6 +120,7 @@ function E.make(F)
       hidden = true, mids = {},
       SetHiddenInGame = function(self, h) self.hidden = h; F.event(self.__name .. (h and " hidden" or " shown")) end,
       K2_DestroyComponent = function(self) self.__dead = true; F.event(self.__name .. " destroyed") end,
+      K2_AttachToComponent = function(self, parent, sock, l, r, sc) self.parent, self.attachRules = parent, { l, r, sc } end,
       GetNumMaterials = function() return 4 end,
       GetBoneIndex = function(_, b) return E.INDEX[b:ToString()] or -1 end,
       CreateDynamicMaterialInstance = function(self, i)

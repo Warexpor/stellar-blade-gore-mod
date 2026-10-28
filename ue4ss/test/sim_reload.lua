@@ -1,8 +1,9 @@
 -- A level reload (a fast travel, a load) with her right arm cut off her alive (Lose Arm at Low HP, Alt+F8). The game
 -- makes a new Eve wearing the same mesh asset; the cut's collapsed helper bones (sbslice's sinks: the asset's own
 -- inverse bind matrices) outlive the old level, so they must be put back for that asset (sbslice "r<asset>") as the
--- old Eve is dropped, or the new one shows the arm gone with nothing cut. Her blocks (No Sword) and the cut's state
--- must be gone too
+-- old Eve is dropped, or the new one shows the arm gone with nothing cut. The arm stays off on the new Eve (the
+-- level's cutscene showed her whole and the arm back, Nexus report): cut again quietly, her blocks with it, unless her
+-- HP bar says a save was loaded (the arm back then)
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
@@ -46,19 +47,57 @@ local old = pawn
 pawn = E.make(F)
 rawset(E.mesh, "SkeletalMesh", ASSET)
 old.__dead = true
+-- (freed: her watches queued by the old one's last poll held it, and asking it crashed the game, playtest)
+old.__freed = true
 local r0 = mark()
-F.run(3, pawn)
+F.run(9, pawn)
+-- (the new level's HP bar reads full till the game sets it, after its cutscene)
+E.s.hp = 0.3
+F.run(1, pawn)
 check(F.find("new Eve .* the level reloaded", r0) ~= nil, "the new Eve adopted")
 local want = string.format("r%x", ASSET.__addr)
 local put = false
 for i = c0 + 1, #F.cmds do if F.cmds[i].s == want or F.cmds[i].s == "r" then put = true end end
 check(put, "her cut's helper bones put back for her mesh asset (" .. want .. ")")
-check(F.find("low HP arm: .*sword back", r0) ~= nil or F.find("low HP arm: the arm came back", r0) ~= nil, "the arm's blocks lifted")
--- (a later Alt+F8 cuts again: nothing left over says the arm is still off)
+check(F.find("level change with Bip001%-R%-UpperArm cut off her alive %(HP bar 0%.300%)", r0) ~= nil, "the arm carried")
+check(F.find("Bip001%-R%-UpperArm off %(carried%): .*the piece hidden", r0) ~= nil, "cut again on the new Eve, quietly")
+check(F.find("Bip001%-R%-UpperArm off %(low HP", r0) == nil and F.find("piece flies", r0) == nil, "no second piece")
+check(F.find("low HP arm: her right arm is off: no sword", r0) ~= nil, "No Sword on the new Eve")
+check(F.find("carried: her HP bar at 0%.300 as she had it", r0) ~= nil, "her HP bar as she had it: kept off")
+check(F.find("piece settled: %d+ piece", r0) == nil, "no copy of her mesh for the hidden piece (it lies in the old level)")
+-- (Alt+F8 does nothing: the arm is still off)
 local a2 = mark()
 F.press("F8", "ALT")
+F.run(2, pawn)
+check(F.find("already off", a2) ~= nil, "Alt+F8 on the new Eve: the arm still off")
+
+-- a save loaded (a new Eve, her HP bar full and staying so): the arm back after CARRY_FULL_S
+old = pawn
+pawn = E.make(F)
+rawset(E.mesh, "SkeletalMesh", ASSET)
+old.__dead, old.__freed = true, true
+E.s.hp = 1.0
+local r1 = mark()
+F.run(9, pawn)
+check(F.find("Bip001%-R%-UpperArm off %(carried%)", r1) ~= nil, "a load: cut again at first")
+F.run(62, pawn)
+check(F.find("carried: her HP bar full 60 s on, not her 0%.300: a save loaded, the parts back", r1) ~= nil, "her HP bar full: a save, the arm back")
+local a3 = mark()
+E.s.hp = 0.3
+F.press("F8", "ALT")
 F.run(3, pawn)
-check(F.find("her right arm cut off", a2) ~= nil, "Alt+F8 again on the new Eve: cut")
+check(F.find("her right arm cut off", a3) ~= nil, "Alt+F8 after the load: cut")
+
+-- a save loaded with her HP bar set to another value: the arm back once it is set
+old = pawn
+pawn = E.make(F)
+rawset(E.mesh, "SkeletalMesh", ASSET)
+old.__dead, old.__freed = true, true
+local r2 = mark()
+F.run(9, pawn)
+E.s.hp = 0.7
+F.run(1, pawn)
+check(F.find("carried: her HP bar set to 0%.700, not her 0%.300: a save loaded, the parts back", r2) ~= nil, "her HP bar set to another value: the arm back")
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

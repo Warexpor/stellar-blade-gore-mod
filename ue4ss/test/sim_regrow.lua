@@ -65,6 +65,8 @@ if not l then dump(rest, "regrow") end
 -- the dissolve, then the hand-off's fade, sampled each frame on the copy's first material
 local e0 = #F.events
 local copy = E.added[#E.added]
+-- (on her as she walks: only placed where her mesh was, it stood there while she walked off, reported)
+check(copy and copy.parent == E.mesh and copy.attachRules[1] == 2, "the copy attached to her mesh, snapped onto it")
 local samples = {}
 for _ = 1, 4 * 60 do
   F.step(1 / 60, pawn)

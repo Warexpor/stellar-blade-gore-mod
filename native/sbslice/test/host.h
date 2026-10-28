@@ -18,6 +18,9 @@ typedef unsigned long long U64_; typedef unsigned int U32_; typedef unsigned sho
 #define CreateThread CreateThread_
 #define Sleep Sleep_
 #define GetAsyncKeyState GetAsyncKeyState_
+#define GetForegroundWindow GetForegroundWindow_
+#define GetWindowThreadProcessId GetWindowThreadProcessId_
+#define GetCurrentProcessId GetCurrentProcessId_
 #define CreateFileW CreateFileW_
 #define ReadFile ReadFile_
 #define WriteFile WriteFile_
@@ -46,6 +49,9 @@ int stats_cmd(const u16 *t, int l, const float *a, const float *b) { (void)t; (v
 #undef CreateThread
 #undef Sleep
 #undef GetAsyncKeyState
+#undef GetForegroundWindow
+#undef GetWindowThreadProcessId
+#undef GetCurrentProcessId
 #undef CreateFileW
 #undef ReadFile
 #undef WriteFile
@@ -70,6 +76,11 @@ static char lastres[65536];
 HANDLE CreateThread_(void *a, u64 b, u32(WINAPI *c)(void *), void *d, u32 e, u32 *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; return 0; }
 void Sleep_(u32 x) { (void)x; }
 short GetAsyncKeyState_(int k) { (void)k; return 0; }
+// the game's window in front (test_fg: 0, another app's)
+static int test_fg = 1;
+HANDLE GetForegroundWindow_(void) { return (HANDLE)(u64)0x10; }
+u32 GetWindowThreadProcessId_(HANDLE w, u32 *pid) { (void)w; if (pid) *pid = test_fg ? 7 : 8; return 1; }
+u32 GetCurrentProcessId_(void) { return 7; }
 u64 GetTickCount64_(void) { return 0; }
 u32 GetCurrentThreadId_(void) { return 1; }
 void *AddVectoredExceptionHandler_(u32 f, long(WINAPI *h)(void *)) { (void)f; (void)h; return 0; }

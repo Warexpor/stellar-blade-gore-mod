@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the Stellar Blade Gore Mod's IoStore patch from the installed game.
-#   ./build.sh            build dist/ZZ_StellarBladeGore_P (core) and dist/ZZ_StellarBladeGore_Outfits_P (outfit
-#                         physics), {utoc,ucas,pak} each, and verify them
-#   ./build.sh --install  also copy the core into the game's Paks/~mods (the outfits pak only with SB_OUTFITS=1: the
+#   ./build.sh            build dist/ZZ_StellarBladeGore_P (core), dist/ZZ_StellarBladeGore_Face_P (her death face)
+#                         and dist/ZZ_StellarBladeGore_Outfits_P (outfit physics), {utoc,ucas,pak} each, and verify them
+#   ./build.sh --install  also copy the core and the face into the game's Paks/~mods (the outfits pak only with SB_OUTFITS=1: the
 #                         script and sbslice.dll make its fixes in game; it stays as the reference they're tested to)
 #   ./build.sh --uninstall
 # Other mods in Paks/~mods are read as the game loads them: an outfit, face or show they replace is patched in
@@ -18,6 +18,11 @@ PAKS=$GAME/SB/Content/Paks
 MODS=$PAKS/~mods
 NAME=ZZ_StellarBladeGore_P
 OUTFITS=ZZ_StellarBladeGore_Outfits_P
+# her death face alone (Proper Death Expression's DIE1), apart from the core: Customized Ragdoll's death_expression_p
+# ships a DIE1 of its own, and two mod containers with the same package keep the game loading forever (Nexus report);
+# its users delete this one
+FACE=ZZ_StellarBladeGore_Face_P
+FACE_ASSETS=(Art/Character/PC/CH_P_EVE_01/Animation/Facial/EVE_Facial_ActionVoice_DIE1)
 OLD_NAMES=(ZZ_Severed_P ZZ_EveRagdollDeath_P) # earlier names; removed on install / uninstall
 SPEC=$ROOT/mod/ragdoll_spec.json
 DIST=${SB_DIST:-$ROOT/dist}
@@ -29,7 +34,7 @@ SBSDK_REV=bed8151334aefdadc76972d68a11f5b07927c336
 log() { printf '\033[1m[build]\033[0m %s\n' "$*"; }
 
 if [[ ${1:-} == --uninstall ]]; then
-  for n in "$NAME" "$OUTFITS" "${OLD_NAMES[@]}"; do rm -fv "$MODS/$n".{utoc,ucas,pak}; done
+  for n in "$NAME" "$FACE" "$OUTFITS" "${OLD_NAMES[@]}"; do rm -fv "$MODS/$n".{utoc,ucas,pak}; done
   exit 0
 fi
 
@@ -98,7 +103,7 @@ load_order() { # ~mods-relative paths on stdin, in the order the game mounts the
 rank=0
 while IFS= read -r rel; do
   toc=$MODS/$rel stem=$(basename "$rel" .utoc)
-  case " $NAME $OUTFITS ${OLD_NAMES[*]} " in *" $stem "*) continue ;; esac
+  case " $NAME $FACE $OUTFITS ${OLD_NAMES[*]} " in *" $stem "*) continue ;; esac
   [[ -f ${toc%.utoc}.ucas ]] || { log "mods: $rel has no .ucas, skipped"; continue; }
   if ! "$RETOC" info "$toc" >/dev/null 2>&1; then log "mods: $rel can't be read (encrypted or another format), skipped"; continue; fi
   rank=$((rank + 1))
@@ -243,10 +248,23 @@ if [[ -n $MESHINFO ]]; then
   done
 fi
 
+LF=$W/legacy_face
+rm -rf "$LF"
+for rel in "${FACE_ASSETS[@]}"; do
+  for f in "$W/legacy/SB/Content/$rel".*; do
+    [[ -f $f ]] || continue
+    mkdir -p "$(dirname "$LF/SB/Content/$rel")"
+    mv "$f" "$LF/SB/Content/$rel.${f##*.}"
+  done
+done
+
 log "packing IoStore"
-mkdir -p "$DIST"; rm -f "$DIST/$NAME".* "$DIST/$OUTFITS".*
+mkdir -p "$DIST"; rm -f "$DIST/$NAME".* "$DIST/$FACE".* "$DIST/$OUTFITS".*
 # zlib: every UE4 build can read it (no Oodle DLL needed here); outfit meshes take the pak from 1.4 GB to ~560 MB
 RETOC_COMPRESS=${SB_COMPRESS:-zlib} "$RETOC" to-zen --version UE4_27 "$W/legacy" "$DIST/$NAME.utoc" >/dev/null
+if [[ -d $LF ]]; then
+  RETOC_COMPRESS=${SB_COMPRESS:-zlib} "$RETOC" to-zen --version UE4_27 "$LF" "$DIST/$FACE.utoc" >/dev/null
+fi
 if [[ -d $LO ]]; then
   RETOC_COMPRESS=${SB_COMPRESS:-zlib} "$RETOC" to-zen --version UE4_27 "$LO" "$DIST/$OUTFITS.utoc" >/dev/null
 fi
@@ -266,6 +284,7 @@ log "verifying"
 mkdir -p "$W/composite"
 ln -sf "$PAKS/global.utoc" "$PAKS/global.ucas" "$W/composite/"
 cp "$DIST/$NAME".* "$W/composite/"
+[[ -d $LF ]] && cp "$DIST/$FACE".* "$W/composite/"
 [[ -d $LO ]] && cp "$DIST/$OUTFITS".* "$W/composite/"
 "$RETOC" to-legacy --no-shaders --no-script-objects "$W/composite" "$W/verify" >/dev/null
 lines "${JSON_ASSETS[@]}" | "${SBTOOL[@]}" dumplist "$W/verify/SB/Content" "$W/verify/json"
@@ -281,5 +300,6 @@ if [[ ${1:-} == --install ]]; then
   mkdir -p "$MODS"
   for n in "$OUTFITS" "${OLD_NAMES[@]}"; do rm -fv "$MODS/$n".{utoc,ucas,pak}; done
   cp -v "$DIST/$NAME".* "$MODS/"
+  if [[ -f $DIST/$FACE.utoc ]]; then cp -v "$DIST/$FACE".* "$MODS/"; fi
   if [[ -f $DIST/$OUTFITS.utoc && ${SB_OUTFITS:-0} != 0 ]]; then cp -v "$DIST/$OUTFITS".* "$MODS/"; fi
 fi

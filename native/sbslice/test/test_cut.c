@@ -389,6 +389,30 @@ int main(void)
         printf("pose: %s, calf z %.1f\n", lastres, dst[CALF * 12 + 6]);
         char want[32]; sprintf(want, "ok copied %d", NB);
         modebad |= strncmp(lastres, want, strlen(want)) || dst[CALF * 12 + 6] != bonez[CALF];
+        // a settled piece onto its still copy ("P"): her pose as drawn (her read buffer) in both of the copy's; her
+        // other buffer, her tick's, holds her animated pose with the piece back on her (the copy drew both in turn,
+        // the arm on the floor and on her shoulder every other frame, playtest)
+        {
+            static float anim[NB * 12], d0[NB * 12], d1[NB * 12];
+            memcpy(anim, space, sizeof anim);
+            anim[CALF * 12 + 6] += 40;
+            *(u64 *)(comp2 + SC_SKELETAL_MESH) = (u64)sm_buf;
+            *(u64 *)(comp2 + SC_SPACE_BASES) = (u64)d0; *(u64 *)(comp2 + SC_SPACE_BASES + 0x10) = (u64)d1;
+            u64 roots[1] = { THIGH };
+            int pbad = 0;
+            for (int rdb = 0; rdb < 2; rdb++) {
+                *(u64 *)(comp_buf + SC_SPACE_BASES + (u64)rdb * 0x10) = (u64)space;
+                *(u64 *)(comp_buf + SC_SPACE_BASES + (u64)(1 - rdb) * 0x10) = (u64)anim;
+                *(int *)(comp_buf + SC_SPACE_READ) = rdb;
+                memset(d0, 0, sizeof d0); memset(d1, 0, sizeof d1);
+                piece_pose((u64)comp_buf, (u64)comp2, roots, 1);
+                printf("piece pose (read %d): %s, calf z %.1f / %.1f (drawn %.1f)\n", rdb, lastres, d0[CALF * 12 + 6], d1[CALF * 12 + 6], bonez[CALF]);
+                pbad |= strncmp(lastres, "ok piece", 8) || d0[CALF * 12 + 6] != bonez[CALF] || d1[CALF * 12 + 6] != bonez[CALF];
+            }
+            *(u64 *)(comp_buf + SC_SPACE_BASES) = (u64)space; *(u64 *)(comp_buf + SC_SPACE_BASES + 0x10) = (u64)space;
+            *(int *)(comp_buf + SC_SPACE_READ) = 0;
+            modebad |= pbad;
+        }
         *(u64 *)(comp_buf + SC_MASTER_BONE_MAP) = 0; *(int *)(comp_buf + SC_MASTER_BONE_MAP + 8) = 0;
         *(u64 *)(sec + SEC_BONE_MAP) = (u64)bonemap; *(int *)(sec + SEC_BONE_MAP + 8) = NB;
         memcpy(vw, vsave, sizeof vw);

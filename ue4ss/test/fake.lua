@@ -46,7 +46,11 @@ function F.obj(name, cls, props)
   nextAddr = nextAddr + 0x1000
   return setmetatable(o, OMT)
 end
-Base.IsValid = function(self) return rawget(self, "__dead") ~= true end
+-- __freed: its memory released (a level gone); UE4SS's IsValid reads the object, which crashes the game
+Base.IsValid = function(self)
+  if rawget(self, "__freed") then F.errors[#F.errors + 1] = "IsValid on freed " .. tostring(rawget(self, "__name")) .. " (crashes the game)" end
+  return rawget(self, "__dead") ~= true
+end
 Base.GetAddress = function(self) return rawget(self, "__addr") end
 Base.GetFName = function(self) return F.fname(rawget(self, "__name")) end
 Base.GetFullName = function(self) return rawget(self, "__cls") .. " " .. rawget(self, "__name") end
