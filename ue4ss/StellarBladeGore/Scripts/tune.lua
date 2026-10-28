@@ -42,8 +42,15 @@ return {
   fewerGC = false,             -- fewer garbage collection passes: the engine's pass forced as each streamed level goes
                                -- out (and its incremental ones while one waits) off, the 61 s timed pass kept; false (the default)
                                -- the game's own values back
+  customizedRagdoll = false,   -- Customized Ragdoll (Nexus 3884) support (customrag.lua): its death camera instead of
+                               -- cameraStill's, the death screen up as the game puts it but see-through, its keys
+                               -- (F / R) working; the mod's ragdoll and cuts as ever (that mod's physics kept off her)
   hideHud = true,              -- the rest of the HUD (HP bar, skills, minimap, notices) hidden through a death, back as
                                -- she is up again; the death and revive screens keep to deathScreen
+  newObjectWatch = true,       -- characters, the death and photo mode widgets, photo mode's pawn and knockdown checks
+                               -- caught as they are made (newobj.lua: sbslice.dll's listener, or UE4SS's NotifyOnNewObject
+                               -- without it). false: none caught, characters found by FindAllOf every 10 s, photo mode's
+                               -- early freeze lost. "ue4ss": NotifyOnNewObject for all, as up to 0.5.0 (UE4SS 3.1.0-6 only)
   keepFresh = 2,               -- s: a character or widget seen as it spawned is checked alive (sbslice "G") this soon, or
                                -- never held (characters are found again with FindAllOf)
   reviveAt = 10,               -- the death screen (and the revive item's) is held hidden this many seconds into the death
@@ -429,6 +436,36 @@ return {
                                --   Sound/Dialogue/ActionVoice/Eve ("vo_eve_die_fall_01") or full paths of any
                                --   SoundWave / SoundCue ("/Game/Mods/MyVoice/scream_01"). A voice mod that replaces
                                --   vo_eve_die_* in place needs nothing here
+      asHer = true,            --   played as another character (the Stellar Blade Play As mod, or any mod putting her meshes on
+                               --   Eve: seen by them), her death cry and the breaths and moans after it are that
+                               --   character's own recordings (`as` below), unless `sounds` is set (false: Eve's)
+      as = {
+        tachy = { die = { "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_xl1_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_xl2_VO", "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_xl3_VO" },
+          breaths = { "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_breath_s1_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_breath_s2_VO" },
+          moans = { "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_s1_VO", "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_s2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_s3_VO", "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_s4_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Tachy/vo_Tachy_dmg_s5_VO" } },
+        -- (Raven has no death line: her heaviest hurt screams)
+        raven = { die = { "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_xl1_VO", "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_xl2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_xl3_VO", "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_xl4_VO" },
+          breaths = { "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_breath_s1_VO", "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_breath_s2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_breath_s3_VO", "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_breath_s4_VO" },
+          moans = { "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_xs2_VO", "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_xs3_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_s1_VO", "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_s2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Raven/vo_Raven_dmg_s3_VO" } },
+        scarlet = { die = { "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dead_1_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dead_2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dead_3_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dead_4_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dead_5_VO" },
+          breaths = { "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_S_1_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_S_2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_S_3_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_S_4_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_S_5_VO" },
+          moans = { "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dmg_S_1_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dmg_S_2_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dmg_S_3_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dmg_S_4_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_Dmg_S_5_VO", "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_L_1_VO",
+            "/Game/Sound/Dialogue/ActionVoice/Scarlet/vo_Scarlet_groggy_L_3_VO" } },
+      },
     },
     sounds = true,             -- the game's own gore sounds on cuts and splits
     soundVolume = 1.0,
@@ -969,9 +1006,6 @@ return {
       { key = "scarlet", alias = "B_Scarlet", label = "Scarlet (boss, DLC)", id = 59610, row = "M_Scarlet", face = true, distance = 700,
         bp = "/Game/DLC_2/Art/Character/Monster/CH_M_NA_961/Blueprints/CH_M_NA_961_Blueprint" },
     },
-  },
-  playAs = {                   -- Play As (playas.lua, F3 → Sandbox): Eve wears another character
-    who = "eve",               -- eve, tachy, raven (her suit and hair: no Raven head on Eve's skeleton), scarlet (DLC)
   },
   glassCannon = {              -- realistic glass cannon (glass.lua); Page Down turns it on and off in game (dev only)
     enabled = false,           -- off by default

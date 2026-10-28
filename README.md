@@ -2,21 +2,21 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.5.0. See the [changelog](CHANGELOG.md).
+Version 0.5.1. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
 
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
-1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.5.0.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
+2. **This mod.** Extract `StellarBladeGore-0.5.1.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death, her death face and voice;
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.0`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.1`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -70,6 +70,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `active.push` | `1.0` | How hard the killing blow throws her body, times the default (`0`: no push of the mod's). |
 | `convulse.enabled` | `true` | After her death her face winces, gasps, sobs, quivers and twitches for a while (a different face every death), fading out, with quiet breaths and moans (beheaded or split down her length by a vertical slash: her face stays still, no gasps, no voice). `convulse.body = true` makes her body spasm too. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
+| `gore.voice.asHer` | `true` | Played as Tachy, Raven or Scarlet (the Stellar Blade Play As mod, or any mod putting their meshes on Eve), her death cry and the breaths and moans after it are that character's own recordings (`false`: Eve's). Not with `gore.voice.sounds` set. |
 | `gore.deathFace.enabled` | `true` | A dead face on her as she dies, her eyes closing (`false`: the game's own, gone a second in). |
 | `convulse.face` | `true` | Her face moving after her death (`false`: it stays as the death face left it). |
 | `convulse.voice.enabled` | `true` | The quiet breaths and moans after her death (`false`: silent). |
@@ -83,6 +84,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `active.stiffness` | `1.0` | How stiff her ragdoll is: `0` limp as a sack, `1` as made, `2`-`3` she keeps her shape as she falls and lies. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` (On Press in the F3 menu) only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
 | `fewerGC` | `false` | Fewer garbage collection hitches: the engine no longer forces a pass every time it unloads part of the map (its regular pass once a minute still runs). Off puts the game's own behaviour back. |
+| `customizedRagdoll` | `false` | Support for [Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884) (F3 → Death, Customized Ragdoll Support): its death camera instead of the Free Camera, and the death screen up at once but invisible, its F / R working with no holding needed (Shift+F4 shows it). This mod's ragdoll, cuts, struggle and face stay as they are. |
 | `hideHud` | `true` | The HUD (HP bar, skills, minimap, notices) is hidden through her death and comes back when she is up again. The death screen still follows `deathScreen`. |
 | `reviveAt` | 10 | Seconds into her death the screen comes up with `"delay"`. |
 | `holdPad` | D-pad down + R1 | Shift+F4 on the controller, both held for `holdPadFor` (1 s) (`false`: none). |
@@ -100,14 +102,13 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `enemies.attackDown` | `true` | Enemies keep attacking her while she is knocked down (`false`: they wait till she is up, as in the game). Still in the works (it does little yet): settings.lua only, out of the F3 menu. |
 | `enemies.afterDeath.enabled` | `false` | Being tested: after her death the enemies around her keep at her body for `time` (10) s, playing their own attacks at it, and their weapons cut it (Hits After Death). F3 → Attacks After Death (experimental). |
 | `bosses.enabled` | `false` | Sandbox Bosses: F3 → Sandbox → Spawn Boss brings Tachy, Raven or Scarlet (`bosses.pick`; Scarlet needs her DLC) in 7 m in front of Eve, anywhere, fighting at once. Killed, a boss dies like any enemy: no death cutscene, no phase change to wait out; it is cut, struggles on the floor (`bosses.struggle`, with Death Struggle on) and wears a dead face (`bosses.face`, with Death Expression on). Their HP and shield are `bosses.hpScale` (25%) of the game's. While one you spawned is up, that boss is mortal everywhere, a story fight with it too; once none is, the game's own boss is back. Remove Spawned takes them all away. |
-| `playAs.who` | `"eve"` | Play As: Eve wears another character, and her animations, cuts, struggle and death face stay: `"tachy"` (her body, hair and face), `"raven"` (her suit and hair; the game has no Raven head for Eve's rig, so the face is Eve's), `"scarlet"` (needs her DLC). Each fights with her own blade (Tachy's sword, Raven's blade, Scarlet's sword) in place of Eve's when it is drawn; it doesn't fold as Eve's does. The outfit menu is overridden while it is on; `"eve"` puts her own outfit back. F3 → Sandbox → Play As. |
 | `smoothAnim` | `false` | Every character animated every frame. The engine skips animation frames on characters further off or small on screen, which can look choppy next to a smooth world, most when they run. Costs some CPU with many characters around. |
 | `verboseLog` | `false` | A detailed log (every death's bone speeds, each cut stage, every slow frame...), for a bug report when asked for one. Off, slow frames are summed up once a minute. |
 | `dev` | `false` | Test keys and the enemy spawner (see below). |
 
 In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the world goes on (she doesn't move), Q/E (LB/RB) switch the tab, the arrow keys pick (Up/Down) and change (Left/Right, or < and >), R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. The mouse works too: hover picks, click presses (or steps, on a value's arrows), the wheel scrolls. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over (a change to a setting the menu no longer has is dropped from it as the menu starts) ("Reset to settings.lua" deletes it). The menu needs no `FText_Constructor.lua` in `UE4SS_Signatures` (leave it as UE4SS shipped it, `dFText_Constructor.lua`: turned on, it closes the game at launch with the Steam overlay on). If F3 does nothing, the log's `menu:` lines say why; `settings.lua` sets everything without the menu.
 
-Every key of the mod can be changed in the menu's Keys tab: Enter on an action, then press the new key, with Ctrl, Shift or Alt if you like (Backspace cancels). A key another action had is swapped onto the old one. In `settings.lua` it's `keys = { split = "Ctrl+F11", menu = "F2" }` (UE4SS's key names: `F1`-`F12`, `A`-`Z`, `ZERO`-`NINE`, `NUM_ZERO`-`NUM_NINE`, `INS`, `DEL`, `HOME`, `END`, `PAGE_UP`, `PAGE_DOWN`; `"None"` unbinds one). The test keys show there only with Developer Keys on. The actions: `menu`, `hold`, `photo`, and the test keys `slice`, `split`, `mark`, `ragdoll`, `recover`, `face`, `death`, `blade`, `spawn`, `nextEnemy`, `spawner`, `kill`, `glass`. Another mod on the same key (a body slider's menu on F11) still gets it too, so move ours off it.
+Every key of the mod can be changed in the menu's Keys tab: Enter on an action, then press the new key, with Ctrl, Shift or Alt if you like (Backspace cancels). A key another action had is swapped onto the old one. In `settings.lua` it's `keys = { split = "Ctrl+F11", menu = "Ctrl+F3" }` (UE4SS's key names: `F1`-`F12`, `A`-`Z`, `ZERO`-`NINE`, `NUM_ZERO`-`NUM_NINE`, `INS`, `DEL`, `HOME`, `END`, `PAGE_UP`, `PAGE_DOWN`; `"None"` unbinds one). The test keys show there only with Developer Keys on. The actions: `menu`, `hold`, `photo`, and the test keys `slice`, `split`, `mark`, `ragdoll`, `recover`, `face`, `death`, `blade`, `spawn`, `nextEnemy`, `spawner`, `kill`, `glass`. Another mod on the same key (a body slider's menu on F11) still gets it too, so move ours off it.
 
 Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 
@@ -118,9 +119,12 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Voice mods** that replace Eve's death cries (`vo_eve_die_*`, e.g. Violent Death Mod) work as they are: her death cry plays their recordings. A mod that adds new sounds instead can be pointed at with `gore.voice.sounds` in `settings.lua`.
 - **Proper Death Expression** by blabmice is built in, credited below. Don't install it alongside.
 - **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.
+- **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: turn on Customized Ragdoll Support (F3 → Death, `customizedRagdoll`). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
 - **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs).
+- **[ESE](https://www.nexusmods.com/stellarblade/mods/672)** (Shield and Destroyed) works alongside, in any load order: a part cut off her stays off when it puts her in another suit as her shield breaks or she dies.
 - **UUEPBS** (the body slider) works alongside: her sliders stay on through her deaths and cuts (before the next release, her deaths froze where she was cut).
-- **Character swap mods** (EVE2Tachy, EVE2Raven): leave Play As on Eve with them, or remove them; both put meshes on her.
+- **[Stellar Blade Play As](https://github.com/Warexpor/stellar-blade-play-as)** (play as Tachy, Raven or Scarlet, a mod of its own) works alongside: the cuts, struggle and dead face are hers as they are Eve's, and her death cry and moans are that character's own.
+- **Character swap mods** (EVE2Tachy, EVE2Raven) work: the cuts follow the meshes on Eve. Don't use them with Play As set to anyone but Eve: both put meshes on her.
 - **Mods that edit the game's data tables** (movesets, shops, items, effects) work: the mod no longer ships whole `CharacterDeadTable` and `EffectTable` copies, it changes only its own rows in game. A mod that changes the `Player` row's death shows conflicts with it: the mod's are written over them.
 <!-- /install -->
 

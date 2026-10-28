@@ -4,6 +4,7 @@
 # by ../run.sh, into $TMPDIR/sbslice-real).
 #   sweep.sh [out, default sweep.txt] [jobs file]       JOBS=<parallel>, default every core
 #   compare.sh [out] to see what changed against results-0.4.1.txt.gz
+#   MESHES=<list>: the meshes dumped first (default meshes.txt; /dev/null when they are, test/real/playas.sh)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$(realpath -m "${1:-sweep.txt}")
@@ -17,7 +18,7 @@ while read -r p; do m=$(basename "$p")
   [[ -f $RS/$m.bin ]] && continue
   PKG=vanilla/SB/Content/Art/Character/PC/$p ARM=1 "$HERE/../run.sh" "$m" > /dev/null 2>&1 || true
   [[ -f $RS/$m.bin ]] || echo "no mesh for $p" >&2
-done < "$HERE/meshes.txt"
+done < "${MESHES:-$HERE/meshes.txt}"
 # the harness, optimized without the sanitizers (the suite runs those)
 clang -O2 -w -o "$RS/real_split_sweep" "$HERE/../real_split.c" -lm
 one() {

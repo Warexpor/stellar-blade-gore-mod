@@ -445,6 +445,8 @@ end
 
 -- every tick she is alive and animated (main.lua)
 M.bar_pct = bar_pct -- (main.lua: the hit marks heal with it)
+-- the bar's widget (its address), nil till found: a new one starts full whatever her HP (main.lua's Lose Arm at Low HP)
+function M.bar_id() return valid(st.barHud) and try(function() return st.barHud:GetAddress() end) or nil end
 
 function M.tick(pawn, mesh)
   if not M.enabled() then if st.on then stop(); log("glass cannon off") end return end

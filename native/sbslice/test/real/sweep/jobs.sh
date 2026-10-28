@@ -3,9 +3,9 @@
 # (its path under Art/Character/PC): splits (straight, beside the neck, across the waist, after an arm, posed), waist
 # cuts (posed, after an arm, high with the arms after, leaned 15 deg four ways), each arm and leg cut at 3-4 places
 # (square, leaned 45 deg eight ways, 25 deg four ways), both thighs, a driven arm, a kept cape, arm then head, head planes
-#   jobs.sh > jobs.txt
+#   jobs.sh > jobs.txt       PC=<dir the mesh paths are under>, MESHES=<list>: other meshes (test/real/playas.sh)
 HERE=$(cd "$(dirname "$0")" && pwd)
-PC=$HERE/../../../../../.cache/work/vanilla/SB/Content/Art/Character/PC
+PC=${PC:-$HERE/../../../../../.cache/work/vanilla/SB/Content/Art/Character/PC}
 while read -r p; do m=$(basename "$p")
   # the Skirt bones with a body in the outfit's physics asset (gore.lua keeps the skirt chains with none on the body
   # in a thigh cut: real_split's SKIRTBODIES)
@@ -32,4 +32,4 @@ while read -r p; do m=$(basename "$p")
   echo "$m|arm cape kept|ARM=1 KEEPCAPE=1"
   echo "$m|arm then head tilt|ARM=1 HEADAFTER=1 ARMTILT=52 ARMTILTDIR=6 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3"
   for at in 0.7 0.85 1.0; do echo "$m|head plane $at|HEAD=1 HEADPLANE=1 HEADAT=$at"; done
-done < "$HERE/meshes.txt"
+done < "${MESHES:-$HERE/meshes.txt}"

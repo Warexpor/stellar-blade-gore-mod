@@ -563,7 +563,9 @@ local function sound(kind, k, always)
   local now = os.clock()
   if now - (st.voiced or -100) < (v.gap or 1.2) then return "" end
   local g = ctx.gore
-  local names = kind == "breath" and v.breaths or v.moans
+  -- (played as another character: hers, gore.lua's voice_as, set at her death)
+  local names = g and g.voice_as and try(function() return g.voice_as(kind == "breath" and "breaths" or "moans") end)
+  if type(names) ~= "table" or #names == 0 then names = kind == "breath" and v.breaths or v.moans end
   local vol = (kind == "breath" and (v.breathVolume or 0.25) or (v.moanVolume or 0.15)) * (v.volume or 1) * (k or 1)
   local name = g and g.voice_soft and try(function() return g.voice_soft(st.pawn, st.mesh, names, vol) end)
   if not name then return "" end

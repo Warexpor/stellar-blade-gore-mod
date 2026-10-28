@@ -114,6 +114,8 @@ F.sbslice = {
   r = "ok restored 0",
   x = "ok cleared, restored 1",
   y = function(s) return "ok copied 1" end,
+  -- (a piece onto its copy: gore.hide_pieces)
+  P = function(s) return "ok piece 40 of 160" end,
   V = function(s) return "ok vanish 100 kept 50 on 1 borrowed 0 stuck 0 mats -" end,
   -- held objects' liveness: every one alive, at a made-up index
   G = function(s)
@@ -122,6 +124,47 @@ F.sbslice = {
     return "ok " .. table.concat(out)
   end,
 }
+-- objects as the game makes them ("O", sbslice's listener): the watched classes' new objects queued (F.new_object),
+-- each "O" leaves the next one in the cheat manager's DebugCameraControllerRef, nil when none is left
+F.watched, F.newq = nil, {}
+F.sbslice.O = function(s)
+  if s == "O" then
+    F.cdo.DebugCameraControllerRef = table.remove(F.newq, 1)
+    return "ok"
+  end
+  if s == "O?" then return "ok " .. #F.newq .. " queued, 0 dropped, 0 taken" end
+  local f = {}
+  for x in s:sub(2):gmatch("%x+") do f[#f + 1] = tonumber(x, 16) end
+  F.watched = {}
+  for i = 4, #f do F.watched[f[i]] = true end
+  return "ok watching " .. (#f - 3) .. ", super +64"
+end
+-- a class as StaticFindObject finds it (IsA compares it with the object's classes)
+function F.class(path)
+  if not F.objects[path] then F.objects[path] = F.obj(path:match("[%.:/]([%w_]+)$"), "Class", { __path = path }) end
+  return F.objects[path]
+end
+-- an object made: to NotifyOnNewObject's callbacks for its classes (UE4SS), and onto sbslice's queue when watched
+function F.new_object(o, ...)
+  o.__isa = o.__isa or {}
+  for _, path in ipairs({ ... }) do o.__isa[path] = true end
+  for _, n in ipairs(F.notify) do if o.__isa[n.cls] then pcall(n.cb, o) end end
+  if F.watched then
+    for path in pairs(o.__isa) do
+      local c = F.objects[path]
+      if c and F.watched[c.__addr] then F.newq[#F.newq + 1] = o; break end
+    end
+  end
+end
+Base.IsA = function(self, c)
+  local s = rawget(self, "__isa")
+  return s ~= nil and c ~= nil and s[rawget(c, "__path")] == true
+end
+for _, p in ipairs({ "/Script/UMG.UserWidget", "/Script/SB.SBPhotoModePawn", "/Script/SB.SBCharacter",
+  "/Script/SB.SBBTDecorator_SbCheckActorEffect" }) do F.class(p) end
+F.class("/Script/Engine.CheatManager").ForEachProperty = function(self, cb)
+  cb({ GetFName = function() return F.fname("DebugCameraControllerRef") end, GetOffset_Internal = function() return 0x2a8 end })
+end
 local function write(path, s) local f = assert(io.open(path, "w")); f:write(s); f:close() end
 F.cdo = F.obj("Default__SBCheatManager", "SBCheatManager", {
   SBRewardGroupDropFormationPathLocation = function(self, _n, _x, _y, _z, s)

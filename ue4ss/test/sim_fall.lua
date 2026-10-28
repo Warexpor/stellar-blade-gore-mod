@@ -3,6 +3,7 @@
 -- controls: the show's ragdoll key working (the mod's own death as ever, no takeover); a medium fall leaving her at
 -- 1 HP (the bar reads 0, no death screen: nothing); a death while swimming with no ragdoll (not taken over, named).
 -- A fall damage death cuts nothing; a blow on her mesh as she lands still does
+-- Any other death with no ragdoll from its show (an enemy's) is taken over too and cut; a scripted one is left alone
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
@@ -110,6 +111,42 @@ F.run(2, pawn)
 check(not F.find("death: fall damage", at), "a blow as she lands: not taken for fall damage")
 check(F.find("gore: cut ", at) ~= nil or F.find("gore: split", at) ~= nil, "its death cuts")
 if fails > 0 then dump(at, "death") end
+next_life()
+
+-- 7: an enemy's kill on the ground whose show gives no ragdoll (0.5.0 report: enemy attacks went straight to the death
+-- screen): taken over as a fall's, and cut as any death
+local MONT = nil
+rawset(E.mesh, "GetAnimInstance", function()
+  return F.obj("ABP_Eve", "AnimInstance", { GetCurrentActiveMontage = function()
+    return MONT and F.obj(MONT, "AnimMontage") or nil
+  end })
+end)
+at = mark()
+MONT = "P_Eve_Grab_Dead"
+E.s.hp = 0
+F.run(0.2, pawn)
+E.die(false, 1000123)
+F.run(1, pawn)
+check(F.find("death: taken over %(no ragdoll from its show: no drop, .*playing P_Eve_Grab_Dead", at) ~= nil and E.s.sim,
+  "an enemy's kill with no ragdoll: taken over")
+F.run(2, pawn)
+check(not F.find("death: fall damage", at), "not taken for fall damage")
+check(F.find("death: last hit .*rolled", at) ~= nil or F.find("death: split rolled", at) ~= nil, "its death rolled as any (cut)")
+check(screen_hidden(), "the death screen held hidden")
+if fails > 0 then dump(at, "death") end
+next_life()
+
+-- 8: a scripted death (the desert's sand hole) with no ragdoll: the game's
+at = mark()
+MONT = "P_Eve_Dead_DesertHole"
+E.s.hp = 0
+F.run(0.2, pawn)
+E.die(false)
+F.run(1, pawn)
+check(not F.find("taken over", at) and not E.s.sim, "the sand hole's death: not taken over")
+check(F.find("death NOT seen.*a scripted death: DesertHole", at) ~= nil, "named in the log")
+if fails > 0 then dump(at, "death") end
+MONT = nil
 next_life()
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end

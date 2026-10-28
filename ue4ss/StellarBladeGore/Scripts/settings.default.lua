@@ -119,6 +119,9 @@ return {
                                -- hides it again once it is up (she stays down till you press it again)
   fewerGC = false,            -- fewer garbage collection hitches: no forced pass each time the game unloads part of
                               -- the map (its regular pass a minute still runs); off by default: the game's own behaviour
+  customizedRagdoll = false,  -- with Customized Ragdoll (Nexus 3884) installed: its death camera, and the death screen
+                              -- up at once but invisible, F / R still working (Shift+F4 shows it); this mod's ragdoll,
+                              -- cuts and struggle as ever
   hideHud = true,             -- the HUD (HP bar, skills, minimap) hidden through a death, back as she is up again
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
                                -- shows the death screen or hides it again; key names as UE's Gamepad_* (false: none)
@@ -141,9 +144,6 @@ return {
     pick = "tachy",            -- tachy, raven, scarlet (DLC)
     hpScale = 0.25,            -- their HP and shield times this
     struggle = true,           -- their death struggle (with Death Struggle on)
-  },
-  playAs = {
-    who = "eve",               -- Play As: eve, tachy, raven (her suit and hair, Eve's face), scarlet (DLC); each with her own blade
   },
   smoothAnim = false,          -- every character animated every frame: the engine skips frames on characters further
                                -- off or small on screen, which can look choppy, running most (costs some CPU)

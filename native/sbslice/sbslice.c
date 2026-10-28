@@ -3665,6 +3665,12 @@ static void skin_clear(u64 comp, int lod, int keep)
     o = put_int(o, sm ? skin_restore(sm) : 0);
     *o = 0;
     unremap(comp);
+    // nor a co-owner of the sinks any more ("y": a piece's copy, destroyed after this; its address, left there, could
+    // be a later component's once the engine frees it, which own_sink then took for an earlier cut of its own)
+    for (int i = 0; i < nsinks; i++) {
+        if (sinks[i].also[0] == comp) { sinks[i].also[0] = sinks[i].also[1]; sinks[i].also[1] = 0; }
+        if (sinks[i].also[1] == comp) sinks[i].also[1] = 0;
+    }
     ((comp_fn)(exe + RVA_MARK_RENDER_STATE_DIRTY))(comp);
     skin_result(msg);
 }
@@ -5026,6 +5032,7 @@ static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 //   o<object>            keep that asset loaded for good (root it: see root_object)
 //   w<comp>              watch her bones once for the stub carriers (Lua, every few ticks while she is alive)
 //   v...                 actor stats, for the glass cannon mode (see stats.c)
+//   O...                 objects as the game makes them (see new_watch)
 //   h<comp>,<mode>,<head bone>
 //                        a split half's neck plane for its next MODE_SIDE cut (mode HEAD_KEEP / HEAD_DROP, 0 none):
 //                        point LocX/Y/Z, normal DirX/Y/Z up the neck
@@ -5146,6 +5153,148 @@ static void alive_cmd(const u64 *f, int k)
         if (ask) { *o++ = ':'; o = put_int(o, index); *o++ = ' '; }
     }
     *o = 0;
+    skin_result(msg);
+}
+// ---- objects as the game makes them ("O": newobj.lua) -----------------------------------------------------------
+// UE4SS's NotifyOnNewObject runs its Lua callback on whatever thread makes the object, the async loading thread
+// included: with the Nexus "SB UE4SS 1.3" build the game crashed at launch in its Lua (a table freed under the game
+// thread's own Lua, Nexus report and its dump). Here the engine's own listener list does it instead
+// (FUObjectArray::UObjectCreateListeners, GUObjectArray +0x68: AllocateUObjectIndex calls each listener's
+// NotifyUObjectCreated(object, index), vtable +8, outside its lock, on the making thread). Ours only queues the
+// objects of the watched classes; the script takes them on her tick, one at a time: "O" puts the next one still alive
+// into an object property of the cheat manager's default object (the field the script reads, as UE4SS's Lua can't
+// make an object of an address), or null when none is left.
+//   O<field>,<child class>,<its parent class>,<class>,...   watch these classes and their subclasses (again to change
+//                        them); the pair finds UStruct::SuperStruct's offset. Answer "ok watching <n>, super +<off>"
+//   O                    the next one into the field (no answer)
+//   O?                   "ok <queued> queued, <dropped> dropped, <taken> taken"
+#define GUO_CREATE_LISTENERS 0x68
+#define NEW_MAX 8192
+#define NEW_CLASSES 8
+#define RF_CDO_OR_ARCHETYPE 0x30 // RF_ClassDefaultObject | RF_ArchetypeObject
+static u64 new_classes[NEW_CLASSES];
+static volatile int nnew_classes, new_super = -1, new_on, new_lock;
+static u64 new_field;
+static struct { u64 obj; int idx; } new_ring[NEW_MAX];
+static volatile u32 new_head, new_tail, new_dropped, new_taken;
+static void new_listener_dtor(void *self) { (void)self; }
+static void new_listener_made(void *self, u64 obj, int index)
+{
+    (void)self;
+    int sup = new_super, n = nnew_classes;
+    if (!new_on || sup < 0 || obj < 0x10000 || (*(u32 *)(obj + 8) & RF_CDO_OR_ARCHETYPE)) return;
+    int hit = 0;
+    u64 c = *(u64 *)(obj + 0x10);
+    for (int d = 0; d < 24 && c >= 0x10000 && !hit; d++) {
+        for (int i = 0; i < n; i++) if (new_classes[i] == c) hit = 1;
+        c = *(u64 *)(c + (u64)sup);
+    }
+    if (!hit) return;
+    while (__atomic_exchange_n(&new_lock, 1, __ATOMIC_ACQUIRE)) { }
+    if (new_head - new_tail < NEW_MAX) {
+        new_ring[new_head % NEW_MAX].obj = obj;
+        new_ring[new_head % NEW_MAX].idx = index;
+        new_head++;
+    } else new_dropped++;
+    __atomic_store_n(&new_lock, 0, __ATOMIC_RELEASE);
+}
+// the game closing: the engine wants every listener gone from its list (a check after OnUObjectArrayShutdown)
+static void new_listener_shutdown(void *self)
+{
+    new_on = 0;
+    u64 arr = exe + RVA_GUOBJECTARRAY + GUO_CREATE_LISTENERS;
+    u64 *data = *(u64 **)arr;
+    int *num = (int *)(arr + 8);
+    for (int i = *num - 1; i >= 0; i--) if (data[i] == (u64)self) { data[i] = data[*num - 1]; (*num)--; break; }
+}
+static void *new_vtbl[3] = { (void *)new_listener_dtor, (void *)new_listener_made, (void *)new_listener_shutdown };
+static struct { void **vt; } new_listener = { new_vtbl };
+// the listener into the engine's list: written in place when there's room, else onto a bigger copy (the old one left
+// alone, never freed: another thread may be going through it right now)
+static const char *new_listen(void)
+{
+    if (new_on) return 0;
+    if (!RVA_GUOBJECTARRAY) return "err no object array in this game build";
+    u64 arr = exe + RVA_GUOBJECTARRAY + GUO_CREATE_LISTENERS;
+    if (!mem_readable(arr, 0x10)) return "err listener list unreadable";
+    u64 *data = *(u64 **)arr;
+    int num = *(int *)(arr + 8), max = *(int *)(arr + 12);
+    if (num < 0 || num > 256 || max < num || (num && !mem_readable((u64)data, (u64)num * 8))) return "err listener list not as expected";
+    for (int i = 0; i < num; i++) {
+        if (data[i] == (u64)&new_listener) { new_on = 1; return 0; }
+        // (each an object with a vtable of 3: the engine's own, or UE4SS's for NotifyOnNewObject, its vtable in
+        // UE4SS.dll: refused when it was held to the exe, playtest on 3.1.0-6)
+        if (!mem_readable(data[i], 8) || !mem_readable(*(u64 *)data[i], 24))
+            return "err listener list not as expected";
+    }
+    if (num == max) {
+        int nmax = max * 2 + 8;
+        u64 *nd = (u64 *)ue_malloc((u64)nmax * 8);
+        if (!nd) return "err no memory for the listener list";
+        for (int i = 0; i < num; i++) nd[i] = data[i];
+        __atomic_store_n((u64 **)arr, nd, __ATOMIC_RELEASE);
+        *(int *)(arr + 12) = nmax;
+        data = nd;
+    }
+    data[num] = (u64)&new_listener;
+    new_on = 1;
+    __atomic_store_n((int *)(arr + 8), num + 1, __ATOMIC_RELEASE);
+    return 0;
+}
+static void new_watch(const u64 *f, int k)
+{
+    static char msg[96];
+    if (k < 4 || !mem_readable(f[0], 8) || !mem_readable(f[1], 0x60)) { skin_result("err O: field, child, parent, classes"); return; }
+    // UStruct::SuperStruct: 0x40 in UE 4.26 without the editor; found by walking the pair
+    int sup = -1;
+    static const int offs[] = { 0x40, 0x48, 0x38, 0x50, 0x30 };
+    for (int j = 0; j < 5 && sup < 0; j++) {
+        u64 c = f[1];
+        for (int d = 0; d < 24 && c >= 0x10000 && mem_readable(c + (u64)offs[j], 8); d++) {
+            c = *(u64 *)(c + (u64)offs[j]);
+            if (c == f[2]) { sup = offs[j]; break; }
+        }
+    }
+    if (sup < 0) { skin_result("err O: no SuperStruct offset leads from the child class to its parent"); return; }
+    int n = 0;
+    for (int i = 3; i < k && n < NEW_CLASSES; i++) if (mem_readable(f[i], 0x60)) new_classes[n++] = f[i];
+    nnew_classes = n;
+    new_super = sup;
+    new_field = f[0];
+    *(u64 *)new_field = 0;
+    const char *e = new_listen();
+    if (e) { skin_result(e); return; }
+    char *o = put(msg, "ok watching ");
+    o = put_int(o, n);
+    o = put(o, ", super +");
+    o = put_int(o, sup);
+    *o = 0;
+    skin_result(msg);
+}
+static void new_next(void)
+{
+    u64 got = 0;
+    for (;;) {
+        while (__atomic_exchange_n(&new_lock, 1, __ATOMIC_ACQUIRE)) { }
+        if (new_tail == new_head) { __atomic_store_n(&new_lock, 0, __ATOMIC_RELEASE); break; }
+        u64 obj = new_ring[new_tail % NEW_MAX].obj;
+        int idx = new_ring[new_tail % NEW_MAX].idx;
+        new_tail++;
+        __atomic_store_n(&new_lock, 0, __ATOMIC_RELEASE);
+        if (object_alive(obj, idx)) { got = obj; new_taken++; break; }
+    }
+    if (new_field) *(u64 *)new_field = got;
+}
+static void new_status(void)
+{
+    static char msg[96];
+    char *o = put(msg, "ok ");
+    o = put_int(o, (long long)(new_head - new_tail));
+    o = put(o, " queued, ");
+    o = put_int(o, new_dropped);
+    o = put(o, " dropped, ");
+    o = put_int(o, new_taken);
+    *put(o, " taken") = 0;
     skin_result(msg);
 }
 // ---- outfit physics at runtime (physfix.lua): what the data mod's outfits container does, for any outfit ----------
@@ -6294,8 +6443,8 @@ static void exec_slice(void *context, unsigned char *stack, void *result)
     u16 *txt = *(u16 **)(p + 0x18);
     int len = *(int *)(p + 0x20);
 #ifndef SBSLICE_HOSTED
-    // ("H" and "v" come every frame: cheap, never what hangs, and not worth the stamp)
-    int stamp = txt && len >= 2 && txt[0] != 'H' && txt[0] != 'v';
+    // ("H", "v" and "O" come every frame: cheap, never what hangs, and not worth the stamp)
+    int stamp = txt && len >= 2 && txt[0] != 'H' && txt[0] != 'v' && txt[0] != 'O';
     if (stamp) {
         int n = 0;
         for (; n < (int)sizeof cmd_now - 1 && n < len - 1 && txt[n]; n++) cmd_now[n] = txt[n] < 128 ? (char)txt[n] : '?';
@@ -6434,6 +6583,14 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
     float *dir = (float *)(p + 0x28);
     if (!txt || len < 2) return;
     if (txt[0] == '&') { async_cmd(txt + 1, len - 1); return; }
+    // (before the prune: "O" comes many times a tick, and writes into no mesh asset)
+    if (txt[0] == 'O') {
+        static u64 of[3 + NEW_CLASSES];
+        if (len <= 2 || !txt[1]) new_next();
+        else if (txt[1] == '?') new_status();
+        else new_watch(of, parse_fields(txt + 1, len - 1, of, 3 + NEW_CLASSES));
+        return;
+    }
     // (no write into a mesh asset the level took with it: assets_prune)
     assets_prune();
     // "H[comp,comp,...]": hold stump seams on their rim bones. No answer file — her tick sends it every frame, and a

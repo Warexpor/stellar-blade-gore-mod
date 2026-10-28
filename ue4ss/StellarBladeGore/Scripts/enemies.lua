@@ -662,10 +662,9 @@ local function down_tick()
   if not mode then return end
   if not down.hooked then
     down.hooked = true
-    local ok, err = pcall(NotifyOnNewObject, "/Script/SB.SBBTDecorator_SbCheckActorEffect", function(o)
+    ctx.newobj.watch("/Script/SB.SBBTDecorator_SbCheckActorEffect", function(o)
       if down.mode then down.pending[#down.pending + 1] = { k = ctx.keep(o), t = os.clock() + 1 } end
     end)
-    if not ok then log("enemies: knockdown checks not watched: " .. tostring(err)) end
   end
   -- the first scan through the same queue, DOWN_MS a tick: the level's every decorator at once was a 1.4-2.2 s freeze
   -- (playtest). Only their addresses are taken here, each one's index asked in its batch below: asked all in this

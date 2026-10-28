@@ -2,12 +2,12 @@
 
 ## Sandbox: first playtest (untried in game)
 
-Built and passing `ue4ss/test/run.sh bosses playas`; nothing of it seen in game yet. F3 → Sandbox, Sandbox Bosses on, Spawn Boss; the `bosses:` and `play as:` log lines say what happened.
+Built and passing `ue4ss/test/run.sh bosses voiceas` and `native/sbslice/test/real/playas.sh`; nothing of it seen in game yet. F3 → Sandbox, Sandbox Bosses on, Spawn Boss; the `bosses:` log lines say what happened. Play As is its own mod now ([Stellar Blade Play As](https://github.com/Warexpor/stellar-blade-play-as), its own TODO.md); here only what this mod does to her as them: the gore log's `voice: she looks like ...`.
 
 - Does a boss spawned outside its arena fight (its tree may wait on its arena's zone events, or play an entrance show)? Tachy's `M_Tachy_Default` effect plays a show of its own at spawn.
 - Does it die by `M_SkullSword`'s rows with a ragdoll (`... died (the game's death)`), or is it held at a floor (`the next hit takes it down`, then `kill: ..., ragdolled`)? Raven's `bDisableCollisionWhenDead`: does her ragdoll stay on the floor?
 - Its cut: does `enemy_cut` find its face (Tachy: `CH_M_NA_21_Face`; Raven's and Scarlet's faces are in their bodies, so `face (...): none of deathFace.morphs on ...` is expected for them)? Its struggle: `boss struggle:` lines, joints kept.
-- Play As: Tachy's hair physics on Eve's Blueprint (her hair bones may hang stiff), Raven's hair on master pose (its own bones at their reference pose), Scarlet with the DLC, the blades in her hand and in a cut (does a blade on its own skeleton show unfolded and on her hand socket?), an outfit change and a camp rest while on.
+- Played as Tachy, Raven or Scarlet (Stellar Blade Play As): a cut and her ragdoll on each (Tachy's 40 hair bodies stay out of her ragdoll's collision, `physfix:` names her asset and `loose bodies jointed: Ab-L-Thigh-Tw0 ...`), Raven's hair coming off with her head, Scarlet's head (in her body) cut with the body, her death cry and the moans after it in the character's voice.
 
 ## Parked: diagonal cut
 

@@ -81,9 +81,15 @@ function E.make(F)
     IsVisible = function() return true end,
     GetCollisionProfileName = function() return F.fname("CharacterMesh") end,
     GetCollisionObjectType = function() return 2 end,
-    GetCollisionEnabled = function() return 3 end,
+    GetCollisionEnabled = function() return E.coll or 3 end,
+    -- (the ponytail reset's query only: it stops a part cut off her simulating on her mesh)
+    SetCollisionEnabled = function(_, v) E.coll = v; E.collLog = E.collLog or {}; E.collLog[#E.collLog + 1] = v end,
     GetCollisionResponseToChannel = function() return 2 end,
+    -- (bones hidden on her: gore.hide_pieces)
+    HideBoneByName = function(_, b) E.hiddenBones[b:ToString()] = true end,
+    UnHideBoneByName = function(_, b) E.hiddenBones[b:ToString()] = nil end,
   })
+  E.hiddenBones = {}
   local capsule = F.obj("CollisionCylinder", "CapsuleComponent", {
     K2_GetComponentLocation = function() local l = loc(); l.Z = l.Z + 90; return l end,
   })
@@ -178,7 +184,7 @@ function E.make(F)
     E.die(ragdoll)
   end
   -- (her movement stays on, walking: the game's falling death left it so, playtest)
-  function E.die(ragdoll)
+  function E.die(ragdoll, effect)
     s.dead = true
     if ragdoll then s.sim = true end
     -- the death screen, made and put up at once (the death table's UI delay 0), its intro playing
@@ -186,20 +192,16 @@ function E.make(F)
     w.__w.intro = true
     E.deadScreen = w
     F.classes.WB_MainHUD_Dead_C = { w }
-    for _, n in ipairs(F.notify) do
-      if n.cls == "/Script/UMG.UserWidget" then pcall(n.cb, w) end
-    end
+    F.new_object(w, "/Script/UMG.UserWidget")
     F.fire("/Script/SB.SBNetworkPlayerController:ClientBroadcast_ActorDead", F.param(controller), F.param(1), F.param(4242),
-      F.param(0), F.param(8000005), F.param(0), F.param(0), F.param(false), F.param(false))
+      F.param(0), F.param(effect or 8000005), F.param(0), F.param(0), F.param(false), F.param(false))
   end
   -- the death screen's widget made with the level, as the game does: it reads visible all along, alive or not
   function E.dead_widget()
     local w = widget("WB_MainHUD_Dead_C_0", "WB_MainHUD_Dead_C")
     E.deadScreen = w
     F.classes.WB_MainHUD_Dead_C = { w }
-    for _, n in ipairs(F.notify) do
-      if n.cls == "/Script/UMG.UserWidget" then pcall(n.cb, w) end
-    end
+    F.new_object(w, "/Script/UMG.UserWidget")
   end
   -- the game's respawn after a death (its death screen's Retry): her actor re-made in place (NotifyBP_ReInitActor),
   -- whole and standing, the death screen gone

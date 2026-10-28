@@ -59,6 +59,7 @@ M.ROWS = {
   { key = "deathScreen", label = "Death Screen", kind = "list", values = { "game", "delay", "key" },
     names = { game = "Instant", delay = "Delayed", key = "On Press" },
     help = "When the death screen appears. Instant: as the game shows it. Delayed: after Death Screen Delay. On Press: only when you press Hold the Death (Shift+F4, or D-pad down + R1 held for a second, unless rebound), which also brings it up early or hides it again." },
+  { key = "customizedRagdoll", label = "Customized Ragdoll Support", kind = "bool", help = "Off by default. For Customized Ragdoll (Nexus 3884) installed alongside: its death camera instead of the Free Camera, and the death screen up at once but invisible, its keys (F / R) working, no holding needed (Hold the Death, Shift+F4, shows it). This mod's ragdoll, cuts, struggle and face stay as they are; that mod's own ragdoll physics are kept off her." },
   { key = "hideHud", label = "Hide HUD on Death", kind = "bool", help = "Hides the HUD (HP bar, skills, minimap, notices) through a death, so the body lies on a clean screen. The death screen still comes up as Death Screen says. Off: the HUD stays up, as in the game." },
   { key = "reviveAt", label = "Death Screen Delay", kind = "num", min = 1, max = 60, step = 1, unit = " s", help = "Seconds into a death before the death screen (and the revive item screen) shows. Only used with Death Screen set to Delayed." },
   { key = "gore.voice.enabled", label = "Death Scream", kind = "bool", help = "Eve cries out, from her own voice recordings, the moment she dies. Off: only the game's own death voice." },
@@ -104,9 +105,6 @@ M.ROWS = {
   { key = "gore.lowArm.healAt", label = "   Grows Back At", kind = "num", min = 0.3, max = 1, step = 0.01, pct = true, help = "With Grows Back With HP: the share of her HP bar at which the arm grows back (90% by default)." },
   { key = "gore.lowArm.effect", label = "Regrow Effect", kind = "bool", help = "On by default. A part cut off her alive (Lose Arm at Low HP's arm, F9's) dissolves back in with a glow when it comes back (a camp rest, Grows Back With HP). Off: it is back at once, with no effect." },
   { section = "Sandbox" },
-  { key = "playAs.who", label = "Play As", kind = "list", values = { "eve", "tachy", "raven", "scarlet" },
-    names = { eve = "Eve", tachy = "Tachy", raven = "Raven (Suit and Hair)", scarlet = "Scarlet (DLC)" }, apply = "playas.apply_now",
-    help = "Eve wears another character: her animations, cuts, struggle and death face stay. Tachy: her body, hair and face. Raven: her suit and hair (the game has no Raven head for Eve's rig, so the face is Eve's). Scarlet: needs the DLC. Each fights with her own blade. Overrides the outfit menu while on; Eve puts her own outfit back." },
   { key = "bosses.enabled", label = "Sandbox Bosses", kind = "bool", help = "Off by default. Spawn Tachy, Raven or Scarlet in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
   { key = "bosses.pick", label = "   Boss", kind = "list", values = { "tachy", "raven", "scarlet" },
     names = { tachy = "Tachy", raven = "Raven", scarlet = "Scarlet (DLC)" }, help = "With Sandbox Bosses on: the one Spawn Boss brings in." },
@@ -818,11 +816,8 @@ local function step(dir)
   s.changed[row.key] = true
   if row.key == "dev" then M.refresh() end
   -- (a row whose change shows at once on what is already out: its function on gore)
-  -- ("mod.fn": that module's, else gore's)
-  local am, af = (row.apply or ""):match("^(%w+)%.([%w_]+)$")
-  local afn = row.apply and (am and ctx[am] and ctx[am][af] or ctx.gore and ctx.gore[row.apply])
-  if afn then
-    local ok, err = pcall(afn)
+  if row.apply and ctx.gore and ctx.gore[row.apply] then
+    local ok, err = pcall(ctx.gore[row.apply])
     if not ok then log("menu: " .. row.apply .. " failed: " .. tostring(err)) end
   end
   render()

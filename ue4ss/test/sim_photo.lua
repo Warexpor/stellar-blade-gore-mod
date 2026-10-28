@@ -90,6 +90,42 @@ check(not hidden(), "3: the death screen up at 11 s")
 opens = true
 next_life()
 
+-- 4: her hair made to ignore her bodies (an arm cut off her alive: her mesh a PhysicsBody) and photo mode's switch
+-- back setting it blocking them as it closes: put back as before photo mode (playtest: her hair shoved her bodies
+-- apart, her whole body shifting and stretching after it closed)
+local SMC = "/Script/Engine.SkeletalMeshComponent"
+local smcPath, meshIsa = rawget(F.objects[SMC], "__path"), rawget(E.mesh, "__isa")
+rawset(F.objects[SMC], "__path", SMC)
+rawset(E.mesh, "__isa", { [SMC] = true })
+local hair = F.obj("SBHair", "SkeletalMeshComponent", {
+  __isa = { [SMC] = true }, en = 3, resp = {},
+  GetCollisionEnabled = function(self) return self.en end,
+  SetCollisionEnabled = function(self, v) self.en = v end,
+  GetCollisionResponseToChannel = function(self, ch) return self.resp[ch] or 2 end,
+  SetCollisionResponseToChannel = function(self, ch, v) self.resp[ch] = v end,
+})
+hair.resp[5] = 0
+local function kids(list) return { ForEach = function(_, fn) for i, c in ipairs(list) do fn(i, { get = function() return c end }) end end } end
+rawset(pawn, "RootComponent", F.obj("Root4", "CapsuleComponent", { AttachChildren = kids({ E.mesh, hair }) }))
+at = mark()
+E.die(true)
+F.run(2, pawn)
+F.press("P", "")
+F.run(1, pawn)
+-- (photo mode's own switch: query only while on, set blocking everything as it closes)
+hair.en = 1
+F.run(2, pawn)
+hair.en, hair.resp[5] = 3, 2
+photo = false
+F.run(1.5, pawn)
+check(F.find("her other meshes' collision as before it: put back on SBHair ch5 2>0", at) ~= nil, "4: her hair's response to her bodies put back")
+check(hair.resp[5] == 0 and hair.en == 3, "4: her hair ignores PhysicsBody again (" .. tostring(hair.resp[5]) .. ")")
+if fails > 0 then dump(at, "photo") end
+rawset(pawn, "RootComponent", nil)
+rawset(F.objects[SMC], "__path", smcPath)
+rawset(E.mesh, "__isa", meshIsa)
+next_life()
+
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

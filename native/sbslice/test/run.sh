@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Build and run the skin cut harness natively (clang, ASan/UBSan), then the cuts on real outfit and enemy meshes when
 # the build cache has them (test/real/run.sh). The real-mesh runs go in parallel (JOBS, default the CPU count).
-#   test/run.sh [group...]   groups: unit (test_cut.c), weapon (test_weapon.c), stats (test_stats.c), rows (test_rows.c), addr (test_addr.c), alive (test_alive.c), phys (test_phys.c and the outfit physics
+#   test/run.sh [group...]   groups: unit (test_cut.c), weapon (test_weapon.c), stats (test_stats.c), rows (test_rows.c), addr (test_addr.c), alive (test_alive.c), newobj (test_newobj.c), phys (test_phys.c and the outfit physics
 #                            parity, phys/parity.py), split, waist, arm, head, mark, enemy; default all
 # What to run for a change:
 #   stats.c / glass.lua            stats
 #   sbslice.c, the table rows      rows
 #   sbslice.c, the addresses       addr
 #   sbslice.c, held objects (G)    alive
+#   sbslice.c, new objects (O)     newobj
 #   physfix.lua, its tune, b/t/j   phys
 #   sbslice.c, a limb or neck cut  unit arm head enemy
 #   sbslice.c, the split (SIDE)    unit split waist
@@ -18,7 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
-[[ $# -eq 0 ]] && SEL=" unit weapon stats rows addr alive phys split waist arm head mark enemy "
+[[ $# -eq 0 ]] && SEL=" unit weapon stats rows addr alive newobj phys split waist arm head mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
 # (diag: the parked diagonal cut, never in the default run)
 fail=0
@@ -54,6 +55,13 @@ if on alive; then
   r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-alive" | tail -1)
   echo "alive: $r"
   [[ $r == PASS ]] || { ASAN_OPTIONS=detect_leaks=0 "$OUT-alive" | grep FAIL; fail=1; }
+fi
+# objects watched as they are made ("O", new_watch) on a made-up object array and listener list
+if on newobj; then
+  clang -O1 -g -fsanitize=address,undefined -w -o "$OUT-newobj" test_newobj.c
+  r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-newobj" | tail -1)
+  echo "newobj: $r"
+  [[ $r == PASS ]] || { ASAN_OPTIONS=detect_leaks=0 "$OUT-newobj" | grep FAIL; fail=1; }
 fi
 # the data table row commands (D, N, A) on a made-up table
 if on rows; then
