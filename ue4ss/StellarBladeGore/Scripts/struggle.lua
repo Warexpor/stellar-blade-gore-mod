@@ -142,7 +142,10 @@ local function com(comp, b)
 end
 -- ...and its centre of mass moved round the joint with it (w x r): turned about its middle alone, the joint dragged
 -- it back and her limbs kept none of a turn (playtest: 0% kept, an arm swing turned 0 deg). The bodies below it on her
--- (DOWN, up to a cut) turn with it about the same joint, unless alone (a parent's push back, the torso's roll)
+-- (DOWN, up to a cut) turn with it about the same joint, unless alone (the torso's roll). A parent's push back
+-- ("carry") moves them round its joint without turning them: turned with it, the bone it pushed back for lost that
+-- much of its own turn (an upper arm 60% of each, its clavicle's share; her arms barely moved while her legs, whose
+-- parent is the pelvis, kicked, playtest), and left behind, the joint came apart
 local function cut(mesh, b) local r = rag(); return r and r.severed(mesh, b) end
 local function push(comp, b, dv, alone)
   local ok, err = pcall(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FName(b)) end)
@@ -153,18 +156,26 @@ local function push(comp, b, dv, alone)
   local wr, r = scale(dv, math.pi / 180), rag()
   local c = com(comp, b)
   if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FName(b)) end) end
-  if alone then return end
+  if alone == true then return end
   for _, x in ipairs(DOWN[b] or {}) do
     if cut(comp, x) or (r and not r.live(comp, x)) then break end
-    try(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FName(x)) end)
+    if alone ~= "carry" then try(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FName(x)) end) end
     local cx = com(comp, x)
     if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FName(x)) end) end
   end
 end
+-- the parent's turn back for a bone's turn: what turns (the bone and the limb below it) against the rest of her, by
+-- mass. Against its parent body alone, an upper arm's was 60% of each turn on a 1.4 kg clavicle that is jointed to
+-- the rest of her (her arms barely moved, playtest); a sit-up's curl still kicks her legs
 local function share(b, p)
   local mass = rag() and rag().MASS or {}
-  return (mass[b] and mass[p]) and math.min(0.6, mass[b] / mass[p]) or 0.3
+  if not (mass[b] and mass[p]) then return 0.3 end
+  local down, all = mass[b], 0
+  for _, x in ipairs(DOWN[b] or {}) do down = down + (mass[x] or 0) end
+  for _, m in pairs(mass) do all = all + m end
+  return math.min(0.6, down / math.max(all - down, 1))
 end
+M.share = share
 
 -- a limb's first bone a cut took (the piece's root), or nil when it is all on her
 local function cut_at(mesh, s, parts)
@@ -294,10 +305,16 @@ local function servo(mesh, b, t, k, dt, mid)
   -- (the parent turned back with the bone and the limb below it carried along: turned alone, the joint between them
   -- came apart, the engine pulled it back together and took most of the turn with it, 44% kept with the elbows 106
   -- deg off, playtest)
+  local back = scale(dv, -share(b, p))
   push(mesh, b, dv)
-  push(mesh, p, scale(dv, -share(b, p)))
-  local set = add(rel, dv)
+  push(mesh, p, back, "carry")
+  -- (what this step leaves of its turn against its parent: its own push and the parent's turn back; a child's turn
+  -- back on it later in the step taken off as it comes, below. Read as only its own push, every reaction counted as
+  -- a turn lost: 36% kept on a ragdoll nothing else moves)
+  local set = perp(sub(add(rel, dv), back), d)
   st.trace[b] = { step = st.step, set = set }
+  local tp = st.trace[p]
+  if tp and tp.step == st.step then tp.set = add(tp.set, back) end
   -- (the first steps of an act: the turn read back at once too, so the log tells a push the engine never took from
   -- one undone before the next step, 0% kept in every playtest)
   local sl = len(set)
@@ -457,7 +474,7 @@ local function pulses_tick(mesh, dt)
       sb.T, sb.A = add(sb.T, scale(p.a, v)), add(sb.A, scale(p.a, d))
       push(mesh, p.b, scale(p.a, d))
       -- (the parent pushed back for the change asked, not for what gravity took)
-      push(mesh, p.p, scale(p.a, -dv * share(p.b, p.p)), true)
+      push(mesh, p.p, scale(p.a, -dv * share(p.b, p.p)), "carry")
       if x < 1 then keep[#keep + 1] = p end
     else
       keep[#keep + 1] = p

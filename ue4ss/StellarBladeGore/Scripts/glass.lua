@@ -106,8 +106,15 @@ local function bar_pct(cached)
     if pct then return pct end
   end
   st.barHud = nil
+  -- (one the game made since, handed out by the widget watch, M.hud_made: no search, a property read)
+  for i = #(st.hudMade or {}), 1, -1 do
+    local w = st.hudMade[i]
+    local pct = valid(w) and pct_of(w)
+    if pct then st.barHud, st.barWait, st.hudMade = w, nil, {}; return pct end
+    if not valid(w) then table.remove(st.hudMade, i) end
+  end
   if cached or os.clock() < (st.barTry or 0) then return nil end
-  st.barWait = math.min((st.barWait or 2.5) * 2, 60)
+  st.barWait = math.min((st.barWait or 0.5) * 2, 60)
   st.barTry = os.clock() + st.barWait
   for _, w in ipairs(try(function() return FindAllOf(HUD) end) or {}) do
     local name = try(function() return w:GetFullName() end) or ""
@@ -445,6 +452,15 @@ end
 
 -- every tick she is alive and animated (main.lua)
 M.bar_pct = bar_pct -- (main.lua: the hit marks heal with it)
+-- her HUD's player info widget, as the game makes it (main.lua's widget watch): its bar read without a search once its
+-- tree is up. After a respawn or a level load the search (FindAllOf, 35 ms) was a stutter as she came back (playtest)
+function M.hud_made(w)
+  st.hudMade = st.hudMade or {}
+  if #st.hudMade >= 4 then table.remove(st.hudMade, 1) end
+  st.hudMade[#st.hudMade + 1] = w
+end
+-- when bar_pct may look for the bar again (main.lua's lethal watch)
+function M.bar_next() return st.barTry or 0 end
 -- the bar's widget (its address), nil till found: a new one starts full whatever her HP (main.lua's Lose Arm at Low HP)
 function M.bar_id() return valid(st.barHud) and try(function() return st.barHud:GetAddress() end) or nil end
 
@@ -615,6 +631,7 @@ function M.forget()
   if st.on and ctx.gore and ctx.gore.state() == "ready" then pcall(ctx.gore.command, "vz") end
   st.on, st.eve, st.foes, st.dying, st.kill, st.faked, st.hud, st.hudLogged = false, nil, {}, nil, nil, false, nil, false
   st.cands, st.candsOf, st.barLast, st.barSent, st.barHud, st.barTry, st.barSeen = nil, nil, nil, nil, nil, 0, nil
+  st.barWait, st.barToldGone = nil, nil
 end
 
 return M

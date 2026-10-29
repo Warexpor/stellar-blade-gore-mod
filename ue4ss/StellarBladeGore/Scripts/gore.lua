@@ -142,6 +142,8 @@ SFX = {
   big = { { SLICE_BIG, SPLASH }, { SLICE_SMALL, SPLASH }, { SLICE_BIG, BLOOD } },
   crunch = { { CRUNCH }, { THUD } },
   smash = { { GORE, POWER }, { SPLASH, CRUNCH }, { GORE, THUD } },
+  -- a wound on her (Blood and Dirt, stains.lua): only the wet layer, over the game's own hit sound
+  wound = { { BLOOD }, { POWER } },
 }
 end
 local SFX_GAP = 3.0 -- s a cue rests after it played
@@ -296,6 +298,10 @@ function M.hold_seams()
 end
 
 function M.native_ready() return native.state == "ready" end
+-- main.lua's death cut timed step by step as a stage is: it was one 81 ms frame with nothing to say where (playtest)
+function M.prof_begin() prof = { t = os.clock() } end
+function M.prof_end() local p = prof; prof = nil; return p and table.concat(p, ", ") or "" end
+M.mark = mark
 -- a command with no answer file (active.lua's eased grip, sent every tick: reading an answer each time stuttered)
 function M.fire(s)
   if native.state ~= "ready" then return end
@@ -401,16 +407,20 @@ end
 -- attached: follow comp (at bone, or at world loc / rot when given: KeepWorldPosition), else a one-off at loc
 -- a gore sound where it happened (tune.gore.sounds, soundVolume). Every parameter is passed: UE4SS leaves the
 -- missing ones at zero, which is a silent volume
--- force: even right after another gore sound (a smash's burst a few frames after its crunch)
-local function sfx(kind, pawn, at, force)
+-- force: even right after another gore sound (a smash's burst a few frames after its crunch). vol: times
+-- soundVolume. aside: neither held back by the other gore sounds nor holding them back (a wound's layer: the cut
+-- that may follow it still plays)
+local function sfx(kind, pawn, at, force, vol, aside)
   local g = cfg()
   if g.sounds == false or not at then return end
   local gs = load_obj("/Script/Engine.Default__GameplayStatics")
   if not gs then return end
   -- the sets in random order; the first with no cue still ringing, else the one whose newest cue is the oldest
   local sets, now = SFX[kind] or {}, os.clock()
-  if not force and now - sfx_last.any < sfx_last.apart then return end
-  sfx_last.any = now
+  if not aside then
+    if not force and now - sfx_last.any < sfx_last.apart then return end
+    sfx_last.any = now
+  end
   local order = {}
   for i = 1, #sets do order[i] = i end
   for i = #order, 2, -1 do local j = math.random(i); order[i], order[j] = order[j], order[i] end
@@ -428,7 +438,7 @@ local function sfx(kind, pawn, at, force)
       -- no owning actor: the cues' concurrency is per owner, so a cut right after another on her was dropped as the
       -- same sound playing again (leg cuts came out silent, fifteenth playtest)
       local ok, err = pcall(function()
-        gs:PlaySoundAtLocation(pawn, snd, vec(at.X, at.Y, at.Z), { Pitch = 0, Yaw = 0, Roll = 0 }, g.soundVolume or 1.0,
+        gs:PlaySoundAtLocation(pawn, snd, vec(at.X, at.Y, at.Z), { Pitch = 0, Yaw = 0, Roll = 0 }, (g.soundVolume or 1.0) * (vol or 1),
           0.92 + math.random() * 0.16, 0.0, nil, nil, nil)
       end)
       if ok then
@@ -443,6 +453,7 @@ local function sfx(kind, pawn, at, force)
   end
   log(string.format("sound %s: %s", kind, #played > 0 and table.concat(played, ", ") or "none"))
 end
+M.sfx = sfx
 
 -- ---- her voice (tune.gore.voice) ----
 -- Eve's own death cry (vo_eve_die_*, SoundWaves under Sound/Dialogue/ActionVoice/Eve, localized like the game's
@@ -3122,8 +3133,11 @@ local function stage_cut(q)
     local function chance(on, k) return on == true or math.random() < (tonumber(k) or 0) end
     local rule = leg and cfg().legRagdoll ~= false or head and chance(cfg().headRagdoll, cfg().headRagdollChance)
       or arm and chance(cfg().armRagdoll, cfg().armRagdollChance)
+    -- (the switch on a frame of its own, the cut the next: together they were one 50 ms frame, the ragdoll's 35,
+    -- playtest)
     if (q.why == "death" or q.why == "after") and rule and ctx.animated and ctx.animated() and ctx.on_need_ragdoll then
       try(function() ctx.on_need_ragdoll(leg and "a leg off" or head and "beheaded" or "an arm off") end)
+      if not q.ragged then q.ragged = true; return "again" end
     end
     q.c = cut_limb(q.pawn, q.mesh, b, q.why, blow, q.face, q.blade)
     mark("cut " .. b)
@@ -4239,6 +4253,12 @@ local function lids_tick()
   lid_ms.n, lid_ms.sum, lid_ms.top = lid_ms.n + 1, lid_ms.sum + ms, math.max(lid_ms.top, ms)
 end
 lids_step = function()
+  -- qrot on plain numbers (no tables: this runs every tick; a local here, the file is at Lua's 200 locals)
+  local function qrot3(q, x, y, z)
+    local qx, qy, qz, qw = q.X, q.Y, q.Z, q.W
+    local tx, ty, tz = 2 * (qy * z - qz * y), 2 * (qz * x - qx * z), 2 * (qx * y - qy * x)
+    return x + qw * tx + qy * tz - qz * ty, y + qw * ty + qz * tx - qx * tz, z + qw * tz + qx * ty - qy * tx
+  end
   local follow = tonumber(cfg().splitLidFollow) or 0
   local limit = follow > 0 and follow / TICK_S or math.huge
   for i = #skinned, 1, -1 do
@@ -4270,24 +4290,33 @@ lids_step = function()
       if still then ok = true
       else
         s.sig = sig
-        local verts, normals = {}, {}
+        -- (the same tables every update, the rotations in plain numbers: a fresh table per vertex and per step made
+        -- thousands a tick, and the ticks the garbage was collected in took 43-50 ms, playtest)
+        s.verts, s.normals = s.verts or {}, s.normals or {}
+        local verts, normals = s.verts, s.normals
         local half = s.half or 0
         -- (the back side's vertices are the front's, its normals turned round)
         local tx, ty, tz, iq = at.t.X, at.t.Y, at.t.Z, at.q
         for k, w in ipairs(s.v) do
+          local vk, nk = verts[k], normals[k]
+          if not vk then vk, nk = vec(0, 0, 0), vec(0, 0, 0); verts[k], normals[k] = vk, nk end
           if half > 0 and k > half then
             local p, n = verts[k - half], normals[k - half]
-            verts[k], normals[k] = p, vec(-n.X, -n.Y, -n.Z)
+            vk.X, vk.Y, vk.Z = p.X, p.Y, p.Z
+            nk.X, nk.Y, nk.Z = -n.X, -n.Y, -n.Z
           else
             local A, B = tms[w.a], tms[w.b]
-            local u = w.t
-            local pa, pb = qrot(A.q, w.la), qrot(B.q, w.lb)
-            local px = (A.t.X + pa.X) * (1 - u) + (B.t.X + pb.X) * u - tx
-            local py = (A.t.Y + pa.Y) * (1 - u) + (B.t.Y + pb.Y) * u - ty
-            local pz = (A.t.Z + pa.Z) * (1 - u) + (B.t.Z + pb.Z) * u - tz
-            verts[k] = qrot(iq, vec(px, py, pz))
-            local na, nb = qrot(A.q, w.na), qrot(B.q, w.nb)
-            normals[k] = qrot(iq, norm(vec(na.X * (1 - u) + nb.X * u, na.Y * (1 - u) + nb.Y * u, na.Z * (1 - u) + nb.Z * u)) or na)
+            local u, iu = w.t, 1 - w.t
+            local ax, ay, az = qrot3(A.q, w.la.X, w.la.Y, w.la.Z)
+            local bx, by, bz = qrot3(B.q, w.lb.X, w.lb.Y, w.lb.Z)
+            vk.X, vk.Y, vk.Z = qrot3(iq, (A.t.X + ax) * iu + (B.t.X + bx) * u - tx,
+              (A.t.Y + ay) * iu + (B.t.Y + by) * u - ty, (A.t.Z + az) * iu + (B.t.Z + bz) * u - tz)
+            local nax, nay, naz = qrot3(A.q, w.na.X, w.na.Y, w.na.Z)
+            local nbx, nby, nbz = qrot3(B.q, w.nb.X, w.nb.Y, w.nb.Z)
+            local nx, ny, nz = nax * iu + nbx * u, nay * iu + nby * u, naz * iu + nbz * u
+            local l = math.sqrt(nx * nx + ny * ny + nz * nz)
+            if l > 1e-4 then nx, ny, nz = nx / l, ny / l, nz / l else nx, ny, nz = nax, nay, naz end
+            nk.X, nk.Y, nk.Z = qrot3(iq, nx, ny, nz)
           end
         end
         ok = try(function() s.pmc:UpdateMeshSection_LinearColor(0, verts, normals, {}, {}, {}, {}, {}, {}); return true end)
@@ -5068,8 +5097,10 @@ split_stage = function(q)
     split_caps(q, q.body2, q.r2, q.caps)
     M.posed = nil
     mark("lids")
-    if not q.anim then M.split_bodies(q); q.stage, q.wait = "masses", 0; return end
-    q.stage, q.wait = "open", 1
+    -- (an animated split's too, in the frame it waited before the opening: in its last frame they were 17 of 70 ms,
+    -- playtest)
+    M.split_bodies(q)
+    q.stage, q.wait = "masses", 0
     return
   elseif q.stage == "masses" then
     -- the copy's masses and spin caps (active.lua) a frame of their own: in the opening's frame they were 36 of its
@@ -5081,7 +5112,15 @@ split_stage = function(q)
     return
   elseif q.stage == "open" then
     stage_split_open(q)
-    if q.anim then q.stage, q.t, q.seen = "anim", 0, nil; return end
+    if q.anim then
+      q.stage, q.t, q.seen = "anim", 0, nil
+      -- (her bones read now: the next frame has their speed and her ragdoll, the one after the halves apart, as many
+      -- frames as before her ragdoll had one of its own)
+      local now = {}
+      for _, b in ipairs(q.bodies or {}) do now[b] = bone_loc(q.mesh, b) end
+      q.seen, q.tl = now, os.clock()
+      return
+    end
     pending = nil
     return
   else
@@ -5102,16 +5141,22 @@ split_stage = function(q)
       end
     end
     q.seen = now
+    -- (her ragdoll a frame before the halves come apart, the copy still on her pose for it; the copy's bodies and
+    -- masses before the opening, "masses": all in the one frame they were 70 ms, playtest)
     -- (two frames at least: the halves fall on at the speed the animation gave each body)
-    if q.t < q.anim or not vel then return end
+    if not q.vel and (q.t < q.anim or not vel) then return end
+    if not q.vel then
+      q.vel = vel
+      if ctx.on_need_ragdoll then try(function() ctx.on_need_ragdoll("split") end) end
+      mark("her ragdoll")
+      return
+    end
     pending = nil
     if valid(q.body2) then try(function() q.body2:SetMasterPoseComponent(nil, true) end) end
     for _, c in ipairs(q.copies2 or {}) do if valid(c) then try(function() c:SetMasterPoseComponent(q.body2, true) end) end end
     command(string.format("p%x,%x", q.mesh:GetAddress(), q.body2:GetAddress()))
     mark("copy pose")
-    if ctx.on_need_ragdoll then try(function() ctx.on_need_ragdoll("split") end) end
-    mark("her ragdoll")
-    split_physics(q, vel)
+    split_physics(q, q.vel)
     return
   end
   -- it didn't happen: nothing of it stays, and she falls whole (a degenerate one: cut across the waist instead)
@@ -5161,8 +5206,10 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
   -- (an enemy built like her: its face whenever the cut may take the head)
   if enemy.cur and enemy.faced[enemy.cur] then face = kind == "head" or (blade ~= nil and kind ~= "split") end
   face = face and face_of(pawn, mesh) or nil
+  mark("start: checks")
   local waited = force_lod(mesh)
   if face then waited = force_lod(face) or waited end
+  mark("start: lod")
   pending = { stage = "cut", wait = waited and 2 or 0, t0 = os.clock(), pawn = pawn, mesh = mesh, hit = hit, why = why, kind = kind,
     face = face, out = out, plane = plane, blade = blade, owner = enemy.cur, bone = M.bone_once, middle = M.splitMiddle,
     smash = M.smash_once and not enemy.cur or nil, fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil,
@@ -5195,12 +5242,17 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
       try(function() pa.SkeletalBodySetups:ForEach(function(_, e) local bs = e:get(); if valid(bs) then pending.bodies[#pending.bodies + 1] = bs.BoneName:ToString() end end) end)
     end
   elseif (why == "death" or why == "after") and halves and ctx.on_need_ragdoll then
+    -- (the cut a frame after the switch, not in its frame: stage_cut's own rule)
+    local was = ctx.animated and ctx.animated()
     try(function() ctx.on_need_ragdoll(kind) end)
+    if was then pending.wait = math.max(pending.wait, 1) end
   end
   -- a split comes first, then the fall: she is held where she is until it opens
   if kind == "split" and not anim and ctx.on_hold then try(function() ctx.on_hold(mesh) end) end
+  mark("start: ragdoll, hold")
   -- its first stage now, in this frame, when nothing waits
   M.pump()
+  mark("start: first stage")
   return true
 end
 
@@ -5805,13 +5857,13 @@ M.MARK_DECALS = {
 -- along the decal's Y) and no normal relief
 M.MARK_SLASH = { "/Game/Art/FX/Tex/Decal/T_A_SwordScars_01.T_A_SwordScars_01" }
 
--- at: where the game says she was hit (world), dir: the blade's motion there (the slash runs along it), or nil;
--- pre: her HP bar before the hit (0-1), or nil. True when a mark went on
-function M.hit_mark(pawn, mesh, at, dir, pre)
-  local g = cfg()
-  local c = g.hitMarks or {}
-  if g.enabled == false or c.enabled == false or not (at and valid(mesh)) then return false end
-  if native.state ~= "ready" then return false end
+-- the skin under a hit (sbslice "m"): at, where the game says she was hit (world); dir, the blow's motion or nil;
+-- reach, how far off her parts' bone axes the hit may lie (40 cm). A table { hit, n (unit), bone (index), part (a
+-- MARK_AT row), mat (the material slot of the skin's section), u, v (its UV, channel 0) }, or nil and why. mat and
+-- u / v are nil when the DLL couldn't tell (no CPU copy of the UVs)
+function M.skin_query(mesh, at, dir, reach_cm)
+  if native.state ~= "ready" then return nil, "sbslice not ready" end
+  if not (at and valid(mesh)) then return nil, "no hit" end
   -- the part: the bone segment nearest the hit
   local best, bd, bc
   for _, w in ipairs(M.MARK_AT) do
@@ -5825,17 +5877,30 @@ function M.hit_mark(pawn, mesh, at, dir, pre)
       if not bd or d < bd then best, bd, bc = w, d, p end
     end
   end
-  if not best or bd > (c.reach or 40) then
-    log(string.format("hit mark skipped: no part of her within %d cm of %s", c.reach or 40, v3(at)))
-    return false
+  if not best or bd > (reach_cm or 40) then
+    return nil, string.format("no part of her within %d cm of %s", reach_cm or 40, v3(at))
   end
   local out = norm(sub(at, bc)) or (dir and norm(scale(dir, -1))) or vec(1, 0, 0)
   local reach = math.min(math.max(bd + 8, 12), 30)
   local r = command(string.format("m%x,0,%x", mesh:GetAddress(), math.floor(reach + 0.5)), bc, out)
   local hit, n = triple(r, "hit", 1), triple(r, "n", 0.01)
-  if r:sub(1, 2) ~= "ok" or not (hit and n) then log("hit mark skipped: " .. r); return false end
-  n = norm(n) or out
-  local bi = num(r, "bone")
+  if r:sub(1, 2) ~= "ok" or not (hit and n) then return nil, r end
+  local u, v = r:match(" uv=(%-?[%d.]+),(%-?[%d.]+)")
+  return { hit = hit, n = norm(n) or out, bone = num(r, "bone"), part = best, mat = num(r, "mat"),
+    u = tonumber(u), v = tonumber(v), out = num(r, "out") }
+end
+
+-- at: where the game says she was hit (world), dir: the blade's motion there (the slash runs along it), or nil;
+-- pre: her HP bar before the hit (0-1), or nil. True when a mark went on
+function M.hit_mark(pawn, mesh, at, dir, pre)
+  local g = cfg()
+  local c = g.hitMarks or {}
+  if g.enabled == false or c.enabled == false or not (at and valid(mesh)) then return false end
+  if native.state ~= "ready" then return false end
+  local q, why = M.skin_query(mesh, at, dir, c.reach or 40)
+  if not q then log("hit mark skipped: " .. why); return false end
+  local best, hit, n = q.part, q.hit, q.n
+  local bi = q.bone
   local ride = bi and bi >= 0 and try(function() return mesh:GetBoneName(bi):ToString() end) or best.bone
   if ride == "None" then ride = best.bone end
   -- along the skin: the swing's motion, flattened onto it, else any way round
@@ -5904,7 +5969,7 @@ function M.hit_mark(pawn, mesh, at, dir, pre)
   end
   if g.blood ~= false and c.blood ~= false then niagara(FX.hit, pawn, nil, hit, false) end
   log(string.format("hit mark on %s (rides %s): %.0f x %.1f cm at %s, %.1f cm out of the bone, %s off the reported hit, HP bar before %s",
-    best.bone, ride, half_l * 2, half_w * 2, v3(hit), num(r, "out") or -1, string.format("%.1f cm", len(sub(hit, at))),
+    best.bone, ride, half_l * 2, half_w * 2, v3(hit), q.out or -1, string.format("%.1f cm", len(sub(hit, at))),
     pre and string.format("%.3f", pre) or "?"))
   return true
 end
@@ -6096,14 +6161,16 @@ function M.blow(pawn, mesh, h, why)
   end
   local function go(at, why, kind, out, plane, blade)
     -- a cut at the hit, before her death is reported (h.early, main.lua): a limb, the head or her body, which come off
-    -- her animated body as F9's do (and open over openTime); a split waits for the death (it needs her ragdoll)
+    -- her animated body as F9's do (and open over openTime); a split waits for the death (it needs her ragdoll), and
+    -- in an enemy's grab (h.grab) her body too: her legs stood on in its pose with nothing above them
     if h.early then
-      if not (kind == "limb" or kind == "head" or kind == "torso") then
+      if not (kind == "limb" or kind == "head" or (kind == "torso" and not h.grab)) then
         M.held = {}
         log(string.format("blade (early): %s %s waits for her death", kind, blade and blade.bone or ""))
         return false
       end
     end
+    mark("blow: plane")
     local ref = blade and blade.bone or (kind == "head" and "Bip001-Neck") or "Bip001-Spine1"
     local was, now = P and P[ref], P and bone_tm(mesh, ref)
     if was and now then
@@ -6685,6 +6752,7 @@ end
 local stage_step
 local function stage_tick(q)
   local stage, t0 = q.stage, os.clock()
+  local outer = prof
   prof = { t = t0 }
   local ok, err = xpcall(stage_step, debug and debug.traceback or tostring, q)
   mark("rest")
@@ -6699,13 +6767,15 @@ local function stage_tick(q)
     log(string.format("%s stage %s at +%.0f ms took %.0f ms%s", q.kind, stage, (t0 - (q.t0 or t0)) * 1000, ms,
       ms >= (cfg().slowMs or 15) and ": " .. table.concat(prof, ", ") or ""))
   end
-  prof = nil
+  prof = outer
   if not ok then error(err, 0) end
 end
 stage_step = function(q)
   if q.kind == "split" then return split_tick(q) end
   if q.stage == "cut" then
-    if stage_cut(q) then q.stage = #q.c.chains > 0 and "chains" or "caps"; q.wait = 0; return end
+    local r = stage_cut(q)
+    if r == "again" then return end
+    if r then q.stage = #q.c.chains > 0 and "chains" or "caps"; q.wait = 0; return end
     pending = nil
     -- nothing came off: give the LOD back unless an earlier cut still needs it
     release_lods()

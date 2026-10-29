@@ -107,13 +107,32 @@ M.ROWS = {
   { key = "active.push", label = "Death Push", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "How hard the killing blow throws Eve's body, on top of the game's own throw (1: default, 0: the game's alone, 2: twice the default)." },
   { key = "active.stiffness", label = "Ragdoll Stiffness", kind = "num", min = 0, max = 3, step = 0.25, help = "Muscle tone in her ragdoll as she falls. 0: limp from the start, 1: default (firm, going limp as she lands), 2-3: she holds her shape longer." },
   { key = "active.neutral.enabled", label = "Relaxed Pose In Flight", kind = "bool", help = "Thrown by a hard hit, her joints are pulled towards a relaxed, curled pose (knees and elbows bent, arms forward) until she lands, instead of her limbs flying out straight." },
-  { key = "active.jiggle.enabled", label = "Jiggle After Death (Experimental)", kind = "bool", help = "Off by default, being tested. In her ragdoll her breasts sway and bounce on a soft spring with her falls and landings. Off: they stay locked to her chest, as before (loose, they used to shake her on the floor)." },
+  { key = "active.jiggle.enabled", label = "Jiggle After Death (Experimental)", kind = "bool", help = "On by default, being tested. In her ragdoll her breasts sway and bounce on a soft spring with her falls and landings. Off: they stay locked to her chest, as before (loose, they used to shake her on the floor)." },
   { section = "Enemies" },
   { key = "enemies.enabled", label = "Enemy Gore", kind = "bool", help = "Cuts and blood on humanoid enemies killed within 25 m of Eve." },
   { key = "enemies.afterDeath.enabled", label = "Attacks After Death (Experimental)", kind = "bool", help = "Off by default, being tested. After Eve dies, the enemies around her keep at her body for 10 s: those within 4.5 m play their own attacks at it, and their weapons cut it through Hits After Death." },
   { key = "enemies.cutChance", label = "   Cut Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a kill cuts something off (0-1): along your swing when you swung, else a limb, the head or a waist cut at random." },
   { key = "enemies.pushScale", label = "Death Throw", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "Scales the game's own throw of a dying enemy (1: as the game, 0: it drops on the spot, 2: twice as far). Works with Enemy Gore off too." },
   { key = "enemies.push", label = "Extra Death Push", kind = "num", min = 0, max = 1000, step = 50, unit = " cm/s", help = "Speed added to every enemy death along the blow, slightly upward, on top of Death Throw (0: none). Works with Enemy Gore off too." },
+  -- (Blood and Dirt: parked, off and hidden till blood on her outfits can look like the game's own; tune.stains)
+  -- { section = "Blood and Dirt" },
+  -- { key = "stains.enabled", label = "Blood and Dirt (Experimental)", kind = "bool", help = "The game's own blood layer on Eve's skin, cut before release, switched back on. Hits that take HP bloody her, enemies hit near her splash her, falls and knockdowns dirty her, and her death soaks her. Swimming washes it off; a camp rest or her next life cleans her. Off: none, her materials as the game has them." },
+  -- { key = "stains.scale", label = "   Blood Amount", kind = "num", min = 0.25, max = 3, step = 0.25, unit = "x", help = "With Blood and Dirt on: how much blood every hit, splash and death puts on her (1: default, 2: twice as much)." },
+  -- { key = "stains.wounds.enabled", label = "   Wounds Where Hit", kind = "bool", help = "With Blood and Dirt on: a hit she lives through leaves a bleeding wound on her skin where it landed, drawn in the skin's own blood layer (not a decal), with drops of blood round it. A hit on her outfit soaks the cloth there with blood instead. Wounds pale in water and heal at a camp rest." },
+  -- { key = "stains.wounds.size", label = "   Wound Size", kind = "num", min = 2, max = 15, step = 1, unit = " cm", help = "With Wounds Where Hit on: the size of a wound's core (harder hits leave bigger ones). New wounds." },
+  -- { key = "stains.splash.enabled", label = "   Enemy Blood Splatter", kind = "bool", help = "With Blood and Dirt on: enemies hit or cut near her splash her with their blood, more the closer they are." },
+  -- { key = "stains.splash.range", label = "   Splatter Range", kind = "num", min = 100, max = 800, step = 50, unit = " cm", help = "With Enemy Blood Splatter on: how near an enemy has to be for its blood to reach her." },
+  -- { key = "stains.dirt.enabled", label = "   Dirt", kind = "bool", help = "With Blood and Dirt on: hard landings and knockdowns dirty her, and her body gets dirtier the longer it lies dead." },
+  -- { key = "stains.cloth.enabled", label = "   Stained Clothing", kind = "bool", help = "With Blood and Dirt on: blood soaks into her outfit where it lands on it (hits, drops), painted into the cloth's own colour, and dirt darkens and greys it. Outfits whose materials lack a colour texture or the game's brightness settings stay as they are." },
+  -- { key = "stains.sound.enabled", label = "   Wound Sound", kind = "bool", help = "With Blood and Dirt on: a wet blood sound (the game's own) on each hit that leaves a wound, over the hit's usual sound." },
+  -- { key = "stains.spatter.enabled", label = "   Blood Drops", kind = "bool", help = "With Blood and Dirt on: blood lands on her as drops, on her skin and her outfit: round her wounds, from enemies hit near her (on the side facing them), at her death and from Add Blood." },
+  -- { key = "stains.wash.enabled", label = "   Water Washes It Off", kind = "bool", help = "With Blood and Dirt on: swimming washes the blood and dirt off her (a few seconds); wounds stay, paler." },
+  -- { key = "stains.rest", label = "   Camp Rest Cleans Her", kind = "bool", help = "With Blood and Dirt on: resting at a camp cleans her and heals her wounds. Her next life always starts clean." },
+  -- { key = "stains.fade", label = "   Fades By Itself", kind = "num", min = 0, max = 30, step = 1, unit = " min", help = "With Blood and Dirt on: minutes for blood and dirt to fade by themselves (0: never, it stays till washed or rested off). Wounds don't fade." },
+  -- { button = "call", call = "stains.test_blood", label = "Add Blood", help = "Puts a quarter more blood on her and a dozen drops over her skin and outfit, to see it." },
+  -- { button = "call", call = "stains.test_wound", label = "Add Wound", help = "A wound on her arm, leg or body at random, on the side facing the camera, to see it." },
+  -- { button = "call", call = "stains.test_dirt", label = "Add Dirt", help = "Puts a quarter more dirt on her, to see it." },
+  -- { button = "call", call = "stains.clean", label = "Clean Her", help = "Takes all the blood, dirt and wounds off her at once." },
   { section = "Gameplay" },
   { key = "holdDown", label = "Stay Down After Knockdown", kind = "bool", help = "When knocked down, Eve stays on the ground until you dodge or jump. Off: she gets up by herself after a second, as in the game." },
   { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under Arm Comes Off Below of her HP (25% by default) cuts an arm off (Which Arm), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life." },
@@ -909,6 +928,16 @@ local function pause(pawn, on)
       local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
       if valid(wbl) then try(function() wbl:SetInputMode_GameAndUIEx(pc, nil, 0, false) end) end
     end
+    -- the world stopped under it (tune.menuPause): the game paused, her actor ticking through it (the menu runs on her
+    -- tick, and the mod's own work waits too: main.lua's game_tick runs only the menu meanwhile). A pause already on
+    -- (the game's own) is left to the game
+    if ctx.tune.menuPause ~= false and valid(pawn) and try(function() return gs:IsGamePaused(pawn) end) ~= true then
+      s.paused.tick = try(function() return pawn.PrimaryActorTick.bTickEvenWhenPaused end)
+      try(function() pawn:SetTickableWhenPaused(true) end)
+      s.paused.world = try(function() return gs:SetGamePaused(pawn, true) end) == true
+      if not s.paused.world then try(function() pawn:SetTickableWhenPaused(s.paused.tick == true) end) end
+      log("menu: the game " .. (s.paused.world and "paused" or "didn't pause"))
+    end
   elseif not on and s.paused then
     local p = s.paused
     s.paused = nil
@@ -920,8 +949,14 @@ local function pause(pawn, on)
       local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
       if valid(wbl) then try(function() wbl:SetInputMode_GameOnly(p.pc) end) end
     end
+    if p.world then
+      if valid(pawn) then try(function() gs:SetGamePaused(pawn, false) end) end
+      if valid(p.pawn) then try(function() p.pawn:SetTickableWhenPaused(p.tick == true) end) end
+    end
   end
 end
+-- the game paused by the menu (main.lua's game_tick runs only the menu then)
+function M.pausing() return M.state.open and M.state.paused ~= nil and M.state.paused.world == true end
 function M.open(pawn)
   local s = M.state
   if s.open then return end
@@ -1173,6 +1208,14 @@ M.FG_S = 0.1
 -- every tick of hers: the open combo on the controller, and the menu's keys while it is open (a key held repeats)
 function M.tick(pawn)
   local s = M.state
+  s.tickAt = os.clock()
+  -- (main.lua's watchdog unpaused the game: her tick had stopped under the menu's pause)
+  if s.unstuck then
+    s.unstuck = nil
+    log("menu: her tick stopped under the menu's pause: unpaused, closed")
+    if s.open then M.close(pawn) end
+    return
+  end
   local _, pc = controller(pawn)
   if not valid(pc) then return end
   local function down(name) return try(function() return pc:IsInputKeyDown({ KeyName = FName(name) }) end) == true end

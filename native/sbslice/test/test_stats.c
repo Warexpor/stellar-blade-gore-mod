@@ -260,7 +260,15 @@ int main(void)
         snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo2, 7000, 166);
         nboss = 0;
         cmd(s6, 0, 0, 0, 0);
-        check(!strcmp(res, "none"), "boss: no maximum or ratio of its: none");
+        check(!strncmp(res, "none nearest 8000.00 8184.00 249.00 249.00 at depth ", 52), "boss: no maximum or ratio of its: none, the nearest told");
+        // a pooled boss used again: its HP over its maximum (set before it) is still found by its maximums, and read
+        unsigned char *bo3;
+        actor(&bo3, 248304, 12415, 240, 240);
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo3, 12415, 240);
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "ok found 248304.00 12415.00 240.00 240.00"), "boss: HP over its maximum still found by the maximums");
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "ok 248304.00 12415.00 240.00 240.00"), "boss: and read again");
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS");

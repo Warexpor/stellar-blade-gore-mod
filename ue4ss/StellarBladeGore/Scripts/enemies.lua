@@ -439,12 +439,13 @@ local function adopt(o, a, cls, k, cuts)
   known[a] = e
   -- one the spawner asked for: it can be removed again. A boss of the kind asked for in the last 10 s is it wherever it
   -- turns up (BOSS_FAR): Tachy comes in from off where she was asked for, wasn't taken for one spawned here, and
-  -- Passive Bosses never touched her (she attacked, playtest)
+  -- Passive Bosses never touched her (she attacked, playtest). Told by alias: a setting changed in the menu that
+  -- spawned it makes the kinds over (Scarlet, Tachy and the Royal Guard weren't taken for hers, playtest)
   local miss
   for i = #expect, 1, -1 do
     local x = expect[i]
     if os.clock() - x.t > 10 then table.remove(expect, i)
-    elseif x.kind == k then
+    elseif x.kind.alias == k.alias then
       local l = try(function() return vof(o:K2_GetActorLocation()) end)
       local d = l and len(sub(l, x.at))
       if d and d < (k.row and M.BOSS_FAR or 800) then mine[a] = true; table.remove(expect, i); break end
@@ -504,6 +505,8 @@ local function try_cut(pawn, a, e)
     e.cut = true
     e.cuts = e.cuts + 1
     if r.loc then ctx.gore.enemy_hit(a, e.obj, e.mesh, r.loc) end
+    -- (its blood onto her when she's near: stains.lua)
+    if ctx.stains and (r.loc or r.pel) then pcall(ctx.stains.splash, r.loc or r.pel, "cut") end
     log(string.format("%s %x: %s %s (%s)", e.kind.alias, a, r.what, tostring(got or r.kind), r.src))
   else
     log(string.format("%s %x: nothing came off (%s)", e.kind.alias, a, r.src))
@@ -563,27 +566,6 @@ local function corpse_hit(pawn, a, e)
     pel = bone_loc(e.mesh, "Bip001-Pelvis"),
     src = string.format("%s at %.0f cm/s, %.0f cm off %s", sw.how, sw.speed, bd, bb),
     h = { loc = loc, dir = sw.dir, fwd = sw.fwd, n = cut and sw.n or nil, how = sw.how, push = sw.dir, bone = bb } }
-end
-
--- her swing through a live one (bosses.lua: a blow struck, whether or not the game let it land): the swing's time, or
--- nil. The same test as a corpse hit's, past since only
--- Not while she is dead or just hit: her hand flung about by a blow or her fall swept through the one hitting her and
--- counted as her blows (playtest: Sandbox Raven, fighting, was taken down for 21 blows "taking no hit" as she killed
--- Eve, and cut along Eve's dying arm's arc, which read as Raven cutting herself)
-function M.struck(pawn, e, since)
-  if ctx.dead_since and ctx.dead_since() then return nil end
-  local hit = ctx.hit_at and ctx.hit_at()
-  if hit and os.clock() - hit < (cfg().hitQuiet or 0.6) then return nil end
-  if hit then since = math.max(since or 0, hit + (cfg().hitQuiet or 0.6)) end
-  local ch = cfg().corpseHits or {}
-  local sw = valid(e.mesh) and her_swing(pawn, math.max(since or 0, os.clock() - (cfg().swingWindow or 0.5)))
-  if not sw then return nil end
-  local reach, blade = ch.reach or 35, ch.blade or 130
-  for _, p in ipairs(PARTS) do
-    local l = part_at(e.mesh, p)
-    if l and math.abs(dot(sub(l, sw.at), sw.n)) < reach and len(sub(l, sw.at)) < blade then return sw.t end
-  end
-  return nil
 end
 
 -- the spawner's Kill nearest (and End): the followed character nearest her goes down as a ragdoll, which the
@@ -1498,7 +1480,8 @@ function M.near_montages(pawn)
     if at and len(sub(at, her)) < GRAB_NEAR then
       local _, _, mn = montage_of(ch.obj)
       -- (its nearest hand to her body: a grab without a montage told from a miss)
-      local hb, bb, hd = mesh and hand_on(ch.obj, mesh, 200)
+      local hb, bb, hd
+      if mesh then hb, bb, hd = hand_on(ch.obj, mesh, 200) end
       out[#out + 1] = string.format("%s %.0f cm: %s%s", ch.cls, len(sub(at, her)), mn or "no montage",
         hb and string.format(", %s %.0f cm from her %s", hb, hd, bb) or "")
     end

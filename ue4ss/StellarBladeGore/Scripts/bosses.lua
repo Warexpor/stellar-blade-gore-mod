@@ -12,23 +12,35 @@
 --   exactly), MaxHP and MaxShield times hpScale, DespawnTimeAfterDeath at least despawn s.
 -- and put back once none of that kind spawned here is left (a story fight of that boss meanwhile would get it too: it
 -- is only ever on while one of yours is up).
--- Their phases' floors (MinimumHP effects some skills put on) can still hold one at a sliver of HP: when the boss bar
--- (WB_MainHUD_EnemyInfo's ProgressBar_HP) sits at floor or below and it is hit again, or reads 0 with it still up for
--- zeroWait s, it is taken down by the mod (enemies.lua kill_one: its AI stopped, ragdolled), as the game would.
--- A phase change that waits on its arena (Scarlet's goes on with the level's MV_Nikke_Scarlet_Phase2 cutscene, never
--- played outside it: she stood there, doing nothing, reported) holds the bar above the floor: the bar unchanged and the
--- boss standing in place (STUCK_CM) through stuckHits hits over stuckS s takes it down too.
+-- Their phases hold them up with floors: the EffectTable's MinimumHP_<n>p rows (an HP floor at n% of its MaxHP, put on
+-- by their trees and skills till the phase change plays, which dispels it; the game's own Test_EnemyKillToBoss kills
+-- one by dispelling them) and Scarlet's M_Scarlet_Immortal_Infinite. A phase change that never plays (one standing
+-- still, Scarlet's outside her arena: the level's MV_Nikke_Scarlet_Phase2 cutscene) held one there for good, so while
+-- one spawned here is up those rows hold nothing (their StatType, ActorState1 None; put back with the rows): its HP
+-- goes down to 0 and the game's own death follows. One still up with its HP (or, unread, the boss bar) at 0 for
+-- zeroWait s is taken down by the mod (enemies.lua kill_one: its AI stopped, ragdolled). The mod no longer guesses at
+-- a boss held up from its blows, its bar or where it stands: each guess took down one fighting (a Raven blocking blow
+-- after blow at full HP, as if she cut herself, playtests).
 local M = {}
 local ctx, try, valid
 local function cfg() return ctx.tune.bosses or {} end
 local function log(s) ctx.log("bosses: " .. s) end
 
 M.CHAR = "/Game/Local/Data/CharacterTable.CharacterTable"
+M.EFFECT = "/Game/Local/Data/EffectTable.EffectTable"
 M.IMMORTAL, M.DISPEL = "Passive_Immortal", "Passive_Immortal_Dispel"
+-- the EffectTable rows holding a boss up (every row of StatType MinimumHP, ESBActorStatType 107; ActorState1
+-- Immortal, ESBActorState 27, on Scarlet's own): each that field's byte, made None (0) while one spawned here is up
+M.HOLDS = { { "M_Scarlet_Immortal_Infinite", "ActorState1", 27 } }
+for _, n in ipairs({ "95", "90", "85", "80", "75", "70", "65", "61", "60", "55", "50", "45", "41", "40", "35", "31", "30",
+  "25", "20", "15", "10", "5", "0.5" }) do
+  table.insert(M.HOLDS, 1, { "MinimumHP_" .. n .. "p", "StatType", 107 })
+end
 M.HUD = "WB_MainHUD_EnemyInfo_C"
 
 local rows = {}   -- row name -> { dt = table address, was = { field -> old u32 }, n = live count, t = last asked }
-local live = {}   -- actor address -> { e, k, mine, hitT, floorT, zeroT, face, struggle }
+local holds      -- the EffectTable's holds let go: { dt = table address, was = { { row, off, shift, byte } } }
+local live = {}   -- actor address -> { e, k, mine, zeroT, face, struggle }
 local dead = {}   -- actor address -> { e, face, struggle }
 local struggleSrc -- struggle.lua's chunk, loaded once (each boss's death runs a fresh copy of it)
 
@@ -47,8 +59,8 @@ local function offsets(rs)
   try(function() rs:ForEachProperty(function(p) out[p:GetFName():ToString()] = p:GetOffset_Internal() end) end)
   return out
 end
-local function table_of()
-  local dt = try(function() return StaticFindObject(M.CHAR) end)
+local function table_of(path)
+  local dt = try(function() return StaticFindObject(path or M.CHAR) end)
   local rs = valid(dt) and try(function() return dt.RowStruct end)
   if not valid(rs) then return nil end
   return dt, rs
@@ -73,6 +85,49 @@ local function swap_names(dt, rs, row, off, from, to)
   return tonumber(n)
 end
 
+-- the byte at a row's field (an enum): read, and set to b when given (its aligned 4 bytes written back). The old byte
+local function field_byte(dt, rs, row, off, b)
+  if not off then return nil, "no field" end
+  local at, shift = off - off % 4, off % 4 * 8
+  local u, err = field(dt, rs, row, at)
+  if not u then return nil, err end
+  local was = u >> shift & 0xff
+  if b and b ~= was and not field(dt, rs, row, at, u & ~(0xff << shift) | b << shift) then return nil, "not written" end
+  return was
+end
+-- the EffectTable's floors and Scarlet's immortality let go of (once, while any row is mortal)
+local function let_go()
+  if holds then return end
+  local dt, rs = table_of(M.EFFECT)
+  if not dt then log("no EffectTable loaded: their phases' floors left on"); return end
+  local off = offsets(rs)
+  holds = { dt = addr(dt), was = {} }
+  local n, miss = 0, {}
+  for _, h in ipairs(M.HOLDS) do
+    local row, f, want = h[1], h[2], h[3]
+    local was = field_byte(dt, rs, row, off[f])
+    -- (only one holding as the dump had it: another mod's row, or a field read wrong, left alone)
+    if was == want and field_byte(dt, rs, row, off[f], 0) then
+      holds.was[#holds.was + 1] = { row, off[f], was }
+      n = n + 1
+    else
+      miss[#miss + 1] = string.format("%s %s", row, was and string.format("%s %d", f, was) or "not found")
+    end
+  end
+  log(string.format("their phases' floors let go while one of yours is up: %d of %d EffectTable rows hold nothing%s", n,
+    #M.HOLDS, #miss > 0 and " (left: " .. table.concat(miss, ", ") .. ")" or ""))
+end
+local function hold_again(why)
+  local h = holds
+  holds = nil
+  if not h then return end
+  local dt, rs = table_of(M.EFFECT)
+  if not dt or addr(dt) ~= h.dt then log(string.format("their floors: the EffectTable is gone (%s), nothing to put back", why)); return end
+  local n = 0
+  for _, w in ipairs(h.was) do if field_byte(dt, rs, w[1], w[2], w[3]) then n = n + 1 end end
+  log(string.format("their phases' floors back as the game has them (%s): %d of %d rows", why, n, #h.was))
+end
+
 -- the row of kind k made mortal (once; a second spawn of it counts on). nil when done, else why not
 function M.prepare(k)
   if cfg().enabled ~= true then return "Sandbox Bosses is off (F3 → Sandbox)" end
@@ -80,6 +135,10 @@ function M.prepare(k)
   -- (a new one may bring its bar: looked for again soon)
   if M.bar_soon then M.bar_soon() end
   local r = rows[k.row]
+  -- one of its kind still followed may be the one the game sends again (its pool): its HP looked for again
+  for _, x in pairs(live) do
+    if x.k.alias == k.alias and not x.hp then x.hpTries, x.hpAt = 0, os.clock() + 1 end
+  end
   if r then r.t = os.clock(); return nil end
   local dt, rs = table_of()
   if not dt then return "no CharacterTable loaded" end
@@ -111,6 +170,7 @@ function M.prepare(k)
   local mhp, msh = field(dt, rs, k.row, off.MaxHP), field(dt, rs, k.row, off.MaxShield)
   rows[k.row] = { dt = addr(dt), was = was, off = off, t = os.clock(), mhp = mhp, msh = msh }
   log(string.format("%s's row made mortal while one of yours is up: %s", k.row, table.concat(out, ", ")))
+  let_go()
   return nil
 end
 
@@ -367,18 +427,6 @@ local function hold_ai(a, x, on, now)
 end
 
 M.next = 0
-M.STUCK_CM = 50
--- its bar and place since they last changed, and the hits on it meanwhile: stood through stuckHits over stuckS s
-local function stuck(x, p, l, hit, now)
-  local h = x.held
-  local moved = h and l and h.l and math.sqrt((l.X - h.l.X) ^ 2 + (l.Y - h.l.Y) ^ 2) > M.STUCK_CM
-  if not h or math.abs(p - h.p) > 0.0005 or moved then
-    x.held = { p = p, l = l, t = now, hits = 0, hit = hit }
-    return false
-  end
-  if hit and hit ~= h.hit then h.hit, h.hits = hit, h.hits + 1 end
-  return h.hits >= (tonumber(cfg().stuckHits) or 3) and now - h.t >= (tonumber(cfg().stuckS) or 4)
-end
 -- its HP, read where the game keeps it (sbslice vb: its stats found by the MaxHP and MaxShield its row was given, else
 -- their ratio). The boss bar is no help on one spawned here: it never showed for a passive one (playtest, "its bar not
 -- shown"), and a hit reaction is no sign of damage (Tachy reacted to blows that took nothing). Read every HP_EVERY s;
@@ -411,9 +459,11 @@ local function read_hp(a, x, now)
         res:match("^ok [%a ]*(.+)$")))
     end
   else
+    -- lost: looked for afresh (its tries over again). The game pools them: Raven came back at the same address after
+    -- her respawn and after its death, and gave up on in 15 s while it was still away (playtest)
     x.hp = nil
-    if not got then x.hpTries = (x.hpTries or 0) + 1 end
-    x.hpAt = now + (got and M.HP_EVERY or M.HP_RETRY)
+    x.hpTries = got and 0 or (x.hpTries or 0) + 1
+    x.hpAt = now + M.HP_RETRY
     if got or x.hpTries >= M.HP_TRIES then
       log(string.format("%s %x: its HP %s (%s)", x.k.alias, a, got and "lost" or "not found in memory", res))
     end
@@ -421,36 +471,6 @@ local function read_hp(a, x, now)
   return x.hp
 end
 
--- blows that land on nothing: her blade through one (enemies.struck) with no hit reaction on it (its mesh's,
--- enemies poll_hit) and its bar unmoved since the blow before. A phase change can hold one invincible until its
--- behaviour tree plays the change: one standing still (Passive Bosses) never does (playtest: Tachy and Scarlet took no
--- more damage partway down, their bars above the floor, no hit reaction for the stuck check to count). stuckHits such
--- blows over stuckS s take it down (twice that while it fights: a guarded blow lands on nothing too)
-local function unanswered(pawn, a, x, p, now)
-  local t = ctx.enemies and ctx.enemies.struck and ctx.enemies.struck(pawn, x.e, (x.blow or {}).t)
-  if not t then return false end
-  local b = x.blow
-  local h = x.hp
-  local life = h and h.hp + h.sh
-  -- (its HP read: only HP or shield lost counts as a blow taken; else its hit reaction or its bar moving)
-  local took
-  if life then took = b and b.life and life < b.life - 0.01
-  else
-    local hit = x.e.hit and x.e.hit.t
-    took = b and ((hit and hit > b.t - 0.1) or (p and b.p and math.abs(p - b.p) > 0.0005))
-  end
-  if not b or took or (life ~= nil) ~= (b.life ~= nil) then
-    x.blow = { t = t, p = p, life = life, n = 0, from = t }
-    return false
-  end
-  b.t, b.p, b.n = t, p, b.n + 1
-  if b.n == 1 then
-    log(string.format("%s %x: struck, no hit taken (%s)", x.k.alias, a, h and string.format("its HP %.0f/%.0f, shield %.0f/%.0f",
-      h.hp, h.mhp, h.sh, h.msh) or p and string.format("its bar %.3f", p) or "its bar not shown, its HP not read"))
-  end
-  local k = x.passive and 1 or 2
-  return b.n >= (tonumber(cfg().stuckHits) or 3) * k and now - b.from >= (tonumber(cfg().stuckS) or 4) * k
-end
 function M.tick(pawn)
   local now = os.clock()
   -- the rows put back once none of their kind spawned here is left (and none asked for in the last 15 s); one whose
@@ -468,51 +488,33 @@ function M.tick(pawn)
       if not up[row] and now - r.t > 15 then put_back(row, "none of yours left") end
     end
     if cfg().enabled ~= true then for row in pairs(rows) do put_back(row, "Sandbox Bosses off") end end
+    if holds and not next(rows) then hold_again(cfg().enabled ~= true and "Sandbox Bosses off" or "none of yours left") end
   end
   local passive = cfg().passive == true and cfg().enabled == true
   for a, x in pairs(live) do if not x.downed then hold_ai(a, x, passive, now) end end
-  -- their floors: the nearest live one spawned here is the one the boss bar shows
-  if next(live) and cfg().floorKill ~= false then
+  -- one still up at 0: its HP read, else the boss bar (the nearest live one spawned here is the one it shows; one
+  -- far off isn't: another enemy's bar at 0 took it down from across the level), hit in the last 10 s
+  if next(live) and cfg().zeroKill ~= false then
     local p = bar()
     local her = try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
-    local best, bd, ba, bl
+    local best, bd
     local reach = tonumber(cfg().barReach) or 3000
-    for a, x in pairs(live) do
+    for _, x in pairs(live) do
       local l = her and valid(x.e.obj) and try(function() local v = x.e.obj:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
       local d = l and math.sqrt((l.X - her.X) ^ 2 + (l.Y - her.Y) ^ 2)
-      -- (one far off isn't the one the bar shows: another enemy's bar at 0 took it down from across the level)
-      if d and d <= reach and (not bd or d < bd) then best, bd, ba, bl = x, d, a, l end
+      if d and d <= reach and (not bd or d < bd) then best, bd = x, d end
     end
-    -- (its own HP, read, before the bar: the bar shows whichever boss the game has in its fight)
-    if best and best.hp and best.hp.mhp > 0 then p = best.hp.hp / best.hp.mhp end
-    if best and p then
-      local floor = tonumber(cfg().floor) or 0.05
-      local hit = best.e.hit and best.e.hit.t
-      if p <= floor then
-        if not best.floorT then
-          best.floorT, best.floorHit = now, hit
-          log(string.format("%s %x: its bar at %.3f (floor %.2f): the next hit takes it down", best.k.alias, ba, p, floor))
-        elseif hit and hit ~= best.floorHit and hit > best.floorT then
-          take_down(pawn, ba, best, string.format("its bar held at %.3f and hit again", p))
-        elseif p <= 0.001 and now - best.floorT > (tonumber(cfg().zeroWait) or 1.5) and hit and now - hit < 10 then
-          take_down(pawn, ba, best, "its bar at 0 and still up")
-        end
-      else
-        best.floorT = nil
-        if stuck(best, p, bl, hit, now) then
-          take_down(pawn, ba, best, string.format("its bar held at %.3f, standing in place, through %d hits over %.1f s "
-            .. "(a phase change waiting on its arena)", p, best.held.hits, now - best.held.t))
-        end
-      end
-    end
-  end
-  if next(live) and cfg().floorKill ~= false then
-    local p = bar()
     for a, x in pairs(live) do
       local h = not x.downed and read_hp(a, x, now)
-      if not x.downed and unanswered(pawn, a, x, h and h.mhp > 0 and h.hp / h.mhp or p, now) then
-        take_down(pawn, a, x, string.format("struck %d times over %.1f s, no hit taken (held invincible: a phase change "
-          .. "waiting on its AI or its arena)", x.blow.n + 1, now - x.blow.from))
+      local hit = x.e.hit and x.e.hit.t
+      local q = h and h.mhp > 0 and h.hp / h.mhp or not h and x == best and hit and now - hit < 10 and p or nil
+      if x.downed or not q or q > 0.001 then
+        x.zeroT = nil
+      elseif not x.zeroT then
+        x.zeroT = now
+        log(string.format("%s %x: its %s at 0 and still up", x.k.alias, a, h and "HP" or "bar"))
+      elseif now - x.zeroT > (tonumber(cfg().zeroWait) or 1.5) then
+        take_down(pawn, a, x, string.format("its %s at 0 and still up for %.1f s", h and "HP" or "bar", now - x.zeroT))
       end
     end
   end
@@ -565,6 +567,7 @@ function M.forget()
   for a, d in pairs(dead) do if d.struggle then pcall(d.struggle.forget) end end
   live, dead, hud.w = {}, {}, nil
   for row in pairs(rows) do pcall(put_back, row, "level reloaded") end
+  pcall(hold_again, "level reloaded")
 end
 
 -- (the sims)

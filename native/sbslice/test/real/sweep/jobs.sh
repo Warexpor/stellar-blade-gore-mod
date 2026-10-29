@@ -18,6 +18,10 @@ while read -r p; do m=$(basename "$p")
   echo "$m|waist armfirst|WAIST=1 ARMFIRST=1"
   echo "$m|waist high blade arms|WAIST=1 WAISTAT=0.88 WAISTTILT=10 ARMSAFTER=1"
   for d in 0 2 4 6; do echo "$m|waist tilt15 dir$d|WAIST=1 WAISTTILT=15 WAISTTILTDIR=$d"; done
+  # the cut's point off the opening's middle (in game her spine bone lies near her back; a leaned thigh cut's point
+  # near the opening's edge): the cap still covers the whole opening
+  for o in -6,0,0 6,0,0; do echo "$m|waist off $o|WAIST=1 CUTOFF=$o"; done
+  for o in -4,0,0 4,0,0 0,-4,0 0,4,0; do echo "$m|Bip001-L-Thigh@0.4 off $o|SKIRTBODIES=$sb ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4 CUTOFF=$o"; done
   for s in L R; do
     for lb in "UpperArm Forearm 0.3" "UpperArm Forearm 0.7" "Forearm Hand 0.5" "Thigh Calf 0.4" "Thigh Calf 0.77" "Thigh Calf 0.15" "Calf Foot 0.5"; do
       set -- $lb; b=Bip001-$s-$1; en=Bip001-$s-$2; at=$3

@@ -1,7 +1,8 @@
--- Sandbox Bosses (bosses.lua): a boss's CharacterTable row made mortal while one spawned here is up, and put back
--- exactly as the game had it once none is; the boss bar held at its floor and hit again takes it down; its death gets
--- a face and a struggle of its own (a fresh struggle.lua) that ticks without error; one held invincible (blows landing on
--- nothing) taken down; off, nothing is changed
+-- Sandbox Bosses (bosses.lua): a boss's CharacterTable row made mortal while one spawned here is up, and the
+-- EffectTable's phase floors (MinimumHP_<n>p, Scarlet's immortality) holding nothing meanwhile, all put back exactly as
+-- the game had them once none is; one up at 0 HP (unread: the bar) taken down; one fighting, blocking blow after blow,
+-- never; its death gets a face and a struggle of its own (a fresh struggle.lua) that ticks without error; off, nothing
+-- is changed
 local F = require("fake")
 local print = F.say
 local fails = 0
@@ -39,6 +40,23 @@ local function snapshot()
   return o
 end
 local before = snapshot()
+-- the EffectTable: the holds' enum bytes inside their 4 bytes (StatType at 0x2d, ActorState1 at 0x52), other bytes kept
+local EOFF = { StatType = 0x2d, ActorState1 = 0x52 }
+local effMem = {}
+for _, n in ipairs({ "95", "90", "85", "80", "75", "70", "65", "61", "60", "55", "50", "45", "41", "40", "35", "31", "30",
+  "25", "20", "15", "10", "5", "0.5" }) do effMem["MinimumHP_" .. n .. "p"] = { [0x2c] = 0x11 | 107 << 8 | 0xab << 16 } end
+effMem.M_Scarlet_Immortal_Infinite = { [0x50] = 0x2200 | 27 << 16 }
+-- (another mod's row holding something else: left)
+effMem.MinimumHP_41p[0x2c] = 0x11 | 5 << 8
+local effBefore = {}
+for r, m in pairs(effMem) do effBefore[r] = m[0x2c] or m[0x50] end
+local ers = F.obj("SBEffectTableProperty", "ScriptStruct")
+ers.ForEachProperty = function(self, cb)
+  for nm, off in pairs(EOFF) do
+    cb({ GetFName = function() return F.fname(nm) end, GetOffset_Internal = function() return off end })
+  end
+end
+F.objects["/Game/Local/Data/EffectTable.EffectTable"] = F.obj("EffectTable", "DataTable", { RowStruct = ers })
 local rs = F.obj("SBCharacterTableProperty", "ScriptStruct")
 rs.ForEachProperty = function(self, cb)
   for nm, off in pairs(OFF) do
@@ -63,8 +81,9 @@ local function command(s)
   local f = {}
   for x in s:sub(2):gmatch("[^,]+") do f[#f + 1] = tonumber(x, 16) end
   local row = byIdx[f[3]]
-  local m = rowsMem[row]
+  local m = rowsMem[row] or effMem[row]
   if not m then return "err no such row" end
+  if c == "d" and f[5] % 4 ~= 0 then return "err bad row" end
   if c == "d" then
     local was = m[f[5]] or 0
     if f[6] then m[f[5]] = f[6] end
@@ -112,6 +131,11 @@ check(B.prepare(kinds.tachy) == nil and #cmds == n0, "a second Tachy: her row as
 -- Raven: her corpse kept
 check(B.prepare(kinds.raven) == nil, "Raven's row made mortal")
 check(string.unpack("<f", string.pack("<I4", rowsMem.M_Raven[0x1c])) == 120, "Raven's corpse stays 120 s (was 1)")
+-- their phases' floors and Scarlet's immortality hold nothing, once, their other bytes kept
+check(effMem.MinimumHP_60p[0x2c] == 0x11 | 0xab << 16 and effMem["MinimumHP_0.5p"][0x2c] == 0x11 | 0xab << 16
+  and effMem.M_Scarlet_Immortal_Infinite[0x50] == 0x2200, "the MinimumHP floors and Scarlet's immortality: None, the bytes by them kept")
+check(effMem.MinimumHP_41p[0x2c] == 0x11 | 5 << 8 and has("23 of 24 EffectTable rows hold nothing %(left: MinimumHP_41p StatType 5%)"),
+  "a row holding something else (another mod's): left, told")
 
 -- one spawned here followed; the floor
 local mesh = F.obj("BossMesh", "SkeletalMeshComponent")
@@ -162,31 +186,31 @@ tune.bosses.passive = false
 F.t = F.t + 0.3; B.tick(pawn)
 check(ai.takes == 1 and boss.Controller == ai and brain.restarts == 1 and brain.running and has("fights again %(possessed, its tree started over%)"),
   "passive off: taken back, its tree started over")
-bar.Percent = 0.03
-F.t = F.t + 0.1; B.tick(pawn)
-check(#kills == 0 and has("the next hit takes it down"), "its bar at 0.03: waiting for the next hit")
-e.hit = { t = F.t + 0.05 }
-F.t = F.t + 0.2; B.tick(pawn)
-check(#kills == 1 and kills[1]:find("hit again"), "hit again at its floor: taken down (" .. tostring(kills[1]) .. ")")
-
--- a phase change waiting on its arena (Scarlet's Phase2 cutscene): the bar held above the floor, it standing there
-local e2 = { obj = F.obj("CH_M_NA_961_Blueprint_C_1", "CH_M_NA_961_Blueprint_C", { Mesh = F.obj("BossMesh2", "SkeletalMeshComponent") }), kind = kinds.tachy }
-local at2 = { X = 400, Y = 0, Z = 0 }
-e2.obj.K2_GetActorLocation = function() return at2 end
+-- its HP read at 0 with it still up: taken down after zeroWait s; the bar at 0 alone (HP unread), hit lately, too
+hpOf[0xb055] = { 300, 5456, 0, 166 }
+-- (its search tried again HP_RETRY s after the last that found nothing)
+for _ = 1, 20 do F.t = F.t + 0.3; B.tick(pawn) end
+check(#kills == 0 and has("B_Tachy b055: its HP found in memory"), "its HP read at 300: up")
+hpOf[0xb055][1] = 0
+for _ = 1, 4 do F.t = F.t + 0.3; B.tick(pawn) end
+check(#kills == 0 and has("B_Tachy b055: its HP at 0 and still up"), "its HP at 0: not yet")
+for _ = 1, 4 do F.t = F.t + 0.3; B.tick(pawn) end
+check(#kills == 1 and kills[1]:find("its HP at 0 and still up for 1%.%d s"), "its HP at 0 for 1.5 s, still up: taken down (" .. tostring(kills[1]) .. ")")
+local e2 = { obj = F.obj("CH_M_NA_21_Blueprint_C_2", "CH_M_NA_21_Blueprint_C", { Mesh = F.obj("BossMesh2", "SkeletalMeshComponent") }), kind = kinds.tachy }
 e2.mesh = e2.obj.Mesh
+e2.obj.K2_GetActorLocation = function() return { X = 400, Y = 0, Z = 0 } end
 B.adopted(0x5ca1, e2, true)
-bar.Percent = 0.5
 local k0 = #kills
-for i = 1, 6 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0, "held at 0.50 for 3 s through hits: not yet")
--- (moving about: it fights, not stuck)
-at2 = { X = 300, Y = 100, Z = 0 }
-for i = 1, 6 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0, "moved: its count starts over")
-for i = 1, 6 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0 + 1 and kills[#kills]:find("phase change"), "standing, bar held through hits over 4 s: taken down (" .. tostring(kills[#kills]) .. ")")
-for i = 1, 4 do e2.hit = { t = F.t + 0.01 }; F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0 + 1, "taken down once")
+bar.Percent = 0
+for _ = 1, 8 do F.t = F.t + 0.3; B.tick(pawn) end
+check(#kills == k0, "its HP unread, the bar at 0, not hit lately: up")
+bar.Percent = 0.5
+e2.hit = { t = F.t }
+for _ = 1, 8 do F.t = F.t + 0.3; B.tick(pawn) end
+check(#kills == k0, "its HP unread, hit, the bar at 0.5: up")
+bar.Percent = 0
+for _ = 1, 8 do F.t = F.t + 0.3; B.tick(pawn) end
+check(#kills == k0 + 1 and kills[#kills]:find("its bar at 0 and still up"), "its HP unread, hit, the bar at 0: taken down (" .. tostring(kills[#kills]) .. ")")
 B._live()[0x5ca1] = nil
 
 -- one far off (40 m) with the bar at 0: another enemy's bar, never taken for its
@@ -197,14 +221,12 @@ B.adopted(0xfa4, e4, true)
 bar.Percent = 0
 k0 = #kills
 for i = 1, 10 do F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0, "40 m off, the bar at 0: not taken down")
+for i = 1, 10 do e4.hit = { t = F.t }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0, "40 m off, hit, the bar at 0: not taken down")
 B._live()[0xfa4] = nil
 
--- held invincible (a phase change waiting on its stopped tree: Tachy and Scarlet took no more damage partway down,
--- playtest): her blade through it (enemies.struck), no hit reaction, its bar unmoved. Passive: stuckHits such blows
--- over stuckS s take it down; blows it reacts to never do; one that fights needs twice that
-local strikes = {}
-ctx.enemies.struck = function(_, x, since) local t = strikes[x]; if t and t > (since or -1) then return t end end
+-- fighting, blocking blow after blow, its HP at full and unmoved (a Raven taken down 8 s in, as if she cut herself,
+-- playtest); passive, hit and unmoved: no guess taken for a hold, it stays up
 local function boss_at(a, name)
   local x = { obj = F.obj(name, "CH_M_NA_21_Blueprint_C", { Mesh = F.obj(name .. "Mesh", "SkeletalMeshComponent") }), kind = kinds.tachy }
   x.mesh = x.obj.Mesh
@@ -214,44 +236,33 @@ local function boss_at(a, name)
   B.adopted(a, x, true)
   return x
 end
-local function blows(x, n, react)
-  for _ = 1, n do
-    strikes[x] = F.t
-    if react then x.hit = { t = F.t + 0.05 }; bar.Percent = bar.Percent - 0.01 end
-    F.t = F.t + 0.5; B.tick(pawn)
-  end
-end
 bar.Percent = 0.6
-local e5 = boss_at(0x1a5, "CH_M_NA_21_Blueprint_C_5")
-tune.bosses.passive = true
+local e9 = boss_at(0x1a9, "CH_M_NA_21_Blueprint_C_9")
+hpOf[0x1a9] = { 5456, 5456, 166, 166 }
 k0 = #kills
-blows(e5, 10, true)
-check(#kills == k0 and B._live()[0x1a5].passive, "passive, struck 10 times, each taken: up")
-blows(e5, 6, false)
-check(#kills == k0 and has("struck, no hit taken %(its bar 0.500%)"), "passive, 6 blows taken by nothing over 2.5 s: not yet")
-blows(e5, 4, false)
-check(#kills == k0 + 1 and kills[#kills]:find("no hit taken"), "passive, held invincible through blows over 4 s: taken down (" .. tostring(kills[#kills]) .. ")")
-B._live()[0x1a5] = nil
+for _ = 1, 30 do e9.hit = { t = F.t }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0, "fighting, 30 blows at full HP taking nothing over 15 s: up")
+tune.bosses.passive = true
+hpOf[0x1a9][1] = 3000
+for _ = 1, 30 do e9.hit = { t = F.t }; F.t = F.t + 0.5; B.tick(pawn) end
+check(#kills == k0, "passive, hurt, 30 blows taking nothing: up")
 tune.bosses.passive = false
-local e6 = boss_at(0x1a6, "CH_M_NA_21_Blueprint_C_6")
-k0 = #kills
-blows(e6, 12, false)
-check(#kills == k0, "fighting, 12 blows over 5.5 s taken by nothing (guarded): up")
-blows(e6, 6, false)
-check(#kills == k0 + 1, "fighting, blows taken by nothing over 8 s: taken down")
-B._live()[0x1a6] = nil
--- its HP read in memory (vb): blows that take HP or shield are taken, though it shows no hit reaction (Tachy reacted
--- to blows that took nothing, and the other way round); blows that take nothing take it down, though it reacts
-tune.bosses.passive = true
-local e7 = boss_at(0x1a7, "CH_M_NA_21_Blueprint_C_7")
-hpOf[0x1a7] = { 5000, 5456, 0, 166 }
-k0 = #kills
-for _ = 1, 10 do strikes[e7] = F.t; hpOf[0x1a7][1] = hpOf[0x1a7][1] - 100; F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0 and has("B_Tachy 1a7: its HP found in memory %(by its maximum%): 4900.00 5456.00"), "HP read: blows that take HP, no hit reaction: up")
-for _ = 1, 10 do strikes[e7] = F.t; e7.hit = { t = F.t + 0.05 }; F.t = F.t + 0.5; B.tick(pawn) end
-check(#kills == k0 + 1 and kills[#kills]:find("no hit taken") and has("struck, no hit taken %(its HP 4000/5456"),
-  "HP read: blows it reacts to, its HP unmoved: taken down (" .. tostring(kills[#kills]) .. ")")
-B._live()[0x1a7] = nil
+-- pooled: the game sends the same actor away (her respawn) and again (a second spawn). Its HP lost, looked for afresh
+-- till its tries are up; another of its kind asked for, looked for again and found (Raven's was never found again,
+-- playtest)
+local hp9 = hpOf[0x1a9]
+hpOf[0x1a9] = nil
+for _ = 1, 40 do F.t = F.t + 0.5; B.tick(pawn) end
+check(has("B_Tachy 1a9: its HP lost") and has("B_Tachy 1a9: its HP not found in memory") and B._live()[0x1a9].hp == nil,
+  "pooled: its HP lost, then not found after its tries")
+hpOf[0x1a9] = hp9
+hp9.told = nil
+for _ = 1, 20 do F.t = F.t + 0.5; B.tick(pawn) end
+check(B._live()[0x1a9].hp == nil, "pooled: given up, not looked for again by itself")
+check(B.prepare(kinds.tachy) == nil, "pooled: another Tachy asked for")
+for _ = 1, 6 do F.t = F.t + 0.5; B.tick(pawn) end
+check(B._live()[0x1a9].hp ~= nil and #kills == k0, "pooled: its HP looked for again and found")
+B._live()[0x1a9] = nil
 -- a read whose maximum is nowhere near its row's (the DLL's "by its ratio" on other numbers: 0/250 on a Tachy of
 -- 5456, playtest) is left: not at its floor, not taken down
 local e8 = boss_at(0x1a8, "CH_M_NA_21_Blueprint_C_8")
@@ -263,7 +274,6 @@ check(x8 and x8.hp == nil and has("B_Tachy 1a8: a read of its HP left") and not 
   and #kills == k0, "HP read: a maximum far off its row's left")
 B._live()[0x1a8] = nil
 tune.bosses.passive = false
-ctx.enemies.struck = nil
 
 -- its death: face and struggle
 B.died(pawn, 0xb055, e)
@@ -285,6 +295,13 @@ local same = true
 for r, v in pairs(before) do for i = 1, 5 do if after[r][i] ~= v[i] then same = false; print("  " .. r .. " field " .. i .. ": " .. tostring(v[i]) .. " -> " .. tostring(after[r][i])) end end end
 check(same, "none left: both rows put back as the game had them")
 check(next(B._rows()) == nil, "nothing left to put back")
+local effSame = true
+for r, v in pairs(effBefore) do
+  local now = effMem[r][0x2c] or effMem[r][0x50]
+  if now ~= v then effSame = false; print(string.format("  %s: %x -> %x", r, v, now)) end
+end
+check(effSame and has("their phases' floors back as the game has them %(none of yours left%): 23 of 23 rows"),
+  "none left: the EffectTable's floors put back as the game had them")
 
 -- Naked Tachy (Nexus 3183): her body mesh pointing at a physics asset the game doesn't have (none loads): the game's
 -- own put back as she is adopted; a vanilla one's left as it is

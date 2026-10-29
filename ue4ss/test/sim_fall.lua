@@ -4,6 +4,9 @@
 -- 1 HP (the bar reads 0, no death screen: nothing); a death while swimming with no ragdoll (not taken over, named).
 -- A fall damage death cuts nothing; a blow on her mesh as she lands still does
 -- Any other death with no ragdoll from its show (an enemy's) is taken over too and cut; a scripted one is left alone
+-- (seeded: its death's roll decides what is cut, and a head roll cuts nothing against the fake DLL; unseeded, it
+-- failed one run in a few)
+math.randomseed(1)
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)

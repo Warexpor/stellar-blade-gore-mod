@@ -158,7 +158,8 @@ local function cen(comp, b) return try(function() local v = comp:GetCenterOfMass
 local function wvel(comp, b) return try(function() local v = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(v.X, v.Y, v.Z) end) end
 -- a change of a body's turn (deg/s, added to its angular velocity), its centre of mass moved round the joint with it
 -- (w x r): turned about its middle alone, the joint dragged it back (playtest: an arm swing turned 0 deg). The bodies
--- below it on her (DOWN, up to a cut) turn with it about the same joint, unless alone (a parent's push back)
+-- below it on her (DOWN, up to a cut) turn with it about the same joint; a parent's push back (alone) moves them round
+-- its joint without turning them (struggle.lua's "carry": left behind, the joint came apart and took the turn)
 local function turn(comp, b, w, alone)
   try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(b)) end)
   if b == "Bip001-Pelvis" then return end
@@ -167,10 +168,9 @@ local function turn(comp, b, w, alone)
   local wr, r = scale(w, math.pi / 180), rag()
   local c = cen(comp, b)
   if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FName(b)) end) end
-  if alone then return end
   for _, x in ipairs(DOWN[b] or {}) do
     if r and (r.severed(comp, x) or not r.live(comp, x)) then break end
-    try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(x)) end)
+    if not alone then try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(x)) end) end
     local cx = cen(comp, x)
     if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FName(x)) end) end
   end
@@ -337,11 +337,19 @@ local function pulse(comp, f, b, to, amp, dur, at, anim, trem, hz, ax, swing)
   if not a then return false end
   local p = J[b][1]
   local mass = r and r.MASS or {}
-  local k = (mass[b] and mass[p]) and math.min(0.6, mass[b] / mass[p]) or 0.3
+  -- (its limb against the rest of her, struggle.lua's share: against its parent body alone a swing's upper arm pushed
+  -- its clavicle back 60% of the turn)
+  local k = 0.3
+  if mass[b] and mass[p] then
+    local down, all = mass[b], 0
+    for _, x in ipairs(DOWN[b] or {}) do down = down + (mass[x] or 0) end
+    for _, m in pairs(mass) do all = all + m end
+    k = math.min(0.6, down / math.max(all - down, 1))
+  end
   -- (no turning back of a parent that is animated, or that a cut took this bone from)
   if anim and not simulating(comp, p) then k = 0 end
   st.pulses[#st.pulses + 1] = { comp = comp, b = b, p = p, a = a, amp = amp, dur = dur, at = at, v = 0, k = k,
-    trem = trem, hz = hz, ph = math.random() * 2 * math.pi }
+    trem = trem, hz = hz, ph = math.random() * 2 * math.pi, swing = swing }
   return a
 end
 -- Each pulse steers its bone's turn against its parent, along its axis, to the speed it asks for now (closed loop, at
@@ -373,8 +381,10 @@ local function pulses_tick(now, dt)
       end
       local d = v + dot(sb.T, p.a) - dot(add(sb.rel, sb.A), p.a)
       d = math.max(-cap, math.min(cap, d))
-      -- (steer off, the default: each tick's change of speed added, as the neck's struggle was made and played well)
-      if cfg().steer ~= true then d = dv end
+      -- (steer off, the default: each tick's change of speed added, as the neck's struggle was made and played well.
+      -- An arm's swing is always steered: added open, the floor and gravity took the lot and her arms lay at her sides,
+      -- "turned at most 0-10 deg (peak 135-168 deg/s asked)", playtest)
+      if cfg().steer ~= true and not p.swing then d = dv end
       sb.T, sb.A = add(sb.T, scale(p.a, v)), add(sb.A, scale(p.a, d))
       -- a swing's upper arm: how far it really turned, logged at its end (a right arm's crawl showed no movement,
       -- playtest)

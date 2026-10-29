@@ -740,6 +740,9 @@ end
 -- bone where it is and rides with it, then slips out as her grip eases (grip.hold s), with her hand's speed
 local function grip_start(mesh, g)
   local gp = g.grip or {}
+  -- (nothing in her hand, or no grip: it still eases then, at the middle of the hold, hands_open)
+  local lo, hi = gp.holdMin or 0.35, gp.holdMax or 0.9
+  run.gripAt = (lo + math.max(hi, lo)) / 2
   if g.dropWeapon == false or gp.enabled == false then return "" end
   local pawn = try(function() return mesh:GetOwner() end)
   if not valid(pawn) then return "" end
@@ -772,7 +775,6 @@ local function grip_start(mesh, g)
     end
   end
   if #names == 0 then return "" end
-  local lo, hi = gp.holdMin or 0.35, gp.holdMax or 0.9
   run.gripAt = lo + math.random() * math.max(hi - lo, 0)
   return string.format(", grip on %s (eases at %.2f s)", table.concat(names, ", "), run.gripAt)
 end
@@ -790,6 +792,20 @@ local function grip_release(pawn, mesh, g)
     gripped[a] = nil
   end
   return table.concat(out, ", ")
+end
+-- her hands open as the grip eases, whatever they held: only the hand a dropped weapon left opened, so a death with
+-- her sword not showing (gone between moves) or over 30 cm off her hand kept the animation's fist shut to the end
+local function hands_open(pawn, mesh)
+  local n = {}
+  for _, sd in ipairs({ "R", "L" }) do
+    local b = "Bip001-" .. sd .. "-Hand"
+    if not eased[b] then
+      local at = try(function() local v = mesh:GetSocketLocation(FN[b]); return vec(v.X, v.Y, v.Z) end)
+      ease_start(pawn, mesh, b, at)
+      if eased[b] then n[#n + 1] = sd end
+    end
+  end
+  return #n > 0 and (", " .. table.concat(n, "+") .. " hand opening") or ""
 end
 -- the grip never eased (she got up, or the death ended first): back on the prop bones
 local function grip_back()
@@ -1845,8 +1861,10 @@ function M.tick(dt, mark)
   end
   run.t = run.t + dt
   if run.gripAt and run.t >= run.gripAt then
-    local r = grip_release(run.pawn or try(function() return run.mesh:GetOwner() end), run.mesh, cfg())
-    log(string.format("her grip eased at %.2f s%s", run.t, r ~= "" and (": " .. r .. " slipped out") or ", nothing left in it"))
+    local pawn = run.pawn or try(function() return run.mesh:GetOwner() end)
+    local r = grip_release(pawn, run.mesh, cfg())
+    log(string.format("her grip eased at %.2f s%s%s", run.t, r ~= "" and (": " .. r .. " slipped out") or ", nothing left in it",
+      hands_open(pawn, run.mesh)))
   end
   if run.probe and STRETCH_AT[run.probe] and run.t >= STRETCH_AT[run.probe] then
     vlog(string.format("stretch at %.1f s (cm off the start): %s%s", run.t, stretch_report(run.mesh, run.joints),
@@ -2153,7 +2171,7 @@ end
 function M.forget()
   M.photoHeld = nil
   layouts = {}
-  run, speeds, dropped, extra, gripped, splits = nil, {}, {}, {}, {}, {}
+  run, speeds, dropped, extra, gripped, splits, eased = nil, {}, {}, {}, {}, {}, {}
   severed, severedOn = {}, nil
   standins = {}
   freed = {}

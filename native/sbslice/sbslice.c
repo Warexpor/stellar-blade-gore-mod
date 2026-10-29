@@ -186,6 +186,7 @@ static void unpin(u64 component)
 #define SEC_BASE_VERTEX 0x10
 #define SEC_BONE_MAP 0x28            // TArray<uint16>
 #define SEC_NUM_VERTICES 0x38
+#define SEC_MATERIAL 0x0             // uint16 MaterialIndex
 #define SW_VARIABLE 0x21             // FSkinWeightVertexBuffer: variable influences per vertex
 #define SW_MAX_INFLUENCES 0x24
 #define SW_16BIT_INDEX 0x28
@@ -1053,6 +1054,8 @@ static char *put_outline(char *o, const char *tag, const float *pts, int n, cons
 #define CORE_FILL_R 1.1f   // a part-way section joins the core within this times the core's radius
 #define CORE_FILL_CM 0.5f  // plus this
 #define CORE_HOLE 3        // directions in a row the core must miss for that
+#define CORE_TOUCH 1.5f    // cm: or further out, up to CORE_TOUCH_R times, when its rim runs on from the core's
+#define CORE_TOUCH_R 2.5f
 #define MAX_RIM_SECTIONS 256
 static int popcount16(int b) { int n = 0; for (int i = 0; i < ANGLE_BINS; i++) n += b >> i & 1; return n; }
 static int core_count[MAX_RIM_SECTIONS], core_bins[MAX_RIM_SECTIONS];
@@ -1128,7 +1131,27 @@ static int core_classify(const float *pts, const u16 *sec, int m, const float *p
         int pick = -1;
         float bd = 1e30f;
         for (int s = 0; s < MAX_RIM_SECTIONS; s++) {
-            if (!count[s] || keep[s] || count[s] < 3 || !(bins[s] & hole) || med[s] > inner * CORE_FILL_R + CORE_FILL_CM) continue;
+            if (!count[s] || keep[s] || count[s] < 3 || !(bins[s] & hole) || med[s] > inner * CORE_TOUCH_R + CORE_FILL_CM) continue;
+            // further out than the core, but its rim runs on from the core's (a point of it within CORE_TOUCH of one
+            // of the core's): the same skin. A leaned cut's opening is an oval, and the section on its long ends lies
+            // further out than the core's however well centred (InnerSuit's leaned arm and leg cuts: 7 of the 16
+            // directions at 4.7-5.3 cm round a core at 3.4-4.1, the cap on half the opening)
+#ifdef NO_TOUCH
+            if (med[s] > inner * CORE_FILL_R + CORE_FILL_CM) continue;
+#endif
+            if (med[s] > inner * CORE_FILL_R + CORE_FILL_CM) {
+                float near = 1e30f;
+                for (int i = 0; i < m && near > CORE_TOUCH * CORE_TOUCH; i++) {
+                    if (sec[i] != s) continue;
+                    for (int j = 0; j < m; j++) {
+                        if (!keep[sec[j]]) continue;
+                        float d[3] = { pts[i * 3] - pts[j * 3], pts[i * 3 + 1] - pts[j * 3 + 1], pts[i * 3 + 2] - pts[j * 3 + 2] };
+                        float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                        if (dd < near) near = dd;
+                    }
+                }
+                if (near > CORE_TOUCH * CORE_TOUCH) continue;
+            }
             float d = fabsf_(med[s] - inner);
             if (d < bd) { bd = d; pick = s; }
         }
@@ -1137,6 +1160,62 @@ static int core_classify(const float *pts, const u16 *sec, int m, const float *p
         covered |= bins[pick];
     }
     return any;
+}
+
+// the opening's own centre to measure round, in place of the cut's point on the bone (pp): the middle of the box the
+// skin's layers span in the plane, found again from there until it settles. From the bone, an opening it sits off the
+// middle of (a leaned cut near the hip, her waist round a spine bone near her back) had its near skin read as the
+// inner layer and the far side's as an outer one: InnerSuit's thigh and waist skin is two sections, one each side,
+// and the cap covered the near one alone (a 3 x 0.7 cm cap on her waist), the other's seam showing round it as
+// skin-coloured wedges (playtest screenshot). Only sections that go round (or fill the core's hole) count, so a cape
+// or a strap's far rim doesn't pull it off. pp moves within the plane only
+static void core_centre(const float *pts, const u16 *sec, int m, const float *pp, const float *dir, float *c)
+{
+    for (int k = 0; k < 3; k++) c[k] = pp[k];
+#ifdef NO_CENTRE
+    return;
+#endif
+    float ax[3] = { fabsf_(dir[0]) < 0.9f ? 1.0f : 0.0f, fabsf_(dir[0]) < 0.9f ? 0.0f : 1.0f, 0 };
+    float t = ax[0] * dir[0] + ax[1] * dir[1];
+    for (int k = 0; k < 3; k++) ax[k] -= t * dir[k];
+    float l = rsqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+    for (int k = 0; k < 3; k++) ax[k] *= l;
+    float ay[3] = { dir[1] * ax[2] - dir[2] * ax[1], dir[2] * ax[0] - dir[0] * ax[2], dir[0] * ax[1] - dir[1] * ax[0] };
+    for (int it = 0; it < 4; it++) {
+        int any = core_classify(pts, sec, m, c, dir);
+        if (any < 0) return;
+        if (!any) {
+            // nothing goes round from here (the bone 6 cm off her waist's middle: 8 and 7 of the 16 directions): once,
+            // from the middle of all the points (each way's median, which a loose piece's few points don't move far)
+            if (it) return;
+            float mid[2];
+            for (int a = 0; a < 2; a++) {
+                const float *e = a ? ay : ax;
+                float lo = -1e4f, hi = 1e4f;
+                for (int b = 0; b < 40; b++) {
+                    float x = (lo + hi) * 0.5f;
+                    int below = 0;
+                    for (int i = 0; i < m; i++)
+                        below += (pts[i * 3] - c[0]) * e[0] + (pts[i * 3 + 1] - c[1]) * e[1] + (pts[i * 3 + 2] - c[2]) * e[2] <= x;
+                    if (below * 2 >= m) hi = x; else lo = x;
+                }
+                mid[a] = hi;
+            }
+            for (int k = 0; k < 3; k++) c[k] += ax[k] * mid[0] + ay[k] * mid[1];
+            if (core_classify(pts, sec, m, c, dir) <= 0) { for (int k = 0; k < 3; k++) c[k] = pp[k]; return; }
+        }
+        float u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
+        for (int i = 0; i < m; i++) {
+            if (!core_keep[sec[i]]) continue;
+            float d[3] = { pts[i * 3] - c[0], pts[i * 3 + 1] - c[1], pts[i * 3 + 2] - c[2] };
+            float u = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2], v = d[0] * ay[0] + d[1] * ay[1] + d[2] * ay[2];
+            if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v;
+        }
+        if (u0 > u1) return;
+        float du = (u0 + u1) * 0.5f, dv = (v0 + v1) * 0.5f;
+        for (int k = 0; k < 3; k++) c[k] += ax[k] * du + ay[k] * dv;
+        if (du * du + dv * dv < 0.01f) return;
+    }
 }
 
 static char *core_rim(char *o, const char *tag, float *pts, u16 *sec, int *n, const float *pp, const float *dir)
@@ -2177,7 +2256,9 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             for (int k = 0; k < 3; k++) rimpos[(u64)m * 3 + k] = xs[(u64)v * 3 + k];
             rimsec[m++] = vsec[v];
         }
-        if (m >= 3 && core_classify(rimpos, rimsec, m, p, n) > 0) {
+        float pc0[3];
+        if (m >= 3) core_centre(rimpos, rimsec, m, p, n, pc0);
+        if (m >= 3 && core_classify(rimpos, rimsec, m, pc0, n) > 0) {
             int any_off = 0;
             classified = 1;
             for (int s = 0; s < c.nsec; s++) {
@@ -3328,18 +3409,20 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         return;
     }
     // a cut's body opening faces the limb and the limb's the body
-    float *pp = p;
-    float nb_dir[3] = { n[0], n[1], n[2] }, nl_dir[3] = { -n[0], -n[1], -n[2] };
+    // (each measured round its own opening's centre, core_centre)
+    float nb_dir[3] = { n[0], n[1], n[2] }, nl_dir[3] = { -n[0], -n[1], -n[2] }, pb[3], pl[3];
+    core_centre(rimpos + (u64)nrim[0] * 3, rimsec + nrim[0], nrim[1], p, nl_dir, pl);
+    core_centre(rimpos, rimsec, nrim[0], p, nb_dir, pb);
     // the limb side's points go after the body side's, so filter the limb side first (it only moves inside its range)
     int nb_core = nrim[0], nl_core = nrim[1];
-    char lsec[1024], *lo = core_rim(lsec, "l", rimpos + (u64)nrim[0] * 3, rimsec + nrim[0], &nl_core, pp, nl_dir);
+    char lsec[1024], *lo = core_rim(lsec, "l", rimpos + (u64)nrim[0] * 3, rimsec + nrim[0], &nl_core, pl, nl_dir);
     *lo = 0;
-    o = core_rim(o, "b", rimpos, rimsec, &nb_core, pp, nb_dir);
+    o = core_rim(o, "b", rimpos, rimsec, &nb_core, pb, nb_dir);
     o = put(o, lsec);
     if (ride_bone[0] >= 0) { o = put(o, " bb="); o = put_int(o, ride_bone[0]); }
     if (ride_bone[1] >= 0) { o = put(o, " lb="); o = put_int(o, ride_bone[1]); }
-    o = put_fit(o, "b", rimpos, nb_core, pp, nb_dir, tm, 1);   // body opening
-    o = put_fit(o, "l", rimpos + (u64)nrim[0] * 3, nl_core, pp, nl_dir, tm, 1); // limb opening
+    o = put_fit(o, "b", rimpos, nb_core, pb, nb_dir, tm, 1);   // body opening
+    o = put_fit(o, "l", rimpos + (u64)nrim[0] * 3, nl_core, pl, nl_dir, tm, 1); // limb opening
     *o = 0;
     skin_result(msg);
     mem_free(msg);
@@ -4070,6 +4153,44 @@ static void skin_probe(u64 comp, int lod, int dump)
 // the triangles within 2 cm, turned to face along the ray; bone: the one that weighs most on that vertex (the mark
 // rides it). Answer "ok hit=x,y,z n=x,y,z bone=i out=cm" (world space), in sbslice.cut
 #define MARK_LAYER_CM 3.0f
+// a LOD's first UV channel on the CPU (StaticVertexBuffers.StaticMeshVertexBuffer, kept with the positions by CPU
+// access): found by its fields, not a fixed offset (... TangentsDataPtr, TexcoordDataPtr, TangentsStride,
+// TexcoordStride, NumTexCoords, NumVertices, bUseFullPrecisionUVs), the vertex count matching the LOD's. 0: none
+typedef struct { const unsigned char *p; u32 stride; int full; } uv_buf;
+static int lod_uvs(u64 ld, int nv, uv_buf *u)
+{
+    for (u64 x = 0x20; x + 8 <= 0x1c0; x += 4) {
+        if (x == LOD_NUM_VERTICES || *(const u32 *)(ld + x) != (u32)nv) continue;
+        u32 ntc = *(const u32 *)(ld + x - 4), ts = *(const u32 *)(ld + x - 8), tg = *(const u32 *)(ld + x - 0xc);
+        int full = *(const unsigned char *)(ld + x + 4) != 0;
+        u32 el = full ? 8 : 4;
+        if (ntc < 1 || ntc > 8 || (tg != 8 && tg != 16) || ((x - 0x14) & 7)) continue;
+        if (ts != ntc * el && ts != el) continue;
+        const unsigned char *p = *(const unsigned char *const *)(ld + x - 0x14);
+        if ((u64)p < 0x10000) continue;
+        u->p = p; u->stride = ntc * el; u->full = full;
+        return 1;
+    }
+    return 0;
+}
+static float half_f(unsigned short h)
+{
+    u32 s = (u32)(h & 0x8000) << 16, e = (h >> 10) & 0x1f, m = h & 0x3ff, b;
+    if (!e) { if (!m) b = s; else { e = 113; while (!(m & 0x400)) { m <<= 1; e--; } m &= 0x3ff; b = s | (e << 23) | (m << 13); } }
+    else if (e == 31) b = s | 0x7f800000 | (m << 13);
+    else b = s | ((e + 112) << 23) | (m << 13);
+    union { u32 b; float f; } c = { b };
+    return c.f;
+}
+static char *put_f3(char *o, float f) // three decimals: a UV
+{
+    long long t = (long long)(f * 1000 + (f < 0 ? -0.5f : 0.5f));
+    if (t < 0) { *o++ = '-'; t = -t; }
+    o = put_int(o, t / 1000); *o++ = '.';
+    *o++ = '0' + (t / 100) % 10; *o++ = '0' + (t / 10) % 10; *o++ = '0' + t % 10;
+    return o;
+}
+
 static void skin_mark(u64 comp, int lod, const float *pw, const float *nw, float reach)
 {
     cut_ctx c = { 0 };
@@ -4190,11 +4311,28 @@ static void skin_mark(u64 comp, int lod, const float *pw, const float *nw, float
     float hw[3], nw2[3];
     comp_to_world(tm, hc, hw);
     quat_rot(tm, nm, nw2);
-    char msg[160], *o = put(msg, "ok");
+    char msg[256], *o = put(msg, "ok");
     o = put_v(o, " hit=", hw, 1);
     o = put_v(o, " n=", nw2, 100);
     o = put(o, " bone="); o = put_int(o, top[hv]);
     o = put(o, " out="); o = put_f(o, best * sc);
+    // the material slot of hv's section, and hv's UV (channel 0) when the LOD keeps them: where a wound is painted
+    for (int s = 0; s < nsec; s++) {
+        u64 sec = secs + (u64)s * 0xe8;
+        int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
+        if (hv < base || hv >= base + cnt) continue;
+        o = put(o, " mat="); o = put_int(o, *(unsigned short *)(sec + SEC_MATERIAL));
+        break;
+    }
+    uv_buf ub;
+    if (lod_uvs(ld, nv, &ub)) {
+        const unsigned char *q = ub.p + (u64)hv * ub.stride;
+        float uu = ub.full ? ((const float *)q)[0] : half_f(((const unsigned short *)q)[0]);
+        float vv = ub.full ? ((const float *)q)[1] : half_f(((const unsigned short *)q)[1]);
+        if (uu == uu && vv == vv && uu > -64 && uu < 64 && vv > -64 && vv < 64) {
+            o = put(o, " uv="); o = put_f3(o, uu); *o++ = ','; o = put_f3(o, vv);
+        }
+    }
     *o = 0;
     mem_free(mem);
     skin_result(msg);
@@ -4505,7 +4643,6 @@ static void regrow_cmd(const u64 *f, int k)
 // with nothing at all (every weight 0) would go onto the section's first bone, so nothing is hidden that way.
 // Answer "ok vanish <hidden> kept <kept> on <sinks used> borrowed <n> stuck <vertices> mats <material>/<section>,...",
 // mats the sections with hidden vertices that stayed and nothing kept (to hide whole: ShowMaterialSection), "-" none
-#define SEC_MATERIAL 0x0               // uint16 MaterialIndex
 static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
 {
     u64 sm = *(u64 *)(comp + SC_SKELETAL_MESH);

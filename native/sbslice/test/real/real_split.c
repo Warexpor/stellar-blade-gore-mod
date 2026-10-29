@@ -274,6 +274,30 @@ static int gap16(int m)
     return best;
 }
 static int env_on(const char *k) { const char *v = getenv(k); return v && *v; }
+
+// CUTOFF=<x,y,z>: the cut's point moved by this (cm, component space) within its plane, off the bone: the plane is
+// the same, only where the rims are measured round from moves (in game her waist's spine bone lies near her back, and
+// a leaned thigh cut's point near the opening's edge)
+static void cut_off(float *at, const float *nn)
+{
+    float o[3];
+    if (!getenv("CUTOFF") || sscanf(getenv("CUTOFF"), "%f,%f,%f", &o[0], &o[1], &o[2]) != 3) return;
+    float d = o[0] * nn[0] + o[1] * nn[1] + o[2] * nn[2];
+    for (int k = 0; k < 3; k++) at[k] += o[k] - d * nn[k];
+}
+
+// the body's cap (be=) against the piece's opening (le=), the same cut's other face: a cap under 40 % of its area is a
+// scrap of the opening (InnerSuit's waist, measured round a spine bone off its middle: a 3 x 0.7 cm cap, its seam's
+// skin showing round it, playtest screenshot)
+static int cap_scrap(const char *res, const char *what)
+{
+    const char *b = strstr(res, " be="), *l = strstr(res, " le=");
+    float be[3], le[3];
+    if (!b || !l || sscanf(b + 4, "%f,%f,%f", &be[0], &be[1], &be[2]) != 3 || sscanf(l + 4, "%f,%f,%f", &le[0], &le[1], &le[2]) != 3) return 0;
+    if (be[0] * be[1] >= 0.4f * le[0] * le[1]) return 0;
+    printf("FAIL: the %s's cap is %.1f x %.1f cm, its piece's opening %.1f x %.1f\n", what, be[0], be[1], le[0], le[1]);
+    return 1;
+}
 // tied to a limb this half keeps (its arm hanging below a waist cut, the cape on it): may lie behind the plane
 static int tied_to_kept(int h, int v)
 {
@@ -1199,6 +1223,21 @@ int main(int argc, char **argv)
         const char *seg[][2] = { { "Bip001-Spine1", "Bip001-Spine2" }, { "Bip001-L-UpperArm", "Bip001-L-Forearm" },
                                  { "Bip001-R-Thigh", "Bip001-R-Calf" } };
         int bad = 0, tried = 0;
+        // a StaticMeshVertexBuffer as the engine lays it out (at LOD + 0x40, the positions' 0xc8 after it), each
+        // vertex's UV naming the vertex (u: index % 512, v: index / 512, in 512ths): the uv= answered must be the
+        // vertex at hit=. Full precision on ways 0 and 2, half floats on 1 and 3
+        float *uvf = malloc(8 * (size_t)NV);
+        unsigned short *uvh = malloc(4 * (size_t)NV);
+        for (int v = 0; v < NV; v++)
+            for (int i = 0; i < 2; i++) {
+                float f = (float)((i ? v / 512 : v % 512)) / 512 + 1.0f / 1024;
+                uvf[v * 2 + i] = f;
+                union { float f; u32 b; } c = { f };
+                int e = (int)((c.b >> 23) & 0xff) - 112;
+                uvh[v * 2 + i] = e <= 0 ? 0 : (unsigned short)((e << 10) | ((c.b >> 13) & 0x3ff));
+            }
+        unsigned char *smvb = (unsigned char *)ld_buf + 0x40;
+        *(u32 *)(smvb + 0x70) = 8; *(u32 *)(smvb + 0x78) = 1; *(u32 *)(smvb + 0x7c) = NV;
         for (int k = 0; k < 3; k++) {
             int b0 = bone(seg[k][0]), b1 = bone(seg[k][1]);
             if (b0 < 0 || b1 < 0) continue;
@@ -1215,14 +1254,24 @@ int main(int argc, char **argv)
             for (int r = 0; r < 4; r++) {
                 float cs = r == 0 ? 1 : r == 2 ? -1 : 0, sn = r == 1 ? 1 : r == 3 ? -1 : 0, at[3], d[3];
                 for (int i = 0; i < 3; i++) { at[i] = a[i] + ax[i] * l * 0.5f; d[i] = u[i] * cs + w[i] * sn; }
+                int full = !(r & 1);
+                *(u64 *)(smvb + 0x68) = full ? (u64)uvf : (u64)uvh;
+                *(u32 *)(smvb + 0x74) = full ? 8 : 4; *(unsigned char *)(smvb + 0x80) = (unsigned char)full;
                 skin_mark((u64)comp_a, 0, at, d, 25);
                 tried++;
-                float h[3], n[3], out = 0;
-                int hb = -1, got = sscanf(lastres, "ok hit=%f,%f,%f n=%f,%f,%f bone=%d out=%f", h, h + 1, h + 2, n, n + 1, n + 2, &hb, &out);
+                float h[3], n[3], out = 0, uu = -1, vv = -1;
+                int hb = -1, mat = -1, got = sscanf(lastres, "ok hit=%f,%f,%f n=%f,%f,%f bone=%d out=%f mat=%d uv=%f,%f",
+                                                     h, h + 1, h + 2, n, n + 1, n + 2, &hb, &out, &mat, &uu, &vv);
                 int on = 0;
                 for (int x = hb; x >= 0 && !on; x = bparent[x]) on = x == b0 || x == bparent[b0];
                 float nd = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / 100;
-                int ok = got == 8 && out >= 3 && out <= 20 && on && nd > 0.3f;
+                // the vertex the UV names, skinned, lies at the hit
+                int vi = (int)((uu - 1.0f / 1024) * 512 + 0.5f) + 512 * (int)((vv - 1.0f / 1024) * 512 + 0.5f);
+                float vx[3] = { 1e9f, 1e9f, 1e9f };
+                if (vi >= 0 && vi < NV) { skin_info o; orig_info(vi, &o); skin_v(&o, vi, vx); }
+                float dv = __builtin_sqrtf((vx[0] - h[0]) * (vx[0] - h[0]) + (vx[1] - h[1]) * (vx[1] - h[1]) + (vx[2] - h[2]) * (vx[2] - h[2]));
+                int ok = got == 11 && out >= 3 && out <= 20 && on && nd > 0.3f && mat >= 0 && dv < 0.2f;
+                if (got == 11 && dv >= 0.2f) printf("mark: uv names vertex %d, %.2f cm off the hit\n", vi, dv);
                 printf("mark %s way %d: %s %s\n", seg[k][0], r, lastres, ok ? "" : "<- bad");
                 bad += !ok;
             }
@@ -1464,6 +1513,7 @@ int main(int argc, char **argv)
         // LEGFIRST=<thigh>: that thigh came off first (0.4 down it, square to it, collapsed), as a killing swing through
         // both legs: the crotch between them stretched (twenty-ninth playtest)
         int lf = getenv("LEGFIRST") ? bone(getenv("LEGFIRST")) : -1, nfirst = 0;
+        float lfat[3] = { 0, 0, 0 }; // (where it was cut: its opening is not this cut's rim)
         if (lf >= 0) {
             int lc = -1;
             for (int i = 0; i < NB; i++) if (bparent[i] == lf && strstr(bname[i], "Calf")) lc = i;
@@ -1471,6 +1521,7 @@ int main(int argc, char **argv)
             float *ap = space + lf * 12 + 4, *bp = space + lc * 12 + 4, aat[3], an[3], al = 0;
             for (int k = 0; k < 3; k++) { aat[k] = ap[k] + (bp[k] - ap[k]) * 0.4f; an[k] = bp[k] - ap[k]; al += an[k] * an[k]; }
             for (int k = 0; k < 3; k++) an[k] /= __builtin_sqrtf(al);
+            for (int k = 0; k < 3; k++) lfat[k] = aat[k];
             set_nosink(); other_limbs_nosink(lf);
             // as gore.lua sends a limb cut: every driver a sink of last resort (fffd), the limbs' gone so far let go (fffc)
             if (!env_on("OLDDRV")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, gone_sides(&lf, 1) & 12) ? 2 : under_driver(i));
@@ -1499,8 +1550,10 @@ int main(int argc, char **argv)
         // (legs only: an arm's drivers shape the shoulder the cut's rim runs round, posed arm cuts lost half their opening)
         int gonel[2] = { ua, lf }, limbbits = gone_sides(gonel, lf >= 0 ? 2 : 1) & 12;
         if (!env_on("OLDDRV") && limb_is_leg(ua)) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)(side_driver(i, limbbits) ? 2 : under_driver(i));
+        cut_off(at2, nn);
         skin_cut((u64)comp_a, 0, ua, at2, nn, MODE_CUT, 0, 0, -1);
         printf("arm: %.300s\n", lastres);
+        int scrap = cap_scrap(lastres, "stump");
         // the piece's cap and bone ride lb=: never a helper under one of the rig's drivers, which the animation keeps
         // pointing at her body (CH_P_EVE_30's left arm rode Ab-L-Deltoid under Dm-L-Deltoid-A, playtest)
         {
@@ -1518,11 +1571,22 @@ int main(int argc, char **argv)
         { const char *q = strstr(lastres, " bc="); capok = q && sscanf(q + 4, "%f,%f,%f", &capc[0], &capc[1], &capc[2]) == 3; }
         if (!ov_a) { printf("FAIL: no override\n"); return 1; }
         int arm_s1 = nsinks;
-        // the cap's rim (the body side's kept sections, core_rim's last call) goes all the way round: InnerSuit1's thigh
-        // skin is two sections, one half way round, and the cap covered only the other's part (playtest screenshot)
-        int capbins = 0;
-        for (int s = 0; s < MAX_RIM_SECTIONS; s++) if (core_count[s] && core_keep[s]) capbins |= core_bins[s];
-        int capdirs = popcount16(capbins), capgap = gap16(capbins);
+        // the cap (gore.lua's lid: the hull the DLL sends, bp=, 1.05x about its middle) reaches the skin's edge all the
+        // way round (judged below, round the opening's own middle: InnerSuit1's thigh skin is two sections, one each
+        // side, and the cap covered only one's part, the other's seam showing round it, playtest screenshots)
+        static float cap_hull[3 * 256];
+        int ncap_hull = 0;
+        {
+            const char *q = strstr(lastres, " bp=");
+            for (q = q ? q + 4 : 0; q && *q && *q != ' ' && ncap_hull < 256; ) {
+                float *h = cap_hull + 3 * ncap_hull;
+                if (sscanf(q, "%f,%f,%f", &h[0], &h[1], &h[2]) != 3) break;
+                ncap_hull++;
+                while (*q && *q != ';' && *q != ' ') q++;
+                if (*q == ';') q++;
+            }
+        }
+        int capdirs = 16, capgap = 0;
         // every sink of the cut on the cut's own limb or off the limbs (the body), none on another arm or leg
         {
             const char *q = strstr(lastres, " sinks=");
@@ -1757,7 +1821,7 @@ int main(int argc, char **argv)
                     float x[3]; skin_v(&vo, v, x);
                     // (this cut's own opening: not a cape's, cut off at its own joint up the arm)
                     float hh = (x[0] - at2[0]) * nn[0] + (x[1] - at2[1]) * nn[1] + (x[2] - at2[2]) * nn[2];
-                    if (hh < -12 || hh > 12 || dist3(x, at2) > 30) continue;
+                    if (hh < -12 || hh > 12 || dist3(x, at2) > 30 || (lf >= 0 && dist3(x, lfat) < dist3(x, at2))) continue;
                     for (int k = 0; k < 3; k++) mc[k] += x[k];
                     mn++;
                 }
@@ -1771,12 +1835,56 @@ int main(int argc, char **argv)
                     skin_info vo; if (pass) vo = ov_a[v]; else orig_info(v, &vo);
                     float x[3]; skin_v(&vo, v, x);
                     float d[3] = { x[0] - c0[0], x[1] - c0[1], x[2] - c0[2] }, h = d[0] * nn[0] + d[1] * nn[1] + d[2] * nn[2];
-                    if (h < -12 || h > 12 || dist3(x, at2) > 30) continue;
+                    if (h < -12 || h > 12 || dist3(x, at2) > 30 || (lf >= 0 && dist3(x, lfat) < dist3(x, at2))) continue;
                     float u = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2], w = d[0] * ay[0] + d[1] * ay[1] + d[2] * ay[2];
                     int bn = (int)((__builtin_atan2f(w, u) + 3.14159f) / 6.28319f * 16); if (bn > 15) bn = 15; if (bn < 0) bn = 0;
                     bins |= 1 << bn; cnt++; hs += h; rs += __builtin_sqrtf(u * u + w * w);
                 }
                 if (pass) rimdirs = __builtin_popcount(bins), rimgap = gap16(bins);
+                // the cap against the skin's edge: in each of the 16 directions round the rim's middle, the innermost
+                // rim point (the skin; a strap round it lies further out and closes up in its own material) more than
+                // 1.5 cm outside the lid is a direction the cap misses
+                if (pass && ncap_hull >= 3) {
+                    float hc[3] = { 0, 0, 0 };
+                    for (int i = 0; i < ncap_hull; i++) for (int k = 0; k < 3; k++) hc[k] += cap_hull[3 * i + k] / ncap_hull;
+                    float hu[256], hw[256], inner[16], out[16];
+                    for (int i = 0; i < ncap_hull; i++) {
+                        float d[3] = { cap_hull[3 * i] - hc[0], cap_hull[3 * i + 1] - hc[1], cap_hull[3 * i + 2] - hc[2] };
+                        float e[3] = { hc[0] + 1.05f * d[0] - c0[0], hc[1] + 1.05f * d[1] - c0[1], hc[2] + 1.05f * d[2] - c0[2] };
+                        hu[i] = e[0] * ax[0] + e[1] * ax[1] + e[2] * ax[2]; hw[i] = e[0] * ay[0] + e[1] * ay[1] + e[2] * ay[2];
+                    }
+                    for (int b2 = 0; b2 < 16; b2++) inner[b2] = 1e30f, out[b2] = 0;
+                    for (int v = 0; v < NV; v++) if (rv[v]) {
+                        skin_info vo = ov_a[v];
+                        float x[3]; skin_v(&vo, v, x);
+                        float d[3] = { x[0] - c0[0], x[1] - c0[1], x[2] - c0[2] }, h = d[0] * nn[0] + d[1] * nn[1] + d[2] * nn[2];
+                        if (h < -12 || h > 12 || dist3(x, at2) > 30 || (lf >= 0 && dist3(x, lfat) < dist3(x, at2))) continue;
+                        float u = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2], w = d[0] * ay[0] + d[1] * ay[1] + d[2] * ay[2];
+                        int bn = (int)((__builtin_atan2f(w, u) + 3.14159f) / 6.28319f * 16); if (bn > 15) bn = 15; if (bn < 0) bn = 0;
+                        float r = __builtin_sqrtf(u * u + w * w);
+                        if (r >= inner[bn]) continue;
+                        inner[bn] = r;
+                        // how far outside the hull: 0 inside, else to its nearest edge (not the edges' lines, the
+                        // largest signed distance: the hull as sent, to 0.1 cm, has near-repeated points that turn a
+                        // little back, and such an edge's line cut through the lid, 15 cm "outside" for skin 4 cm out)
+                        float o = 1e30f;
+                        int in = 0;
+                        for (int i = 0; i < ncap_hull; i++) {
+                            int j = (i + 1) % ncap_hull;
+                            if ((hw[i] > w) != (hw[j] > w) && u < hu[i] + (w - hw[i]) * (hu[j] - hu[i]) / (hw[j] - hw[i])) in = !in;
+                            float ex = hu[j] - hu[i], ey = hw[j] - hw[i], el = ex * ex + ey * ey;
+                            float t = el > 1e-12f ? ((u - hu[i]) * ex + (w - hw[i]) * ey) / el : 0;
+                            t = t < 0 ? 0 : t > 1 ? 1 : t;
+                            float dx = u - hu[i] - t * ex, dy = w - hw[i] - t * ey, dd = __builtin_sqrtf(dx * dx + dy * dy);
+                            if (dd < o) o = dd;
+                        }
+                        out[bn] = in ? 0 : o;
+                    }
+                    int miss = 0, had = 0;
+                    for (int b2 = 0; b2 < 16; b2++) if (inner[b2] < 1e29f) { had |= 1 << b2; if (out[b2] > 1.5f) miss |= 1 << b2; }
+                    capdirs = popcount16(had & ~miss); capgap = gap16(~miss & 0xffff);
+                    if (env_on("DBGCAP")) for (int b2 = 0; b2 < 16; b2++) printf("cap dir %d: skin %.1f cm out, %.1f outside the lid\n", b2, inner[b2] < 1e29f ? inner[b2] : -1, out[b2]);
+                }
                 if (env_on("DBGARM") || (pass && rimdirs < 12)) printf("arm: body rim %s: %d vertices, %d of 16 directions, mean %.1f cm off the plane, %.1f from the axis\n",
                        pass ? "cut weights" : "vanilla weights", cnt, __builtin_popcount(bins), cnt ? hs / cnt : 0, cnt ? rs / cnt : 0);
             }
@@ -2128,6 +2236,7 @@ int main(int argc, char **argv)
             if (env_on("DBGARM")) printf("arm: %d vertices on the carrier, %d left behind by the parent turning\n", n, left);
             if (left) { printf("FAIL: %d of the stub's %d carried vertices didn't turn with %s\n", left, n, bname[pb]); bad = 1; }
         }
+        bad |= scrap;
         if (hid > still_hid) { printf("FAIL: the arm flung off stretches %d more triangles that stay visible\n", hid - still_hid); bad = 1; }
         // the second leg's seam stays at its own opening: on the first leg's sink it stretched to that stump
         if (lf >= 0 && still_hid > 0) { printf("FAIL: %d triangles stretch with both legs off, before either moves\n", still_hid); bad = 1; }
@@ -2242,9 +2351,11 @@ int main(int argc, char **argv)
         // and what a Dm- driver moves only as a last resort (gore.lua's driven_list after fffd; OLDDM=1: as before)
         if (!env_on("OLDDM") && !env_on("ENEMY")) for (int i = 0; i < NB; i++) drivenb[i] = (unsigned char)under_driver(i);
         if (armsub && !env_on("NODROP")) { limbs_comp = (u64)comp_a; ngone = nkeep = nride = ndrop = 0; drop_roots[ndrop++] = ua; }
+        cut_off(at2, nn);
         skin_cut((u64)comp_a, 0, spine1, at2, nn, MODE_CUT, 0, 0, -1);
         printf("waist: %.300s\n", lastres);
         if (!strstr(lastres, " unsunk=0 ")) { printf("FAIL: seam vertices left with no sink\n"); return 1; }
+        int scrap = cap_scrap(lastres, "waist");
         if (!env_on("OLDDM") && !env_on("ENEMY")) {
             // (the list holds the earlier cuts' sinks too, this one's "new=" last)
             const char *q = strstr(lastres, " sinks="), *nw = strstr(lastres, " new=");
@@ -2488,7 +2599,7 @@ int main(int argc, char **argv)
         memcpy(space, saved, 48 * NB); free(saved);
         int shown = (flung - hf) - (still - hs);
         if (shown > 0) printf("FAIL: the upper body fallen off stretches %d more triangles that stay visible\n", shown);
-        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0 || armmoved > 0 || torn > 0;
+        int bad = left > arms / 200 || horns > 0 || gaps > 0 || shown > 0 || legmoved > 0 || armmoved > 0 || torn > 0 || scrap;
         printf("%s\n", bad ? "FAIL" : "PASS");
         return bad;
     }

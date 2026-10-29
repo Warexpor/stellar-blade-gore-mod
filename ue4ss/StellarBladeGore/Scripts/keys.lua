@@ -141,8 +141,8 @@ function M.register()
 end
 
 -- the keys pressed since the last frame: each to the action bound to it (game thread, game_tick). The menu taking a
--- key (its Keys tab waiting for one) gets it instead
-function M.flush()
+-- key (its Keys tab waiting for one) gets it instead. only: that action's alone (the menu's pause: the rest wait)
+function M.flush(only)
   local fired = M.fired
   if next(fired) == nil then return end
   M.fired = {}
@@ -150,7 +150,7 @@ function M.flush()
     if M.capture then M.capture(f.combo)
     else
       for _, a in ipairs(M.ACTIONS) do
-        if M.binding(a.id) == f.combo and M.handlers[a.id] and not (a.dev and not ctx.tune.dev) then
+        if M.binding(a.id) == f.combo and M.handlers[a.id] and not (a.dev and not ctx.tune.dev) and (not only or a.id == only) then
           local ok, err = pcall(M.handlers[a.id])
           if not ok then log(M.show(f.combo) .. " (" .. a.label .. ") error: " .. tostring(err)) end
         end

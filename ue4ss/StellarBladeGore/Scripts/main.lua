@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.5.3"
+local VERSION = "0.5.4"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -422,7 +422,8 @@ do
   -- the sandbox: bosses spawned and killed like any enemy (goreCtx.bosses). (Playing as another character is a mod
   -- of its own, Stellar Blade Play As: gore.lua sees who she looks like by her meshes)
   -- Customized Ragdoll (Nexus 3884) support: its death camera over the mod's ragdoll (goreCtx.customrag)
-  for _, m in ipairs({ { "bosses", "bosses.lua" }, { "customrag", "customrag.lua" } }) do
+  -- blood and dirt on her, the game's own switched back on (goreCtx.stains, tune.stains)
+  for _, m in ipairs({ { "bosses", "bosses.lua" }, { "customrag", "customrag.lua" }, { "stains", "stains.lua" } }) do
     local okm, mod = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/" .. m[2])
     if okm and type(mod) == "table" then
       goreCtx[m[1]] = mod
@@ -1420,7 +1421,11 @@ screen.late[#screen.late + 1] = function()
     if (cls == "WB_MainHUD_Dead_C" or cls == "WB_MainHUD_ResurrectionItem_C")
       and tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then return end
     if cls == "WB_MainHUD_Dead_C" then dead_hud.w = goreCtx.keep(o)
-    elseif cls == "WB_MainHUD_ResurrectionItem_C" then dead_hud.rv = goreCtx.keep(o) end
+    elseif cls == "WB_MainHUD_ResurrectionItem_C" then dead_hud.rv = goreCtx.keep(o)
+    elseif cls == "WB_MainHUD_PlayerInfo_C" and goreCtx.glass and goreCtx.glass.hud_made
+      and not tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then
+      goreCtx.glass.hud_made(o)
+    end
     if cls and cls:find("[Pp]hoto") and not tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then
       local ok, err = pcall(screen.photo_widget, o, cls)
       if not ok then log("photo mode widget: " .. tostring(err)) end
@@ -2429,7 +2434,14 @@ local function add_char(o)
 end
 screen.late[#screen.late + 1] = function()
   goreCtx.newobj.watch("/Script/SB.SBCharacter", add_char)
+  -- (the laser traps, for sw.laser_hit at her death: kept as they are made, seeded with the characters once a level.
+  -- Looked for at the death, FindAllOf was 35 ms of the death's cut frame, a stutter at every death, playtest)
+  goreCtx.newobj.watch("/Script/SB.SBLaserComponent", function(o)
+    local k = goreCtx.keep(o)
+    if k then goreCtx.lasers[k.addr] = k end
+  end)
 end
+goreCtx.lasers = {}
 -- (the list made once a frame: the swing, the grab watch, the enemies and the glass cannon each asked it, every
 -- character checked and its location read again by each, in a fight a good part of the poll; 0.5.2 Nexus report of
 -- the frame rate down. Read only: the callers only walk it, and a character's location is goreCtx.char_at's)
@@ -2450,6 +2462,15 @@ local function live_chars()
     -- (the whole object array walked: 20-50 ms "following 0 enemies" after outfit changes and level loads, playtest)
     local ms = (os.clock() - t0) * 1000
     if ms >= 10 then log(string.format("characters looked up again (%d): %.0f ms", #all, ms)) end
+  end
+  -- (the laser traps seeded on a frame of their own, a second after the characters: in theirs it was 73 ms, playtest.
+  -- Once a session when the watch hands them out as they are made, else once a level)
+  if not goreCtx.lasersSeeded and goreCtx.seededAt and os.clock() - goreCtx.seededAt > 1 then
+    goreCtx.lasersSeeded = true
+    for _, o in ipairs(try(function() return FindAllOf("SBLaserComponent") end) or {}) do
+      local k = goreCtx.keep(o)
+      if k then goreCtx.lasers[k.addr] = k end
+    end
   end
   local out = {}
   -- (her place this frame, for char_at's far ones)
@@ -3138,7 +3159,16 @@ function sw.laser_hit(pawn, mesh)
   if #pts == 0 then return nil end
   local me = pawn:GetAddress()
   local best, n = nil, 0
-  for _, c in ipairs(try(function() return FindAllOf("SBLaserComponent") end) or {}) do
+  -- (the ones kept as they were made, live_chars; not watched, looked for here as before)
+  local list = {}
+  if goreCtx.newobj.mode() == "off" then
+    list = try(function() return FindAllOf("SBLaserComponent") end) or {}
+  else
+    for ad, k in pairs(goreCtx.lasers) do
+      if goreCtx.held(k) then list[#list + 1] = k.obj else goreCtx.lasers[ad] = nil end
+    end
+  end
+  for _, c in ipairs(list) do
     if valid(c) and try(function() return c.bActiveLaser end) ~= false then
       n = n + 1
       try(function()
@@ -3283,8 +3313,12 @@ local function hits_after(pawn, mesh)
   if not atk or best.v < (c.minSpeed or 500) then
     if (ah.brushes or 0) < 3 then
       ah.brushes = (ah.brushes or 0) + 1
+      -- (the montage it plays named: Raven's weapon 21 cm from her at 777 cm/s was "not attacking", and nothing said
+      -- what it was doing, playtest)
+      local mn = not atk and en and en.montage_of and goreCtx.held(S.k) and select(3, en.montage_of(S.actor))
       log(string.format("after death: %s's %s passed %.0f cm from her %s at %.0f cm/s, %s: not a blow", tostring(S.who),
-        best.name, d, bone, best.v, atk and string.format("under %s cm/s", c.minSpeed or 500) or "not attacking"))
+        best.name, d, bone, best.v, atk and string.format("under %s cm/s", c.minSpeed or 500)
+          or string.format("not attacking (%s)", mn and ("montage " .. mn) or "no montage")))
     end
     ah.armedBy[S.addr or 0] = false
     return
@@ -3427,10 +3461,26 @@ function hm.death_roll(seen, near)
   -- (no blade seen: "blade" still, which gore_cut rolls the odds for as a made-up blow)
   return seen and "odds" or "blade"
 end
--- the killing cut made at the hit on a blow she lived through (a revive, a skill, her bar back up, no death within
--- LIVED_S): it stayed on her alive, a stump's seam at her neck as she played on (reported). Undone as the death's end
--- undoes it
-hm.LIVED_S = 6
+-- the killing cut made at the hit on a blow she lived through (a revive, a skill, her bar back up, or no death and
+-- proof she plays on, hm.plays_on): it stayed on her alive, a stump's seam at her neck as she played on (reported).
+-- Undone as the death's end undoes it. Time alone is no proof: a death slow to show (a long death show before its
+-- ragdoll key) would have had its cut taken back and rolled again
+hm.LIVED_S, hm.LIVED_CM = 6, 150
+-- her bar still at 0 (a fall leaves her at 1 HP, read as 0) LIVED_S on from the hit: why she is seen alive, else nil.
+-- Her movement on, no death screen, no death montage, and her capsule moved LIVED_CM from where the blow found her
+function hm.plays_on(pawn, mesh, lt)
+  if os.clock() - lt.t <= hm.LIVED_S then return end
+  local mm = try(function() return pawn.CharacterMovement.MovementMode end)
+  if mm == nil or mm == 0 or death_screen() or hm.dead_proof(lt.t) then return end
+  local mn = hm.montage(mesh)
+  if mn and (mn:find("Dead", 1, true) or mn:find("Die", 1, true)) then return end
+  local at = try(function() return vof(pawn:K2_GetActorLocation()) end)
+  if not (at and lt.from) then return end
+  local d = len(sub(at, lt.from))
+  if d < hm.LIVED_CM then return end
+  return string.format("no death %.0f s after her HP bar hit 0, her movement on (mode %s) and %.0f cm walked",
+    os.clock() - lt.t, tostring(mm), d)
+end
 function hm.lived(pawn, mesh, why)
   hm.lethal.cut = nil
   log("lethal hit: she lived (" .. why .. "): the cut made at the hit undone")
@@ -3468,14 +3518,25 @@ function hm.lethal_watch(pawn, mesh)
   -- (a death came after the hit: the cut was its own, undone with it at its end. A death that began 5 s or more after
   -- the hit left it on record, gore_cut not taking it, and her first tick up logged "she lived" and cleaned up again)
   if hm.lethal and hm.lethal.cut and (screen.deathAt or -1) >= hm.lethal.t then hm.lethal.cut = nil end
-  if hm.lethal and hm.lethal.cut and os.clock() - hm.lethal.t > hm.LIVED_S then
-    hm.lived(pawn, mesh, string.format("no death %d s after her HP bar hit 0", hm.LIVED_S))
-  end
+  -- (in a grab the game holds her death till it lets go: LIVED_S counts from there)
+  local why = hm.lethal and hm.lethal.cut and not hm.lethal.grab and hm.plays_on(pawn, mesh, hm.lethal)
+  if why then hm.lived(pawn, mesh, why) end
   local pct = goreCtx.glass.bar_pct(true)
-  -- (the HUD looked for, 35 ms, at most every 30 s till it is found: it is kept after that)
+  if pct and hm.barLost then
+    log(string.format("HP bar: found %.1f s after the level loaded", os.clock() - hm.barLost))
+    hm.barLost = nil
+  end
+  -- (the HUD looked for, 35 ms, when glass's back-off allows (1 s doubling to a minute) till it is found: it is kept
+  -- after that, and a new one the game makes is taken without a search (glass.hud_made). A new level looks 5 s on
+  -- (forget_world): this watch's own 30 s on top left the bar unread for up to a minute after a level load, a death
+  -- in it cut late, at the ragdoll instead of the hit, playtest)
   if not pct and os.clock() >= (hm.barTry or 0) then
-    hm.barTry = os.clock() + 30
     pct = goreCtx.glass.bar_pct(false)
+    hm.barTry = not pct and goreCtx.glass.bar_next and goreCtx.glass.bar_next() or os.clock() + 30
+    if pct and hm.barLost then
+      log(string.format("HP bar: found %.1f s after the level loaded (looked for)", os.clock() - hm.barLost))
+      hm.barLost = nil
+    end
   end
   if not pct then return end
   if pct ~= hm.barLast then hm.barLast, hm.barT = pct, os.clock() end
@@ -3491,7 +3552,8 @@ function hm.lethal_watch(pawn, mesh)
   local lt = hm.lethal
   if lt and not lt.missed and os.clock() - lt.t > 0.1 and os.clock() >= (lt.screenAt or 0) then
     lt.screenAt = os.clock() + 0.1
-    -- in an enemy's grab: the death waits till it lets go (its montage over) or grab.most s, then comes as any
+    -- in an enemy's grab: the death waits till it lets go (its montage over) or grab.most s, then comes as any (the
+    -- killing cut made at the hit already, the limb or head off while it holds her)
     if lt.grab then
       local most = ((tune.enemies or {}).grab or {}).most or 6
       local long = os.clock() - lt.grab.t0 >= most
@@ -3499,6 +3561,7 @@ function hm.lethal_watch(pawn, mesh)
       log(string.format("lethal hit: %s's grab over after %.1f s (%s): her death now", lt.grab.cls,
         os.clock() - lt.grab.t0, long and string.format("waited the most, %s s", most) or lt.grab.mont and "its montage ended" or "it let go of her"))
       lt.grab, lt.t = nil, os.clock() - 0.15
+      lt.from = try(function() return vof(pawn:K2_GetActorLocation()) end) or lt.from
     end
     -- (the death screen's widget is made with the level and reads visible all along: a 16 m fall leaving her at 1 HP,
     -- the bar at 0, was taken for a death and ragdolled her alive, the player walking off from her body, playtest.
@@ -3546,7 +3609,7 @@ function hm.lethal_watch(pawn, mesh)
   -- her there (playtest)
   if hm.lethal or not hm.armed then return end
   hm.armed = false
-  hm.lethal = { t = os.clock() }
+  hm.lethal = { t = os.clock(), from = try(function() return vof(pawn:K2_GetActorLocation()) end) }
   gore.blocking = hm.blocking()
   local ws = weapon_swing(mesh)
   local m = meshHit and os.clock() - meshHit.t <= 0.5 and meshHit or nil
@@ -3563,10 +3626,10 @@ function hm.lethal_watch(pawn, mesh)
   if en and en.near_montages then log("lethal hit: near her: " .. tostring(select(2, pcall(en.near_montages, pawn)))) end
   if gb then
     hm.lethal.grab = { obj = gb.obj, mont = gb.mont, cls = gb.cls, t0 = os.clock() }
-    -- (no montage: the grab lasts while its hand stays on her, enemies.grab_holds)
-    log(string.format("lethal hit: in %s's grab (%s, %s on her for %.1f s): the cut and her death wait for it to let go",
+    -- (no montage: the grab lasts while its hand stays on her, enemies.grab_holds). The cut comes now as below, a
+    -- limb or the head falling off her while it holds her; her ragdoll and a split wait for it to let go
+    log(string.format("lethal hit: in %s's grab (%s, %s on her for %.1f s): her death waits for it to let go, the cut now",
       gb.cls, gb.mn, gb.how, gb.last - gb.since))
-    return
   end
   -- gore.bluntRagdoll: a blunt killing blow cuts nothing, the death is a plain ragdoll (gore_cut)
   if g.bluntRagdoll == true and h and not h.made then
@@ -3591,17 +3654,29 @@ function hm.lethal_watch(pawn, mesh)
     -- (her body waits for her death and its ragdoll, smashed there)
     hm.lethal.judged = later ~= "later"
     if done then hm.lethal.cut, hm.lethal.h = true, h; return end
-    if later == "later" then return end
+    if later == "later" then hm.grab_keep(h); return end
   end
   if hm.lethal.roll ~= "blade" then return end
   h = h or death_hit(pawn, mesh)
   if not (h and not h.made and (h.n or (h.dir and h.fwd))) then return end
   h.early = true
+  -- (in a grab her body's cut waits too, as a split does: off at the waist, her legs stood on in its pose)
+  h.grab = hm.lethal.grab and true or nil
   local fly = h.push or h.dir
   if fly then gore.aim(fly) end
   local ok, err = pcall(gore.blow, pawn, mesh, h, "death")
+  h.grab = nil
   if ok and err then hm.lethal.cut, hm.lethal.h = true, h
-  elseif not ok then log("lethal hit: early cut failed: " .. tostring(err)) end
+  elseif ok then hm.grab_keep(h)
+  else log("lethal hit: early cut failed: " .. tostring(err)) end
+end
+-- a killing blow in a grab whose cut waits for her death (a split, her body): kept for it, as the grab can hold her
+-- for longer than death_hit remembers a blow (its later hits would be taken instead). gore.blow carries its plane
+-- from her pose at the blow to her pose then (h.pose)
+function hm.grab_keep(h)
+  if not (hm.lethal.grab and h) then return end
+  h.early = nil
+  hm.lethal.held = h
 end
 
 -- tune.gore.lowArm: a hit that leaves her HP bar under lowArm.below (a quarter) takes an arm off where she stands
@@ -4002,6 +4077,7 @@ function hm.rest_seq()
   end
   return false, seen
 end
+goreCtx.rest_seq = hm.rest_seq
 function hm.rest_watch(pawn, mesh)
   -- (not in photo mode or a pause: photo mode stops her movement too, and the pieces sit on their copy)
   if not gore or (tune.gore or {}).enabled == false or hm.regrow or hm.ghost or gore.busy()
@@ -4428,6 +4504,13 @@ local function gore_cut(pawn, mesh, h, hit)
     log(string.format("death: the killing cut was made at the hit, %d more of the blow now", gore.release_held()))
     return
   end
+  -- the killing blow of a grab, its cut held for her death (hm.grab_keep): that blow, not the grab's later hits
+  local held = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.held
+  if held then
+    hm.lethal.held = nil
+    h = held
+    log("death: the cut of the killing blow in the grab now")
+  end
   -- fall damage cuts nothing (no blade in it): a death taken over after a drop (hm.take), or her HP bar at 0 within
   -- LOW_LAND_S of landing from LOW_LAND_CM or more with no hit on her mesh (low_arm's rule: a kill after a jump still
   -- cuts). The 16 m drop's death rolled both legs off on the odds (playtest); hits after it still cut
@@ -4456,6 +4539,7 @@ local function gore_cut(pawn, mesh, h, hit)
   -- a laser trap's beam on her: cut along it (sw.laser_hit)
   if g.sliceOnDeath ~= false then
     local lh = sw.laser_hit(pawn, mesh)
+    gore.mark("laser")
     if lh then
       local ok, cut = pcall(gore.blow, pawn, mesh, lh, "death")
       if not ok then log("death: laser cut failed: " .. tostring(cut)) end
@@ -4481,8 +4565,10 @@ local function gore_cut(pawn, mesh, h, hit)
   -- down her length, rare: no split in many deaths (reported)
   local roll = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.roll
   -- (the odds shaped by where the blow landed, gore.near_odds: the killing blow's own if seen, else the lethal hit's)
+  gore.mark("smash")
   local ok, near = pcall(gore.near_odds, mesh, h, hit)
   near = ok and near or (roll and hm.lethal.near) or nil
+  gore.mark("odds")
   if near then log("death: odds by the hit: " .. near.why) end
   if not roll then
     roll = (g.sliceOnDeath == false or math.random() > (g.sliceChance or 1.0)) and "none" or hm.death_roll(h ~= nil and not h.made, near)
@@ -4568,7 +4654,9 @@ local function gore_death(pawn, mesh, h)
   gore.blocking = hm.blocking(lt)
   log(string.format("death: her stance at the blow %s%s", tostring(hm.stance), gore.blocking
     and string.format(", guard up (%s %.2f s before)", gore.blocking, (lt or os.clock()) - hm.guardT) or ""))
+  gore.mark("guard")
   gore_cut(pawn, mesh, h, hit)
+  gore.mark("cut chosen")
   -- a blow through her guard breaks her sword, whatever cut it made (a split, a rolled one with no blade seen)
   if gore.blocking and rag and rag.weapon_cut and not rag.sword_split() then
     local at = (h and h.loc) or hit or try(function() return vof(mesh:GetSocketLocation(FName("Bip001-R-Hand"))) end)
@@ -4578,9 +4666,11 @@ local function gore_death(pawn, mesh, h)
       if not ok then log("weapon cut: " .. tostring(err)) end
     end
   end
+  gore.mark("her sword")
   if not gore.splitting() then
     gore.on_hit(pawn, mesh, hit or try(function() return mesh:GetSocketLocation(FName("Bip001-Spine2")) end))
   end
+  gore.mark("blood")
 end
 
 -- work for the next game-thread tick (game_tick below): the death's cut, a frame after it starts
@@ -4752,6 +4842,7 @@ local uv_on = (function()
   return not txt:find("UltraViolenceBlood%s*:%s*0")
 end)()
 screen.uv = uv_on
+goreCtx.uv = function() return screen.uv end
 if goreCtx.keys then goreCtx.keys.uv = uv_on end
 if uv_on then log("Ultra Violence is on: the test keys F9, F10 and F11 are Alt+F9, Alt+F10 and Alt+F11 unless set (its menu, outfit blood and blood stages are on F9-F11)") end
 key_on("slice", sandbox_slice)
@@ -5897,6 +5988,11 @@ function hm.alive_watch(pawn, mesh)
   tp.mark("carry")
   if goreCtx.customrag then try(function() goreCtx.customrag.keep(pawn, mesh) end) end
   tp.mark("customrag")
+  if goreCtx.stains then
+    local ok, err = pcall(goreCtx.stains.tick, pawn, mesh, false)
+    if not ok then log("stains: " .. tostring(err)) end
+  end
+  tp.mark("stains")
   hm.swap_watch(pawn, mesh, false)
   tp.mark("outfit swap")
   track_swing(pawn, mesh)
@@ -6108,11 +6204,20 @@ local function tick()
       log(string.format("Test: Animated Death: %s's ragdoll key %.1f s in, no cut", test.what, os.clock() - test.t))
     end
     tp.mark("death start")
+    -- (the game let her death go before the watch saw the grab end: the killing cut made in it counts from here)
+    if hm.lethal and hm.lethal.grab then
+      log(string.format("lethal hit: %s's grab over after %.1f s (her death came)", hm.lethal.grab.cls,
+        os.clock() - hm.lethal.grab.t0))
+      hm.lethal.grab, hm.lethal.t = nil, os.clock() - 0.15
+    end
     if hm.lethal then log(string.format("death: %.2f s after her HP bar hit 0", os.clock() - hm.lethal.t))
     elseif hm.armed then
       -- (the bar not yet at 0 as the death comes: the game drains it after; nothing could be cut at the hit)
       log(string.format("death: her HP bar read %s at it, %.2f s since it last changed", tostring(hm.barLast),
         os.clock() - (hm.barT or 0)))
+    elseif hm.barLost then
+      log(string.format("death: her HP bar not found since the level loaded %.0f s ago: nothing cut at the hit",
+        os.clock() - hm.barLost))
     end
     -- disarmed till the bar is seen above 0 again: it reads 0 through the respawn, and the watch fired there
     hm.armed = false
@@ -6133,12 +6238,17 @@ local function tick()
       if not (active and valid(mesh)) then return end
       local t0 = os.clock()
       local ok, err = true, nil
+      if gore then gore.prof_begin() end
       if not test then ok, err = pcall(gore_death, pawn, mesh, h) end
       if not ok then log("death cut failed: " .. tostring(err)) end
       if goreCtx.pose.held then goreCtx.pose.held.cut = true end
       if not (gore and gore.splitting()) then goreCtx.pose.free("no split: the fall plays on") end
+      if gore then gore.mark("pose let go") end
+      local steps = gore and gore.prof_end() or ""
       local ms = (os.clock() - t0) * 1000
-      if ms >= ((tune.gore or {}).slowMs or 15) then log(string.format("death cut: %.0f ms (a frame of its own)", ms)) end
+      if ms >= ((tune.gore or {}).slowMs or 15) then
+        log(string.format("death cut: %.0f ms (a frame of its own)%s", ms, steps ~= "" and ": " .. steps or ""))
+      end
     end
   elseif not sim and active and animDeath and polls <= 45 and (try(function() return pawn.CharacterMovement:IsFalling() end)
     or (animDeath.z0 or -1e9) - (try(function() return mesh:K2_GetComponentLocation().Z end) or -1e9) > 25) then
@@ -6280,6 +6390,12 @@ local function forget_world(pawn)
   hm.q, hm.pct, hm.gkeys, hm.guardT, hm.guardWhy = {}, nil, nil, nil, nil
   sw.drop(); swingBones = {}
   chars, charsSeeded = {}, false
+  -- (the laser traps kept: the watch may have handed the new level's out before this; gone ones are dropped as read)
+  if not goreCtx.newobj.watched("/Script/SB.SBLaserComponent") then goreCtx.lasersSeeded = false end
+  -- (her HP bar's widget went with the old level: the new one is handed out by the widget watch as the game makes it
+  -- (glass.hud_made), and looked for 5 s on if it wasn't. The lethal watch waited up to 30 s before looking, a death
+  -- in that time not seen at its hit, its cut late, playtest)
+  hm.barTry, hm.barLost = os.clock() + 5, os.clock()
   followed = nil
   -- (the still camera went with the old level; the new controller looks through its own pawn)
   camHeld, camWatch, hold = nil, nil, nil
@@ -6350,6 +6466,14 @@ local function game_tick(ctx)
   end
   goreCtx.newobj.tick()
   if not adopt(ctx) then return end
+  -- the F3 menu paused the game: only the menu runs (and its key), the mod's own work waits with the world (its
+  -- clocks too: the frame after reads no gap)
+  if goreCtx.gui and goreCtx.gui.pausing() then
+    lastFrame = nil
+    goreCtx.gui.tick(cachedPawn)
+    if goreCtx.keys then goreCtx.keys.flush("menu") end
+    return
+  end
   goreCtx.frame = goreCtx.frame + 1
   local now = os.clock()
   local gap = lastFrame and (now - lastFrame) * 1000
@@ -6439,6 +6563,10 @@ local function game_tick(ctx)
     if goreCtx.struggle then
       local ok3, err3 = pcall(goreCtx.struggle.tick, screen.photoOn or screen.vtPhoto or screen.photoLive or screen.stopped)
       if not ok3 then log("struggle: " .. tostring(err3)) end
+    end
+    if goreCtx.stains and cachedPawn then
+      local ok4, err4 = pcall(goreCtx.stains.tick, cachedPawn, nil, true)
+      if not ok4 then log("stains: " .. tostring(err4)) end
     end
     ft[5] = os.clock()
     local fms = (ft[5] - f0) * 1000
@@ -6628,6 +6756,26 @@ LoopAsync(1000, function()
       s, screen.restartHook and "set, never fired in game" or "failed"))
   end
   return ok
+end)
+
+-- the F3 menu's pause, should it stop her tick after all (the menu runs on it): unpaused from here once the menu has
+-- gone 2 s without a tick, and closed by its next one (gui.tick)
+LoopAsync(500, function()
+  local g = goreCtx.gui
+  local s = g and g.state
+  if s and g.pausing() and os.clock() - (s.tickAt or os.clock()) > 2 and not s.unstuck then
+    s.unstuck = true
+    ExecuteInGameThread(function()
+      local p = s.paused
+      local gs = goreCtx.statics()
+      if p and p.world and valid(gs) and valid(p.pawn) then
+        p.world = false
+        try(function() gs:SetGamePaused(p.pawn, false) end)
+        try(function() p.pawn:SetTickableWhenPaused(p.tick == true) end)
+      end
+    end)
+  end
+  return false
 end)
 
 log("loaded (stabiliser + logger)")

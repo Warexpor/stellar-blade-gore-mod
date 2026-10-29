@@ -30,15 +30,15 @@ local function setup()
     try(function() owner:ForEachProperty(function(p) if p:GetFName():ToString() == FIELD then off = p:GetOffset_Internal() end end) end)
   end
   if not (valid(cdo) and valid(child) and off) then return "no " .. (not valid(cdo) and CDO or not off and FIELD or "cheat manager class") end
-  local cls = {}
+  local cls, missing = {}, {}
   for _, w in ipairs(watchers) do
     w.cls = w.cls or try(function() return StaticFindObject(w.path) end)
-    if valid(w.cls) then cls[#cls + 1] = string.format("%x", w.cls:GetAddress()) end
+    if valid(w.cls) then cls[#cls + 1] = string.format("%x", w.cls:GetAddress()) else missing[#missing + 1] = w.path end
   end
   local r = g.command(string.format("O%x,%x,%x,%s", cdo:GetAddress() + off, child:GetAddress(), owner:GetAddress(), table.concat(cls, ",")))
   if not r:match("^ok") then return r end
   st.cdo = cdo
-  log("watched as they are made (sbslice.dll): " .. r)
+  log("watched as they are made (sbslice.dll): " .. r .. (#missing > 0 and ("; no class " .. table.concat(missing, ", ")) or ""))
   return nil
 end
 
@@ -106,6 +106,13 @@ function M.tick()
 end
 
 function M.mode() return st.mode end
+-- objects of class path are handed out as they are made (its class found, the watch on)
+function M.watched(path)
+  if st.mode == "lua" then return true end
+  if st.mode ~= "native" then return false end
+  for _, w in ipairs(watchers) do if w.path == path and valid(w.cls) then return true end end
+  return false
+end
 
 function M.init(c)
   ctx = c

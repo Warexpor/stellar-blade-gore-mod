@@ -274,16 +274,36 @@ static struct { u64 a; int n; u32 off[3]; float mhp, msh; } boss[MAX_BOSS];
 static int nboss, boss_mode, boss_best, boss_n;
 static u32 boss_off[3];
 static float boss_mhp, boss_msh;
+// a boss's array by its maximums: HP and shield only have to be sane, not under them (a pooled boss used again, by a
+// second spawn or after her respawn, was found by none, playtest: its HP set before its maximum, it may be)
+static int loosely_shaped(const float *f)
+{
+    if (f[0] != 0) return 0;
+    for (int i = 1; i <= S_MAXSHIELD; i++) if (!finite_(f[i])) return 0;
+    return f[S_MAXHP] >= 1 && f[S_MAXHP] < 1e7f && f[S_HP] >= 0 && f[S_SHIELD] >= 0 && f[S_MAXSHIELD] >= 0 && f[S_MAXSHIELD] < 1e6f;
+}
 static int boss_match(const float *f)
 {
-    if (!shaped(f)) return 0;
+    if (!loosely_shaped(f)) return 0;
     if (fabs_(f[S_MAXHP] - boss_mhp) <= 0.51f && fabs_(f[S_MAXSHIELD] - boss_msh) <= 0.51f) return 1;
-    return boss_msh > 0 && f[S_MAXSHIELD] > 0 && f[S_MAXHP] > 1 &&
+    return shaped(f) && boss_msh > 0 && f[S_MAXSHIELD] > 0 && f[S_MAXHP] > 1 &&
            fabs_((f[S_MAXHP] / f[S_MAXSHIELD]) / (boss_mhp / boss_msh) - 1) <= BOSS_RATIO ? 2 : 0;
 }
+// with none found: the stats-like array whose MaxHP is nearest its row's (for the log: what it has instead)
+static float boss_near[4], boss_near_d;
+static int boss_near_n;
 static void boss_seen(int n, u32 o0, u32 o1, u32 o2, const float *f)
 {
     int m = boss_match(f);
+    if (!m && loosely_shaped(f) && f[S_MAXHP] >= 100) {
+        // (one only loosely shaped or with no HP counts 4 times as far: a read a float off a real array is shaped,
+        // its HP the real one's None, 0)
+        float d = (f[S_MAXHP] > boss_mhp ? f[S_MAXHP] / boss_mhp : boss_mhp / f[S_MAXHP]) * (shaped(f) && f[S_HP] > 0 ? 1 : 4);
+        if (!boss_near_n || d < boss_near_d) {
+            boss_near_d = d; boss_near_n = n;
+            boss_near[0] = f[S_HP]; boss_near[1] = f[S_MAXHP]; boss_near[2] = f[S_SHIELD]; boss_near[3] = f[S_MAXSHIELD];
+        }
+    }
     if (!m || (boss_best && m >= boss_best)) return;
     boss_best = m; boss_n = n; boss_off[0] = o0; boss_off[1] = o1; boss_off[2] = o2;
 }
@@ -447,9 +467,10 @@ static const float *boss_at(int i)
     cand_t c; c.n = (unsigned char)boss[i].n;
     for (int k = 0; k < 3; k++) c.off[k] = boss[i].off[k];
     const float *f = (const float *)cand_at(boss[i].a, &c);
-    return f && shaped(f) && f[S_MAXHP] == boss[i].mhp && f[S_MAXSHIELD] == boss[i].msh ? f : 0;
+    return f && loosely_shaped(f) && f[S_MAXHP] == boss[i].mhp && f[S_MAXSHIELD] == boss[i].msh ? f : 0;
 }
-// "vb<actor>,<maxhp>,<maxshield>": "ok [found [by ratio]] HP MaxHP Shield MaxShield", or "none"
+// "vb<actor>,<maxhp>,<maxshield>": "ok [found [by ratio]] HP MaxHP Shield MaxShield", or "none [nearest HP MaxHP
+// Shield MaxShield at depth n]"
 static void boss_cmd(const u16 *txt, int len)
 {
     u64 f[3] = { 0, 0, 0 };
@@ -461,13 +482,23 @@ static void boss_cmd(const u16 *txt, int len)
     const float *s = i < nboss ? boss_at(i) : 0;
     if (!s) {
         if (i < nboss) boss[i] = boss[--nboss];
-        boss_mhp = (float)f[1]; boss_msh = (float)f[2]; boss_best = 0;
+        boss_mhp = (float)f[1]; boss_msh = (float)f[2]; boss_best = 0; boss_near_n = 0;
         int keepn = npaths;
         boss_mode = 1;
         stats_find(f[0]);
         boss_mode = 0;
         npaths = keepn;
-        if (!boss_best) { stats_result("none"); return; }
+        if (!boss_best) {
+            o = s_put(o, "none");
+            if (boss_near_n) {
+                o = s_put(o, " nearest");
+                for (int j = 0; j < 4; j++) { *o++ = ' '; o = s_f(o, boss_near[j]); }
+                o = s_put(o, " at depth "); o = s_int(o, boss_near_n);
+            }
+            *o = 0;
+            stats_result(msg);
+            return;
+        }
         if (nboss >= MAX_BOSS) nboss = MAX_BOSS - 1;
         i = nboss++;
         boss[i].a = f[0]; boss[i].n = boss_n;

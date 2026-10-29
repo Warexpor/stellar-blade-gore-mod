@@ -36,6 +36,7 @@ return {
   keys = {},                   -- the mod's keys by action (keys.lua has them and their defaults), e.g. { split = "Ctrl+F11" };
                                -- "None" unbinds one. The F3 menu's Keys tab sets them
   menuPadIcons = "playstation", -- the menu's controller key icons: "playstation" or "xbox"
+  menuPause = true,            -- the F3 menu pauses the game while it is open (false: the world goes on under it)
   language = "en",             -- the F3 menu's language: "en", "zh" (Chinese, Simplified), "ja", "ko" or "ru"
   deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
                                -- seconds into the death, "key" only on Shift+F4 (or holdPad). Shift+F4 shows it early,
@@ -804,8 +805,9 @@ return {
       rise = 0.14,             --   s the pulse takes (the rest a little longer); then she falls back on her own
       last = 1.3,              --   her last gasp's, times lift
     },
-    steer = false,             -- each movement steered to the speed it asks every tick (closed loop, for the parked
-                               --   arm swings); off: each tick's change of speed added, as the neck's struggle was made
+    steer = false,             -- each movement steered to the speed it asks every tick (closed loop); off: each tick's
+                               --   change of speed added, as the neck's struggle was made. The arm swings are steered
+                               --   either way (open, they turned 0-10 deg of a swing, playtest)
     accel = 6000,              --   deg/s^2 a steered turn may change by at most each tick (gravity on a lifted arm
                                --   takes about 1500 deg/s^2)
     agonal = 4,                -- s of spasms (bursts of a leg kicking or an arm curling, her back arching, her head
@@ -909,8 +911,8 @@ return {
     capeKg = 0.12,             -- each of its links then weighs this (they hang off the 1.4 kg clavicle, not the arm)
     capeSwing = 45,            -- degrees the cape swings at the shoulder, each way
     capeTwist = 20,            -- degrees it turns about itself there
-    jiggle = {                 -- Jiggle After Death (experimental, off by default): her breasts' bodies sway on a
-      enabled = false,         --   damped spring of their own in the ragdoll instead of riding her chest locked
+    jiggle = {                 -- Jiggle After Death (experimental, on by default): her breasts' bodies sway on a
+      enabled = true,          --   damped spring of their own in the ragdoll instead of riding her chest locked
       swing = 12,              --   degrees each way they may swing from where they sat as she died
       twist = 6,               --   degrees they may turn about themselves
       stiffness = 600,         --   the spring back to there (higher: a quicker, tighter bounce)
@@ -1038,10 +1040,11 @@ return {
       scanClear = 1500,        --   cm: the trees are looked up ahead (not in the death) when no enemy is this near her
     },
     grab = {                   -- a death in an enemy's grab (Raven holding her and hitting) waits for the grab to end:
-      enabled = true,          --   the killing blow wounds her, the cut and the ragdoll come as it lets go (they came
-      reach = 40,              --   at once, and Raven went on hitting thin air). Held: its hand within reach cm of
-      hold = 0.4,              --   her body (or her attached to it) for hold s; it lasts while its montage plays,
-      most = 6,                --   without one (Raven's grab) while its hand stays on her; waits at most `most` s
+      enabled = true,          --   a limb or the head the killing blow cuts falls off at once; her ragdoll, a split or a
+      reach = 40,              --   cut across her waist come as it lets go (it came at once, and Raven went on hitting
+      hold = 0.4,              --   thin air). Held: its hand within reach cm of her body (or her attached to it) for
+      most = 6,                --   hold s; it lasts while its montage plays, without one (Raven's grab) while its hand
+                               --   stays on her; waits at most `most` s
     },
     nativeSlice = false,       -- the game's own monster slicer on them (off: it hides parts its own way, on top of ours)
     reach = 2500,              -- cm from Eve: enemies further off are left alone (their hits aren't followed)
@@ -1049,8 +1052,6 @@ return {
     bladeChance = 0.85,        --   ...along her swing (her right hand's arc) when she swung, else a rolled kind
     swingMinSpeed = 250,       -- cm/s her hand must reach to count as a swing
     swingWindow = 0.5,         -- seconds of her hand's path before the hit (else before its ragdoll) her swing is looked for in
-    hitQuiet = 0.6,            -- seconds after a blow on her her hand's moves aren't her blows on a live one (Sandbox
-                               --   Bosses' stuck check; none while she is dead)
     hitWindow = 1.0,           -- seconds a hit on its mesh is where the killing blow landed (moved onto its body when
                                -- the game put it off it)
     odds = { limb = 0.55, head = 0.3, torso = 0.15 }, -- a rolled kill (torso: across the waist; never a split)
@@ -1099,13 +1100,10 @@ return {
     hpScale = 0.25,            -- its MaxHP and MaxShield times this (1: the game's)
     deadAs = "M_SkullSword",   -- the death rows it dies by (CharacterDeadTable: the common deaths, each with a ragdoll)
     despawn = 120,             -- s its corpse stays at least (Raven's went after 1 s)
-    floorKill = true,          -- held at a sliver of HP by its phases' floors: the next hit takes it down (the mod's kill)
-    floor = 0.05,              --   the boss bar's share at or under which that counts
-    zeroWait = 1.5,            --   s the bar may read 0 with it still up before it is taken down (hit in the last 10 s)
+    zeroKill = true,           -- one still up with its HP at 0 is taken down (the mod's kill; its phases' floors are off
+                               --   while one of yours is up, so the game's own death comes first)
+    zeroWait = 1.5,            --   s its HP (unread: the boss bar, hit in the last 10 s) may read 0 with it still up
     barReach = 3000,           --   cm: only one this near her is taken for the one the bar shows
-    stuckHits = 3,             -- a phase change waiting on its arena (Scarlet's Phase2 cutscene, never played outside it:
-    stuckS = 4,                --   she stood, reported): its bar unchanged and it standing in place through stuckHits
-                               --   hits over stuckS s or more takes it down too (floorKill on)
     passive = false,           -- one spawned here stands still and never attacks (its AI stopped), for cutting at will
     struggle = true,           -- its death struggle on the floor (struggle.lua's, with Death Struggle on)
     face = true,               -- a dead face held on its face mesh (with Death Expression on)
@@ -1126,6 +1124,68 @@ return {
         distance = 600, bp = "/Game/Art/Character/NPC/CH_NPC_Rael/Blueprints/CH_NPC_Rael_Blueprint",
         physics = "/Game/Art/Character/NPC/CH_NPC_Rael/CH_NPC_Rael_Physics" },
     },
+  },
+  stains = {                   -- blood and dirt on her (stains.lua): the game's own, cut before release, switched on again
+    enabled = false,           -- (parked: off, its F3 tab hidden) off: none, her materials as the game has them
+    scale = 1,                 -- all the blood below times this
+    max = 1,                   -- the most blood or dirt she takes (0-1)
+    hit = { base = 0.04,       -- a hit that takes HP: this much blood,
+      perHp = 0.9 },           --   and this times the share of her HP bar it took
+    splash = { enabled = true, -- enemies hit near her splash her
+      range = 350,             --   within this many cm (less the further off)
+      amount = 0.04,           --   a hit on one right beside her
+      cut = 0.12 },            --   a part cut off one (enemy gore)
+    death = { blood = 0.35,    -- her death: this much blood at once,
+      perCut = 0.15 },         --   and this for each part cut off her
+    dirt = { enabled = true,   -- dirt from landings, knockdowns and lying dead
+      land = 0.15,             --   a hard landing (past landSpeed cm/s down; more the harder)
+      landSpeed = 900,
+      knock = 0.12,            --   a knockdown
+      death = 0.6,             --   lying dead it rises to this,
+      rate = 0.08 },           --   this much a second
+    wash = { enabled = true,   -- swimming washes blood and dirt off (wounds stay, paler)
+      rate = 0.35 },           --   this much a second
+    rest = true,               -- a camp rest cleans her and heals the wounds
+    fade = 0,                  -- minutes for blood and dirt to fade by themselves (0: they stay till washed or rested)
+    wounds = { enabled = true, -- a hit she lives through leaves a wound where it landed, in her skin's own blood layer
+      size = 6,                --   cm across the wound's core (bigger for harder hits)
+      uvCm = 150,              --   cm of her skin over the whole texture, about (sizes the wounds on the mask)
+      splatter = 8,            --   drops round each wound
+      background = 0.8,        --   the game's own blood mask under the wounds (0-1: lower, the blood spreads from
+                               --   the wounds longer before it shows elsewhere)
+      res = 512,               --   the skin's wound mask (px; a render target a wounded skin slot)
+      floor = 0.35,            --   the blood offset a wounded skin material keeps however clean she is (the wounds show)
+      color = { 0.2, 0.012, 0.01 }, -- a painted wound's colour (paintMasters' skin, linear RGB): the skin's goes toward it
+      max = 24 },              --   wounds kept on one material, the oldest goes first
+    cloth = { enabled = true,  -- blood on her outfit (painted into its colour where it lands) and dirt (darker, greyer)
+      soak = 1.6,              --   blood on cloth spreads this many times wider than on skin
+      bloodColor = { 0.2, 0.012, 0.01 }, -- fully soaked cloth's colour (linear RGB): the cloth's goes toward it
+      levels = { 0.15, 0.3, 0.45, 0.6, 0.8, 1 }, -- the strengths a mark on it is drawn at (one blob each)
+      res = 2048,              --   its colour texture copied at up to this size (px; a render target a stained slot)
+      format = 3,              --   the render target's format (3: RGBA8 sRGB)
+      coat = { enabled = true, --   blood over all of it as hers rises, the way the game's own layer covers her skin suit
+        strength = 0.85,       --     how far the cloth's colour goes to blood's where it's covered (0-1)
+        tile = 4,              --     the blood's pattern (the game's own noise) repeated this many times over its UV (4: as the skin suits' BloodTile)
+        from = 1.05, to = 0.2, --     the noise level it shows from at no blood and at full (lower: more of it)
+        soft = 5,              --     its edges' sharpness
+        step = 0.08,           --     redrawn when the blood moves this much
+        res = 512 },           --     the pattern's size (px)
+      darken = 0.45, desaturate = 0.35, tint = 0.5, dirtTint = { 0.62, 0.52, 0.4 } }, -- dirt on it
+    sound = { enabled = true,  -- a wet blood sound on each wound (the game's blood cues; none with gore.sounds off)
+      volume = 0.7 },          --   times gore.soundVolume
+    spatter = { enabled = true, -- blood lands on her as drops (skin or cloth) under points round her parts
+      size = 1.5,              --   cm across a drop, about
+      minPx = 2.5,             --   a splatter drop's radius at least this many px on the texture (smaller ones came out pixelated)
+      perBlood = 40,           --   drops for a whole blood's worth splashed on her (enemy hits near her)
+      hit = 3,                 --   drops round each wound of hers
+      death = 14, perCut = 6,  --   at her death, and for each part cut off her
+      menu = 12,               --   the menu's Add Blood
+      perTick = 1,             --   skin queries a tick (0.1 s) for them
+      queue = 40, max = 60 },  --   drops waiting at most; drops kept on one material (the oldest go first)
+    skinMasters = { "MA_Skin", "MA_CH_P_EVE_34_BB" }, -- her skin's masters whose blood layer shows (her head, the skin suits)
+    paintMasters = { "MA_Skin_EVE", "MA_Skin_EVE_Ver02", "MA_HumanSkin_Ver01" }, -- her skin's masters whose blood layer
+                               -- doesn't show on her body (playtest: none at full blood): wounds painted into its colour
+    matEvery = 0.5,            -- s between her materials' updates (at once on a wound)
   },
   glassCannon = {              -- realistic glass cannon (glass.lua); Page Down turns it on and off in game (dev only)
     enabled = false,           -- off by default

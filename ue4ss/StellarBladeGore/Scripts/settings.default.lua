@@ -73,6 +73,21 @@ return {
       enabled = true,          -- a dead face on her as she dies, eyes closing (false: the game's own, gone 1 s in)
     },
   },
+  stains = {
+    enabled = false,           -- (parked, not in the F3 menu) blood and dirt on her: the game's own blood layer on her skin, cut before
+                               -- release. Hits bloody her and leave wounds where they land, enemies hit near her splash
+                               -- her (drops on her skin and outfit), falls and knockdowns dirty her, blood soaks into her
+                               -- outfit where it lands; swimming washes it off, a camp rest cleans her
+    wounds = { enabled = true },  -- a wound where each hit landed
+    splash = { enabled = true },  -- enemies' blood onto her
+    dirt = { enabled = true },    -- dirt from falls, knockdowns and lying dead
+    cloth = { enabled = true },   -- her outfit stained too (blood where it lands, dirt all over)
+    spatter = { enabled = true }, -- blood drops on her (skin and outfit)
+    sound = { enabled = true },   -- a wet blood sound on each wound
+    wash = { enabled = true },    -- water washes it off
+    rest = true,               -- a camp rest cleans her
+    fade = 0,                  -- minutes to fade by itself (0: never)
+  },
   convulse = {
     enabled = true,            -- after her death her face winces, gasps and twitches for a while, fading out (beheaded
                                -- or split down her length: none of it)
@@ -124,7 +139,7 @@ return {
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
                                -- she falls and lies (a stiffer, more held-together body)
     jiggle = {
-      enabled = false,         -- experimental: her breasts sway on a spring of their own in the ragdoll (false: they
+      enabled = true,          -- experimental: her breasts sway on a spring of their own in the ragdoll (false: they
     },                         -- ride her chest locked, as ever)
   },
   deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
@@ -160,6 +175,8 @@ return {
   },
   smoothAnim = false,          -- every character animated every frame: the engine skips frames on characters further
                                -- off or small on screen, which can look choppy, running most (costs some CPU)
+  menuPause = true,            -- the F3 menu pauses the game while it is open, the mod's own work too (false: the world
+                               -- goes on under it, she doesn't move)
   language = "en",             -- the F3 menu's language: "en" English, "zh" Chinese (Simplified), "ja" Japanese,
                                -- "ko" Korean, "ru" Russian (the menu's Mod tab sets it too)
   verboseLog = false,          -- a detailed log, for a bug report when asked for one (the log is made anew each start,
