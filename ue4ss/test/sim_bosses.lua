@@ -26,6 +26,8 @@ local rowsMem = {
     eff = { "Rank_Boss", "M_Tachy_HitCheckCount", "Passive_Immortal", "M_Tachy_Phase1", "M_Tachy_Default" } },
   M_Raven = { [0x10] = idx("M_Raven"), [0x14] = 248304, [0x18] = 4805, [0x1c] = f2u(1.0),
     eff = { "Rank_Boss", "Passive_Immortal", "M_Common_HitProjectileCheckCount" } },
+  M_RoyalGuardFemale = { [0x10] = idx("M_RoyalGuardFemale"), [0x14] = 35455, [0x18] = 908, [0x1c] = f2u(1.0),
+    eff = { "Passive_Immortal", "M_RoyalGuardFemale_Phase1", "Check_TagWeakPointX", "M_RoyalGuardFemale_FX_On" } },
 }
 local function snapshot()
   local o = {}
@@ -250,6 +252,16 @@ for _ = 1, 10 do strikes[e7] = F.t; e7.hit = { t = F.t + 0.05 }; F.t = F.t + 0.5
 check(#kills == k0 + 1 and kills[#kills]:find("no hit taken") and has("struck, no hit taken %(its HP 4000/5456"),
   "HP read: blows it reacts to, its HP unmoved: taken down (" .. tostring(kills[#kills]) .. ")")
 B._live()[0x1a7] = nil
+-- a read whose maximum is nowhere near its row's (the DLL's "by its ratio" on other numbers: 0/250 on a Tachy of
+-- 5456, playtest) is left: not at its floor, not taken down
+local e8 = boss_at(0x1a8, "CH_M_NA_21_Blueprint_C_8")
+hpOf[0x1a8] = { 0, 250, 1.43, 7.6 }
+k0 = #kills
+for _ = 1, 4 do F.t = F.t + 1; B.tick(pawn) end
+local x8 = B._live()[0x1a8]
+check(x8 and x8.hp == nil and has("B_Tachy 1a8: a read of its HP left") and not has("B_Tachy 1a8: its HP found")
+  and #kills == k0, "HP read: a maximum far off its row's left")
+B._live()[0x1a8] = nil
 tune.bosses.passive = false
 ctx.enemies.struck = nil
 
@@ -274,4 +286,69 @@ for r, v in pairs(before) do for i = 1, 5 do if after[r][i] ~= v[i] then same = 
 check(same, "none left: both rows put back as the game had them")
 check(next(B._rows()) == nil, "nothing left to put back")
 
+-- Naked Tachy (Nexus 3183): her body mesh pointing at a physics asset the game doesn't have (none loads): the game's
+-- own put back as she is adopted; a vanilla one's left as it is
+local function pa_obj(path)
+  local nm = path:match("([^/]+)$")
+  return F.obj(nm, "PhysicsAsset", { GetFullName = function() return "PhysicsAsset " .. path .. "." .. nm end })
+end
+local own = pa_obj("/Game/Art/Character/Monster/CH_M_NA_21/CH_M_NA_21_Body_Physics")
+F.objects["/Game/Art/Character/Monster/CH_M_NA_21/CH_M_NA_21_Body_Physics.CH_M_NA_21_Body_Physics"] = own
+local function tachy_mesh(pa)
+  -- (its bodies made again simulating, as the game's were: the mesh set to simulate with none till then)
+  local st = { pa = pa, sets = 0, sim = false }
+  local m = F.obj("TachyMesh", "SkeletalMeshComponent", { SkeletalMesh = F.obj("CH_M_NA_21_Body", "SkeletalMesh"),
+    GetPhysicsAsset = function() return st.pa end,
+    SetPhysicsAsset = function(self, p, re) st.pa, st.sets, st.reinit, st.sim, self.PhysicsAssetOverride = p, st.sets + 1, re, true, p end,
+    IsSimulatingPhysics = function() return st.sim end,
+    SetSimulatePhysics = function(_, v) st.sim = v end, SetAllBodiesSimulatePhysics = function(_, v) st.sim = v end })
+  return m, st
+end
+logs = {}
+local mm, mms = tachy_mesh(nil)
+B.adopted(0xb0a1, { obj = F.obj("CH_M_NA_21_Blueprint_C_8", "CH_M_NA_21_Blueprint_C", { Mesh = mm }), mesh = mm, kind = kinds.tachy }, true)
+check(mms.pa == own and mms.reinit == true and has("the game.s own CH_M_NA_21_Body_Physics put back %(ok,"),
+  "a modded Tachy body with no physics asset the game has: hers put back")
+check(not mms.sim and has("its bodies made kinematic %(they came simulating%)"), "its new bodies kinematic, not a ragdoll (no death on spawn)")
+check(mm.SkeletalMesh.PhysicsAsset == own and has("on its mesh asset too"), "hers on its mesh asset too (a body made again from it keeps it)")
+check(has("B_Tachy: mesh CH_M_NA_21_Body %x+, override CH_M_NA_21_Body_Physics, asset's own CH_M_NA_21_Body_Physics, answers CH_M_NA_21_Body_Physics, pelvis not simulating"),
+  "its body's physics logged")
+-- her death: its physics logged then and over the next 2 s
+local e8 = { obj = F.obj("CH_M_NA_21_Blueprint_C_8", "CH_M_NA_21_Blueprint_C", { Mesh = mm }), mesh = mm, kind = kinds.tachy }
+mms.sim = true
+B.died(pawn, 0xb0a1, e8)
+for _ = 1, 25 do F.t = F.t + 0.1; B.tick(pawn) end
+check(has("B_Tachy b0a1 at its death: .*pelvis simulating") and has("B_Tachy b0a1 0%.%d s after its death") and has("B_Tachy b0a1 2%.%d s after its death"),
+  "her death's physics logged at it and over the next 2 s")
+local mf, mfs = tachy_mesh(pa_obj("/Game/Art/Character/PC/CH_P_EVE_01/CH_P_EVE_01_Physics"))
+B.adopted(0xb0a2, { obj = F.obj("CH_M_NA_21_Blueprint_C_9", "CH_M_NA_21_Blueprint_C", { Mesh = mf }), mesh = mf, kind = kinds.tachy }, true)
+check(mfs.pa == own, "a modded Tachy body with another's physics asset: hers put back")
+local mv, mvs = tachy_mesh(own)
+B.adopted(0xb0a3, { obj = F.obj("CH_M_NA_21_Blueprint_C_10", "CH_M_NA_21_Blueprint_C", { Mesh = mv }), mesh = mv, kind = kinds.tachy }, true)
+check(mvs.sets == 0 and has("its own physics asset %(CH_M_NA_21_Body_Physics"), "a vanilla Tachy body: left as it is")
+
+-- the Royal Guard Sister (her actor Rael's): her row made mortal, and Passive Bosses stands her still
+check(kinds.royalguard and B.prepare(kinds.royalguard) == nil, "the Royal Guard Sister's row made mortal")
+local g = rowsMem.M_RoyalGuardFemale
+check(byIdx[g[0x10]] == "M_SkullSword" and g.eff[1] == "Passive_Immortal_Dispel" and g[0x14] == 8864
+  and string.unpack("<f", string.pack("<I4", g[0x1c])) == 120, "she dies as M_SkullSword, not immortal, a quarter HP, kept 120 s")
+local gb = { running = true, stops = 0 }
+gb.IsRunning = function() return gb.running end
+gb.StopLogic = function() gb.running, gb.stops = false, gb.stops + 1 end
+gb.RestartLogic = function() gb.running = true end
+local gm = F.obj("RaelMesh", "SkeletalMeshComponent")
+local gai = F.obj("RaelAI", "SBAIController", { StopMovement = function() end })
+local rael = F.obj("CH_NPC_Rael_Blueprint_C_1", "CH_NPC_Rael_Blueprint_C", { Mesh = gm, Controller = gai })
+gai.UnPossess = function() rael.Controller = nil end
+gai.Possess = function(_, p) p.Controller = gai end
+rael.K2_GetActorLocation = function() return { X = 300, Y = 0, Z = 0 } end
+rael.BrainComponent = F.obj("RaelBrain", "SBBehaviorTreeComponent", gb)
+gb = rael.BrainComponent
+B.adopted(0x4a1, { obj = rael, mesh = gm, kind = kinds.royalguard }, true)
+tune.bosses.passive = true
+F.t = F.t + 0.3; B.tick(pawn)
+check(gb.stops == 1 and rael.Controller == nil and has("B_RoyalGuard 4a1 stands still"), "passive: the Royal Guard Sister's tree stopped, her controller let go")
+tune.bosses.passive = false
+F.t = F.t + 0.3; B.tick(pawn)
+check(gb.running and rael.Controller == gai and has("B_RoyalGuard 4a1 fights again"), "passive off: she fights again")
 print(fails == 0 and "PASS" or "FAIL")

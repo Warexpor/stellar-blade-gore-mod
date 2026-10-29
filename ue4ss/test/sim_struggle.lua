@@ -61,8 +61,9 @@ local hand0 = R.P["Bip001-L-Hand"]
 -- her death, a ragdoll
 local d0 = mark()
 local e0 = #F.events
--- (its rolls from here on a seed of their own: how many the cut's stages drew before it doesn't change the struggle)
-math.randomseed(rawget(_G, "STRUGGLE_SEED") or 1)
+-- (its rolls from here on a seed of their own: how many the cut's stages drew before it doesn't change the struggle;
+-- re-picked as the death face took more rolls: on 1 a short struggle had time for one act only)
+math.randomseed(rawget(_G, "STRUGGLE_SEED") or 10)
 E.s.hp = 0
 E.die(true)
 F.run(18, pawn)

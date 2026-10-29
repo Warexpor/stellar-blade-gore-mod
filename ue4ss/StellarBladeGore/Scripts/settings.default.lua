@@ -16,9 +16,11 @@ return {
       -- diagonal = 15,        --   (parked for now) cut diagonally from over a shoulder to the other hip
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
+    noSplits = false,          -- true: she is never split top to bottom, by any blow, roll or hit after death (the
+                               -- limbs the blade crossed come off instead)
     followUpCuts = true,       -- one swing cuts everything it went through (both arms and her body); false: one cut
                                -- a swing, her body when it went through it (a laser trap still cuts along its beam)
-    bladeFollow = 0.75,        -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
+    bladeFollow = 0.8,         -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
                                -- roll the odds above (1: always the blade, mostly waist cuts and splits)
     -- diagonal = {          (parked for now)
     --   enabled = true,          -- diagonal cuts, rolled or from a slanting blade (false: never)
@@ -98,12 +100,18 @@ return {
       alone = 0.5,             --   share of ragdoll deaths with nothing cut off that still try to sit up (0: none)
     },
   },
-  cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, and fly it with
-                               -- WASD, Q/E (down/up), Shift (faster) or the left stick and triggers, till the death
-                               -- screen (false: the game's own camera, which jerks after her body)
+  cameraStill = true,          -- after her death you turn the camera round her, mouse or right stick, fly it with
+                               -- WASD, Q/E (down/up), Shift (faster) or the left stick and triggers, and zoom it with
+                               -- the mouse wheel or the D-pad (up in, down out), till the death screen (false: the
+                               -- game's own camera, which jerks after her body)
   cameraMouse = 3,             --   mouse speed
   cameraStick = 150,           --   right stick speed, degrees a second
-  cameraTrack = 2.5,           --   how closely it slides after her body, on the level, till you fly it (0: it stays put)
+  cameraBody = true,           --   it follows her body closely, up and down too, till you fly it (false: it only
+                               --   slides after her on the level, cameraTrack)
+  cameraFlyAfter = 1.5,        --   seconds into her death before WASD / Q/E (or the left stick and triggers) fly it;
+                               --   the first press after that lets go of her body
+  cameraBodyBone = "upper",    --   which part it follows: "upper" (her upper body) or "pelvis"
+  cameraTrack = 2.5,           --   (cameraBody off) how closely it slides after her body, on the level, till you fly it (0: it stays put)
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
   active = {
@@ -115,6 +123,9 @@ return {
     push = 1.0,                -- how hard the killing blow throws her body, times the default (0: no push of ours)
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
                                -- she falls and lies (a stiffer, more held-together body)
+    jiggle = {
+      enabled = false,         -- experimental: her breasts sway on a spring of their own in the ragdoll (false: they
+    },                         -- ride her chest locked, as ever)
   },
   deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
@@ -141,14 +152,16 @@ return {
                                -- works with the cuts off too
     push = 0,                  -- cm/s every dying enemy is pushed along the blow on top (0: none)
   },
-  bosses = {                   -- Sandbox Bosses (F3 → Sandbox): spawn Tachy, Raven or Scarlet in front of her and kill
+  bosses = {                   -- Sandbox Bosses (F3 → Sandbox): spawn Tachy, Raven, Scarlet or a Royal Guard Sister and kill
     enabled = false,           -- them like any enemy (no cutscene), cut, struggling and with a dead face
-    pick = "tachy",            -- tachy, raven, scarlet (DLC)
+    pick = "tachy",            -- tachy, raven, scarlet (DLC), royalguard (a Royal Guard Sister)
     hpScale = 0.25,            -- their HP and shield times this
     struggle = true,           -- their death struggle (with Death Struggle on)
   },
   smoothAnim = false,          -- every character animated every frame: the engine skips frames on characters further
                                -- off or small on screen, which can look choppy, running most (costs some CPU)
+  language = "en",             -- the F3 menu's language: "en" English, "zh" Chinese (Simplified), "ja" Japanese,
+                               -- "ko" Korean, "ru" Russian (the menu's Mod tab sets it too)
   verboseLog = false,          -- a detailed log, for a bug report when asked for one (the log is made anew each start,
                                -- the last one kept as stellarbladegore.log.old)
   dev = false,                 -- test keys (F5-F11, Insert, Delete, Home, End, Page Up, Page Down), the enemy spawner, the glass

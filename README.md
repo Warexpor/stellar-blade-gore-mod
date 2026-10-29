@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.5.2. See the [changelog](CHANGELOG.md).
+Version 0.5.3. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,14 +10,14 @@ Version 0.5.2. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.5.2.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.5.3.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.2`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.3`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -44,9 +44,10 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.enabled` | `true` | All cuts and blood. |
 <!-- | `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. | -->
 | `gore.death` | 42 / 25 / 15 / 18 | Odds of a limb, a beheading, a cut across her body (under the bust, leaning a little at random) or a split down the middle (running a little diagonally), when the blow doesn't decide. All split (`0` for the rest) splits every death; otherwise a blade seen decides first (`bladeFollow`). |
+| `gore.noSplits` | `false` | `true`: she is never split top to bottom, by any blow, roll or hit after her death (No Vertical Splits in the menu); a blade down her length takes the limbs it crossed instead, and the split share of `gore.death` goes to the others. |
 | `gore.death.moreLimbs` | 0.35 | Chance a rolled limb cut takes the next nearest limb too, and a third at the same chance again. |
 | `gore.followUpCuts` | `true` | One swing cuts everything it went through (both arms and her body, say). `false`: one cut a swing, her body when the blade went through it, else the limb it met; no extra limbs from `moreLimbs` either. A laser trap still cuts along its beam. F3 → Follow-up Cuts. |
-| `gore.bladeFollow` | 0.75 | Share of deaths with a tracked blade that the blade alone decides; the rest roll `gore.death`. At `1` most deaths were waist cuts or splits, as a blade mostly crosses her body. |
+| `gore.bladeFollow` | 0.8 | Hit Decides in F3. Share of deaths with a tracked blade that the blade alone decides; the rest roll `gore.death`. At `1` most deaths were waist cuts or splits, as a blade mostly crosses her body. |
 | `gore.oddsNear.enabled` | true | The odds above, when rolled, lean to what is near where the blow landed: a swing at her waist cuts the waist, a nearby arm or leg, or splits her if it came down her length, never her head; one at her neck mostly beheads. Odds with only one kind above 0 still do that one every death, wherever it hit. F3 → Chances Follow the Hit. |
 | `gore.oddsNear.floor` | 0 | Share of its odds a part far from the hit keeps (0-1): `0.1` lets a waist swing behead now and then, `1` is as if off. F3 → Far Part Chance. |
 | `gore.torsoLegs.enabled` | `true` | A cut across her waist sometimes leaves her legs playing her death fall while the upper body flies off in the ragdoll: most often from a level swing, less from a slanted one, half the time when the blow wasn't seen (`level` / `slant` / `rolled` in `tune.lua`). `false`: all of her ragdolls. |
@@ -87,16 +88,21 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `convulse.armSwing.enabled` | `true` | With `deathMoves`: her arms lift and drop, or make a crawl's stroke, now and then in her last movements (`false`: only the struggle moves them). F3 → Death → Arm Swings. |
 | `active.stiffness` | `1.0` | How stiff her ragdoll is: `0` limp as a sack, `1` as made, `2`-`3` she keeps her shape as she falls and lies. |
 | `active.neutral.enabled` | `true` | Relaxed Pose In Flight: thrown by a hard hit, her joints are pulled towards a relaxed, curled pose until she lands (needs `sbslice.dll`). `active.neutral.pose` holds the pose, `stiffness` how hard it pulls. |
+| `active.jiggle.enabled` | `false` | Jiggle After Death (Experimental): in her ragdoll her breasts sway on a damped spring of their own (`swing`, `twist`, `stiffness`, `damping`, `kg` in `tune.lua`) instead of riding her chest locked. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` (On Press in the F3 menu) only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
 | `fewerGC` | `false` | Fewer garbage collection hitches: the engine no longer forces a pass every time it unloads part of the map (its regular pass once a minute still runs). Off puts the game's own behaviour back. |
-| `customizedRagdoll` | `false` | Support for [Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884) (F3 → Death, Customized Ragdoll Support): its death camera instead of the Free Camera, and the death screen up at once but invisible, its F / R working with no holding needed (Shift+F4 shows it). This mod's ragdoll, cuts, struggle and face stay as they are. |
+| `customizedRagdoll` | `false` | Support for [Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884) (F3 → Death, Customized Ragdoll (Redundant)): its death camera instead of the Free Camera, and the death screen up at once but invisible, its F / R working with no holding needed (Shift+F4 shows it). This mod's ragdoll, cuts, struggle and face stay as they are. |
 | `hideHud` | `true` | The HUD (HP bar, skills, minimap, notices) is hidden through her death and comes back when she is up again. The death screen still follows `deathScreen`. |
 | `reviveAt` | 10 | Seconds into her death the screen comes up with `"delay"`. |
 | `holdPad` | D-pad down + R1 | Shift+F4 on the controller, both held for `holdPadFor` (1 s) (`false`: none). |
 | `menuPadIcons` | `"playstation"` | The settings menu's controller key icons: `"playstation"` or `"xbox"` (also in the menu). |
-| `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster. It slides smoothly after her body till you fly it, and stops short of walls. |
+| `language` | `"en"` | The F3 menu's language: `"en"` English, `"zh"` Chinese (Simplified), `"ja"` Japanese, `"ko"` Korean, `"ru"` Russian. F3 → Mod → Language. The rest (this README, `settings.lua`, the log) stays in English. |
+| `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster, the mouse wheel or the D-pad (up in, down out) zooms it in to 15 cm off her. It follows her body closely till you fly it (Follow Her Body), and stops short of walls. Once flown it is a free camera: the mouse or stick turns it where it stands, and the wheel or D-pad moves it along the view. |
 | `cameraMouse` / `cameraStick` | 3 / 150 | Its mouse and stick speed. |
-| `cameraTrack` | 2.5 | How closely it slides after her (0: it stays where she died). |
+| `cameraBody` | `true` | It follows her body closely, up and down too, as it falls and tumbles, till you fly it; zoom and walls ease rather than jump. `false`: it only slides after her on the level. |
+| `cameraFlyAfter` | 1.5 | Seconds into her death before WASD / Q/E (or the left stick and triggers) fly it; till then it stays locked on her while you turn and zoom round her, and the first fly press after lets go of her. |
+| `cameraBodyBone` | `"upper"` | Which part of her it follows and turns round: `"upper"` (her chest) or `"pelvis"`. |
+| `cameraTrack` | 2.5 | With `cameraBody` off, how closely it slides after her (0: it stays where she died). |
 | `cameraMove` | 400 | Flying speed, cm a second (up to 15 m from where it started). |
 <!-- | `deathSkip` | `true` | Esc on her death fast forwards to the death screen instead of the wait. | -->
 | `holdDown` | `true` | Knocked down, she stays on the floor till you dodge or jump (the game's fast getup); `false`: she gets up on her own after a second, as in the game. Air juggles' knockdowns aren't held. |
@@ -105,8 +111,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `enemies.pushScale` | `1.0` | Times the game's own throw of a dying enemy (`0`: it drops on the spot, `2`: twice as far). Works with the cuts off too. |
 | `enemies.push` | 0 | Cm a second every dying enemy is pushed along the blow on top. |
 | `enemies.attackDown` | `true` | Enemies keep attacking her while she is knocked down (`false`: they wait till she is up, as in the game). Still in the works (it does little yet): settings.lua only, out of the F3 menu. |
-| `enemies.afterDeath.enabled` | `false` | Being tested: after her death the enemies around her keep at her body for `time` (10) s, playing their own attacks at it, and their weapons cut it (Hits After Death). F3 → Attacks After Death (experimental). |
-| `bosses.enabled` | `false` | Sandbox Bosses: F3 → Sandbox → Spawn Boss brings Tachy, Raven or Scarlet (`bosses.pick`; Scarlet needs her DLC) in 7 m in front of Eve, anywhere, fighting at once. Killed, a boss dies like any enemy: no death cutscene, no phase change to wait out; it is cut, struggles on the floor (`bosses.struggle`, with Death Struggle on) and wears a dead face (`bosses.face`, with Death Expression on). Their HP and shield are `bosses.hpScale` (25%) of the game's. `bosses.passive` (Passive Bosses) keeps a spawned one standing still, never attacking (its own behaviour tree stopped, its AI controller off it). A boss that stops taking damage (held invincible by a phase change it can't play: a passive one's, or Scarlet's outside her arena) is taken down after a few blows that take none of its HP (`bosses.stuckHits` over `bosses.stuckS`; its HP is read from its memory). While one you spawned is up, that boss is mortal everywhere, a story fight with it too; once none is, the game's own boss is back. Remove Spawned takes them all away. |
+| `enemies.afterDeath.enabled` | `false` | Being tested: after her death the enemies around her keep at her body for `time` (10) s, playing their own attacks at it, and their weapons cut it (Hits After Death). F3 → Attacks After Death (Experimental). |
+| `bosses.enabled` | `false` | Sandbox Bosses (experimental): F3 → Sandbox → Spawn Boss brings Tachy, Raven, Scarlet or a Royal Guard Sister (`bosses.pick`; Scarlet needs her DLC) in 7 m in front of Eve, anywhere, fighting at once. Killed, a boss dies like any enemy: no death cutscene, no phase change to wait out; it is cut, struggles on the floor (`bosses.struggle`, with Death Struggle on) and wears a dead face (`bosses.face`, with Death Expression on). Their HP and shield are `bosses.hpScale` (25%) of the game's. `bosses.passive` (Passive Bosses) keeps a spawned one standing still, never attacking (its own behaviour tree stopped, its AI controller off it). A boss that stops taking damage (held invincible by a phase change it can't play: a passive one's, or Scarlet's outside her arena) is taken down after a few blows that take none of its HP (`bosses.stuckHits` over `bosses.stuckS`; its HP is read from its memory). While one you spawned is up, that boss is mortal everywhere, a story fight with it too; once none is, the game's own boss is back. Remove Spawned takes them all away. |
 | `smoothAnim` | `false` | Every character animated every frame. The engine skips animation frames on characters further off or small on screen, which can look choppy next to a smooth world, most when they run. Costs some CPU with many characters around. |
 | `verboseLog` | `false` | A detailed log (every death's bone speeds, each cut stage, every slow frame...), for a bug report when asked for one. Off, slow frames are summed up once a minute. |
 | `dev` | `false` | Test keys and the enemy spawner (see below). |
@@ -120,7 +126,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 ## Compatibility
 
 - **Outfit and nude mods** work, installed before or after this one: every outfit gets its ragdoll fixes in game when she puts it on, and its look is left alone.
-- **Face mods** for Eve work: the pak carries no face or body mesh of hers or the enemies' (older versions carried her face, and a face replacer stopped the game at launch).
+- **Face mods** for Eve work: the pak carries no face or body mesh of hers or the enemies' (older versions carried her face, and a face replacer stopped the game at launch). Head swaps that put a face of their own on her (CNS face fits such as [TK Scarlet Head](https://www.nexusmods.com/stellarblade/mods/2438)) wear the dead face too.
 - **Voice mods** that replace Eve's death cries (`vo_eve_die_*`, e.g. Violent Death Mod) work as they are: her death cry plays their recordings. A mod that adds new sounds instead can be pointed at with `gore.voice.sounds` in `settings.lua`.
 - **Proper Death Expression** by blabmice is built in (`ZZ_StellarBladeGore_Face_P`), credited below. To install it anyway, delete `ZZ_StellarBladeGore_Face_P.*` from `Paks/~mods`: two paks with the same asset keep the game loading forever.
 - **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.

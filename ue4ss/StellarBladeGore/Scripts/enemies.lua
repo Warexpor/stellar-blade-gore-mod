@@ -567,7 +567,14 @@ end
 
 -- her swing through a live one (bosses.lua: a blow struck, whether or not the game let it land): the swing's time, or
 -- nil. The same test as a corpse hit's, past since only
+-- Not while she is dead or just hit: her hand flung about by a blow or her fall swept through the one hitting her and
+-- counted as her blows (playtest: Sandbox Raven, fighting, was taken down for 21 blows "taking no hit" as she killed
+-- Eve, and cut along Eve's dying arm's arc, which read as Raven cutting herself)
 function M.struck(pawn, e, since)
+  if ctx.dead_since and ctx.dead_since() then return nil end
+  local hit = ctx.hit_at and ctx.hit_at()
+  if hit and os.clock() - hit < (cfg().hitQuiet or 0.6) then return nil end
+  if hit then since = math.max(since or 0, hit + (cfg().hitQuiet or 0.6)) end
   local ch = cfg().corpseHits or {}
   local sw = valid(e.mesh) and her_swing(pawn, math.max(since or 0, os.clock() - (cfg().swingWindow or 0.5)))
   if not sw then return nil end
@@ -1010,7 +1017,7 @@ local function swings_tick(pawn, c)
       if k >= 1 then sw.lunge = nil end
     end
     if a ~= me and not (e and e.dead) and not (ctx.ignored and ctx.ignored(ch.cls)) then
-      local at = try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+      local at = ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end)
       local d = at and len(vec(body.X - at.X, body.Y - at.Y, 0))
       if d and (not near or d < near) then near, nearCls = d, ch.cls end
       local mesh = d and d < reach and not (sw and (sw.till or now < (sw.next or 0))) and try(function() return ch.obj.Mesh end)
@@ -1132,7 +1139,7 @@ function M.after_tick(pawn)
     local classes, fresh, close = {}, false, false
     for _, ch in ipairs(ctx.live_chars()) do
       if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
-        local at = try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+        local at = ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end)
         classes[ch.cls] = true
         if not (aft.scan and aft.scan.classes[ch.cls]) then fresh = true end
         if her and at and len(sub(at, her)) < (c.scanClear or 1500) then close = true end
@@ -1213,7 +1220,7 @@ function M.after_tick(pawn)
   for _, ch in ipairs(ctx.live_chars()) do
     if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
       local e = known[ch.addr]
-      local at = not (e and e.dead) and try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+      local at = not (e and e.dead) and (ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end))
       local bb = her and at and len(sub(at, her)) < (c.reach or 3000) and M.after_bb(ch.obj)
       if bb then
         local names = aft.keys[ch.addr]
@@ -1285,6 +1292,12 @@ function M.tick(pawn, mesh, tm)
           gone(c.addr, e, "destroyed", "lost its mesh")
         else
           local sim = simulating(e)
+          -- (a boss's physics asset just put back: its bodies came simulating, no death; bosses.own_physics)
+          if sim and not e.dead and e.physHold and os.clock() < e.physHold and ctx.bosses then
+            ctx.bosses.kinematic(e.mesh)
+            if not e.physHeld then e.physHeld = true; log(string.format("%s %x: its bodies simulating after its physics asset was put back: kinematic again, not its death", k.alias, c.addr)) end
+            sim = false
+          end
           local pel = bone_loc(e.mesh, "Bip001-Pelvis")
           local near = her and pel and len(sub(pel, her)) < (g.reach or 2500)
           e.far = not near
@@ -1328,9 +1341,11 @@ function M.tick(pawn, mesh, tm)
             else
               e.still = 0
               if e.scaleAt and os.clock() >= e.scaleAt then scale_push(e) end
-              -- (its materials every 4 polls' time: a far one is looked at only that often, and on its own poll)
+              -- (its materials every 0.5 s, a far one on its own poll: up to 8 slots, 4 engine reads each, for every
+              -- corpse near her 8 times a second were a good part of the enemies' poll after a fight; the caps and
+              -- bleeds go a few frames later as it dissolves)
               if not e.faded and now >= (e.matAt or 0) then
-                e.matAt = now + 4 * TICK_S - 0.005
+                e.matAt = now + 0.5
                 local yes, now = dissolving(e)
                 if yes then
                   e.faded, e.want = true, nil
@@ -1370,19 +1385,36 @@ local function montage_of(o)
   return m, ai, try(function() return m:GetFName():ToString() end) or "?"
 end
 M.montage_of = montage_of
--- its hand on her: the hand, her bone and how far (cm), else nil
-local function hand_on(o, mesh, reach)
+-- her body's bones within GRAB_SPAN cm of her pelvis, so a hand further than reach + that off it touches none of them
+local GRAB_SPAN = 100
+local function her_bones(mesh)
   local her = {}
   for _, b in ipairs(GRAB_HER) do her[#her + 1] = { b, bone_loc(mesh, b) } end
-  local best, bh, bb
+  return her
+end
+-- its hand on her: the hand, her bone and how far (cm), else nil; and her bones if read. at0: her pelvis, her:
+-- her_bones (both read once a watch, not once an enemy: 5 bones and the montage read for every enemy near her, 10
+-- times a second, were most of 0.5.2's "lethal" poll part in a fight, 1.2-2 ms a poll, a Nexus report of the frame
+-- rate down)
+local function hand_on(o, mesh, reach, at0, her)
+  local hands = {}
+  local om = try(function() return o.Mesh end)
+  if not valid(om) then return nil, nil, nil, her end
   for _, hb in ipairs(GRAB_HANDS) do
-    local h = bone_loc(o.Mesh, hb)
-    for _, p in ipairs(h and her or {}) do
+    local h = bone_loc(om, hb)
+    if h and not (at0 and len(sub(h, at0)) > reach + GRAB_SPAN) then hands[#hands + 1] = { hb, h } end
+  end
+  if #hands == 0 then return nil, nil, nil, her end
+  her = her or her_bones(mesh)
+  local best, bh, bb
+  for _, e in ipairs(hands) do
+    local hb, h = e[1], e[2]
+    for _, p in ipairs(her) do
       local d = p[2] and len(sub(h, p[2]))
       if d and d < reach and (not best or d < best) then best, bh, bb = d, hb, p[1] end
     end
   end
-  return bh, bb, best
+  return bh, bb, best, her
 end
 function M.grab_tick(pawn, mesh)
   local c = cfg().grab or {}
@@ -1395,18 +1427,24 @@ function M.grab_tick(pawn, mesh)
   local me = addr(pawn)
   local root = try(function() return pawn.RootComponent end)
   local parent = valid(root) and addr(try(function() return root:GetAttachParentActor() end))
-  local seen = {}
+  local seen, her = {}, nil
   for _, ch in ipairs(ctx.live_chars()) do
     -- (a boss standing still, Passive Bosses: her walking up to it put its hand on her neck, a grab logged, playtest)
     if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) and not (ctx.bosses and ctx.bosses.is_passive(ch.addr)) then
       local o = ch.obj
-      local at = try(function() return vof(o:K2_GetActorLocation()) end)
+      local at = ctx.char_at and ctx.char_at(ch) or try(function() return vof(o:K2_GetActorLocation()) end)
       if at and len(sub(at, at0)) < GRAB_NEAR then
-        local m, _, mn = montage_of(o)
-        mn = mn or "no montage"
         local touch, bone, d = parent and parent == ch.addr and "attached", nil, nil
-        if not touch then touch, bone, d = hand_on(o, mesh, c.reach or 40) end
+        if not touch then
+          local reach = c.reach or 40
+          -- (her bones read for the first enemy with a hand near her, kept for the rest)
+          touch, bone, d, her = hand_on(o, mesh, reach, at0, her)
+        end
         local g = grab.on[ch.addr]
+        -- (its montage only for an enemy touching her or noted already: one with neither isn't a grab)
+        local m, mid, mn
+        if touch or g then m, mid, mn = montage_of(o) end
+        mn = mn or "no montage"
         if touch then
           if not g or g.mn ~= mn then g = { since = now, mn = mn, obj = o, cls = ch.cls, addr = ch.addr }; grab.on[ch.addr] = g end
           g.last, g.mont, g.how = now, m, touch .. (bone and string.format(" on her %s (%.0f cm)", bone, d) or "")
@@ -1456,7 +1494,7 @@ function M.near_montages(pawn)
   local mesh = try(function() return pawn.Mesh end)
   if not valid(mesh) then mesh = nil end
   for _, ch in ipairs(her and ctx.live_chars() or {}) do
-    local at = ch.addr ~= me and try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+    local at = ch.addr ~= me and (ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end))
     if at and len(sub(at, her)) < GRAB_NEAR then
       local _, _, mn = montage_of(ch.obj)
       -- (its nearest hand to her body: a grab without a montage told from a miss)

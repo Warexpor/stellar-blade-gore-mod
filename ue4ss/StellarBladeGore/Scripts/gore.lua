@@ -5152,6 +5152,10 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
   if pending then log(kind .. " skipped (" .. why .. "): another cut is still opening"); return false end
   -- an enemy is never split (a split rebuilds Eve's outfit pieces and needs her whole), and has no face of its own
   if enemy.cur and kind == "split" then log("split skipped (" .. why .. "): not on an enemy"); return false end
+  -- vertical splits off altogether (noSplits): only the test keys still split (a diagonal is not one)
+  if kind == "split" and g.noSplits == true and not (plane and plane.diag) and why ~= "F11" and why ~= "F5" then
+    log("split skipped (" .. why .. "): vertical splits are off (noSplits)"); return false
+  end
   local tb = not enemy.cur and PARTS[g.bone or ""] or {}
   local face = not enemy.cur and (kind == "head" or (kind ~= "split" and not blade and tb.kind == "head"))
   -- (an enemy built like her: its face whenever the cut may take the head)
@@ -5995,7 +5999,7 @@ function M.pose(mesh)
   return p
 end
 
--- tune.gore.oddsNear: the death odds main.lua rolls (a blade left aside by Blade Decides, or none seen) shaped by where
+-- tune.gore.oddsNear: the death odds main.lua rolls (a blade left aside by Hit Decides, or none seen) shaped by where
 -- the blow landed: each kind's weight times how near the hit was to what it cuts, 1 within near cm and down to floor
 -- at far cm (the neck for a beheading, the spine from her pelvis to her chest for a waist cut, her length for a split,
 -- the nearest arm or leg for a limb). A blade's plane down her length makes a waist cut less likely (across), one across
@@ -6456,12 +6460,13 @@ function M.blow(pawn, mesh, h, why)
     return p0 and p1 and norm(sub(p1, p0))
   end)()
   local lengthwise = axis and math.abs(dot(axis, n)) < M.ALONG
-  local nosplit = why == "enemy" or ((why == "death" or why == "after") and cfg().deathSplit == false)
+  -- (noSplits: never, at death, after it or alive)
+  local nosplit = why == "enemy" or cfg().noSplits == true or ((why == "death" or why == "after") and cfg().deathSplit == false)
   if (what == "slice" or (not pos and not neg)) and lengthwise and nosplit then
     local list = extras(nil)
     if #list == 0 or list[1].kind ~= "limb" then
       log(string.format("blade (%s): %s plane down her length, no split %s", why, how,
-        why == "enemy" and "on an enemy" or "at death (deathSplit off)"))
+        why == "enemy" and "on an enemy" or cfg().noSplits == true and "(noSplits on)" or "at death (deathSplit off)"))
       return false
     end
     local first = table.remove(list, 1)

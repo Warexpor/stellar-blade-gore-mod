@@ -424,7 +424,7 @@ local function follow_foes(pawn)
   local me = try(function() return pawn:GetAddress() end)
   for _, e in ipairs(ctx.live_chars()) do
     if e.addr ~= me and not st.foes[e.addr] and not ctx.ignored(e.cls) then
-      local l = try(function() local x = e.obj:K2_GetActorLocation(); return { X = x.X, Y = x.Y, Z = x.Z } end)
+      local l = ctx.char_at and ctx.char_at(e) or try(function() local x = e.obj:K2_GetActorLocation(); return { X = x.X, Y = x.Y, Z = x.Z } end)
       if l and ctx.dist(l, here) < (g.foeReach or 4000) then
         local r = ctx.gore.command(string.format("ve%x,%x", e.addr, math.floor(mult * 100 + 0.5)))
         st.foes[e.addr] = r:match("^ok") and "ok" or "no"

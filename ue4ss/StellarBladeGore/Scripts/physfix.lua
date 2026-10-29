@@ -1074,6 +1074,16 @@ function M.arm_collision(mesh, pa)
     for _, a in ipairs({ "Bip001-L-Thigh", "Bip001-L-Calf", "Bip001-L-Foot" }) do
       for _, b in ipairs({ "Bip001-R-Thigh", "Bip001-R-Calf", "Bip001-R-Foot" }) do cand[#cand + 1] = { a, b } end
     end
+    -- her forearms and hands against her breasts' bodies (they collide with nothing of hers otherwise, and the
+    -- spine's capsule doesn't reach that far forward: her hands sank into her chest)
+    if g.breastCollision ~= false then
+      for _, bs in ipairs(bodies_of(pa)) do
+        local b = try(function() return bs.BoneName:ToString() end) or ""
+        if b:find("Breast") then
+          for _, a in ipairs({ "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-R-Forearm", "Bip001-R-Hand" }) do cand[#cand + 1] = { a, b } end
+        end
+      end
+    end
   end
   local pairs, near, guessed = measure(mesh, pa, cand, g.armGap or 2)
   local r = M.arm_table(pa, pairs)

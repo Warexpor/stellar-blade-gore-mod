@@ -36,6 +36,7 @@ return {
   keys = {},                   -- the mod's keys by action (keys.lua has them and their defaults), e.g. { split = "Ctrl+F11" };
                                -- "None" unbinds one. The F3 menu's Keys tab sets them
   menuPadIcons = "playstation", -- the menu's controller key icons: "playstation" or "xbox"
+  language = "en",             -- the F3 menu's language: "en", "zh" (Chinese, Simplified), "ja", "ko" or "ru"
   deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
                                -- seconds into the death, "key" only on Shift+F4 (or holdPad). Shift+F4 shows it early,
                                -- and hides it again (the death held) once it is up
@@ -65,12 +66,24 @@ return {
   cameraMouse = 3,             --   the held view turns this many degrees a unit of mouse input, all the way round, up and
                                --   down (SB reads about 0.06 a frame for a slow move)
   cameraStick = 150,           --   and this many degrees a second at the right stick's full tilt
-  cameraTrack = 2.5,           --   it slides sideways after her pelvis, never up or down, closing this share of the gap a
+  cameraBody = true,           --   the point it turns about rides her pelvis, up and down too, every frame (as Customized
+                               --   Ragdoll's camera does), till it is flown; false: it slides after her (cameraTrack)
+  cameraBodyBone = "upper",    --   which part of her: "upper" (her chest, Spine2) or "pelvis" (Customized Ragdoll's)
+  cameraMotionBlur = false,    --   the game's motion blur in the death camera's view (false: none; on, the stump caps smeared
+                               --   the way the blow went as the camera rode her body)
+  cameraBodyRate = 15,         --   how tightly it rides her pelvis, a second (0: rigidly, her ragdoll's shakes and all)
+  cameraBodyBlend = 0.5,       --   where it looked at her death eases onto her pelvis over about this many seconds
+  cameraFlyAfter = 1.5,        --   WASD / Q/E and the left stick and triggers fly it only from this many seconds into the
+                               --   death: till then it stays locked on her body; the first press after lets go of her
+  cameraZoomEase = 10,         --   the zoom eases to where the wheel sets it at this rate a second (0: at once)
+  cameraWallEase = 4,          --   pushed in by a wall, it eases back out at this rate a second once the way clears
+  cameraTrack = 2.5,           --   (cameraBody off) it slides sideways after her pelvis, never up or down, closing this share of the gap a
                                --   second (smoothed, so her ragdoll's shakes don't reach it; 0: it stays put)
   cameraMove = 400,            --   WASD, Q/E (down/up) and the left stick and triggers fly it this many cm a second
                                --   (once flown it stops sliding after her)
   cameraFast = 3,              --   this many times faster with Shift
-  cameraRange = 1500,          --   no further than this many cm from where it started
+  cameraRange = 1500,          --   no further than this many cm from where it started (and zoomed out no further)
+  cameraZoomMin = 15,          --   the mouse wheel and the D-pad (up in, down out) zoom it in down to this many cm
   holdPad = { "Gamepad_DPad_Down", "Gamepad_RightShoulder" }, -- Shift+F4 on the controller: both down in a death
                                -- shows the death screen, or hides it again (false: none)
   holdPadFor = 1.0,           -- seconds both are held before it counts (a quick press of both in a fight came by accident)
@@ -103,7 +116,7 @@ return {
     followUpCuts = true,       -- one swing cuts every arm, leg, her body and neck it went through (multiCut), and a
                                --   rolled limb cut takes more (death.moreLimbs); false: one cut a swing, her body over
                                --   the limbs it crossed (laserCut still cuts along the beam)
-    bladeFollow = 0.75,        -- share of deaths with a blade seen that the blade decides; the rest roll the odds above
+    bladeFollow = 0.8,         -- share of deaths with a blade seen that the blade decides; the rest roll the odds above
                                -- (a blade mostly crosses her body: at 1 nearly every death was a waist cut or a split)
                                -- A death whose killing hit the game reported, or whose enemy's weapon swing was
                                -- seen, is otherwise decided by that blade alone, nothing rolled: what its plane goes through
@@ -132,6 +145,9 @@ return {
     bladeJitter = 15,          -- for variety, each blade is turned up to this many degrees at random
     bladeShift = 10,           --   and moved up to this many cm along its normal
     bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
+    noSplits = false,          -- vertical splits off altogether: no blow, roll or after-death hit splits her down her
+                               --   length; the blade's limbs come off instead, the odds' split share goes to the others
+                               --   (the F11 / F5 test keys still split)
     deathSplit = true,         -- a blade down her length at death splits her (false: the limbs it crosses come off
                                --   instead, else the odds above; F11 and F5 still split)
     armsOverSplit = 0.6,       -- share of splits (rolled, or a blade down her length) whose blade crossed both arms
@@ -298,6 +314,38 @@ return {
           { "grimace_neck", 0.15, from = 0.4, over = 5 },
           { "nostrill_flare", 0.2, from = 0.5, over = 4 },
         } },
+        { name = "scream", weight = 3, morphs = {  -- died screaming: eyes torn wide and staring, brows high and
+                               --   pulled together, the mouth stretched open, the neck's cords taut; her eyes stay open
+                               --   a long while, closing only partway
+          { "upLid_down_L", "eyeBlinkLeft", 0.35, from = 0.0, over = 10 },
+          { "upLid_down_R", "eyeBlinkRight", 0.35, from = 0.0, over = 10.5 },
+          { "upLid_up_L", 0.1, from = 0.55, over = 7 }, { "upLid_up_R", 0.1, from = 0.55, over = 7 },
+          { "loLid_up_L", 0.0 }, { "loLid_up_R", 0.0 },
+          { "innerBrow_up", "browInnerUp", 0.35, from = 0.85, over = 8 },
+          { "brow_in", 0.25, from = 0.5, over = 8 },
+          { "outerBrow_up", 0.15, from = 0.45, over = 7 },
+          { "jaw_open", "jawOpen", 0.35, from = 0.5, over = 8 },
+          { "lip_stretch", 0.2, from = 0.6, over = 7 },
+          { "lowerLip_down", 0.2, from = 0.45, over = 7 },
+          { "upperLip_up", 0.05, from = 0.25, over = 6 },
+          { "lipCorner_down", 0.2, from = 0.35, over = 7 },
+          { "grimace_neck", 0.1, from = 0.7, over = 6 },
+          { "nostrill_flare", 0.1, from = 0.6, over = 5 },
+        } },
+        { name = "horror", weight = 2, morphs = {  -- frozen on what she saw: a silent scream, the mouth fallen open
+                               --   and rounded, eyes wide and rolled a little up, brows raised; set till the end
+          { "upLid_down_L", "eyeBlinkLeft", 0.2, from = 0.0, over = 12 },
+          { "upLid_down_R", "eyeBlinkRight", 0.2, from = 0.0, over = 12 },
+          { "upLid_up_L", 0.25, from = 0.45, over = 8 }, { "upLid_up_R", 0.25, from = 0.45, over = 8 },
+          { "loLid_up_L", 0.0 }, { "loLid_up_R", 0.0 },
+          { "eye_up_L", 0.2, from = 0.0, over = 4 }, { "eye_up_R", 0.2, from = 0.0, over = 4 },
+          { "innerBrow_up", "browInnerUp", 0.5, from = 0.8, over = 8 },
+          { "outerBrow_up", 0.35, from = 0.6, over = 8 },
+          { "jaw_open", "jawOpen", 0.45, from = 0.35, over = 4 },
+          { "lowerLip_funnel", 0.2, from = 0.3, over = 6 }, { "upperLip_funnel", 0.15, from = 0.25, over = 6 },
+          { "lowerLip_down", 0.15, from = 0.25, over = 6 },
+          { "nostrill_flare", 0.05, from = 0.35, over = 5 },
+        } },
         { name = "fading", weight = 1, morphs = {  -- quiet: the pain already leaving, eyes closing sooner
           { "upLid_down_L", "eyeBlinkLeft", 1.0, from = 0.65, over = 4 },
           { "upLid_down_R", "eyeBlinkRight", 1.0, from = 0.7, over = 4.5 },
@@ -369,11 +417,15 @@ return {
     },
     afterHits = {              -- an enemy's weapon swinging through her once she is dead cuts her again: a limb, the
       enabled = true,          --   head or (while she is whole) her body in two along the swing, else a hit mark
-      reach = 25,              --   cm its fastest bone (a hand or weapon bone) passes from a part of her
+      reach = 25,              --   cm its weapon's blade passes from a part of her...
+      handReach = 40,          --   ...or its hand bone, with no weapon mesh (the fingers or claws past it: a hands-only
+                               --   enemy's second blow on her went unseen at 25, playtest)
       minSpeed = 500,          --   cm/s it moves at least, in an attack (one of its montages that isn't a walk, turn,
                                --   hit reaction...): 300 and any weapon passing by cut her (a brush, reported)
       max = 6,                 --   hits a death
       from = 0.6,              --   s into the death before the first (the killing swing itself doesn't count twice)
+      rearm = 0.35,            --   s after an enemy's last cut (or the death) it may cut again, slowed down or not (a
+                               --   combo's next blow came with its hands never slowing, and cut nothing, playtest)
       cutChance = 0.75,        --   share that cut (the rest leave a hit mark, see hitMarks; with the marks off all cut)
     },
     hitWindow = 0.6,           -- seconds before death the game's last hit on her still counts as the killing blow
@@ -627,6 +679,7 @@ return {
                                --   legs with each other (an arm went through her body in the ragdoll); a pair whose
                                --   bodies' shapes are within armGap cm
                                --   of each other as she goes limp is left out (overlapping bodies fling apart)
+    breastCollision = true,    --   and her forearms and hands with her breasts' bodies (her hands sank into her chest)
     armGap = 2,
     pieceCollision = true,     --   and a cut-off arm, leg or head with the rest of her (it fell through her); the pairs
                                --   touching where she is cut are left out, as armGap
@@ -676,6 +729,8 @@ return {
     shake = 0.6,               -- cm the hand on a stump trembles
     wrist = 0.6,               -- times the strength her wrists are held in line with the forearm while an arm moves
                                --   (0: limp, as they flopped about before)
+    reachMax = 0.88,           -- share of a limb's length its end is sent out to at most: the elbow or knee always a
+                               --   little bent (0.97 reached with her arms straight as a mannequin's, playtest)
     drag = {                   -- a hand or foot planted and pulling (crawl, heels, scrabbling knees) moves her torso
       enabled = true,          --   along the floor up to speed cm/s, accel cm/s^2 at most: the floor's grip. Without
       speed = 35,              --   it every stroke swept the air and she stayed put (playtest)
@@ -759,6 +814,9 @@ return {
     duration = 8,              -- s from the first spasm to the last twitch (the death screen comes ~10 s in)
     faceAgonal = 2.5,          -- with body off (her face alone): s of winces and gasps before her last gasp
     faceDuration = 5,          --   and s to the last tic (8 ran on too long, playtest)
+    blinks = 0.3,              --   chance a wince, gasp or tic in her first seconds comes with a blink (later ones
+                               --   are slow blinks, slower as she goes)
+    glances = 0.2,             --   chance her eyes dart a little aside and back with one (later: drift, smaller)
     body = false,              -- her body convulses too; off: it lies still and her face alone moves (winces with a moan,
                                --   gasps, a swallow, sobs, tics on one side, her jaw trembling or lip quivering, her
                                --   eyes rolling up, sighs, her eyelids fluttering)
@@ -851,6 +909,14 @@ return {
     capeKg = 0.12,             -- each of its links then weighs this (they hang off the 1.4 kg clavicle, not the arm)
     capeSwing = 45,            -- degrees the cape swings at the shoulder, each way
     capeTwist = 20,            -- degrees it turns about itself there
+    jiggle = {                 -- Jiggle After Death (experimental, off by default): her breasts' bodies sway on a
+      enabled = false,         --   damped spring of their own in the ragdoll instead of riding her chest locked
+      swing = 12,              --   degrees each way they may swing from where they sat as she died
+      twist = 6,               --   degrees they may turn about themselves
+      stiffness = 600,         --   the spring back to there (higher: a quicker, tighter bounce)
+      damping = 12,            --   how fast it settles (higher: less bounce, 0: it never stops)
+      kg = 0.4,                --   what each weighs then
+    },
     buzzLog = false,           -- log which bodies shake over a ragdoll's first 2 s (reads every body every tick)
     bisect = false,            -- buzz hunt: F7 / F11 ragdolls take turns at 1 as it is, 2 plain engine
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s
@@ -983,6 +1049,8 @@ return {
     bladeChance = 0.85,        --   ...along her swing (her right hand's arc) when she swung, else a rolled kind
     swingMinSpeed = 250,       -- cm/s her hand must reach to count as a swing
     swingWindow = 0.5,         -- seconds of her hand's path before the hit (else before its ragdoll) her swing is looked for in
+    hitQuiet = 0.6,            -- seconds after a blow on her her hand's moves aren't her blows on a live one (Sandbox
+                               --   Bosses' stuck check; none while she is dead)
     hitWindow = 1.0,           -- seconds a hit on its mesh is where the killing blow landed (moved onto its body when
                                -- the game put it off it)
     odds = { limb = 0.55, head = 0.3, torso = 0.15 }, -- a rolled kill (torso: across the waist; never a split)
@@ -1044,12 +1112,19 @@ return {
     -- each: key (pick), alias, label, CharacterTable ID and row, its Blueprint, face (cut with Eve's rules: the face
     -- goes with the head), distance (cm in front of her). All on Bip001 skeletons Eve's cuts know (Scarlet on hers)
     kinds = {
+      -- (physics: its body's physics asset as the game has it, put back over an outfit mod's: bosses.lua own_physics)
       { key = "tachy", alias = "B_Tachy", label = "Tachy (boss)", id = 50210, row = "M_Tachy", face = true, distance = 700,
-        bp = "/Game/Art/Character/Monster/CH_M_NA_21/Blueprints/CH_M_NA_21_Blueprint" },
+        bp = "/Game/Art/Character/Monster/CH_M_NA_21/Blueprints/CH_M_NA_21_Blueprint",
+        physics = "/Game/Art/Character/Monster/CH_M_NA_21/CH_M_NA_21_Body_Physics" },
       { key = "raven", alias = "B_Raven", label = "Raven (boss)", id = 50530, row = "M_Raven", face = true, distance = 700,
         bp = "/Game/Art/Character/Monster/CH_M_NA_53/Blueprints/CH_M_NA_53_Blueprint" },
       { key = "scarlet", alias = "B_Scarlet", label = "Scarlet (boss, DLC)", id = 59610, row = "M_Scarlet", face = true, distance = 700,
         bp = "/Game/DLC_2/Art/Character/Monster/CH_M_NA_961/Blueprints/CH_M_NA_961_Blueprint" },
+      -- the Royal Guard Sister (the Wasteland's Royal Guard fight: M_RoyalGuardFemale, an elite immortal as the bosses
+      -- are; her actor is Rael's, CH_NPC_Rael, on Bip001 with a face mesh of its own)
+      { key = "royalguard", alias = "B_RoyalGuard", label = "Royal Guard Sister", id = 50500, row = "M_RoyalGuardFemale", face = true,
+        distance = 600, bp = "/Game/Art/Character/NPC/CH_NPC_Rael/Blueprints/CH_NPC_Rael_Blueprint",
+        physics = "/Game/Art/Character/NPC/CH_NPC_Rael/CH_NPC_Rael_Physics" },
     },
   },
   glassCannon = {              -- realistic glass cannon (glass.lua); Page Down turns it on and off in game (dev only)

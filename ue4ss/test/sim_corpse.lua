@@ -114,5 +114,36 @@ passive[r2:GetAddress()] = nil
 for _ = 1, 8 do F.t = F.t + 0.1; E.grab_tick(pawn, herMesh) end
 check(E.grab_now() ~= nil, "the same, fighting: a grab")
 
+-- a Tachy spawned here whose physics asset was just put back (bosses.own_physics): its bodies came simulating, no
+-- death; once the hold is over the same is her death (playtest: cut and thrown across the map as she came in)
+local B = dofile("ue4ss/Mods/StellarBladeGore/Scripts/bosses.lua")
+B.init({ tune = tune, try = try, valid = valid, log = ctx.log })
+local dies = 0
+ctx.bosses.prepare = function() return nil end
+ctx.bosses.adopted = function(a, e, mine) if mine then e.physHold = os.clock() + 1 end end
+ctx.bosses.died = function() dies = dies + 1 end
+ctx.bosses.kinematic = B.kinematic
+tune.enemies.push = 1
+local tsim = true
+local tm = F.obj("TachyMesh", "SkeletalMeshComponent", { SkeletalMesh = F.obj("CH_M_NA_21_Body", "SkeletalMesh") })
+tm.IsSimulatingPhysics = function() return tsim end
+tm.SetSimulatePhysics = function(_, x) tsim = x end
+tm.SetAllBodiesSimulatePhysics = function(_, x) tsim = x end
+tm.GetSocketLocation = function() return v(400, 0, 100) end
+local tachy = F.obj("CH_M_NA_21_Blueprint_C_1", "CH_M_NA_21_Blueprint_C", { Mesh = tm, bActorIsBeingDestroyed = false })
+tachy.K2_GetActorLocation = function() return v(400, 0, 100) end
+pawn.Controller = { ServerRequest_CreateActor = function() end }
+pawn.K2_GetActorLocation = function() return v(0, 0, 100) end
+pawn.GetControlRotation = function() return { Pitch = 0, Yaw = 0, Roll = 0 } end
+local tk
+for _, k in ipairs(tune.bosses.kinds) do if k.key == "tachy" then tk = k end end
+E.spawn_kind(pawn, tk, 1)
+chars[1] = { obj = tachy, addr = tachy:GetAddress(), cls = "CH_M_NA_21_Blueprint_C" }
+F.t = F.t + 0.1; E.tick(pawn, herMesh)
+F.t = F.t + 0.1; E.tick(pawn, herMesh)
+check(dies == 0 and not tsim and has("kinematic again, not its death"), "a boss's bodies simulating right after its physics asset was put back: kinematic again, no death")
+F.t = F.t + 1.5; tsim = true; E.tick(pawn, herMesh)
+check(dies == 1, "simulating after the hold: its death")
+
 check(#F.errors == 0, "no errors (" .. table.concat(F.errors, "; ") .. ")")
 print(fails == 0 and "PASS" or "FAIL")

@@ -50,6 +50,10 @@ local function classes()
   return false
 end
 
+-- on and the mod there: the death screen's see-through way is only for it (on with the mod missing, the screen came up
+-- at once and took the mouse, and the death camera only turned with a button held: playtest)
+function M.active() return M.enabled() and classes() end
+
 local function drop(why)
   if valid(st.mgr) then
     try(function() st.mgr:K2_DestroyActor() end)

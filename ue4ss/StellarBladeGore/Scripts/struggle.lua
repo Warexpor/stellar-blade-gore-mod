@@ -41,7 +41,7 @@
 
 local M = {}
 local ctx, try, valid
-local function cfg() return ctx.tune.struggle or {} end
+local function cfg() return ctx and ctx.tune.struggle or {} end
 local function sub_cfg(k) return (ctx.tune.struggle or {})[k] or {} end
 local function log(s) ctx.log("struggle: " .. s) end
 
@@ -244,7 +244,7 @@ local function ik(s, t, l1, l2, pole)
   local d = sub(t, s)
   local u = norm(d)
   if not u then return nil end
-  local D = clamp(len(d), 0.25 * (l1 + l2), 0.97 * (l1 + l2))
+  local D = clamp(len(d), 0.25 * (l1 + l2), (cfg().reachMax or 0.88) * (l1 + l2))
   local ca = clamp((l1 * l1 + D * D - l2 * l2) / (2 * l1 * D), -1, 1)
   local n = norm(perp(pole, u)) or norm(perp(UP, u)) or vec(1, 0, 0)
   local e = add(add(s, scale(u, l1 * ca)), scale(n, l1 * math.sqrt(1 - ca * ca)))
@@ -275,7 +275,9 @@ local function servo(mesh, b, t, k, dt, mid)
   end
   local hold = st.hold[b] or vec(0, 0, 0)
   if ax and ang > 2 then
-    hold = add(hold, scale(ax, (c.hold or 8) * ang * dt))
+    -- (only what it summed along the way it is off now: the rest pushed the limb towards where its target had been,
+    -- and never wore off while it stayed more than 2 deg off, sending her arms off in odd directions)
+    hold = scale(ax, math.max(dot(hold, ax), 0) + (c.hold or 8) * ang * dt)
     local hl = len(hold)
     if hl > (c.holdMax or 200) then hold = scale(hold, (c.holdMax or 200) / hl) end
   else
@@ -289,8 +291,11 @@ local function servo(mesh, b, t, k, dt, mid)
   if (c.response or 0) > 0 then dv = scale(dv, 1 - math.exp(-dt / c.response)) end
   local cap = (c.accel or 2500) * k * dt
   if len(dv) > cap then dv = scale(dv, cap / len(dv)) end
+  -- (the parent turned back with the bone and the limb below it carried along: turned alone, the joint between them
+  -- came apart, the engine pulled it back together and took most of the turn with it, 44% kept with the elbows 106
+  -- deg off, playtest)
   push(mesh, b, dv)
-  push(mesh, p, scale(dv, -share(b, p)), true)
+  push(mesh, p, scale(dv, -share(b, p)))
   local set = add(rel, dv)
   st.trace[b] = { step = st.step, set = set }
   -- (the first steps of an act: the turn read back at once too, so the log tells a push the engine never took from

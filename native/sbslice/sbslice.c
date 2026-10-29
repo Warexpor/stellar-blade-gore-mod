@@ -6750,9 +6750,26 @@ static void text_cmd(const u16 *txt, int len)
     if (n > 0) {
         fs.data = (u16 *)ue_malloc((u64)(n + 1) * 2);
         if (!fs.data) return;
-        for (int i = 0; i < n; i++) fs.data[i] = src[i];
-        fs.data[n] = 0;
-        fs.num = fs.max = n + 1;
+        // a character past ASCII comes as \1 and 4 hex digits (the menu's translations): the script sends ASCII only,
+        // whatever UE4SS's Lua string to FString does with UTF-8
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            if (src[i] == 1 && i + 4 < n) {
+                u32 c = 0;
+                int ok = 1;
+                for (int k = 1; k <= 4; k++) {
+                    u16 h = src[i + k];
+                    if (h >= '0' && h <= '9') c = c * 16 + (h - '0');
+                    else if (h >= 'a' && h <= 'f') c = c * 16 + (h - 'a' + 10);
+                    else if (h >= 'A' && h <= 'F') c = c * 16 + (h - 'A' + 10);
+                    else ok = 0;
+                }
+                if (ok) { fs.data[m++] = (u16)c; i += 4; continue; }
+            }
+            fs.data[m++] = src[i];
+        }
+        fs.data[m] = 0;
+        fs.num = fs.max = m + 1;
     }
     // FText { TSharedRef<ITextData> (object, controller), u32 flags }
     struct { u64 obj, ctl; u32 flags, pad; } ft = { 0, 0, 0, 0 };

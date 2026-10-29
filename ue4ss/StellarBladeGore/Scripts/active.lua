@@ -1233,6 +1233,59 @@ local function hang_capes(pawn, mesh, g)
     .. (#skipped > 0 and (", cape left as the cut left it: " .. table.concat(skipped, ", ")) or "")
 end
 
+-- Jiggle After Death (jiggle.enabled, off by default): her breasts' bodies are locked solid to her chest in a
+-- ragdoll (physfix.lua's weld: on their authored 0.1-1 deg joints they slammed into the limits every frame and she
+-- buzzed), and her outfit's KawaiiPhysics is off, so they rode her chest as one with it. On, each lets go of the
+-- asset's joint and hangs off its body above (Spine2) by a joint of our own: no linear give, a cone of jiggle.swing
+-- degrees (jiggle.twist about itself) round where it sits as she dies, and a damped spring (jiggle.stiffness /
+-- damping) back to there, so it sways with her falls and landings without reaching a limit each frame. Each weighs
+-- jiggle.kg. Ours go in M.stop with the capes'; the asset's joint comes back when gore re-makes her physics
+local TORSO_BODY = { ["Bip001-Spine"] = true, ["Bip001-Spine1"] = true, ["Bip001-Spine2"] = true, ["Bip001-Neck"] = true }
+local function jiggle(pawn, mesh, g)
+  local j = g.jiggle
+  if not j or j.enabled ~= true or not run then return "" end
+  local list = bodies(mesh)
+  local has = {}
+  for _, b in ipairs(list) do has[b] = true end
+  local cls, done = nil, {}
+  for _, b in ipairs(list) do
+    if b:find("Breast") then
+      local p = b
+      for _ = 1, 16 do
+        p = try(function() return mesh:GetParentBone(FN[p]):ToString() end)
+        if not p or p == "None" or has[p] then break end
+      end
+      local at = p and TORSO_BODY[p] and try(function() local v = mesh:GetSocketLocation(FN[b]); return vec(v.X, v.Y, v.Z) end)
+      local rot = at and try(function() local r = mesh:GetSocketRotation(FN[b]); return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end)
+      cls = cls or (rot and try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintComponent") end))
+      local pc = rot and valid(cls) and try(function()
+        return pawn:AddComponentByClass(cls, false, { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }, false)
+      end)
+      if valid(pc) then
+        run.hung[#run.hung + 1] = pc
+        try(function() pc:K2_SetWorldLocationAndRotation(at, rot, false, {}, true) end)
+        try(function() pc:SetLinearXLimit(2, 0) end)
+        try(function() pc:SetLinearYLimit(2, 0) end)
+        try(function() pc:SetLinearZLimit(2, 0) end)
+        try(function() pc:SetAngularSwing1Limit(1, j.swing or 12) end)
+        try(function() pc:SetAngularSwing2Limit(1, j.swing or 12) end)
+        try(function() pc:SetAngularTwistLimit(1, j.twist or 6) end)
+        try(function() pc:SetAngularDriveMode(0) end) -- SLERP
+        try(function() pc:SetAngularOrientationTarget({ Pitch = 0, Yaw = 0, Roll = 0 }) end)
+        try(function() pc:SetOrientationDriveSLERP(true) end)
+        try(function() pc:SetAngularDriveParams(j.stiffness or 600, j.damping or 12, 0) end)
+        try(function() mesh:BreakConstraint(vec(0, 0, 0), at, FN[b]) end)
+        if try(function() pc:SetConstrainedComponents(mesh, FN[p], mesh, FN[b]); return true end) then
+          run.masses[b] = run.masses[b] or mass(mesh, b)
+          try(function() mesh:SetMassOverrideInKg(FN[b], j.kg or 0.4, true) end)
+          done[#done + 1] = b .. " on " .. p:gsub("Bip001%-", "")
+        end
+      end
+    end
+  end
+  return #done > 0 and (", jiggle: " .. table.concat(done, ", ")) or ", jiggle: no breast bodies on her chest"
+end
+
 function M.start(pawn, mesh, kind, dir)
   local g = cfg()
   if g.enabled == false then return end
@@ -1252,7 +1305,7 @@ function M.start(pawn, mesh, kind, dir)
   end
   local plain = run.variant == 2
   local parts = plain and {} or { set_masses(mesh, g, run), cap_spin(mesh, g) }
-  if not plain then parts[#parts + 1] = hang_capes(pawn, mesh, g) end
+  if not plain then parts[#parts + 1] = hang_capes(pawn, mesh, g); parts[#parts + 1] = jiggle(pawn, mesh, g) end
   if kind == "death" then
     parts[#parts + 1] = momentum(mesh, g)
     -- the death key pushes after ImpulseDelayTime (0.01 s), so its direction is read a couple of ticks later

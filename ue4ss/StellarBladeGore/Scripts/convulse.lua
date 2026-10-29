@@ -408,6 +408,11 @@ end
 -- one picked each time; every morph of it is jittered by tune.convulse.faceJitter (and a sided pair apart)
 local POSES = {
   lids = { upLid_down_L = -1, upLid_down_R = -1 },
+  -- a blink: the lids closing all the way for a moment, whatever the death face holds them at
+  blink = { upLid_down_L = 1, upLid_down_R = 1 },
+  -- her eyes darting off a little and back (both the same way)
+  glance = { { eye_left_L = 0.35, eye_left_R = 0.35 }, { eye_right_L = 0.35, eye_right_R = 0.35 },
+    { eye_up_L = 0.3, eye_up_R = 0.3 }, { eye_down_L = 0.3, eye_down_R = 0.3 } },
   jaw = { jaw_open = 1, nostrill_flare = 0.8 },
   brow = { brow_furrow = 1, brow_down = 0.6, innerBrow_up = 0.4, squint = 0.6 },
   mouth = { lip_stretch = 1, lipCorner_down = 0.6, nose_wrinkle = 0.6, upperLip_up = 0.4 },
@@ -705,6 +710,15 @@ local function face_event(x)
       local t0 = now + rnd(0, 0.2)
       for i = 0, math.random(1, 3) - 1 do face("lids", rnd(0.3, 0.6) * s, t0 + i * 0.16, 0.12) end
       what = what .. ", eyelids flutter"
+    elseif math.random() < (c.blinks or 0.3) then
+      -- (now and then twice, quick)
+      local n = math.random() < 0.2 and 2 or 1
+      for i = 0, n - 1 do face("blink", rnd(0.85, 1), now + rnd(0.1, 0.3) + i * 0.3, rnd(0.18, 0.26)) end
+      what = what .. (n == 2 and ", blinks twice" or ", a blink")
+    end
+    if math.random() < (c.glances or 0.2) then
+      face("glance", rnd(0.6, 1.0), now + rnd(0, 0.3), rnd(0.5, 0.9))
+      what = what .. ", eyes dart"
     end
     st.next = x + rnd(0.4, 1.0) / (0.5 + I)
   else
@@ -721,9 +735,13 @@ local function face_event(x)
     end
     local y = (x - agonal) / math.max(total - agonal, 1)
     local r = math.random()
-    if r < 0.25 then
+    if r < 0.12 then
       face("lids", rnd(0.15, 0.3) * s * (1 - 0.6 * y), now, 0.12)
       what = "eyelid flicker"
+    elseif r < 0.25 then
+      -- (slower and less far as she goes)
+      face("blink", rnd(0.8, 1) * (1 - 0.4 * y), now, rnd(0.3, 0.45) * (1 + y))
+      what = "a slow blink"
     elseif r < 0.4 then
       face("sigh", s * rnd(0.6, 1.0), now, rnd(1.0, 1.6))
       what = "a sigh"
@@ -735,6 +753,10 @@ local function face_event(x)
       local sd = side()
       face(tic_pose(sd), s * rnd(0.4, 0.7) * (1 - 0.6 * y), now, rnd(0.1, 0.15))
       what = (sd == "L" and "left" or "right") .. " tic"
+    end
+    if math.random() < (c.glances or 0.2) * (1 - 0.6 * y) then
+      face("glance", rnd(0.4, 0.8) * (1 - 0.5 * y), now + rnd(0.1, 0.4), rnd(0.7, 1.1))
+      what = what .. ", eyes drift"
     end
     st.next = x + rnd(0.5, 1.0) * (1 + y)
   end

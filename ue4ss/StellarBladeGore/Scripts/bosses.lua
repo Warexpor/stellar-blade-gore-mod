@@ -77,6 +77,8 @@ end
 function M.prepare(k)
   if cfg().enabled ~= true then return "Sandbox Bosses is off (F3 → Sandbox)" end
   if not ctx.gore or ctx.gore.native_state() ~= "ready" then return "sbslice.dll isn't up yet" end
+  -- (a new one may bring its bar: looked for again soon)
+  if M.bar_soon then M.bar_soon() end
   local r = rows[k.row]
   if r then r.t = os.clock(); return nil end
   local dt, rs = table_of()
@@ -133,23 +135,95 @@ end
 -- enemies.lua: a boss kind followed (mine: spawned here)
 -- one spawned here standing still (Passive Bosses): its hand by her is no grab (enemies.grab_tick)
 function M.is_passive(a) local x = live[a]; return x ~= nil and x.passive == true end
+-- its body's physics asset as the game made it (kind.physics): an outfit mod's mesh for the boss can point at one the
+-- game doesn't have (Naked Tachy, Nexus 3183: none the game can load, so its ragdoll had the wrong bodies or none and
+-- it went wild as it died; Nexus report). Put back when its own isn't one from the boss's folder; told either way.
+-- Its bodies are made again simulating (the mesh is set to, with no bodies till then): the pelvis simulating is an
+-- enemy's death (enemies.lua), so Tachy was cut and thrown across the map as she came in (playtest). They are made
+-- kinematic again at once, and for PHYS_HOLD s the enemies' watch does it again rather than take it for her death.
+-- It goes on her mesh asset too (a body made again from the mesh's then has hers). Her ragdoll still stopped
+-- within a second of her death, standing (playtests); starting it again with hers stretched her legs out across
+-- the map: her death's physics is logged (M.physics_line) and left to the game
+M.PHYS_HOLD = 1.0
+local function own_physics(e)
+  local want = e.kind.physics
+  local mesh = e.mesh or try(function() return e.obj.Mesh end)
+  if not (want and valid(mesh)) then return end
+  local pa = try(function() return mesh:GetPhysicsAsset() end)
+  local path = valid(pa) and try(function() return pa:GetFullName() end) or "none"
+  local sm = try(function() return mesh.SkeletalMesh:GetFName():ToString() end) or "?"
+  local dir = want:match("^(.*)/[^/]+$")
+  if valid(pa) and path:find(dir, 1, true) then
+    log(string.format("%s's body %s: its own physics asset (%s)", e.kind.alias, sm, path:match("([^/]+)$") or path))
+    return
+  end
+  local nm = want:match("([^/]+)$")
+  local full = want .. "." .. nm
+  local p = try(function() return StaticFindObject(full) end)
+  if not valid(p) and LoadAsset then
+    try(function() LoadAsset(full) end)
+    p = try(function() return StaticFindObject(full) end)
+  end
+  if not valid(p) then
+    log(string.format("%s's body %s has physics asset %s, not its own, and %s didn't load: left as it is", e.kind.alias, sm, path, nm))
+    return
+  end
+  local sk = try(function() return mesh.SkeletalMesh end)
+  if valid(sk) then try(function() sk.PhysicsAsset = p end) end
+  local onAsset = valid(sk) and try(function() return sk.PhysicsAsset:GetFName():ToString() end) == nm
+  try(function() mesh:SetPhysicsAsset(p, true) end)
+  e.physHold = os.clock() + M.PHYS_HOLD
+  local sim = M.kinematic(mesh)
+  local now = try(function() return mesh:GetPhysicsAsset():GetFName():ToString() end)
+    or try(function() return mesh.PhysicsAssetOverride:GetFName():ToString() end) or "?"
+  log(string.format("%s's body %s had physics asset %s (an outfit mod's mesh): the game's own %s put back (%s, %s)%s",
+    e.kind.alias, sm, path, nm, now == nm and "ok" or "FAILED, it has " .. now,
+    onAsset and "on its mesh asset too" or "its mesh asset NOT changed", sim and ", its bodies made kinematic (they came simulating)" or ""))
+  log(string.format("%s: %s", e.kind.alias, M.physics_line(e)))
+  return true
+end
+-- its bodies kinematic, as a live one's are; true when they were simulating
+function M.kinematic(mesh)
+  local was = try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true
+  try(function() mesh:SetSimulatePhysics(false) end)
+  try(function() mesh:SetAllBodiesSimulatePhysics(false) end)
+  return was
+end
+-- what its body's physics is made of, for the log: its component's override, its mesh asset's own, what the
+-- component answers, and whether its pelvis simulates (Naked Tachy playtests: at her death her ragdoll stopped and
+-- the asset read none, with hers put on the mesh asset at spawn)
+function M.physics_line(e)
+  local mesh = e.mesh
+  local function nm(o) return valid(o) and (try(function() return o:GetFName():ToString() end) or "?") or "none" end
+  local function ad(o) return valid(o) and string.format("%x", try(function() return o:GetAddress() end) or 0) or "-" end
+  local sk = try(function() return mesh.SkeletalMesh end)
+  return string.format("mesh %s %s, override %s, asset's own %s, answers %s, pelvis %s", nm(sk), ad(sk),
+    nm(try(function() return mesh.PhysicsAssetOverride end)), nm(valid(sk) and try(function() return sk.PhysicsAsset end)),
+    nm(try(function() return mesh:GetPhysicsAsset() end)),
+    try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true and "simulating" or "not simulating")
+end
 function M.adopted(a, e, mine)
   if not mine then return end
   live[a] = { e = e, k = e.kind, at = os.clock() }
+  own_physics(e)
   if rows[e.kind.row] then rows[e.kind.row].t = os.clock() end
 end
 
 -- the boss bar: the HUD's enemy info widget's HP bar (0..1), nil when none shows. Its class's default object is
--- never the one: FindFirstOf could hand that back, kept for good (valid), and no bar was ever read. Looked for every
--- 5 s while none is held (a scan of every object)
-local hud = { w = nil, next = 0 }
+-- never the one: FindFirstOf could hand that back, kept for good (valid), and no bar was ever read. Looked for while
+-- none is held (a scan of every object, 35 ms): 5 s after, then twice as long each time it isn't found, to a minute
+-- (every 5 s it was a stutter of its own while a passive boss, which never shows one, stood there)
+local hud = { w = nil, next = 0, wait = 5 }
+function M.bar_soon() if not valid(hud.w) then hud.next, hud.wait = math.min(hud.next, os.clock() + 1), 5 end end
 local function bar()
   local now = os.clock()
   if not valid(hud.w) and now >= hud.next then
-    hud.next, hud.w = now + 5, nil
+    hud.w = nil
     for _, x in ipairs(try(function() return FindAllOf(M.HUD) end) or {}) do
       if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then hud.w = x; break end
     end
+    hud.next = now + hud.wait
+    hud.wait = hud.w and 5 or math.min(hud.wait * 2, 60)
   end
   local w = hud.w
   if not valid(w) then return nil end
@@ -206,6 +280,10 @@ function M.died(pawn, a, e)
   if cfg().face ~= false and df.enabled ~= false and ctx.new_face then d.faceAt = os.clock() + (df.at or 0.3) end
   d.struggle = new_struggle(e)
   dead[a] = d
+  if e.kind.physics then
+    d.probe = { 0.1, 0.3, 0.6, 1.0, 2.0 }
+    log(string.format("%s %x at its death: %s", e.kind.alias, a, M.physics_line(e)))
+  end
   log(string.format("%s %x died (%s)", e.kind.alias, a, x.how or "the game's death"))
 end
 
@@ -314,6 +392,17 @@ local function read_hp(a, x, now)
   local got = x.hp ~= nil
   local res = ctx.gore.command(cmd)
   local hp, mhp, sh, msh = res:match("^ok [%a ]*(%-?[%d.]+) (%-?[%d.]+) (%-?[%d.]+) (%-?[%d.]+)$")
+  -- a maximum nowhere near its row's is some other pair of numbers (by its ratio: 0/250 and 0/15.27 on a Tachy of
+  -- 5456, 1/51.48 on a Raven of 12415, playtest: each put at its floor seconds after it came, down in a hit or two)
+  local m = tonumber(mhp)
+  if m and (m < r.mhp * 0.1 or m > r.mhp * 10) then
+    if not x.hpOdd then
+      x.hpOdd = true
+      log(string.format("%s %x: a read of its HP left (%s): its maximum isn't near %.0f", x.k.alias, a, res, r.mhp))
+    end
+    hp = nil
+    res = "not near its row's maximum"
+  end
   if hp then
     x.hp = { hp = tonumber(hp), mhp = tonumber(mhp), sh = tonumber(sh), msh = tonumber(msh) }
     x.hpAt = now + M.HP_EVERY
@@ -439,6 +528,10 @@ function M.tick(pawn)
         try(function() d.face.start(d.e.obj, d.e.mesh, d.e.kind.alias) end)
       end
       if d.face then try(function() d.face.tick() end) end
+      if d.probe and d.probe[1] and now - d.t >= d.probe[1] then
+        log(string.format("%s %x %.1f s after its death: %s", d.e.kind.alias, a, now - d.t, M.physics_line(d.e)))
+        table.remove(d.probe, 1)
+      end
       if d.struggle then
         local ok, err = pcall(d.struggle.tick, paused)
         if not ok then log(d.e.kind.alias .. " struggle: " .. tostring(err)); d.struggle = nil end

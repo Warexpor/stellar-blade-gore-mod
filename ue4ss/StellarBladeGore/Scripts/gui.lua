@@ -13,6 +13,25 @@ M.FONT = "/Game/Art/Font/Rajdhani-BoldM_Font.Rajdhani-BoldM_Font"
 -- the settings screen's own: labels in Mideum, values and tabs in Bold (M.FONT when one isn't found)
 M.FONT_MID = "/Game/Art/Font/Mideum.Mideum"
 M.FONT_BOLD = "/Game/Art/Font/Bold.Bold"
+-- the menu's languages (tune.language): each but English has its strings in lang_<code>.lua, by row (English is the
+-- rows' own). Mideum and Bold carry the game's face for each script, but use it only with the game itself set to
+-- that language (their sub-fonts are tied to it): the menu's text is in a copy of them with that face their own and
+-- no others, made the first time and kept for good (rooted through sbslice.dll: the engine's font cache keys on the
+-- font's address, and a copy freed and another made there would find the old one's)
+M.LANGS = { "en", "zh", "ja", "ko", "ru" }
+M.LANG_NAMES = { en = "English", zh = "简体中文", ja = "日本語", ko = "한국어", ru = "Русский" }
+-- each language's face for Mideum and for Bold (the ones they have for it)
+M.FACES = {
+  zh = { "/Game/Art/Font/china/MXiangHeHeiSCStd-Light", "/Game/Art/Font/china/MXiangHeHeiSCStd-Regular" },
+  ja = { "/Game/Art/Font/Japan/HeiseiKakuGoStd-W3", "/Game/Art/Font/Japan/HeiseiKakuGoStd-W5" },
+  ko = { "/Game/Art/Font/korean/KoPubDotumMedium", "/Game/Art/Font/korean/KoPubDotumBold" },
+  ru = { "/Game/Art/Font/Cyrillic/TT_Supermolot_Condensed_Light", "/Game/Art/Font/Cyrillic/TT_Supermolot_Condensed_Regular" },
+}
+-- how far up a language's font draws its line, a share of its size, over the game's (Rajdhani's): the menu's copies
+-- of the Chinese and Japanese faces put every line 0.6-0.8 of its size low (playtest screenshots: labels on a focused
+-- row's bottom edge, key caps' text below the cap). Korean and Russian sit right. tune.menuTextUp overrides
+M.TEXT_UP = { zh = 0.62, ja = 0.76 }
+M.fontCode = {} -- a language font's address -> its language
 -- the game's own key icons (80 x 80, the key in the middle of each)
 M.ICONS = "/Game/Art/UI/Texture/Interaction/"
 M.HINTS = {
@@ -36,14 +55,15 @@ M.HINTS = {
 M.ROWS = {
   { section = "Gore" },
   { key = "gore.enabled", label = "Cuts and Blood", kind = "bool", help = "Master switch for all cuts, stumps and blood, on Eve and on enemies. Off: deaths are plain ragdolls." },
-  { key = "gore.death.limb", label = "Limb Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the arm or leg nearest the hit comes off." },
-  { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the head comes off." },
-  { key = "gore.death.torso", label = "Waist Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut in two at the waist, leaning a little at random." },
-  { key = "gore.death.split", label = "Vertical Split Chance", kind = "num", min = 0, max = 100, step = 1, help = "Weight against the other chances: the body splits in two from head to hips. Like the others it is rolled when Blade Decides leaves the cut to chance (a tracked blade decides first); set only this one above 0 and every death splits." },
-  -- (parked) { key = "gore.death.diagonal", label = "Diagonal Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Blade Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut from over one shoulder down to the other hip; the head and the other arm go one way, that arm and the legs the other." },
+  { key = "gore.death.limb", label = "Limb Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the arm or leg nearest the hit comes off." },
+  { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the head comes off." },
+  { key = "gore.death.torso", label = "Waist Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut in two at the waist, leaning a little at random." },
+  { key = "gore.death.split", label = "Vertical Split Chance", kind = "num", min = 0, max = 100, step = 1, help = "Weight against the other chances: the body splits in two from head to hips. Like the others it is rolled when Hit Decides leaves the cut to chance (a tracked blade decides first); set only this one above 0 and every death splits." },
+  { key = "gore.noSplits", label = "No Vertical Splits", kind = "bool", help = "Off by default. On: she is never split in half from head to hips, by any blow, chance or hit after her death. A blade down her length takes the limbs it crossed instead, and the split chance goes to the others." },
+  -- (parked) { key = "gore.death.diagonal", label = "Diagonal Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut from over one shoulder down to the other hip; the head and the other arm go one way, that arm and the legs the other." },
   { key = "gore.death.moreLimbs", label = "Extra Limb Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a limb cut takes the next nearest limb too (0-1), and a third at the same chance again. At 0.35: 35% two or more limbs, 12% three. Rolled limb cuts only; a tracked blade cuts every limb it crosses." },
   { key = "gore.followUpCuts", label = "Follow-up Cuts", kind = "bool", help = "One swing cuts everything it went through: both arms and the body, say. Off: one cut a swing, the body when the blade went through it, else the limb it met first (Extra Limb Chance does nothing either). A laser trap still cuts along its beam." },
-  { key = "gore.bladeFollow", label = "Blade Decides", kind = "num", min = 0, max = 1, step = 0.05, help = "Share of deaths with a tracked blade where the blade alone decides what is cut (0-1). The rest roll the chances above. At 1 most deaths are waist cuts or splits, since a blade mostly crosses her body." },
+  { key = "gore.bladeFollow", label = "Hit Decides", kind = "num", min = 0, max = 1, step = 0.05, help = "Share of deaths with a tracked blade where the blade alone decides what is cut (0-1). The rest roll the chances above. At 1 most deaths are waist cuts or splits, since a blade mostly crosses her body." },
   -- (parked) { key = "gore.diagonal.enabled", label = "Diagonal Cuts", kind = "bool", help = "Cuts from over one shoulder down to the other hip: rolled by Diagonal Cut Chance, and from a tracked blade slanting across her body (20-60 degrees off her spine), which otherwise came out a waist cut or a split. Off: none." },
   { key = "gore.oddsNear.enabled", label = "Chances Follow the Hit", kind = "bool", help = "The chances above lean to what is near where the blow landed: a swing at her waist cuts the waist, a nearby arm or leg, or splits her if it came down her length, never her head; a blow at her neck mostly beheads. Set only one chance above 0 and every death still does that one, wherever it hit. Off: the chances as they are." },
   { key = "gore.oddsNear.floor", label = "   Far Part Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "With Chances Follow the Hit: share of its chance a part far from the hit keeps (0-1). 0: never (a waist swing never beheads), 0.1: now and then, 1: as if off." },
@@ -60,7 +80,7 @@ M.ROWS = {
   { key = "deathScreen", label = "Death Screen", kind = "list", values = { "game", "delay", "key" },
     names = { game = "Instant", delay = "Delayed", key = "On Press" },
     help = "When the death screen appears. Instant: as the game shows it. Delayed: after Death Screen Delay. On Press: only when you press Hold the Death (Shift+F4, or D-pad down + R1 held for a second, unless rebound), which also brings it up early or hides it again." },
-  { key = "customizedRagdoll", label = "Customized Ragdoll Support", kind = "bool", help = "Off by default. For Customized Ragdoll (Nexus 3884) installed alongside: its death camera instead of the Free Camera, and the death screen up at once but invisible, its keys (F / R) working, no holding needed (Hold the Death, Shift+F4, shows it). This mod's ragdoll, cuts, struggle and face stay as they are; that mod's own ragdoll physics are kept off her." },
+  { key = "customizedRagdoll", label = "Customized Ragdoll (Redundant)", kind = "bool", help = "Off by default. For Customized Ragdoll (Nexus 3884) installed alongside: its death camera instead of the Free Camera, and the death screen up at once but invisible, its keys (F / R) working, no holding needed (Hold the Death, Shift+F4, shows it). This mod's ragdoll, cuts, struggle and face stay as they are; that mod's own ragdoll physics are kept off her." },
   { key = "hideHud", label = "Hide HUD on Death", kind = "bool", help = "Hides the HUD (HP bar, skills, minimap, notices) through a death, so the body lies on a clean screen. The death screen still comes up as Death Screen says. Off: the HUD stays up, as in the game." },
   { key = "reviveAt", label = "Death Screen Delay", kind = "num", min = 1, max = 60, step = 1, unit = " s", help = "Seconds into a death before the death screen (and the revive item screen) shows. Only used with Death Screen set to Delayed." },
   { key = "gore.voice.enabled", label = "Death Scream", kind = "bool", help = "Eve cries out, from her own voice recordings, the moment she dies. Off: only the game's own death voice." },
@@ -87,9 +107,10 @@ M.ROWS = {
   { key = "active.push", label = "Death Push", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "How hard the killing blow throws Eve's body, on top of the game's own throw (1: default, 0: the game's alone, 2: twice the default)." },
   { key = "active.stiffness", label = "Ragdoll Stiffness", kind = "num", min = 0, max = 3, step = 0.25, help = "Muscle tone in her ragdoll as she falls. 0: limp from the start, 1: default (firm, going limp as she lands), 2-3: she holds her shape longer." },
   { key = "active.neutral.enabled", label = "Relaxed Pose In Flight", kind = "bool", help = "Thrown by a hard hit, her joints are pulled towards a relaxed, curled pose (knees and elbows bent, arms forward) until she lands, instead of her limbs flying out straight." },
+  { key = "active.jiggle.enabled", label = "Jiggle After Death (Experimental)", kind = "bool", help = "Off by default, being tested. In her ragdoll her breasts sway and bounce on a soft spring with her falls and landings. Off: they stay locked to her chest, as before (loose, they used to shake her on the floor)." },
   { section = "Enemies" },
   { key = "enemies.enabled", label = "Enemy Gore", kind = "bool", help = "Cuts and blood on humanoid enemies killed within 25 m of Eve." },
-  { key = "enemies.afterDeath.enabled", label = "Attacks After Death (experimental)", kind = "bool", help = "Off by default, being tested. After Eve dies, the enemies around her keep at her body for 10 s: those within 4.5 m play their own attacks at it, and their weapons cut it through Hits After Death." },
+  { key = "enemies.afterDeath.enabled", label = "Attacks After Death (Experimental)", kind = "bool", help = "Off by default, being tested. After Eve dies, the enemies around her keep at her body for 10 s: those within 4.5 m play their own attacks at it, and their weapons cut it through Hits After Death." },
   { key = "enemies.cutChance", label = "   Cut Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a kill cuts something off (0-1): along your swing when you swung, else a limb, the head or a waist cut at random." },
   { key = "enemies.pushScale", label = "Death Throw", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "Scales the game's own throw of a dying enemy (1: as the game, 0: it drops on the spot, 2: twice as far). Works with Enemy Gore off too." },
   { key = "enemies.push", label = "Extra Death Push", kind = "num", min = 0, max = 1000, step = 50, unit = " cm/s", help = "Speed added to every enemy death along the blow, slightly upward, on top of Death Throw (0: none). Works with Enemy Gore off too." },
@@ -107,9 +128,9 @@ M.ROWS = {
   { key = "gore.lowArm.healAt", label = "   Grows Back At", kind = "num", min = 0.3, max = 1, step = 0.01, pct = true, help = "With Grows Back With HP: the share of her HP bar at which the arm grows back (90% by default)." },
   { key = "gore.lowArm.effect", label = "Regrow Effect", kind = "bool", help = "On by default. A part cut off her alive (Lose Arm at Low HP's arm, F9's) dissolves back in with a glow when it comes back (a camp rest, Grows Back With HP). Off: it is back at once, with no effect." },
   { section = "Sandbox" },
-  { key = "bosses.enabled", label = "Sandbox Bosses", kind = "bool", help = "Off by default. Spawn Tachy, Raven or Scarlet in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
-  { key = "bosses.pick", label = "   Boss", kind = "list", values = { "tachy", "raven", "scarlet" },
-    names = { tachy = "Tachy", raven = "Raven", scarlet = "Scarlet (DLC)" }, help = "With Sandbox Bosses on: the one Spawn Boss brings in." },
+  { key = "bosses.enabled", label = "Sandbox Bosses (Experimental)", kind = "bool", help = "Off by default. Spawn Tachy, Raven, Scarlet or a Royal Guard Sister in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
+  { key = "bosses.pick", label = "   Boss", kind = "list", values = { "tachy", "raven", "scarlet", "royalguard" },
+    names = { tachy = "Tachy", raven = "Raven", scarlet = "Scarlet (DLC)", royalguard = "Royal Guard Sister" }, help = "With Sandbox Bosses on: the one Spawn Boss brings in." },
   { key = "bosses.hpScale", label = "   Boss HP", kind = "num", min = 0.05, max = 1, step = 0.05, pct = true, help = "With Sandbox Bosses on: their HP and shield, as a share of the game's (25%: a quarter). Takes effect for the next boss once none you spawned is up." },
   { key = "bosses.passive", label = "   Passive Bosses", kind = "bool", help = "With Sandbox Bosses on: a boss you spawned stands where it is and never attacks, so you can cut it at will. Off again, it fights." },
   { key = "bosses.struggle", label = "   Boss Struggle", kind = "bool", help = "With Sandbox Bosses and Death Struggle on: a boss with a limb cut off struggles on the floor before it dies, as Eve does." },
@@ -117,12 +138,17 @@ M.ROWS = {
   { button = "call", call = "bosses.spawn_pick", label = "Spawn Boss", help = "With Sandbox Bosses on: the boss picked above, 7 m in front of Eve, facing her. It fights at once." },
   { button = "call", call = "bosses.remove", label = "Remove Spawned", help = "Every boss and enemy spawned here goes, corpses too." },
   { section = "Camera" },
-  { key = "cameraStill", label = "Free Camera", kind = "bool", help = "At a death the camera stops riding her pawn and holds where it is until she gets up. Turn it with the mouse or right stick; fly it with WASD, Q/E or the left stick and triggers (Shift: faster)." },
+  { key = "cameraStill", label = "Free Camera", kind = "bool", help = "At a death the camera stops riding her pawn and holds where it is until she gets up. Turn it with the mouse or right stick; fly it with WASD, Q/E or the left stick and triggers (Shift: faster); zoom with the mouse wheel or the D-pad (up in, down out), right up to her." },
   { key = "cameraMouse", label = "   Mouse Sensitivity", kind = "num", min = 0.5, max = 10, step = 0.5, help = "How fast the mouse turns the death camera." },
   { key = "cameraStick", label = "   Stick Sensitivity", kind = "num", min = 30, max = 400, step = 10, help = "How fast the right stick turns the death camera, in degrees a second at full tilt." },
-  { key = "cameraTrack", label = "   Follow Strength", kind = "num", min = 0, max = 10, step = 0.5, help = "How quickly the death camera slides sideways after her body, never up or down (0: it stays put). It stops following once you fly it." },
+  { key = "cameraBody", label = "   Follow Her Body", kind = "bool", help = "On by default. The death camera stays locked on her body as it falls and tumbles, up and down too, while you turn and zoom round it. It stops following once you fly it. Off: it only slides after her on the level (Follow Strength)." },
+  { key = "cameraFlyAfter", label = "   Fly After", kind = "num", min = 0, max = 10, step = 0.5, unit = " s", help = "Seconds into her death before WASD, Q/E or the left stick and triggers fly the camera. Till then it stays locked on her body while you turn and zoom round her; the first fly press after that lets go of her and flies it." },
+  { key = "cameraBodyBone", label = "   Follow Point", kind = "list", values = { "upper", "pelvis" },
+    names = { upper = "Upper Body", pelvis = "Pelvis" }, help = "Which part of her the death camera follows and turns round: her upper body (chest) or her pelvis." },
+  { key = "cameraTrack", label = "   Follow Strength", kind = "num", min = 0, max = 10, step = 0.5, help = "With Follow Her Body off: how quickly the death camera slides sideways after her body, never up or down (0: it stays put). It stops following once you fly it." },
   { key = "cameraMove", label = "   Fly Speed", kind = "num", min = 100, max = 2000, step = 50, unit = " cm/s", help = "How fast the death camera flies (Shift: three times that). It stays within 15 m of where it started." },
   { section = "Mod" },
+  { key = "language", label = "Language", kind = "list", values = M.LANGS, names = M.LANG_NAMES, help = "The language of this menu: English, Chinese (Simplified), Japanese, Korean or Russian. The rest of the mod (settings.lua, the log, the README) stays in English." },
   { key = "menuPadIcons", label = "Controller Icons", kind = "list", values = { "xbox", "playstation" },
     names = { xbox = "Xbox", playstation = "PlayStation" }, help = "Which controller's buttons this menu shows when you use a controller." },
   { key = "fewerGC", label = "Fewer GC Hitches", kind = "bool", help = "Stops the engine forcing a garbage collection each time it unloads part of the map, one of the causes of the game's own half-second freezes. Its regular pass once a minute still runs. Off: the game's own behaviour. Takes effect within a minute." },
@@ -157,8 +183,37 @@ M.PAD_NAMES = {
   playstation = { "Cross", "Circle", "Square", "Triangle", "L1", "R1", "L2", "R2", "L3", "R3", "Up", "Down", "Left",
     "Right", "Create", "Options" },
 }
+-- the menu in the language picked: its strings (nil for English), loaded once
+M.lang = {}
+local function lang()
+  local code = ctx.tune.language
+  if not M.FACES[code] then return nil, "en" end
+  if M.lang[code] == nil then
+    local ok, t = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/lang_" .. code .. ".lua")
+    if not ok or type(t) ~= "table" then log("menu: lang_" .. code .. ".lua not read: " .. tostring(t)); t = false end
+    M.lang[code] = t
+  end
+  return M.lang[code] or nil, code
+end
+local function row_id(r) return r.key or r.call or (r.button and ("button." .. r.button)) end
+local function row_tr(r) local L = lang(); return L and L.rows and L.rows[row_id(r)] end
+-- (a sub-setting keeps its indent: the rows' look of it)
+local function label_of(r)
+  local t = row_tr(r)
+  if not (t and t[1]) then return r.label end
+  return (r.label:match("^%s*") or "") .. t[1]
+end
+local function help_of(r)
+  local t = row_tr(r)
+  if not (t and t[2]) then return r.help end
+  local L = lang()
+  if r.kind == "key" and L.ui and L.ui.keySuffix then return t[2] .. " " .. L.ui.keySuffix end
+  return t[2]
+end
+local function ui_text(s) local L = lang(); return L and L.ui and L.ui[s] or s end
+local function tab_name(s) local L = lang(); return L and L.tabs and L.tabs[s] or s end
 local function pad_show(combo)
-  if type(combo) ~= "table" or #combo == 0 then return "None" end
+  if type(combo) ~= "table" or #combo == 0 then return ui_text("None") end
   local names = M.PAD_NAMES[ctx.tune.menuPadIcons == "xbox" and "xbox" or "playstation"]
   local out = {}
   for i, k in ipairs(combo) do
@@ -329,17 +384,21 @@ end
 
 local function value_text(row)
   if row.kind == "key" then
-    if M.state.capture and M.state.capture.id == row.id then return "Press a key..." end
-    return ctx.keys.show(ctx.keys.binding(row.id))
+    if M.state.capture and M.state.capture.id == row.id then return ui_text("Press a key...") end
+    local k = ctx.keys.show(ctx.keys.binding(row.id))
+    return k == "None" and ui_text(k) or k
   end
   if row.kind == "pad" then
     local c = M.state.capture
-    if c and c.id == row.id then return #c.combo > 0 and (pad_show(c.combo) .. "...") or "Hold the buttons..." end
+    if c and c.id == row.id then return #c.combo > 0 and (pad_show(c.combo) .. "...") or ui_text("Hold the buttons...") end
     return pad_show(get(row.key))
   end
   local v = get(row.key)
-  if row.kind == "bool" then return v and "On" or "Off" end
-  if row.kind == "list" then return (row.names and row.names[v]) or tostring(v) end
+  if row.kind == "bool" then return ui_text(v and "On" or "Off") end
+  if row.kind == "list" then
+    local t = row.key ~= "language" and row_tr(row)
+    return (t and t.names and t.names[v]) or (row.names and row.names[v]) or tostring(v)
+  end
   if type(v) ~= "number" then return tostring(v) end
   -- (a share of her HP, 0-1, shown as a percent)
   if row.pct then return string.format("%d%%", math.floor(v * 100 + 0.5)) end
@@ -399,14 +458,81 @@ local function text_by()
   log(string.format("menu: its text by %s (sbslice: %s)", M.textBy or "nothing", tostring(r)))
   return M.textBy or nil
 end
+-- (to the DLL past ASCII as \1 and 4 hex digits, decoded there: what UE4SS makes of UTF-8 on its way to an FString
+-- isn't ours to count on)
+local function escaped(s)
+  if not s:find("[\128-\255]") then return s end
+  local ok, r = pcall(function()
+    return (s:gsub(utf8.charpattern, function(c)
+      local cp = utf8.codepoint(c)
+      if cp < 128 then return c end
+      return cp > 0xffff and "?" or string.format("\1%04x", cp)
+    end))
+  end)
+  return ok and r or s
+end
 local function set_text(tb, s)
   s = tostring(s or "")
   if M.textBy == "dll" then
+    s = escaped(s)
     local a = try(function() return tb:GetAddress() end)
     if a then ctx.gore.fire(string.format("T%x,%x;%s", a, M.setTextFn, s)) end
   else
     tb:SetText(FText(s))
   end
+end
+
+-- a language's copy of Mideum (w 1) or Bold (w 2), base the game's: its face found in memory (Mideum and Bold hold
+-- them all), the copy made in the transient package with base its template, rooted, its own typeface's fonts given
+-- that face and the sub-fonts dropped. Nil (base used) when sbslice.dll can't root it or any step doesn't take
+M.fonts = {}
+local function lang_font_make(code, w, base)
+  local name = "SBGore_Font_" .. code .. w
+  if M.fonts[name] ~= nil then return M.fonts[name] or nil end
+  M.fonts[name] = false
+  local g = ctx.gore
+  local function no(why) log("menu: no " .. name .. ": " .. why); return nil end
+  if not valid(base) then return no("the game's font isn't loaded") end
+  if not (g and g.native_ready and g.native_ready() and g.command) then return no("sbslice.dll isn't up") end
+  local path = M.FACES[code][w]
+  local face = StaticFindObject(path .. "." .. path:match("[^/]+$"))
+  if not valid(face) then return no(path .. " isn't loaded") end
+  local f = try(function() return StaticFindObject("/Engine/Transient." .. name) end)
+  if not valid(f) then
+    -- (the transient package: the game engine's outer; StaticFindObject("/Engine/Transient") throws "Name wasn't
+    -- long" in UE4SS, and the menu fell back to the game's fonts, a Simplified Chinese menu missing every character
+    -- the English game's sub-fonts don't have, playtest)
+    local eng = FindFirstOf("GameEngine")
+    local pkg = valid(eng) and try(function() return eng:GetOuter() end)
+    if not valid(pkg) then return no("no transient package") end
+    f = try(function() return StaticConstructObject(base:GetClass(), pkg, FName(name), 0, 0, false, false, base) end)
+    if not valid(f) then return no("not made") end
+  end
+  local r = g.command(string.format("o%x", f:GetAddress()))
+  if not r:match("^ok") then return no("not rooted: " .. r) end
+  local ok, err = pcall(function()
+    local cf = f.CompositeFont
+    local list = cf.DefaultTypeface.Fonts
+    local n = list:GetArrayNum()
+    if n == 0 then error("the copy has no fonts (its template not copied)") end
+    for i = 1, n do list[i].Font.FontFaceAsset = face end
+    local got = list[1].Font.FontFaceAsset
+    if not (valid(got) and got:GetAddress() == face:GetAddress()) then error("its face didn't take") end
+    cf.SubTypefaces:Empty()
+  end)
+  if not ok then return no(tostring(err)) end
+  log("menu: " .. name .. " made (" .. path:match("[^/]+$") .. ")")
+  M.fonts[name] = f
+  M.fontCode[f:GetAddress()] = code
+  return f
+end
+-- (a step that throws leaves the game's font, never the menu unmade: the language row's change closed the menu,
+-- playtest)
+local function lang_font(code, w, base)
+  local ok, f = pcall(lang_font_make, code, w, base)
+  if ok then return f end
+  log(string.format("menu: no SBGore_Font_%s%d: %s", code, w, tostring(f)))
+  return nil
 end
 
 -- ---- the widgets ----
@@ -443,6 +569,15 @@ local function build()
   local mid, bold = load_font(M.FONT_MID) or fallback, load_font(M.FONT_BOLD) or fallback
   log(string.format("menu: fonts found: %s %s %s", fallback and "yes" or "no", load_font(M.FONT_MID) and "yes" or "no",
     load_font(M.FONT_BOLD) and "yes" or "no"))
+  -- the language's, and each language's own name in its Bold (the Language row shows it whatever the menu is in)
+  local _, code = lang()
+  local enBold = bold -- (a key cap's text is Latin: the game's own, whatever the menu's language)
+  local names = { en = bold }
+  for c in pairs(M.FACES) do names[c] = lang_font(c, 2, load_font(M.FONT_BOLD)) end
+  if code ~= "en" then
+    mid = lang_font(code, 1, load_font(M.FONT_MID)) or mid
+    bold = names[code] or bold
+  end
   -- the viewport's height in layout units (the backdrop covers it)
   local VH, VW = 1080, 1920
   try(function()
@@ -482,8 +617,15 @@ local function build()
     o = o or {}
     n = n + 1
     local tb = StaticConstructObject(cls("/Script/UMG.TextBlock"), tree, FName("SBGore_Txt" .. n))
-    -- (the glyphs sit a little above their line's middle: 1/12 of the size down)
-    if o.mid then y = y + size / 12 end
+    -- (the glyphs sit a little above their line's middle: 1/12 of the size down; a language's font as far up again
+    -- as it draws low, M.TEXT_UP)
+    if o.mid then
+      y = y + size / 12
+      local fo = o.font or mid
+      local code = fo and M.fontCode[try(function() return fo:GetAddress() end) or 0]
+      local up = code and ((ctx.tune.menuTextUp or {})[code] or M.TEXT_UP[code])
+      if up then y = y - size * up end
+    end
     place(canvas:AddChildToCanvas(tb), x, y, o.boxw, o.boxw and size * 1.8, o.centre and 0.5, o.mid and 0.5)
     try(function()
       local f = tb.Font
@@ -529,7 +671,7 @@ local function build()
   local ui = { w = w, rows = {}, tabs = {}, K = K, tint = tint, gi = gi }
   stage("widgets: title")
   -- the title (the game's orange), the mod's name and version small under it
-  tint(text(101, 92, 23, "Gore Settings"), 0.716, 0.246, 0.034)
+  tint(text(101, 92, 23, ui_text("Gore Settings")), 0.716, 0.246, 0.034)
   tint(text(101, 196, 9, "STELLAR BLADE GORE MOD  " .. tostring(ctx.version or ""), { font = bold, spacing = 200 }), 0.25, 0.27, 0.3)
   -- tabs and rows on one grid: the same top, height and spacing, so a tab lines up with the row beside it
   local r0, rh, bh = 222, 58, 48
@@ -538,7 +680,7 @@ local function build()
   -- the tabs down the left
   for k, t in ipairs(tabs()) do
     local ty = r0 + (k - 1) * rh
-    ui.tabs[k] = { focus = focus(101, ty, 208, bh), txt = text(116, ty + bh / 2, 17, t.name, { font = bold, mid = true }) }
+    ui.tabs[k] = { focus = focus(101, ty, 208, bh), txt = text(116, ty + bh / 2, 17, tab_name(t.name), { font = bold, mid = true }) }
   end
   -- the rows: label left, value centred (at 945), arrows the same distance either side of it on the focused row
   local vc = 945
@@ -547,10 +689,19 @@ local function build()
     local ry = r0 + (i - 1) * rh
     local cy = ry + bh / 2
     ui.rows[i] = { focus = focus(385, ry, 790, bh),
-      lab = text(400, cy, 17, "", { wrap = 340, mid = true }),
+      lab = text(400, cy, 17, "", { wrap = 360, mid = true }),
+      -- (a label too long for one line at 17: this one, smaller, instead; a wrapped one ran into the next row)
+      labS = text(400, cy, 13, "", { wrap = 360, mid = true }),
       val = text(vc, cy, 18, "", { font = bold, centre = true, mid = true }),
       la = text(vc - 170, cy, 18, "<", { font = bold, centre = true, mid = true }),
       ra = text(vc + 170, cy, 18, ">", { font = bold, centre = true, mid = true }) }
+  end
+  -- the Language row's value: each language's name in its own font, one shown over the row's (moved to it)
+  ui.langVal, ui.langUp = {}, {}
+  for c, f in pairs(names) do
+    ui.langVal[c] = text(vc, 0, 18, M.LANG_NAMES[c], { font = f or bold, centre = true, mid = true })
+    ui.langUp[c] = f and ((ctx.tune.menuTextUp or {})[c] or M.TEXT_UP[c]) or 0
+    try(function() ui.langVal[c]:SetRenderOpacity(0) end)
   end
   -- a thin scroll bar right of the rows, for a tab longer than the screen
   ui.track = { x = 1196, y = r0, h = M.VISIBLE * rh - 10 }
@@ -572,6 +723,15 @@ local function build()
     -- icons, the text spilling out of them (playtest)
     local IS, GAP, KGAP, CAP, CW = 44, 30, 6, 30, 9 -- icon; between hints; between keys; cap height; a cap letter
     local function ulen(t) return (utf8 and utf8.len(t)) or #t end
+    -- (a hint's name as wide as it is drawn: a CJK character about two Latin ones)
+    local function wide(t)
+      local ok, w = pcall(function()
+        local n = 0
+        for _, cp in utf8.codes(t) do n = n + (cp >= 0x1100 and 2.25 or 1) end
+        return n
+      end)
+      return ok and w or #t
+    end
     local function caps_of(h)
       local c = h[3]
       if type(c) == "table" then return c end
@@ -590,10 +750,11 @@ local function build()
         keys[j] = { tex = tex, cap = cap, w = w }
         kw = kw + w + (j > 1 and KGAP or 0)
       end
-      local lw = #h[2] > 0 and (10 + #h[2] * 10) or 0
+      local name = ui_text(h[2])
+      local lw = #name > 0 and (10 + wide(name) * 10) or 0
       -- (a hint with no name shares the next one's: its keys sit close before the next keys)
       local g = i < #list and (h[2] == "" and KGAP * 2 or GAP) or 0
-      plan[i] = { keys = keys, kw = kw, lw = lw, g = g, name = h[2] }
+      plan[i] = { keys = keys, kw = kw, lw = lw, g = g, name = name }
       width = width + kw + lw + g
     end
     local x, cy, out = VW - 90 - width, VH - 73, {}
@@ -609,7 +770,7 @@ local function build()
         if not made then
           local w = math.max(CAP, ulen(k.cap) * CW + 14)
           out[#out + 1] = box(x, cy - CAP / 2, w, CAP, 0.95, 0.95, 0.95, 1)
-          local kt = text(x + w / 2, cy, 15, k.cap, { font = bold, centre = true, mid = true })
+          local kt = text(x + w / 2, cy, 15, k.cap, { font = enBold, centre = true, mid = true })
           tint(kt, 0.03, 0.035, 0.05)
           out[#out + 1] = kt
         end
@@ -643,6 +804,16 @@ local function build()
   return ui
 end
 
+-- how wide a line of text is drawn, in layout units, at size (points: 4/3 of a unit each): a CJK character a full
+-- em, a Hangul one nearly, Cyrillic and Latin about half (Rajdhani and Supermolot are narrow)
+function M.text_width(t, size)
+  local ok, n = pcall(function()
+    local n = 0
+    for _, cp in utf8.codes(t) do n = n + (cp >= 0x2E80 and 1 or cp >= 0x1100 and 0.95 or cp >= 0x400 and 0.55 or 0.47) end
+    return n
+  end)
+  return (ok and n or #t * 0.5) * size * 4 / 3
+end
 local function show(im, on) try(function() im:SetRenderOpacity(on and 1 or 0) end) end
 local function show_all(list, on) for _, x in ipairs(list) do show(x, on) end end
 local function render()
@@ -656,6 +827,7 @@ local function render()
   if s.sel > s.top + M.VISIBLE - 1 then s.top = s.sel - M.VISIBLE + 1 end
   -- (and no empty rows below a tab's end while rows above are scrolled off)
   if s.top > t.first and t.last - s.top + 1 < M.VISIBLE then s.top = math.max(t.first, t.last - M.VISIBLE + 1) end
+  local langShown
   for k, tab in ipairs(ui.tabs) do
     local on = k == tk
     show_all(tab.focus, on)
@@ -667,22 +839,38 @@ local function render()
     local row = idx <= t.last and M.ROWS[idx] or nil
     local on = row ~= nil and idx == s.sel
     show_all(r.focus, on)
-    local lab, val = row and row.label or "", row and row.key and value_text(row) or ""
-    try(function() set_text(r.lab, lab); set_text(r.val, val) end)
+    local lab, val = row and label_of(row) or "", row and row.key and value_text(row) or ""
+    -- (the Language row's value: its name in its own font, over the row's empty one)
+    local lv = row and row.key == "language" and ui.langVal and ui.langVal[get("language") or "en"] or nil
+    -- (too long for one line at 17: the smaller label)
+    local small = r.labS and M.text_width(lab, 17) > 360
+    try(function()
+      set_text(r.lab, small and "" or lab); set_text(r.val, lv and "" or val)
+      if r.labS then set_text(r.labS, small and lab or "") end
+    end)
+    if lv then
+      langShown = lv
+      local up = ui.langUp and ui.langUp[get("language") or "en"] or 0
+      try(function() lv.Slot:SetPosition({ X = ui.vc * ui.K, Y = (ui.r0 + (i - 1) * ui.rh + ui.bh / 2 + 18 / 12 - 18 * up) * ui.K }) end)
+      if on then tint(lv, 0.022, 0.025, 0.05) else tint(lv, 0.85, 0.85, 0.86) end
+    end
     -- (no arrows on a key: Enter takes a new one)
     local arrows = on and val ~= "" and row.kind ~= "key" and row.kind ~= "pad"
     show(r.la, arrows); show(r.ra, arrows)
     if on then
       tint(r.lab, 0.022, 0.025, 0.05); tint(r.val, 0.022, 0.025, 0.05)
+      if r.labS then tint(r.labS, 0.022, 0.025, 0.05) end
       tint(r.la, 0.02, 0.32, 0.9); tint(r.ra, 0.02, 0.32, 0.9)
     else
       -- a sub-setting (its label indented) a shade dimmer
       local c = lab:sub(1, 1) == " " and 0.38 or 0.6
       tint(r.lab, c, c, c * 1.03); tint(r.val, 0.85, 0.85, 0.86)
+      if r.labS then tint(r.labS, c, c, c * 1.03) end
     end
   end
+  for _, lv in pairs(ui.langVal or {}) do show(lv, lv == langShown) end
   local cur = M.ROWS[s.sel]
-  try(function() set_text(ui.help, cur and cur.help or "") end)
+  try(function() set_text(ui.help, cur and help_of(cur) or "") end)
   local padSet = ctx.tune.menuPadIcons == "xbox" and "xbox" or "playstation"
   for set, list in pairs(ui.keys) do show_all(list, set == (s.pad and padSet or "kb")) end
   -- the scroll bar, only on a tab longer than the screen
@@ -818,6 +1006,18 @@ local function step(dir)
   set(row.key, v)
   s.changed[row.key] = true
   if row.key == "dev" then M.refresh() end
+  -- (another language: the menu made again, in its strings and fonts)
+  if row.key == "language" then
+    if s.ui and valid(s.ui.w) then try(function() s.ui.w:RemoveFromParent() end) end
+    local built, ui = pcall(build)
+    -- (once more on a failure: a font that didn't take is left for the game's the second time)
+    if not built then
+      log("menu: couldn't be made again: " .. tostring(ui) .. ", trying once more")
+      built, ui = pcall(build)
+    end
+    s.ui = built and ui or nil
+    if not built then log("menu: couldn't be made again: " .. tostring(ui)) end
+  end
   -- (a row whose change shows at once on what is already out: its function on gore)
   if row.apply and ctx.gore and ctx.gore[row.apply] then
     local ok, err = pcall(ctx.gore[row.apply])

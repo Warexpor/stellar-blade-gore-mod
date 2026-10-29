@@ -140,6 +140,11 @@ check(#far.plays > 0, "the second one swings too (" .. table.concat(far.plays, "
 check(F.find("after death %(.-%): CH_M_NA_14_Blueprint_C_2's", d0) ~= nil, "the second one's blade (not the nearest's) cut her too")
 F.run(5, pawn)
 check(F.find("after death: over %(time up%)", d0) ~= nil, "over once the time is up")
+-- (their blades never slow between swings here, as a combo's hands didn't: each swing still cuts, rearm s after the
+-- last; a second hit right after her death cut nothing, playtest)
+local hits = 0
+for i = d0, #F.log_lines() do if F.log_lines()[i]:find("after death %(") then hits = hits + 1 end end
+check(hits >= 4, "a blow a swing, its weapon never slowing in between (" .. hits .. " hits)")
 check(det[1].bDead == false and det[1].TargetCancel == 0 and alive[1].CheckType == 0, "the trees put back as they were")
 check(near.mode == 0 and far.mode == 0, "their animation Blueprints given back")
 if fails > 0 then dump(d0, "after death"); dump(d0, "swing:") end
