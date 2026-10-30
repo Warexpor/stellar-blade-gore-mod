@@ -811,6 +811,15 @@ function M.pair(ob, ol, back, side)
   ob.tx, ob.ty = x, y
   if ol then ol.tx, ol.ty = x, y end
 end
+-- the spine bone a cut's frame reads her back off (back_on): one that stays with the limb whatever was cut before.
+-- Spine1 for all, and after a waist cut it rode her flying upper half: a thigh cut then got its back from that, the
+-- right thigh's bone and tubes turned anyhow and no longer the left's mirror image (playtest screenshot). The legs
+-- hang off Bip001-Spine, under the waist cut; the arms and spine off Spine1 and up, which go with them
+function M.back_bone(bone)
+  if not bone then return "Bip001-Spine1" end
+  if bone:find("Thigh") or bone:find("Calf") or bone:find("Foot") then return "Bip001-Spine" end
+  return bone:find("^Bip001%-[PSNH]") and not bone:find("%-[LR]%-") and bone or "Bip001-Spine1"
+end
 -- a cut bone's side for M.pair: -1 on her right, 1 on her left and down her middle
 function M.side_of(bone)
   return bone and bone:find("%-R%-") and -1 or 1
@@ -1988,10 +1997,36 @@ local function track_opening(q, cap_actor, o, comp, bone)
   end, bone, comp)
 end
 
-local POOL_EVERY = 3 -- ticks between updates (0.1 s)
+local POOL_EVERY = 3 -- ticks between updates (0.1 s); a pool's size follows every tick (pool_grow)
 local pool_n = 0
+-- every pool's size, every tick, up to the last ring the floor checks held (grown every 0.1 s and only up to each
+-- ring as it was checked, it spread in steps, a new stain put down a size larger each time, Nexus report). (On M:
+-- gore.lua is at Lua's 200 locals)
+function M.pool_grow()
+  local now = os.clock()
+  local dt = M.poolClock and math.min(now - M.poolClock, 0.1) or 0
+  M.poolClock = now
+  if dt <= 0 then return end
+  local grow = cfg().poolGrow or 5
+  -- (pure Lua but for the one resize a pool due one: a pool still growing was looked up and resized each tick, but
+  -- under 0.15 cm nothing is set, so a slow one is set every few ticks, a stopped one never)
+  for _, k in ipairs(trackers) do
+    local q = k.pool
+    if q and q.ok then
+      q.age = q.age + dt
+      -- fast at first, slowing down: 63 % of the way after poolGrow s
+      local rm = math.min(k.rmax, q.rmax or k.rmax)
+      local r = math.min(4 + (rm - 4) * (1 - math.exp(-q.age / grow)), q.ok)
+      if r - q.r > 0.15 and valid(q.d) then
+        q.r = r
+        try(function() q.d:SetWorldScale3D(vec(1, r, r)) end)
+      end
+    end
+  end
+end
 local function pools_tick()
-  if #trackers == 0 then return end
+  if #trackers == 0 then M.poolClock = nil; return end
+  M.pool_grow()
   pool_n = pool_n + 1
   if pool_n % POOL_EVERY ~= 0 then return end
   local g = cfg()
@@ -2039,13 +2074,12 @@ local function pools_tick()
         end
       end
       if k.pool and valid(k.pool.d) then
-        k.pool.age = k.pool.age + dt
-        -- fast at first, slowing down: 63 % of the way after poolGrow s
         local rm = math.min(k.rmax, k.pool.rmax or k.rmax)
         local r = 4 + (rm - 4) * (1 - math.exp(-k.pool.age / grow))
-        -- the next ring checked before it grows into it (one ring a pass, every pool's together under ringBudget)
+        -- the next ring checked a ring before it grows into it, so the floor checks stay ahead of its spread (one ring a
+        -- pass, every pool's together under ringBudget); pool_grow sizes it every tick up to the last that held
         k.pool.ok = k.pool.ok or 4
-        if r > k.pool.ok and not k.pool.stopped and ringBudget > 0 then
+        if r + 6 > k.pool.ok and k.pool.ok < rm and not k.pool.stopped and ringBudget > 0 then
           ringBudget = ringBudget - 1
           local ring = math.min(k.pool.ok + 6, rm)
           if M.ring_ok(k.pawn, k.pool.at, k.pool.n, ring) then k.pool.ok = ring
@@ -2056,11 +2090,6 @@ local function pools_tick()
               log(string.format("floor blood: a pool stopped at %.0f cm across, the floor not flat past it", k.pool.ok * 2))
             end
           end
-        end
-        r = math.min(r, k.pool.ok)
-        if r - k.pool.r > 0.2 then
-          k.pool.r = r
-          try(function() k.pool.d:SetWorldScale3D(vec(1, r, r)) end)
         end
       end
       if k.t + dt > life then
@@ -3180,11 +3209,11 @@ local function stage_cut(q)
   mark("lua: openings, ride bones")
   -- (and the spine bones the stubs look for her back on: back_on, and the cut bone's far end: the stump bone's axis)
   local far = PARTS[q.bone] and PARTS[q.bone].to
-  q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL, q.parent or q.bone, q.bone, "Bip001-Spine1", far } } })
+  q.posed = M.snap({ { q.mesh, { q.rideB, q.rideL, q.parent or q.bone, q.bone, M.back_bone(q.bone), far } } })
   mark("lua: snap")
   -- (the openings' shared frame from her back as posed at the cut, the snap's Spine1 or the spine bone cut)
   M.posed = q.posed
-  local back = q.ob and q.ob.z and norm(q.ob.z) and back_on(q.mesh, norm(q.ob.z), q.bone, true)
+  local back = q.ob and q.ob.z and norm(q.ob.z) and back_on(q.mesh, norm(q.ob.z), M.back_bone(q.bone), true)
   M.posed = nil
   M.pair(q.ob, q.ol, back, M.side_of(q.bone))
   mark("lua: back, pair")

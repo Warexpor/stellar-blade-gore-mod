@@ -1031,11 +1031,16 @@ end
 -- fall still playing 3-5 s in was taken by the neck's struggle and snapped mid animation, playtest)
 local function at_rest(anim)
   local c = cfg()
-  if st.t >= (anim and (c.animStartMax or 6) or (c.startMax or 2)) then return true end
   if not anim then
-    local v = rag() and rag().view()
+    -- (never in the air: startMax counts from her landing, as struggle.lua's)
+    local r = rag()
+    if r and r.aloft_now and r.aloft_now() > (c.air or 40) then st.down = 0; return false end
+    st.down = (st.down or 0) + st.dt
+    if st.down >= (c.startMax or 2) then return true end
+    local v = r and r.view()
     return v ~= nil and v.settled == true
   end
+  if st.t >= (c.animStartMax or 6) then return true end
   if st.t < 1.0 then return false end
   local p, hd = loc(st.mesh, "Bip001-Pelvis"), loc(st.mesh, "Bip001-Head")
   if not (p and hd) then return false end
@@ -1060,7 +1065,7 @@ function M.tick(paused)
     for _, c in pairs(st.chains) do c.till = c.till + dt; if c.t then c.t = c.t + dt end end
     return
   end
-  st.t = st.t + dt
+  st.t, st.dt = st.t + dt, dt
   local anim = ctx.animated and ctx.animated()
   if not anim and next(st.chains) then chains_drop("ragdoll") end
   if not anim and not (rag() and rag().view()) then

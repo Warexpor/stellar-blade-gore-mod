@@ -37,6 +37,13 @@ case("thighs", "Bip001-L-Thigh", v(0.1, 0, -1), v(1, 0.3, 0), v(-0.2, 1, 0))
 case("upper arms", "Bip001-L-UpperArm", n(v(0.3, 0.2, -1)), v(0, 1, 0.2), v(0.7, -0.7, 0.1))
 case("forearms", "Bip001-L-Forearm", n(v(0.4, -0.5, -1)), v(-1, 0, 0.4), v(0.1, 0.1, 1))
 case("raised arms", "Bip001-L-UpperArm", v(1, 0, 0.1), v(0, 0, 1), v(0, 1, 0))
+-- her back is read off a spine bone the limb stays on: after a waist cut Spine1 rides her flying upper half, and a
+-- thigh cut then took its back from that (its bone and tubes no longer the other thigh's mirror image, playtest)
+for _, b in ipairs({ "Bip001-L-Thigh", "Bip001-R-Thigh", "Bip001-L-Calf", "Bip001-R-Calf" }) do
+  check(M.back_bone(b) == "Bip001-Spine", b .. ": back off Bip001-Spine, under the waist cut")
+end
+check(M.back_bone("Bip001-L-UpperArm") == "Bip001-Spine1" and M.back_bone("Bip001-R-Forearm") == "Bip001-Spine1", "arms: back off Spine1, which they go with")
+check(M.back_bone("Bip001-Head") == "Bip001-Head" and M.back_bone("Bip001-Spine1") == "Bip001-Spine1", "spine cuts: their own bone")
 -- no back (back_on found nothing): the rim's axis still makes a frame
 local o = { z = v(0, 0, 1), x = v(1, 0, 0) }
 M.pair(o, nil, nil, 1)

@@ -2089,6 +2089,27 @@ M.bodies = bodies
 function M.severed(mesh, bone) return addr(mesh) == severedOn and severed[bone] == true end
 -- a body that simulates and that the half still shows
 function M.live(comp, bone) return live(comp, bone) end
+-- how far over the floor she is (cm, her pelvis or a piece's root on her, the highest; 0 with no floor found):
+-- struggle.lua and convulse.lua wait for her to land (a long fall from a ledge started them in mid-air, and their
+-- steering met the landing: her chest and arms stretched like rubber, then slid her along, Nexus report). Read at
+-- most every 0.25 s (a floor trace each)
+function M.aloft_now()
+  if not run or not valid(run.mesh) then return 0 end
+  if run.aloftAt and run.t - run.aloftAt < 0.25 and run.t >= run.aloftAt then return run.aloftV end
+  local comps, top, found = { run.mesh }, 0, false
+  for _, c in ipairs(extra) do comps[#comps + 1] = c end
+  for _, c in ipairs(comps) do
+    if valid(c) then local o = aloft(c); if o then found = true; if o > top then top = o end end end
+  end
+  -- (no floor within the trace's 10 m: still falling while her pelvis drops fast, else lying on something it misses;
+  -- not any speed: a struggle's own moves are that fast)
+  if not found and live(run.mesh, "Bip001-Pelvis") then
+    local vz = try(function() return run.mesh:GetPhysicsLinearVelocity(FN["Bip001-Pelvis"]).Z end)
+    if vz and vz < -300 then top = 1000 end
+  end
+  run.aloftAt, run.aloftV = run.t, top
+  return top
+end
 -- a twitch (convulse.lua) moves her for s seconds: she isn't settled meanwhile, and wakes without a "woken" line
 function M.twitch(s)
   if not run then return end

@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.5.4. See the [changelog](CHANGELOG.md).
+Version 0.5.5. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,14 +10,14 @@ Version 0.5.4. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.5.4.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.5.5.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.4`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.5`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -101,7 +101,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `active.jiggle.enabled` | `true` | Jiggle After Death (Experimental): in her ragdoll her breasts sway on a damped spring of their own (`swing`, `twist`, `stiffness`, `damping`, `kg` in `tune.lua`) instead of riding her chest locked. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` (On Press in the F3 menu) only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
 | `fewerGC` | `false` | Fewer garbage collection hitches: the engine no longer forces a pass every time it unloads part of the map (its regular pass once a minute still runs). Off puts the game's own behaviour back. |
-| `customizedRagdoll` | `false` | Support for [Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884) (F3 → Death, Customized Ragdoll (Redundant)): its death camera instead of the Free Camera, and the death screen up at once but invisible, its F / R working with no holding needed (Shift+F4 shows it). This mod's ragdoll, cuts, struggle and face stay as they are. |
+| `customizedRagdoll` | `false` | Support for [Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884) (settings.lua only, out of the F3 menu): its death camera instead of the Free Camera, and the death screen up at once but invisible, its F / R working with no holding needed (Shift+F4 shows it). This mod's ragdoll, cuts, struggle and face stay as they are. |
 | `hideHud` | `true` | The HUD (HP bar, skills, minimap, notices) is hidden through her death and comes back when she is up again. The death screen still follows `deathScreen`. |
 | `reviveAt` | 10 | Seconds into her death the screen comes up with `"delay"`. |
 | `holdPad` | D-pad down + R1 | Shift+F4 on the controller, both held for `holdPadFor` (1 s) (`false`: none). |
@@ -141,7 +141,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Voice mods** that replace Eve's death cries (`vo_eve_die_*`, e.g. Violent Death Mod) work as they are: her death cry plays their recordings. A mod that adds new sounds instead can be pointed at with `gore.voice.sounds` in `settings.lua`.
 - **Proper Death Expression** by blabmice is built in (`ZZ_StellarBladeGore_Face_P`), credited below. To install it anyway, delete `ZZ_StellarBladeGore_Face_P.*` from `Paks/~mods`: two paks with the same asset keep the game loading forever.
 - **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.
-- **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: turn on Customized Ragdoll Support (F3 → Death, `customizedRagdoll`). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. **Delete `ZZ_StellarBladeGore_Face_P.pak`, `.ucas` and `.utoc` from `Paks/~mods`**: its `death_expression_p` carries a death face of its own (and its camera, so keep that one), and with both the game loads forever (reported). Its face plays then. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
+- **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: set `customizedRagdoll = true` in settings.lua (no longer in the F3 menu). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. **Delete `ZZ_StellarBladeGore_Face_P.pak`, `.ucas` and `.utoc` from `Paks/~mods`**: its `death_expression_p` carries a death face of its own (and its camera, so keep that one), and with both the game loads forever (reported). Its face plays then. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
 - **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs). Blood and Dirt (parked, off by default) would put its own blood on her too if turned on in settings.lua.
 - **[ESE](https://www.nexusmods.com/stellarblade/mods/672)** (Shield and Destroyed) works alongside, in any load order: a part cut off her stays off when it puts her in another suit as her shield breaks or she dies.
 - **UUEPBS** (the body slider) works alongside: her sliders stay on through her deaths and cuts (before the next release, her deaths froze where she was cut).

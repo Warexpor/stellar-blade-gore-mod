@@ -1170,10 +1170,18 @@ function M.tick(paused)
       return
     end
     if not (v and v.mesh == mesh) then return end
+    -- (never in the air: startMax counts from her landing, so a fall off a ledge starts it once she is down)
+    if r.aloft_now and r.aloft_now() > (cfg().air or 40) then
+      if not st.airSaid then st.airSaid = true; log(string.format("waits: she is %.0f cm over the floor", r.aloft_now())) end
+      st.down = 0
+      return
+    end
+    st.down = (st.down or 0) + dt
+    if st.airSaid and not st.landSaid then st.landSaid = true; log(string.format("she landed %.1f s into her ragdoll", v.t)) end
     -- (from a quiet ragdoll she lies as she fell: a moment for her to sag into the floor)
     if st.plan0 then
-      if v.t < (cfg().quietWait or 0.4) then return end
-    elseif not v.settled and v.t < (cfg().startMax or 0.8) then return end
+      if st.down < (cfg().quietWait or 0.4) then return end
+    elseif not v.settled and st.down < (cfg().startMax or 0.8) then return end
     local alone = nil
     if st.plan0 then alone = st.plan0.alone == true end
     local plan, why = pick(mesh, alone)
@@ -1188,6 +1196,24 @@ function M.tick(paused)
     st.done = true
     log(string.format("stopped after %.1f s: her ragdoll ended", st.t))
     return
+  end
+  -- off a ledge mid-struggle (a crawl, a shove): no steering while she falls, the act cut short; on again once she
+  -- has been down startMax s (its clock waits meanwhile)
+  if r.aloft_now and r.aloft_now() > (cfg().air or 40) then
+    if not st.falling then
+      st.falling = true
+      log(string.format("%.1f s: she fell (%.0f cm over the floor): held till she lands%s", st.t, r.aloft_now(),
+        st.act and (", " .. st.act.name .. " cut short") or ""))
+      st.act = nil
+    end
+    st.down = 0
+    return
+  end
+  if st.falling then
+    st.down = (st.down or 0) + dt
+    if st.down < (cfg().startMax or 0.8) then return end
+    st.falling = nil
+    log(string.format("%.1f s: down again, on", st.t))
   end
   st.t = st.t + dt
   if st.t >= st.total then

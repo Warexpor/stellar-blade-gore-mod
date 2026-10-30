@@ -4,8 +4,13 @@
 -- targets and keep most of each turn they set (in game the log said 0% kept: there the engine or something of the
 -- mod's undid them; here nothing else should), and end with her death. What active.lua's settling does to her
 -- turns meanwhile is counted (every zeroing of them all is an event)
--- (sim_waist.lua runs it with WAIST_CUT set: her death cuts her across the waist, and her upper body struggles)
+-- (sim_waist.lua runs it with WAIST_CUT set: her death cuts her across the waist, and her upper body struggles;
+-- sim_struggle_air.lua with AIR_FALL: she dies falling, her pelvis dropping fast with no floor under her for 2 s, and
+-- neither the struggle nor her post-death movement may start before she lands: started in the air, their steering
+-- met the landing and stretched her like rubber, Nexus report)
 local WAIST = rawget(_G, "WAIST_CUT") == true
+local AIR = rawget(_G, "AIR_FALL") == true
+local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local F = require("fake")
 local E = require("eve")
 local R = require("rag")
@@ -65,7 +70,23 @@ local e0 = #F.events
 -- re-picked as the death face took more rolls: on 1 a short struggle had time for one act only)
 math.randomseed(rawget(_G, "STRUGGLE_SEED") or 10)
 E.s.hp = 0
+local falling = false
+if AIR then
+  local real = E.mesh.GetPhysicsLinearVelocity
+  rawset(E.mesh, "GetPhysicsLinearVelocity", function(m, b)
+    if falling and b and b:ToString() == "Bip001-Pelvis" then return vec(0, 0, -1200) end
+    return real(m, b)
+  end)
+  falling = true
+end
 E.die(true)
+if AIR then
+  F.run(2, pawn)
+  check(F.find("struggle: waits: she is", d0) ~= nil, "in the air: the struggle waits for her to land")
+  check(not F.find("struggle: stumps:", d0), "no struggle begun in the air")
+  check(not F.find("convulse: from ", d0), "no post-death movement begun in the air")
+  falling = false
+end
 F.run(18, pawn)
 local sg = lines(d0, "struggle: ")
 for _, x in ipairs(sg) do print("  | " .. x:sub(1, 230)) end
@@ -79,6 +100,7 @@ if WAIST then
 else
   check(F.find("struggle: stumps: .*right", d0) ~= nil, "the struggle began, her right arm's stump seen")
 end
+if AIR then check(F.find("struggle: she landed", d0) ~= nil, "it began once she landed") end
 local acts, kept, off = 0, {}, {}
 for _, x in ipairs(sg) do
   if x:find(" over: ") then

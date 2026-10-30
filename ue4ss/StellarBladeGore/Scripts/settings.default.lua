@@ -141,6 +141,9 @@ return {
     jiggle = {
       enabled = true,          -- experimental: her breasts sway on a spring of their own in the ragdoll (false: they
     },                         -- ride her chest locked, as ever)
+    weaponCut = {
+      enabled = true,          -- her sword breaks: cut in two where the killing blade crosses it, and always by a
+    },                         -- killing blow through her guard (false: it always falls whole)
   },
   deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and

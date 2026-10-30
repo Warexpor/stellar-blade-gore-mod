@@ -713,8 +713,11 @@ return {
     strength = 1.0,            -- times every speed and strength below (settings.lua's struggle.strength)
     time = { 5, 8 },           -- s it lasts, from her coming to rest to her death (8-12 dragged on, playtest)...
     length = 1.0,              --   ...times this (F3 -> Struggle Length)
-    startMax = 0.8,            -- s into the ragdoll it starts at the latest (else once she has come to rest; 2.5
+    startMax = 0.8,            -- s after she lands it starts at the latest (else once she has come to rest; 2.5
                                --   came far too late, playtest)
+    air = 40,                  -- cm: her pelvis higher than this over the floor is a fall: not started, or held till
+                               --   she is down (started in a fall off a ledge, its steering met the landing and
+                               --   stretched her chest and arms like rubber, Nexus report)
     rate = 60,                 -- times a second she is steered at most
     animated = false,          -- an animated death's fall: maimed, she goes limp as she lies once it rests (a quiet
     quietWait = 0.4,           --   ragdoll: no blow, no momentum) and struggles from there, quietWait s later. Off:
@@ -830,8 +833,9 @@ return {
                                --   wholeMouth_down); at 1 a gasp dropped her chin barely 1.4 cm, a wince's 0.5 cm
     faceIn = 0.8,              --   s the face's movements ease in over from the first one (it snapped from the death face
                                --   into a full wince as she came to lie still, playtest)
-    startMax = 2,              -- s after her death they begin at the latest (else once she lies still); the first
+    startMax = 2,              -- s after she lands they begin at the latest (else once she lies still); the first
                                --   spasm always has a moan
+    air = 40,                  -- cm: her pelvis higher than this over the floor is a fall: they wait for her landing
     animStartMax = 6,          -- the same for an animated fall, once its pelvis and head are both still (at 2 s the
                                --   neck's struggle took the head of a fall still playing and snapped it)
     settleAfter = 0.4,         -- s a ragdoll is kept awake after a movement, before it may settle again
