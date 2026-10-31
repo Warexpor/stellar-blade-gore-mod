@@ -8,6 +8,8 @@
 // Commands (from exec_slice, fields in hex, floats in its LocX/Y/Z and DirX):
 //   vf<actor>            find the stats: HP, MaxHP, Shield in LocX/Y/Z, MaxShield in DirX (her HUD's; MaxHP 0: refused)
 //   vr<actor>            read HP, MaxHP, Shield, MaxShield
+//   vb<actor>,<hp>,<sh>  read a sandbox boss by its row's maximums; pending: continue the bounded search next tick
+//   vB<actor>            forget that boss's cached path/search; actor 0 forgets all bosses, without reading memory
 //   vw<actor>,<index>    write LocX to stat <index> on every copy found
 //   vy<actor>,<guard>    follow her: HP lost while her shield was up is given back (guard 1); 0 stops
 //   ve<actor>,<x100>     follow an enemy: HP and shield it loses are multiplied (x100 = 100 * the factor)
@@ -40,6 +42,10 @@ __declspec(dllimport) int WINAPI CloseHandle(HANDLE);
 static u64 rd_lo, rd_hi;
 static volatile u32 rd_tid;
 __declspec(dllimport) u32 WINAPI GetCurrentThreadId(void);
+__declspec(dllimport) int WINAPI QueryPerformanceCounter(long long *);
+__declspec(dllimport) int WINAPI QueryPerformanceFrequency(long long *);
+static u64 boss_clock(void) { long long t = 0; QueryPerformanceCounter(&t); return (u64)t; }
+static u64 boss_hz(void) { long long f = 0; QueryPerformanceFrequency(&f); return (u64)f; }
 static int readable_to(u64 p, u64 n, u64 *end)
 {
     if (p < 0x10000 || p > 0x7ffffffeffffull || (p & 3)) return 0;
@@ -144,6 +150,8 @@ int readable(u64 p, u64 n);
 u64 readable_len(u64 p, u64 max);
 void stats_result(const char *s);
 void stats_event(const char *s);
+u64 boss_clock(void);
+u64 boss_hz(void);
 #endif
 
 #define S_HP 1
@@ -267,13 +275,21 @@ static void found(int n, u32 o0, u32 o1, u32 o2)
 }
 // a boss spawned here (bosses.lua): its stats found by the MaxHP and MaxShield its row was given (any HP and shield
 // under them; 1), else by their ratio within BOSS_RATIO (a difficulty scaling both; 2), and kept per actor. The
-// search (boss_mode) leaves the paths and candidates glass.lua follows as they were
+// search leaves the paths and candidates glass.lua follows as they were. Each vb advances one small slice: the
+// old synchronous stats_find could hold the game thread for 1.5-2 seconds, three times per summon (0.5.5 report).
 #define MAX_BOSS 8
 #define BOSS_RATIO 0.005f
-static struct { u64 a; int n; u32 off[3]; float mhp, msh; } boss[MAX_BOSS];
-static int nboss, boss_mode, boss_best, boss_n;
-static u32 boss_off[3];
-static float boss_mhp, boss_msh;
+#define BOSS_SEEN 8192
+#define BOSS_WORK 256
+typedef struct {
+    int stage, best, n, near_n, nseen, active;
+    u32 off[3];
+    u64 q, q2, at, p, p2;
+    float near[4], near_d;
+    u64 seen[BOSS_SEEN];
+} boss_scan_t;
+static struct { u64 a; int n; u32 off[3]; float mhp, msh, want_hp, want_sh; boss_scan_t scan; } boss[MAX_BOSS];
+static int nboss, boss_replace;
 // a boss's array by its maximums: HP and shield only have to be sane, not under them (a pooled boss used again, by a
 // second spawn or after her respawn, was found by none, playtest: its HP set before its maximum, it may be)
 static int loosely_shaped(const float *f)
@@ -282,30 +298,28 @@ static int loosely_shaped(const float *f)
     for (int i = 1; i <= S_MAXSHIELD; i++) if (!finite_(f[i])) return 0;
     return f[S_MAXHP] >= 1 && f[S_MAXHP] < 1e7f && f[S_HP] >= 0 && f[S_SHIELD] >= 0 && f[S_MAXSHIELD] >= 0 && f[S_MAXSHIELD] < 1e6f;
 }
-static int boss_match(const float *f)
+static int boss_match(const float *f, float mhp, float msh)
 {
     if (!loosely_shaped(f)) return 0;
-    if (fabs_(f[S_MAXHP] - boss_mhp) <= 0.51f && fabs_(f[S_MAXSHIELD] - boss_msh) <= 0.51f) return 1;
-    return shaped(f) && boss_msh > 0 && f[S_MAXSHIELD] > 0 && f[S_MAXHP] > 1 &&
-           fabs_((f[S_MAXHP] / f[S_MAXSHIELD]) / (boss_mhp / boss_msh) - 1) <= BOSS_RATIO ? 2 : 0;
+    if (fabs_(f[S_MAXHP] - mhp) <= 0.51f && fabs_(f[S_MAXSHIELD] - msh) <= 0.51f) return 1;
+    return shaped(f) && msh > 0 && f[S_MAXSHIELD] > 0 && f[S_MAXHP] > 1 &&
+           fabs_((f[S_MAXHP] / f[S_MAXSHIELD]) / (mhp / msh) - 1) <= BOSS_RATIO ? 2 : 0;
 }
 // with none found: the stats-like array whose MaxHP is nearest its row's (for the log: what it has instead)
-static float boss_near[4], boss_near_d;
-static int boss_near_n;
-static void boss_seen(int n, u32 o0, u32 o1, u32 o2, const float *f)
+static void boss_seen(boss_scan_t *s, float mhp, float msh, int n, u32 o0, u32 o1, u32 o2, const float *f)
 {
-    int m = boss_match(f);
+    int m = boss_match(f, mhp, msh);
     if (!m && loosely_shaped(f) && f[S_MAXHP] >= 100) {
         // (one only loosely shaped or with no HP counts 4 times as far: a read a float off a real array is shaped,
         // its HP the real one's None, 0)
-        float d = (f[S_MAXHP] > boss_mhp ? f[S_MAXHP] / boss_mhp : boss_mhp / f[S_MAXHP]) * (shaped(f) && f[S_HP] > 0 ? 1 : 4);
-        if (!boss_near_n || d < boss_near_d) {
-            boss_near_d = d; boss_near_n = n;
-            boss_near[0] = f[S_HP]; boss_near[1] = f[S_MAXHP]; boss_near[2] = f[S_SHIELD]; boss_near[3] = f[S_MAXSHIELD];
+        float d = (f[S_MAXHP] > mhp ? f[S_MAXHP] / mhp : mhp / f[S_MAXHP]) * (shaped(f) && f[S_HP] > 0 ? 1 : 4);
+        if (!s->near_n || d < s->near_d) {
+            s->near_d = d; s->near_n = n;
+            s->near[0] = f[S_HP]; s->near[1] = f[S_MAXHP]; s->near[2] = f[S_SHIELD]; s->near[3] = f[S_MAXSHIELD];
         }
     }
-    if (!m || (boss_best && m >= boss_best)) return;
-    boss_best = m; boss_n = n; boss_off[0] = o0; boss_off[1] = o1; boss_off[2] = o2;
+    if (!m || (s->best && m >= s->best)) return;
+    s->best = m; s->n = n; s->off[0] = o0; s->off[1] = o1; s->off[2] = o2;
 }
 // stat arrays in [p, p + n): their offsets from p
 static void scan_block(u64 p, u64 n, int depth, u32 o0, u32 o1)
@@ -313,13 +327,6 @@ static void scan_block(u64 p, u64 n, int depth, u32 o0, u32 o1)
     u64 len = readable_len(p, n);
     if (len < 4 * (S_MAXSHIELD + 1)) return;
     for (u64 o = 0; o + 4 * (S_MAXSHIELD + 1) <= len; o += 4) {
-        if (boss_mode) {
-            const float *x = (const float *)(p + o);
-            if (depth == 0) boss_seen(1, (u32)o, 0, 0, x);
-            else if (depth == 1) boss_seen(2, o0, (u32)o, 0, x);
-            else boss_seen(3, o0, o1, (u32)o, x);
-            continue;
-        }
         if (cand_mode) {
             if (!shaped((const float *)(p + o))) continue;
             if (depth == 0) cand_add(1, (u32)o, 0, 0, (const float *)(p + o));
@@ -360,6 +367,86 @@ static void stats_find(u64 a)
             scan_block(p2, SCAN_L2, 2, (u32)q, (u32)q2);
         }
     }
+}
+
+// A hash set avoids the old linear visited search (quadratic on a pointer-rich actor). At half full, new addresses
+// are still visited, just not remembered; probing stays short and each call's work remains bounded.
+static int boss_seen_once(boss_scan_t *s, u64 p)
+{
+    u64 h = ((p >> 3) * 11400714819323198485ull) >> (64 - 13);
+    while (s->seen[h]) {
+        if (s->seen[h] == p) return 1;
+        h = (h + 1) & (BOSS_SEEN - 1);
+    }
+    if (s->nseen < BOSS_SEEN / 2) { s->seen[h] = p; s->nseen++; }
+    return 0;
+}
+static void boss_scan_start(boss_scan_t *s)
+{
+    s->stage = s->best = s->n = s->near_n = s->nseen = 0;
+    s->active = 1;
+    s->q = s->q2 = s->at = s->p = s->p2 = 0;
+    for (int i = 0; i < BOSS_SEEN; i++) s->seen[i] = 0;
+}
+// Same two-pointer search as stats_find, resumed through offsets rather than keeping a memory range readable
+// across calls. Recheck both parent links before resuming: pooled/reallocated objects must not yield an old HP.
+// Each operation checks one pointer or at most 64 float runs; stop after 1 ms or BOSS_WORK operations, even if the
+// clock is unavailable. A ratio match waits for the whole search, so a later exact match still wins.
+static int boss_scan_step(u64 a, boss_scan_t *s, float mhp, float msh)
+{
+    static u64 hz;
+    if (!hz) hz = boss_hz();
+    u64 start = boss_clock();
+    if (s->stage >= 2 && s->stage <= 4 &&
+        (!readable(a + s->q, 8) || *(u64 *)(a + s->q) != s->p)) {
+        s->stage = 1; s->q += 8; s->at = 0;
+    }
+    if (s->stage == 4 &&
+        (!readable(s->p + s->q2, 8) || *(u64 *)(s->p + s->q2) != s->p2)) {
+        s->stage = 3; s->q2 += 8; s->at = 0;
+    }
+    for (int work = 0; work < BOSS_WORK; work++) {
+        if (hz && boss_clock() - start >= hz / 1000) return 0;
+        if (s->stage == 5 || s->best == 1) return 1;
+        if (s->stage == 1 || s->stage == 3) {
+            int root = s->stage == 1;
+            u64 base = root ? a : s->p, q = root ? s->q : s->q2;
+            u64 len = readable_len(base, root ? SCAN_ACTOR : SCAN_L1);
+            if (q + 8 > len) {
+                if (root) s->stage = 5;
+                else { s->stage = 1; s->q += 8; }
+                continue;
+            }
+            u64 p = *(u64 *)(base + q);
+            if ((p & 7) || p == a || p == base || !readable(p, 16) || boss_seen_once(s, p)) {
+                if (root) s->q += 8; else s->q2 += 8;
+                continue;
+            }
+            if (root) { s->p = p; s->q2 = 0; s->stage = 2; }
+            else { s->p2 = p; s->stage = 4; }
+            s->at = 0;
+            continue;
+        }
+        int depth = s->stage == 0 ? 0 : s->stage == 2 ? 1 : 2;
+        u64 p = depth == 0 ? a : depth == 1 ? s->p : s->p2;
+        u64 len = readable_len(p, depth == 0 ? SCAN_ACTOR : depth == 1 ? SCAN_L1 : SCAN_L2);
+        if (s->at + 4 * (S_MAXSHIELD + 1) > len) {
+            s->at = 0;
+            if (depth == 0) s->stage = 1;
+            else if (depth == 1) s->stage = 3;
+            else { s->stage = 3; s->q2 += 8; }
+            continue;
+        }
+        u64 end = s->at + 0x100;
+        for (; s->at < end && s->at + 4 * (S_MAXSHIELD + 1) <= len; s->at += 4) {
+            u32 o0 = depth == 0 ? (u32)s->at : (u32)s->q;
+            u32 o1 = depth == 1 ? (u32)s->at : (u32)s->q2;
+            boss_seen(s, mhp, msh, depth + 1, o0, depth ? o1 : 0, depth == 2 ? (u32)s->at : 0,
+                      (const float *)(p + s->at));
+            if (s->best == 1) return 1;
+        }
+    }
+    return s->stage == 5;
 }
 
 static char *put_paths(char *o)
@@ -470,7 +557,7 @@ static const float *boss_at(int i)
     return f && loosely_shaped(f) && f[S_MAXHP] == boss[i].mhp && f[S_MAXSHIELD] == boss[i].msh ? f : 0;
 }
 // "vb<actor>,<maxhp>,<maxshield>": "ok [found [by ratio]] HP MaxHP Shield MaxShield", or "none [nearest HP MaxHP
-// Shield MaxShield at depth n]"
+// Shield MaxShield at depth n]". "pending" means more search work; "busy" means all search slots are in use.
 static void boss_cmd(const u16 *txt, int len)
 {
     u64 f[3] = { 0, 0, 0 };
@@ -479,36 +566,52 @@ static void boss_cmd(const u16 *txt, int len)
     if (f[0] < 0x10000 || !readable(f[0], 0x100) || !f[1]) { stats_result("err bad actor"); return; }
     int i = 0;
     while (i < nboss && boss[i].a != f[0]) i++;
-    const float *s = i < nboss ? boss_at(i) : 0;
+    if (i == nboss) {
+        if (nboss < MAX_BOSS) nboss++;
+        else {
+            // Never evict a scan in progress: with more than MAX_BOSS actors, round-robin reads otherwise keep
+            // restarting every scan forever. A caller with no slot waits while the existing scans finish.
+            i = boss_replace;
+            for (int k = 0; k < MAX_BOSS && boss[i].scan.active; k++) i = (i + 1) % MAX_BOSS;
+            if (boss[i].scan.active) { stats_result("busy"); return; }
+            boss_replace = (i + 1) % MAX_BOSS;
+        }
+        boss[i].a = f[0]; boss[i].n = 0;
+        boss[i].want_hp = boss[i].want_sh = -1;
+    }
+    if (boss[i].want_hp != (float)f[1] || boss[i].want_sh != (float)f[2]) {
+        boss[i].want_hp = (float)f[1]; boss[i].want_sh = (float)f[2];
+        boss[i].n = 0; boss_scan_start(&boss[i].scan);
+    }
+    const float *s = boss[i].n ? boss_at(i) : 0;
     if (!s) {
-        if (i < nboss) boss[i] = boss[--nboss];
-        boss_mhp = (float)f[1]; boss_msh = (float)f[2]; boss_best = 0; boss_near_n = 0;
-        int keepn = npaths;
-        boss_mode = 1;
-        stats_find(f[0]);
-        boss_mode = 0;
-        npaths = keepn;
-        if (!boss_best) {
+        boss_scan_t *b = &boss[i].scan;
+        if (boss[i].n) { boss[i].n = 0; boss_scan_start(b); }
+        if (!boss_scan_step(f[0], b, (float)f[1], (float)f[2])) { stats_result("pending"); return; }
+        if (!b->best) {
             o = s_put(o, "none");
-            if (boss_near_n) {
+            if (b->near_n) {
                 o = s_put(o, " nearest");
-                for (int j = 0; j < 4; j++) { *o++ = ' '; o = s_f(o, boss_near[j]); }
-                o = s_put(o, " at depth "); o = s_int(o, boss_near_n);
+                for (int j = 0; j < 4; j++) { *o++ = ' '; o = s_f(o, b->near[j]); }
+                o = s_put(o, " at depth "); o = s_int(o, b->near_n);
             }
             *o = 0;
+            boss_scan_start(b);
+            b->active = 0;
             stats_result(msg);
             return;
         }
-        if (nboss >= MAX_BOSS) nboss = MAX_BOSS - 1;
-        i = nboss++;
-        boss[i].a = f[0]; boss[i].n = boss_n;
-        for (int j = 0; j < 3; j++) boss[i].off[j] = boss_off[j];
+        boss[i].n = b->n;
+        for (int j = 0; j < 3; j++) boss[i].off[j] = b->off[j];
         boss[i].mhp = boss[i].msh = -1;
-        cand_t c; c.n = (unsigned char)boss_n; for (int j = 0; j < 3; j++) c.off[j] = boss_off[j];
+        cand_t c; c.n = (unsigned char)b->n; for (int j = 0; j < 3; j++) c.off[j] = b->off[j];
         s = (const float *)cand_at(f[0], &c);
-        if (!s) { nboss--; stats_result("none"); return; }
+        if (!s || !boss_match(s, (float)f[1], (float)f[2])) {
+            boss[i].n = 0; boss_scan_start(b); stats_result("pending"); return;
+        }
         boss[i].mhp = s[S_MAXHP]; boss[i].msh = s[S_MAXSHIELD];
-        o = s_put(o, boss_best == 1 ? "ok found " : "ok found by ratio ");
+        b->active = 0;
+        o = s_put(o, b->best == 1 ? "ok found " : "ok found by ratio ");
     } else o = s_put(o, "ok ");
     o = s_f(o, s[S_HP]); *o++ = ' '; o = s_f(o, s[S_MAXHP]); *o++ = ' ';
     o = s_f(o, s[S_SHIELD]); *o++ = ' '; o = s_f(o, s[S_MAXSHIELD]);
@@ -526,6 +629,13 @@ int stats_cmd(const u16 *txt, int len, const float *loc, const float *dir)
     char msg[512], *o = msg;
     if (c == 'z') { nfol = 0; stats_result("ok"); return 1; }
     if (c == 't') { stats_tick(); return 1; }
+    if (c == 'B') {
+        if (!f[0]) nboss = 0;
+        else for (int i = 0; i < nboss; i++) if (boss[i].a == f[0]) {
+            boss[i].a = 0; boss[i].n = 0; boss[i].scan.active = 0;
+        }
+        stats_result("ok"); return 1;
+    }
     if (c == 'b') { boss_cmd(txt + 2, len - 2); return 1; }
     if (f[0] < 0x10000 && !(c == 'y' && f[0] == 0)) { stats_result("err bad actor"); return 1; }
     if (c == 's') {

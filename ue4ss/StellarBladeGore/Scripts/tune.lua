@@ -36,6 +36,7 @@ return {
   keys = {},                   -- the mod's keys by action (keys.lua has them and their defaults), e.g. { split = "Ctrl+F11" };
                                -- "None" unbinds one. The F3 menu's Keys tab sets them
   menuPadIcons = "playstation", -- the menu's controller key icons: "playstation" or "xbox"
+  menuGrouped = true,          -- F3: grouped experimental layout; false restores the previous row order
   menuPause = true,            -- the F3 menu pauses the game while it is open (false: the world goes on under it)
   language = "en",             -- the F3 menu's language: "en", "zh" (Chinese, Simplified), "ja", "ko" or "ru"
   deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
@@ -104,7 +105,7 @@ return {
     sliceOnDeath = true,       -- a killing blow leaves a mark (see death)
     sliceChance = 1.0,         -- 0..1, per death
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
-                               -- F9 rolls the cuts only, F10 marks, F11 splits
+                               -- F9 rolls cuts, F10 smashes, Alt+F10 marks, F11 splits
       limb = 42,               --   the arm or thigh nearest the hit comes off
       head = 25,               --   beheaded (the face goes with the head, the neck gets a stump)
       torso = 15,              --   cut in half at the waist
@@ -147,7 +148,7 @@ return {
     bladeShift = 10,           --   and moved up to this many cm along its normal
     bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
     noSplits = false,          -- vertical splits off altogether: no blow, roll or after-death hit splits her down her
-                               --   length; the blade's limbs come off instead, the odds' split share goes to the others
+                               --   length; lengthwise hits choose a neck or waist cut, the odds' split share goes to the others
                                --   (the F11 / F5 test keys still split)
     deathSplit = true,         -- a blade down her length at death splits her (false: the limbs it crosses come off
                                --   instead, else the odds above; F11 and F5 still split)
@@ -347,6 +348,18 @@ return {
           { "lowerLip_down", 0.15, from = 0.25, over = 6 },
           { "nostrill_flare", 0.05, from = 0.35, over = 5 },
         } },
+        { name = "rolled", weight = 3, noGaze = true, morphs = { -- eyes rolled back, only the bottom of her
+                               --   pupils showing under half-shut lids, the mouth hanging open, slack; noGaze: no
+                               --   random drift (it would pull her eyes off the roll)
+          { "eye_up_L", 0.85, from = 0.3, over = 2 }, { "eye_up_R", 0.85, from = 0.3, over = 2 },
+          { "upLid_down_L", "eyeBlinkLeft", 0.45, from = 0.2, over = 6 },
+          { "upLid_down_R", "eyeBlinkRight", 0.45, from = 0.2, over = 6.5 },
+          { "loLid_up_L", 0.0 }, { "loLid_up_R", 0.0 },
+          { "innerBrow_up", "browInnerUp", 0.15, from = 0.4, over = 5 },
+          { "jaw_open", "jawOpen", 0.42, from = 0.25, over = 4 },
+          { "lowerLip_down", 0.2, from = 0.1, over = 5 },
+          { "lipCorner_down", 0.1 },
+        } },
         { name = "fading", weight = 1, morphs = {  -- quiet: the pain already leaving, eyes closing sooner
           { "upLid_down_L", "eyeBlinkLeft", 1.0, from = 0.65, over = 4 },
           { "upLid_down_R", "eyeBlinkRight", 1.0, from = 0.7, over = 4.5 },
@@ -392,24 +405,32 @@ return {
       healAt = 0.9,            --   that heals on kills or over time; heal items too with noHealGun off)
     },
     smash = {                  -- (experimental) a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg
-      enabled = false,         --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
+      enabled = true,          --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
                                --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
       always = false,          --   every death smashes, blunt or not (to try it)
-      chunks = 3,              --   meat chunks for an arm
-      chunksLeg = 4,           --   for a leg
-      chunksHead = 4,          --   for the head
-      chunksBody = 7,          --   for her upper body (smashed from the waist up)
-      sizeMin = 5,             --   cm across, the smallest chunk
-      sizeMax = 11,            --   the biggest
+      chunks = 10,             --   whole arm; counts 0-64, two spawned a tick; missing child parts reduce the count
+      chunksForearm = 6,       --   forearm and hand
+      chunksLeg = 16,          --   whole leg
+      chunksCalf = 10,         --   lower leg and foot
+      chunksHead = 8,          --   head
+      chunksBody = 44,         --   upper body including both arms and head
+      sizeMin = 7,             --   cm across for an arm/head; smaller for forearms, larger for legs/upper body
+      sizeMax = 14,            --   biggest before those part-size multipliers (always bounded to 100 cm)
       speed = 350,             --   cm/s they burst out at (half to one and a half times), along the blow and every way
       kg = 0.3,                --   each chunk's mass
-      drips = 3,               --   chunks that drip blood as they fly and pool where they land
+      drips = 3,               --   chunks that also drip blood while flying; all chunks pool on landing
+      chunkPoolRadius = 11,     --   maximum radius in cm for each chunk's small pool
       splash = false,          --   the game's meat splash effect (NS_A_MeatSplash) on top of the hit blood
-      -- material = "...",     --   the chunks' material (default: the stumps' meat, MI_A_Meat_01_1; false: the
-      --                            meshes' own, an effect material)
+      burst = true,            --   short scaled blood burst; no cinematic smoke/sheets
+      burstScale = 1,          --   blood burst size follows remaining flesh (0-2, capped at three-quarter size)
+      limbBleedScale = 0.8,    --   smaller surviving stump bleed for smashed arms and legs
+      bleedTimeScale = 0.84,   --   smash stump bleeding lasts 84% of the ordinary cut duration
+      -- material = "...",     --   optional override. Default: the actual cut seam's material instance, including
+      --                            its colour/roughness; without a cap, the same seam material setup. false:
+      --                            the meshes' own effect materials
       bareHands = true,        --   a bare hand, foot, knee or elbow swinging (no weapon mesh) is blunt
       -- names (any part, any case) of what hit her, sharp checked first: the swinging enemy's weapon meshes, its
-      -- swinging bone, then the enemy's name and class. A blow from above with no weapon (a stomp) is blunt too
+      -- swinging bone, then the enemy's name and class. With bareHands on, an unarmed downward blow is blunt too
       sharp = { "sword", "blade", "claw", "knife", "axe", "spear", "lance", "scythe", "saw", "sickle", "katana",
         "dagger", "cutter", "spike", "thorn", "lion", "mite", "raven", "tachy", "gorgon", "lurker", "weaponmaster",
         "behemoth" },
@@ -496,7 +517,7 @@ return {
     voice = {                  -- her own death cry (Eve's action-voice recordings) the moment she dies, nothing after
       enabled = true,          --   false: the game's own death voice only
       volume = 1.0,
-      cutFade = 0.08,          --   s the cry fades out in when her head comes off (cut off, but no click)
+      cutFade = 0.08,          --   s to fade after beheading or a head/upper-body smash (other cuts keep the cry)
       rest = 8,                --   s a recording rests before it can play again
       sounds = nil,            --   recordings to pick from (nil: vo_eve_die_01-05): names under
                                --   Sound/Dialogue/ActionVoice/Eve ("vo_eve_die_fall_01") or full paths of any
@@ -608,7 +629,7 @@ return {
     sliceFx = false,           -- the game's flesh-slice burst at the cut: it drops a static meat stub made for
                                -- monster stumps, which hangs in the air where she was cut
     bleedTime = 2.5,           -- seconds both openings keep bleeding (0 = until she recovers)
-    bleedAxis = "z",           -- the bleed effect's (NS_Hit_Flesh_Slice_BloodOnly) cone axis, pointed out of each
+    bleedAxis = "z",           -- the player-hit blood effect's cone axis, pointed out of each
                                -- opening: "z", "x", "-z", "-x" (the F3 menu re-reads it; the "bleed: opening faces" log line
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
     bleedSize = 0.6,           -- the bleed's size (the effect's scale; the spurts are as many)
@@ -630,7 +651,7 @@ return {
     capBloodColor = { 0.12, 0.005, 0.002 }, -- its glow (BloodColor, emissive: the material's own 10, 2.4, 0 lit the
                                -- stumps bright orange); nil = the material as it is
     bodyBlood = {              -- her skin's own blood layer (MPC_PCDirtyOffset, read by Eve's skin material) raised on
-      enabled = true,          -- any cut (F9, F11 too), all of her at once (it is global); put back when she recovers
+      enabled = false,         -- legacy cut-only ramp; off to avoid a whole-skin flash. Blood and Dirt owns it when on
       factor = 1.0,            --   BloodFactor to reach (the log shows the value it had)
       offset = 0.5,            --   BloodOffset to reach (its default is 0, BloodFactor's already 1; a first guess:
                                --   if she shows no blood, try 1.0 or -0.5)
@@ -640,8 +661,8 @@ return {
     splatSize = 14,            --   cm across the splat under a cut or a hit is, about (radius; the pools' blood)
     splatLife = 30,            --   s the splat under a hit she lives through stays (a death's stay till she is up)
     pool = true,               -- floor blood: a cut's openings (F9, F11 too) drip while they move and pool where they rest
-                               -- (without a cut: one pool under the body after 2 s)
-    poolScale = 1.0,           --   pool size (a neck or thigh ~55-60 cm radius, a forearm 30, a split 90)
+                               -- (without a cut: one pool begins under the body after 1 s)
+    poolScale = 1.15,          --   pool size multiplier (15% larger than the base radii)
     poolGrow = 5,              --   seconds for a pool to reach most of its size (it keeps spreading slowly)
     poolTime = 12,             --   seconds each opening is followed
     dripEvery = 18,            --   cm between drips while it moves
@@ -915,7 +936,7 @@ return {
     capeKg = 0.12,             -- each of its links then weighs this (they hang off the 1.4 kg clavicle, not the arm)
     capeSwing = 45,            -- degrees the cape swings at the shoulder, each way
     capeTwist = 20,            -- degrees it turns about itself there
-    jiggle = {                 -- Jiggle After Death (experimental, on by default): her breasts' bodies sway on a
+    jiggle = {                 -- Jiggle After Death (on by default): her breasts' bodies sway on a
       enabled = true,          --   damped spring of their own in the ragdoll instead of riding her chest locked
       swing = 12,              --   degrees each way they may swing from where they sat as she died
       twist = 6,               --   degrees they may turn about themselves
@@ -1129,67 +1150,18 @@ return {
         physics = "/Game/Art/Character/NPC/CH_NPC_Rael/CH_NPC_Rael_Physics" },
     },
   },
-  stains = {                   -- blood and dirt on her (stains.lua): the game's own, cut before release, switched on again
-    enabled = false,           -- (parked: off, its F3 tab hidden) off: none, her materials as the game has them
-    scale = 1,                 -- all the blood below times this
-    max = 1,                   -- the most blood or dirt she takes (0-1)
-    hit = { base = 0.04,       -- a hit that takes HP: this much blood,
-      perHp = 0.9 },           --   and this times the share of her HP bar it took
-    splash = { enabled = true, -- enemies hit near her splash her
-      range = 350,             --   within this many cm (less the further off)
-      amount = 0.04,           --   a hit on one right beside her
-      cut = 0.12 },            --   a part cut off one (enemy gore)
-    death = { blood = 0.35,    -- her death: this much blood at once,
-      perCut = 0.15 },         --   and this for each part cut off her
-    dirt = { enabled = true,   -- dirt from landings, knockdowns and lying dead
-      land = 0.15,             --   a hard landing (past landSpeed cm/s down; more the harder)
-      landSpeed = 900,
-      knock = 0.12,            --   a knockdown
-      death = 0.6,             --   lying dead it rises to this,
-      rate = 0.08 },           --   this much a second
-    wash = { enabled = true,   -- swimming washes blood and dirt off (wounds stay, paler)
-      rate = 0.35 },           --   this much a second
-    rest = true,               -- a camp rest cleans her and heals the wounds
-    fade = 0,                  -- minutes for blood and dirt to fade by themselves (0: they stay till washed or rested)
-    wounds = { enabled = true, -- a hit she lives through leaves a wound where it landed, in her skin's own blood layer
-      size = 6,                --   cm across the wound's core (bigger for harder hits)
-      uvCm = 150,              --   cm of her skin over the whole texture, about (sizes the wounds on the mask)
-      splatter = 8,            --   drops round each wound
-      background = 0.8,        --   the game's own blood mask under the wounds (0-1: lower, the blood spreads from
-                               --   the wounds longer before it shows elsewhere)
-      res = 512,               --   the skin's wound mask (px; a render target a wounded skin slot)
-      floor = 0.35,            --   the blood offset a wounded skin material keeps however clean she is (the wounds show)
-      color = { 0.2, 0.012, 0.01 }, -- a painted wound's colour (paintMasters' skin, linear RGB): the skin's goes toward it
-      max = 24 },              --   wounds kept on one material, the oldest goes first
-    cloth = { enabled = true,  -- blood on her outfit (painted into its colour where it lands) and dirt (darker, greyer)
-      soak = 1.6,              --   blood on cloth spreads this many times wider than on skin
-      bloodColor = { 0.2, 0.012, 0.01 }, -- fully soaked cloth's colour (linear RGB): the cloth's goes toward it
-      levels = { 0.15, 0.3, 0.45, 0.6, 0.8, 1 }, -- the strengths a mark on it is drawn at (one blob each)
-      res = 2048,              --   its colour texture copied at up to this size (px; a render target a stained slot)
-      format = 3,              --   the render target's format (3: RGBA8 sRGB)
-      coat = { enabled = true, --   blood over all of it as hers rises, the way the game's own layer covers her skin suit
-        strength = 0.85,       --     how far the cloth's colour goes to blood's where it's covered (0-1)
-        tile = 4,              --     the blood's pattern (the game's own noise) repeated this many times over its UV (4: as the skin suits' BloodTile)
-        from = 1.05, to = 0.2, --     the noise level it shows from at no blood and at full (lower: more of it)
-        soft = 5,              --     its edges' sharpness
-        step = 0.08,           --     redrawn when the blood moves this much
-        res = 512 },           --     the pattern's size (px)
-      darken = 0.45, desaturate = 0.35, tint = 0.5, dirtTint = { 0.62, 0.52, 0.4 } }, -- dirt on it
-    sound = { enabled = true,  -- a wet blood sound on each wound (the game's blood cues; none with gore.sounds off)
-      volume = 0.7 },          --   times gore.soundVolume
-    spatter = { enabled = true, -- blood lands on her as drops (skin or cloth) under points round her parts
-      size = 1.5,              --   cm across a drop, about
-      minPx = 2.5,             --   a splatter drop's radius at least this many px on the texture (smaller ones came out pixelated)
-      perBlood = 40,           --   drops for a whole blood's worth splashed on her (enemy hits near her)
-      hit = 3,                 --   drops round each wound of hers
-      death = 14, perCut = 6,  --   at her death, and for each part cut off her
-      menu = 12,               --   the menu's Add Blood
-      perTick = 1,             --   skin queries a tick (0.1 s) for them
-      queue = 40, max = 60 },  --   drops waiting at most; drops kept on one material (the oldest go first)
-    skinMasters = { "MA_Skin", "MA_CH_P_EVE_34_BB" }, -- her skin's masters whose blood layer shows (her head, the skin suits)
-    paintMasters = { "MA_Skin_EVE", "MA_Skin_EVE_Ver02", "MA_HumanSkin_Ver01" }, -- her skin's masters whose blood layer
-                               -- doesn't show on her body (playtest: none at full blood): wounds painted into its colour
-    matEvery = 0.5,            -- s between her materials' updates (at once on a wound)
+  stains = {                   -- experimental: only the game's native blood/dirt layer on her skin
+    enabled = false,           -- F3 → Blood and Dirt (Experimental); no outfit paint or replacement materials
+    scale = 1, max = 1,        -- blood added by damage and nearby enemy hits/cuts
+    rise = 0.6,                -- native coverage gained per second toward accumulated blood/dirt
+    clearRate = 0.35,          -- coverage lost per second after healing, water or cleaning
+    hit = { base = 0.04, perHp = 0.9 }, -- once per blow, plus the share of her HP lost
+    splash = { enabled = true, range = 1000, amount = 0.06, cut = 0.12 }, -- cm; less blood further away
+    heal = { enabled = true }, -- recovering a share of missing HP removes that share of remaining stains
+    dirt = { enabled = true, land = 0.15, landSpeed = 900, knock = 0.12, death = 0.6, rate = 0.08 },
+    wash = { enabled = true, rate = 0.35 }, -- swimming gradually clears both native layers
+    rest = true,               -- camp rest cleans her; a new life starts clean
+    fade = 0,                  -- minutes to fade without healing/water (0: never)
   },
   glassCannon = {              -- realistic glass cannon (glass.lua); Page Down turns it on and off in game (dev only)
     enabled = false,           -- off by default

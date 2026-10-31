@@ -13,6 +13,11 @@
     "CapsuleComponentFollowingSocketName": null
   },
   "assets": {
+    "Art/FX/StellarBladeGore/NS_SmashBloodDrops": {
+      "mode": "niagara_drops",
+      "from": "Art/FX/Enviroment/Matrix_XI/Cinematic/Grinder_Dead/NS_A_BloodExplosive",
+      "keep": "NE_CollisionBloodParticlesM001"
+    },
     "Art/Show/CH_P_EVE_01/Ragdoll/EveRD_Stand": {
       "mode": "clone",
       "from": "Art/Show/Dead/Dead_Monster_EffectType_Stand",

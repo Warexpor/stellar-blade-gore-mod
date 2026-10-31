@@ -26,12 +26,11 @@ HEADSPLIT=1 HEADN=y HEADSINKB=Bip001-Spine1 HEADSHEET=0.3 HEADOBJ=/tmp/sbslice-r
 - Hair (`00_HR/EVE_HR_01`, in the head's frame with its Root at the head bone; the ponytail `EVE_HR_01_Tail`, a 9-bone chain) can't be cut by weights: every bone of theirs is skinned, so there is no bone to sink the dropped side on. Ideas: the dropped side's skin on one of that side's chain bones, scaled to nothing in the half's pose each frame, or a copy of the hair mesh asset per half. The ponytail goes whole to the half its tie is on. Its physics on the copy's half needs her animation Blueprint (or a ragdoll of its own).
 - Renders: `test/real/head/compose.py` (her face half, the hair clipped along the plane in Python as a preview, not sbslice's, and the ponytail) and `render_head.py` (headless Blender; `VIEWS`, `SIZE`, `CENTER`). The hair meshes are extracted into `.cache/work/hair` with retoc (`-f SB/Content/Art/Character/PC/00_HR/EVE_HR_01/...`).
 
-## Parked: Blunt Smash
+## Blunt Smash: in-game validation
 
-Parked for now (2026-10-26), in the game but not a main feature: off by default (`tune.gore.smash.enabled`), out of the README and `settings.default.lua`; F3 → Blunt Smash and Smash Every Death still switch it. A blunt killing blow (by name: `smash.blunt` / `smash.sharp`) smashes the arm, leg, head or upper body it hit to the game's meat chunks (`SM_meat_01`-`04`) instead of cutting it; see TECHNICAL.md's Blunt smash.
+Development resumed 2026-10-31; still experimental and on by default; Smash Every Death remains off. Dedicated sims now cover selection/classification, all ten parts, 90 death/respawn cycles, delayed work and recovery, bounded configuration, effects/audio and the chunks sharing the current seam's material/colour. Run `bash ue4ss/test/run.sh smash smash_hits smash_lifecycle smash_stress smash_effects smash_material`.
 
-- Playtested on F6 only (Smash Every Death): limbs smash, the chunks lie where they land. The first upper body smash (F6, 2026-10-26) froze the game 0.1 s in, no crash dump: its seven chunks came out inside her hidden chest's still-simulating bodies; the chunks now collide with the level alone, untried since. Head smashes, the blunt/sharp judgement on real enemies (the name lists are from the asset list, unchecked) and its sounds are untried.
-- Its own stump look: for now a cut's stump.
+The first upper-body playtest on 2026-10-26 froze 0.1 s into the smash. Chunks now explicitly ignore Pawn/PhysicsBody and collide only with the world; invisible smashed parts no longer receive the cut piece's throw/float steering, gradual-opening constraints or new piece/body collision. Offline sims verify those contracts, but cannot exercise the actual engine solver. In game, enable Blunt Smash and Smash Every Death, set death odds to Torso only for a deterministic torso trial, then check head and limb smashes, floor collisions and recovery. Restore the normal odds afterwards. Also check a Skull Hammer kill (internal Blueprint aliases now resolve), the blunt crunch/wet burst, and chunk colour beside the surviving seam under the same light. The stump still uses the normal cut geometry.
 
 ## 0.4.3
 

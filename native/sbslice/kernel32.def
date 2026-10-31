@@ -21,6 +21,8 @@ VirtualProtect
 FlushInstructionCache
 GetCurrentProcess
 GetTickCount64
+QueryPerformanceCounter
+QueryPerformanceFrequency
 AddVectoredExceptionHandler
 GetCurrentThreadId
 GetCurrentProcessId

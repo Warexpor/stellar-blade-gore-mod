@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+
+- Blunt Smash is enabled by default for blunt killing blows; Smash Every Death remains off. Head, torso and limbs produce appropriately sized meat and blood, with reduced rolling and small pools beneath the pieces. Upper-body smashes produce 44 pieces before deductions for missing parts, with flatter scatter that follows the falling body.
+- Improved blunt-hit targeting, including large projectiles such as Gorilla B’s rock. No Vertical Splits redirects lengthwise hits to a beheading or waist cut, subject to normal balancing.
+- Head removal stops death struggle while preserving slight, silent leg convulsions. Upper-body smashes and animated waist cuts release held weapons when their supporting body disappears; weapons return on respawn.
+- Blood pools start sooner and are larger under the body. Stump blood uses the game’s native player-hit particles. Blood burst size and duration were tuned to the affected part.
+- F3 settings have an optional experimental grouped layout, dimmed dependent settings, and clearer Blood and Dirt guidance. Jiggle After Death is no longer labeled experimental.
+- Blood and Dirt restores the game’s native skin effect as an off-by-default option; support varies by outfit. The separate unfinished living-hit cut marks remain disabled and unavailable in F3.
+- Fixed Sandbox Boss HP discovery blocking the game during spawns by spreading the memory search across ticks. Reduced Blood and Dirt polling work and staggered some smash effects to limit frame spikes.
+- Restored the defeat sound when the delayed death screen is revealed, hid the recovery pose reset behind the screen, and prevented automatic hair resets during cutscenes.
+- Added diagnostics and regression simulations for death effects, weapon recovery, hit detection, UI, cinematics and performance.
+
 ## 0.5.5
 
 - The death struggle and her post-death movement wait for her to land (Nexus report: a struggle test on a rooftop knocked her off, and on landing her chest and arms stretched like rubber, then slid her along the ground, about 1 in 5 tries at Struggle Strength and Length 3x). Both started a fixed time into the ragdoll (0.8 s, 2 s) whether or not she was down, so in a long fall they began in mid-air and their steering met the landing. They now wait while her pelvis is over 40 cm off the floor (`struggle.air`, `convulse.air`), and their start times count from her landing. Knocked off a ledge mid-struggle, the act is cut short and nothing steers her till she has been down again for `startMax` s. Over a drop deeper than the floor trace's 10 m, her pelvis falling fast counts as in the air. `struggle: waits: she is N cm over the floor`, `she landed N s into her ragdoll` and `she fell ...: held till she lands` in the log. Struggle sim with a fall (struggle_air)

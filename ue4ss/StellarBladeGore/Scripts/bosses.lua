@@ -25,6 +25,9 @@ local M = {}
 local ctx, try, valid
 local function cfg() return ctx.tune.bosses or {} end
 local function log(s) ctx.log("bosses: " .. s) end
+local function forget_hp(a)
+  if ctx.gore and ctx.gore.native_state() == "ready" then ctx.gore.command(string.format("vB%x", a or 0)) end
+end
 
 M.CHAR = "/Game/Local/Data/CharacterTable.CharacterTable"
 M.EFFECT = "/Game/Local/Data/EffectTable.EffectTable"
@@ -264,6 +267,7 @@ function M.physics_line(e)
 end
 function M.adopted(a, e, mine)
   if not mine then return end
+  forget_hp(a)
   live[a] = { e = e, k = e.kind, at = os.clock() }
   own_physics(e)
   if rows[e.kind.row] then rows[e.kind.row].t = os.clock() end
@@ -334,6 +338,7 @@ function M.died(pawn, a, e)
   local x = live[a]
   live[a] = nil
   if not x then return end
+  forget_hp(a)
   e.addr = a
   local d = { e = e, t = os.clock() }
   local df = (ctx.tune.gore or {}).deathFace or {}
@@ -348,6 +353,7 @@ function M.died(pawn, a, e)
 end
 
 function M.gone(a, e)
+  forget_hp(a)
   live[a] = nil
   local d = dead[a]
   dead[a] = nil
@@ -430,15 +436,29 @@ M.next = 0
 -- its HP, read where the game keeps it (sbslice vb: its stats found by the MaxHP and MaxShield its row was given, else
 -- their ratio). The boss bar is no help on one spawned here: it never showed for a passive one (playtest, "its bar not
 -- shown"), and a hit reaction is no sign of damage (Tachy reacted to blows that took nothing). Read every HP_EVERY s;
--- the search (a scan of its memory, a frame's worth) is tried at most HP_TRIES times, HP_RETRY s apart
-M.HP_EVERY, M.HP_TRIES, M.HP_RETRY = 0.2, 3, 5
-local function read_hp(a, x, now)
+-- the search advances in bounded native slices, at most one boss per tick. Only a completed unsuccessful search
+-- counts toward HP_TRIES; a pending slice continues next tick, with no zero-HP reading kept from before a loss.
+M.HP_EVERY, M.HP_TRIES, M.HP_RETRY, M.HP_SCAN_EVERY = 0.2, 3, 5, 0.03
+local function hp_due(x, now)
   local r = rows[x.k.row]
-  if not (r and r.mhp and r.mhp > 0) or (x.hpTries or 0) >= M.HP_TRIES and not x.hp then return x.hp end
-  if now < (x.hpAt or 0) then return x.hp end
+  return not x.downed and r and r.mhp and r.mhp > 0 and
+    ((x.hpTries or 0) < M.HP_TRIES or x.hp ~= nil) and now >= (x.hpAt or 0)
+end
+local function read_hp(a, x, now, allow)
+  if not allow or not hp_due(x, now) then return x.hp end
+  local r = rows[x.k.row]
   local cmd = string.format("vb%x,%x,%x", a, r.mhp, r.msh or 0)
   local got = x.hp ~= nil
   local res = ctx.gore.command(cmd)
+  if res == "pending" or res == "busy" then
+    x.hp = nil
+    if got then
+      x.hpTries = 0
+      log(string.format("%s %x: its HP lost (search continuing)", x.k.alias, a))
+    end
+    x.hpAt = now + (res == "busy" and M.HP_RETRY or M.HP_SCAN_EVERY)
+    return nil
+  end
   local hp, mhp, sh, msh = res:match("^ok [%a ]*(%-?[%d.]+) (%-?[%d.]+) (%-?[%d.]+) (%-?[%d.]+)$")
   -- a maximum nowhere near its row's is some other pair of numbers (by its ratio: 0/250 and 0/15.27 on a Tachy of
   -- 5456, 1/51.48 on a Raven of 12415, playtest: each put at its floor seconds after it came, down in a hit or two)
@@ -481,7 +501,7 @@ function M.tick(pawn)
     local up = {}
     for a, x in pairs(live) do
       if valid(x.e.obj) and try(function() return x.e.obj.bActorIsBeingDestroyed end) ~= true then up[x.k.row] = true
-      else live[a] = nil end
+      else M.gone(a) end
     end
     for _, d in pairs(dead) do up[d.e.kind.row] = true end
     for row, r in pairs(rows) do
@@ -497,15 +517,18 @@ function M.tick(pawn)
   if next(live) and cfg().zeroKill ~= false then
     local p = bar()
     local her = try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
-    local best, bd
+    local best, bd, reader, readAt
     local reach = tonumber(cfg().barReach) or 3000
-    for _, x in pairs(live) do
+    for a, x in pairs(live) do
+      -- Oldest due read first: pending scans cannot multiply the frame cost or starve another boss's HP reads.
+      local at = x.hpAt or 0
+      if hp_due(x, now) and (not readAt or at < readAt or at == readAt and a < reader) then reader, readAt = a, at end
       local l = her and valid(x.e.obj) and try(function() local v = x.e.obj:K2_GetActorLocation(); return { X = v.X, Y = v.Y, Z = v.Z } end)
       local d = l and math.sqrt((l.X - her.X) ^ 2 + (l.Y - her.Y) ^ 2)
       if d and d <= reach and (not bd or d < bd) then best, bd = x, d end
     end
     for a, x in pairs(live) do
-      local h = not x.downed and read_hp(a, x, now)
+      local h = not x.downed and read_hp(a, x, now, a == reader)
       local hit = x.e.hit and x.e.hit.t
       local q = h and h.mhp > 0 and h.hp / h.mhp or not h and x == best and hit and now - hit < 10 and p or nil
       if x.downed or not q or q > 0.001 then
@@ -513,7 +536,8 @@ function M.tick(pawn)
       elseif not x.zeroT then
         x.zeroT = now
         log(string.format("%s %x: its %s at 0 and still up", x.k.alias, a, h and "HP" or "bar"))
-      elseif now - x.zeroT > (tonumber(cfg().zeroWait) or 1.5) then
+      elseif now - x.zeroT > (tonumber(cfg().zeroWait) or 1.5) and (not h or a == reader) then
+        -- With several bosses a cached zero may wait its turn: confirm it with a fresh read before the kill.
         take_down(pawn, a, x, string.format("its %s at 0 and still up for %.1f s", h and "HP" or "bar", now - x.zeroT))
       end
     end
@@ -560,10 +584,12 @@ function M.remove(pawn)
   if ctx.enemies and ctx.enemies.remove_spawned then ctx.enemies.remove_spawned() end
   for a in pairs(dead) do M.gone(a) end
   live = {}
+  forget_hp()
 end
 
 -- the level reloaded: the old world's dropped without touching it; the rows put back (the tables outlive levels)
 function M.forget()
+  forget_hp()
   for a, d in pairs(dead) do if d.struggle then pcall(d.struggle.forget) end end
   live, dead, hud.w = {}, {}, nil
   for row in pairs(rows) do pcall(put_back, row, "level reloaded") end

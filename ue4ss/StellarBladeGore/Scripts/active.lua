@@ -726,7 +726,14 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
           (math.random() - 0.5) * 360 * spin), false, FName("None"))
         return true
       end)
-      if ok then ease_start(pawn, mesh, hold, try(function() local v = w:K2_GetComponentLocation(); return vec(v.X, v.Y, v.Z) end)) end
+      if ok then
+        d.probe = 2
+        local pos = try(function() return w:K2_GetComponentLocation() end)
+        log(string.format("weapon drop: %s at %s, visible=%s hidden=%s", tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)),
+          pos and string.format("(%.0f %.0f %.0f)", pos.X, pos.Y, pos.Z) or "unknown", tostring(try(function() return w:IsVisible() end)),
+          tostring(try(function() return w.bHiddenInGame end))))
+        ease_start(pawn, mesh, hold, pos)
+      end
       names[#names + 1] = string.format("%s %.0fx%.0fx%.0f%s", tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)),
         b.e.X * 2, b.e.Y * 2, b.e.Z * 2, ok and "" or " (failed)")
     end
@@ -789,9 +796,33 @@ local function grip_release(pawn, mesh, g)
         { toss = gp.toss or 30, spin = gp.spin or 0.2, hand = o.hand })
       if r ~= "" then out[#out + 1] = r:gsub("^, dropped ", "") end
     end
-    gripped[a] = nil
+    -- drop_weapons moves the original attachment into dropped only after a box exists. Keep the record on failure
+    -- (including a hidden weapon), so recovery can still put it back on its original socket.
+    if not valid(o.comp) then gripped[a] = nil end
   end
   return table.concat(out, ", ")
+end
+-- Release a weapon before the hand it rides is hidden by a smash; otherwise it disappears with the limb and cannot
+-- be found by weapons(), which intentionally only returns visible weapons.
+function M.smash_drop(pawn, mesh, bone, reason)
+  if not (valid(pawn) and valid(mesh)) then return end
+  local affected = {}
+  for a, o in pairs(gripped) do
+    if o.hand == bone or try(function() return mesh:BoneIsChildOf(FName(o.hand), FName(bone)) end) == true then
+      affected[a] = true
+    end
+  end
+  -- An animated death may have a ragdoll run without a grip record. For an upper-body smash, find a visible weapon in
+  -- either hand before the animation moves or hides it; weapons on the back are left alone.
+  if bone == "Bip001-Spine1" then
+    for _, w in ipairs(weapons(pawn)) do
+      local a = addr(w)
+      if a and holding_hand(mesh, w) then affected[a] = true end
+    end
+  end
+  if not next(affected) then return end
+  local r = drop_weapons(pawn, mesh, cfg(), function(w) return affected[addr(w) or 0] == true end)
+  log((reason or "smash") .. " weapon release" .. (r ~= "" and r or ": no drop; original grip retained for recovery"))
 end
 -- her hands open as the grip eases, whatever they held: only the hand a dropped weapon left opened, so a death with
 -- her sword not showing (gone between moves) or over 30 cm off her hand kept the animation's fist shut to the end
@@ -1850,6 +1881,31 @@ end
 function M.tick(dt, mark)
   mark = mark or function() end
   if #standins > 0 then standins_watch(dt) end
+  for _, d in ipairs(dropped) do
+    if d.probe then
+      d.probe = d.probe - dt
+      if d.probe <= 0 then
+        d.probe = nil
+        local pos = valid(d.comp) and try(function() return d.comp:K2_GetComponentLocation() end)
+        local bp = valid(d.box) and try(function() return d.box:K2_GetComponentLocation() end)
+        log(string.format("weapon drop after 2 s: component=%s box=%s visible=%s hidden=%s",
+          pos and string.format("(%.0f %.0f %.0f)", pos.X, pos.Y, pos.Z) or "gone",
+          bp and string.format("(%.0f %.0f %.0f)", bp.X, bp.Y, bp.Z) or "gone",
+          tostring(valid(d.comp) and try(function() return d.comp:IsVisible() end)),
+          tostring(valid(d.comp) and try(function() return d.comp.bHiddenInGame end))))
+        if valid(d.comp) then
+          local scale = try(function() return d.comp:K2_GetComponentScale() end)
+          local master = try(function() return d.comp.MasterPoseComponent:Get() end)
+          local parent = try(function() return d.comp:GetAttachParent() end)
+          log(string.format("weapon render: scale=%s master=%s attached to box=%s spine bone hidden=%s",
+            scale and string.format("(%.3f %.3f %.3f)", scale.X, scale.Y, scale.Z) or "unknown",
+            valid(master) and tostring(try(function() return master:GetFullName() end)) or "none",
+            tostring(valid(parent) and valid(d.box) and addr(parent) == addr(d.box)),
+            tostring(try(function() return d.comp:BoneIsHiddenByName(FName("Bip001-Spine1")) end))))
+        end
+      end
+    end
+  end
   -- (an animated death's hand too: its animation kept the fist as well)
   if not (run and run.held) then grip_ease(dt) end
   if not run then return end

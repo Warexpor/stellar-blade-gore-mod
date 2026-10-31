@@ -67,10 +67,14 @@ local dt = F.obj("CharacterTable", "DataTable", { RowStruct = rs })
 F.objects["/Game/Local/Data/CharacterTable.CharacterTable"] = dt
 local cmds = {}
 local hpOf = {} -- actor address -> { hp, mhp, sh, msh } read by vb (none: "none")
+local hpPending, hpBusy = {}, {}
 local function command(s)
   cmds[#cmds + 1] = s
+  if s:sub(1, 2) == "vB" then return "ok" end
   if s:sub(1, 2) == "vb" then
     local a = tonumber(s:match("^vb(%x+)"), 16)
+    if hpBusy[a] then return "busy" end
+    if (hpPending[a] or 0) > 0 then hpPending[a] = hpPending[a] - 1; return "pending" end
     local h = hpOf[a]
     if not h then return "none" end
     local r = string.format("ok %s%.2f %.2f %.2f %.2f", h.told and "" or "found ", h[1], h[2], h[3], h[4])
@@ -188,6 +192,11 @@ check(ai.takes == 1 and boss.Controller == ai and brain.restarts == 1 and brain.
   "passive off: taken back, its tree started over")
 -- its HP read at 0 with it still up: taken down after zeroWait s; the bar at 0 alone (HP unread), hit lately, too
 hpOf[0xb055] = { 300, 5456, 0, 166 }
+hpPending[0xb055] = 12
+B._live()[0xb055].hpAt, B._live()[0xb055].hpTries = 0, 0
+for _ = 1, 12 do F.t = F.t + 0.1; B.tick(pawn) end
+check(B._live()[0xb055].hpTries == 0 and B._live()[0xb055].hp == nil and #kills == 0,
+  "pending search: twelve slices use no failed attempts and supply no HP")
 -- (its search tried again HP_RETRY s after the last that found nothing)
 for _ = 1, 20 do F.t = F.t + 0.3; B.tick(pawn) end
 check(#kills == 0 and has("B_Tachy b055: its HP found in memory"), "its HP read at 300: up")
@@ -273,6 +282,44 @@ local x8 = B._live()[0x1a8]
 check(x8 and x8.hp == nil and has("B_Tachy 1a8: a read of its HP left") and not has("B_Tachy 1a8: its HP found")
   and #kills == k0, "HP read: a maximum far off its row's left")
 B._live()[0x1a8] = nil
+
+-- Multiple bosses: one native call per tick, oldest due first, pending work doesn't starve a cached read.
+boss_at(0xc001, "PendingBoss1")
+boss_at(0xc002, "PendingBoss2")
+hpPending[0xc001] = 100
+hpOf[0xc002] = { 300, 5456, 0, 166 }
+local readsA, readsB, maxCalls = 0, 0, 0
+for _ = 1, 20 do
+  local start = #cmds
+  F.t = F.t + 0.1; B.tick(pawn)
+  local n = 0
+  for i = start + 1, #cmds do
+    if cmds[i]:sub(1, 2) == "vb" then
+      n = n + 1
+      if cmds[i]:match("^vbc001,") then readsA = readsA + 1 end
+      if cmds[i]:match("^vbc002,") then readsB = readsB + 1 end
+    end
+  end
+  maxCalls = math.max(maxCalls, n)
+end
+check(maxCalls == 1 and readsA > 3 and readsB > 3 and B._live()[0xc001].hpTries == nil and B._live()[0xc002].hp ~= nil,
+  "multiple bosses: one native read per tick, both served, pending work never exhausts retries")
+-- A lost zero read must not kill the actor while a fresh search continues.
+local pendingBoss = B._live()[0xc002]
+pendingBoss.hp, pendingBoss.hpAt, pendingBoss.zeroT = { hp = 0, mhp = 5456 }, F.t + 10, F.t - 2
+F.t = F.t + 0.1; B.tick(pawn)
+check(#kills == k0, "multiple bosses: a cached zero cannot trigger rescue before its fresh read")
+pendingBoss.hp, pendingBoss.hpAt, pendingBoss.zeroT = { hp = 0, mhp = 5456 }, 0, F.t
+hpPending[0xc002] = 50
+for _ = 1, 25 do F.t = F.t + 0.1; B.tick(pawn) end
+check(pendingBoss.hp == nil and pendingBoss.zeroT == nil and #kills == k0,
+  "lost HP: pending search clears stale zero HP and its rescue timer")
+hpBusy[0xc002], pendingBoss.hpAt = true, 0
+F.t = F.t + 0.1; B.tick(pawn)
+F.t = F.t + 0.1; B.tick(pawn)
+check((pendingBoss.hpTries or 0) == 0 and pendingBoss.hpAt > F.t + 4,
+  "native slots busy: waits without spending a failed attempt")
+B._live()[0xc001], B._live()[0xc002] = nil, nil
 tune.bosses.passive = false
 
 -- its death: face and struggle

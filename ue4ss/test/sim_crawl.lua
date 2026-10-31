@@ -9,7 +9,7 @@ local PUSH = rawget(_G, "PUSH") == true
 local F = require("fake")
 local E = require("eve")
 local R = require("rag")
--- (seeds whose death cut takes a leg for the crawl, her left arm for the push)
+-- Each scenario fixes the death cut so unrelated random draws cannot swap the intended limb.
 math.randomseed(rawget(_G, "SEED") or (PUSH and 2 or 1))
 local pawn = E.make(F)
 local print = F.say
@@ -25,6 +25,7 @@ s.gore.lowArm.enabled = true
 -- (a stage a frame, as the seeds were picked: chained stages roll the dice in another order)
 s.gore.stageBudgetMs = 0
 s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
+s.gore.bone = ]] .. string.format("%q", PUSH and "Bip001-L-UpperArm" or "Bip001-L-Thigh") .. [[
 s.struggle = s.struggle or {}
 s.struggle.weights = { clutch = 0, reach = 0, turn = 0, crawl = 3, rise = 0, prop = 0, push = 3, curl = 0, lie = 0 }
 return s

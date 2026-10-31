@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.5.5. See the [changelog](CHANGELOG.md).
+Version 0.6.0. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,14 +10,14 @@ Version 0.5.5. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.5.5.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.6.0.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.5.5`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.0`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -44,7 +44,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.enabled` | `true` | All cuts and blood. |
 <!-- | `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. | -->
 | `gore.death` | 42 / 25 / 15 / 18 | Odds of a limb, a beheading, a cut across her body (under the bust, leaning a little at random) or a split down the middle (running a little diagonally), when the blow doesn't decide. All split (`0` for the rest) splits every death; otherwise a blade seen decides first (`bladeFollow`). |
-| `gore.noSplits` | `false` | `true`: she is never split top to bottom, by any blow, roll or hit after her death (No Vertical Splits in the menu); a blade down her length takes the limbs it crossed instead, and the split share of `gore.death` goes to the others. |
+| `gore.noSplits` | `false` | `true`: she is never split top to bottom, by any blow, roll or hit after her death (No Vertical Splits in the menu); a blade down her length becomes a beheading or waist cut according to where it struck (with normal follow-up cuts), and the split share of `gore.death` goes to the others. |
 | `gore.death.moreLimbs` | 0.35 | Chance a rolled limb cut takes the next nearest limb too, and a third at the same chance again. |
 | `gore.followUpCuts` | `true` | One swing cuts everything it went through (both arms and her body, say). `false`: one cut a swing, her body when the blade went through it, else the limb it met; no extra limbs from `moreLimbs` either. A laser trap still cuts along its beam. F3 → Follow-up Cuts. |
 | `gore.bladeFollow` | 0.8 | Hit Decides in F3. Share of deaths with a tracked blade that the blade alone decides; the rest roll `gore.death`. At `1` most deaths were waist cuts or splits, as a blade mostly crosses her body. |
@@ -54,7 +54,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.asyncLoad` | `true` | The cuts' effects, materials and sounds load ahead through the game's async loader (no stutters at the start); `false`: one at a time on the game thread. |
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again: in an attack, the weapon at `minSpeed` (500) cm/s or more within `reach` (25) cm of her. |
 | `enemies.grab.enabled` | `true` | A death in an enemy's grab waits for the grab to end (at most `most`, 6 s): a limb or the head the killing blow cuts falls off at once; the ragdoll, a split or a cut across her waist come as it lets go. |
-<!-- | `gore.smash.enabled` | `false` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a burst of blood fly out where it was, and the stump stays as a cut's. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always`: with it on, every death smashes, to try it. | -->
+| `gore.smash.enabled` | `true` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a brief spray of falling blood droplets fly out where it was, proportional to the remaining part, and the stump stays as a cut's. An upper-body smash leaves only small silent leg twitches. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always` is off by default: with it on, every death smashes, to try it. |
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
 | `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. It stays off through a level change and its cutscene; a save loaded brings it back. F3 → Gameplay → Lose Arm at Low HP. |
@@ -73,16 +73,13 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.headRagdollChance` | `0.6` | With `headRagdoll` off, the chance a beheading during her animated fall ragdolls her (the rest play the fall on headless). |
 | `gore.armsOverSplit` | `0.6` | When a split's blade crossed both her arms, the chance it takes both arms instead of splitting her. |
 | `active.push` | `1.0` | How hard the killing blow throws her body, times the default (`0`: no push of the mod's). |
-| `stains.enabled` | `false` | Parked: off by default and not in the F3 menu (settings.lua only), until blood on her outfits can match the game's own. Blood and dirt on Eve: the game's own blood layer on her skin, cut before release, switched back on. Hits that take HP bloody her, enemies hit or cut near her splash her, hard landings and knockdowns dirty her, her death soaks her and she gets dirtier lying there. Blood on her outfit is painted into the cloth where it lands. Swimming washes it off; a camp rest or her next life cleans her. |
-| `stains.wounds.enabled` | `true` | A hit she lives through leaves a bleeding wound on her skin where it landed, drawn in the skin's own blood layer where it shows (her face, the skin suits) and painted into her body's skin elsewhere (not a decal), with drops round it. A hit on her outfit soaks the cloth there with blood instead. Wounds pale in water and heal at a camp rest. |
-| `stains.splash.enabled` | `true` | Enemies hit or cut near her splash her with their blood (`stains.splash.range`, 350 cm). |
-| `stains.dirt.enabled` | `true` | Hard landings, knockdowns and lying dead dirty her. |
-| `stains.cloth.enabled` | `true` | Blood soaks into her outfit where it lands (hits, drops), painted into the cloth's own colour, and as her blood rises it spreads over all of the outfit (and her bare body) in blotches, like the game's own blood on the skin suits (`stains.cloth.coat`). Dirt darkens and greys it (outfits whose materials lack a colour texture or the game's brightness settings stay as they are). |
-| `stains.spatter.enabled` | `true` | Blood lands on her as drops, on her skin and outfit: round her wounds, from enemies hit near her (on the side facing them), at her death and from Add Blood. |
-| `stains.sound.enabled` | `true` | A wet blood sound (the game's own cues) on each hit that leaves a wound, over the hit's usual sound (`stains.sound.volume`, 0.7; none with `gore.sounds` off). |
-| `stains.wash.enabled` | `true` | Swimming washes the blood and dirt off. |
-| `stains.rest` | `true` | A camp rest cleans her and heals the wounds. |
-| `stains.fade` | `0` | Minutes for blood and dirt to fade by themselves (`0`: they stay till washed or rested off). |
+| `stains.enabled` | `false` | Experimental, F3 → Blood and Dirt. Restores the game's unused native blood and dirt mechanic: gradual blood from her HP damage and nearby enemy hits/cuts, dirt from hard landings and knockdowns. It works best on the Skin Suit and exposed skin on some outfits; many outfits do not fully support it. |
+| `stains.splash.enabled` | `true` | Nearby enemy hits/cuts add blood to her skin; `stains.splash.range` is 1000 cm (10 m), with less blood at greater distance. |
+| `stains.dirt.enabled` | `true` | Hard landings, knockdowns and lying dead gradually dirty her skin. |
+| `stains.heal.enabled` | `true` | Healing a share of missing HP gradually removes that share of blood and dirt. Healing to full clears both. |
+| `stains.wash.enabled` | `true` | Swimming gradually washes blood and dirt off completely. |
+| `stains.rest` | `true` | Camp rest cleans her skin; a new life starts clean. |
+| `stains.fade` | `0` | Minutes to fade without healing or water (`0`: never). |
 | `convulse.enabled` | `true` | After her death her face winces, gasps, sobs, quivers and twitches for a while (a different face every death), fading out, with quiet breaths and moans (beheaded or split down her length by a vertical slash: her face stays still, no gasps, no voice). `convulse.body = true` makes her body spasm too. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
 | `gore.voice.asHer` | `true` | Played as Tachy, Raven or Scarlet (the Stellar Blade Play As mod, or any mod putting their meshes on Eve), her death cry and the breaths and moans after it are that character's own recordings (`false`: Eve's). Not with `gore.voice.sounds` set. |
@@ -98,7 +95,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `convulse.armSwing.enabled` | `true` | With `deathMoves`: her arms lift and drop, or make a crawl's stroke, now and then in her last movements (`false`: only the struggle moves them). F3 → Death → Arm Swings. |
 | `active.stiffness` | `1.0` | How stiff her ragdoll is: `0` limp as a sack, `1` as made, `2`-`3` she keeps her shape as she falls and lies. |
 | `active.neutral.enabled` | `true` | Relaxed Pose In Flight: thrown by a hard hit, her joints are pulled towards a relaxed, curled pose until she lands (needs `sbslice.dll`). `active.neutral.pose` holds the pose, `stiffness` how hard it pulls. |
-| `active.jiggle.enabled` | `true` | Jiggle After Death (Experimental): in her ragdoll her breasts sway on a damped spring of their own (`swing`, `twist`, `stiffness`, `damping`, `kg` in `tune.lua`) instead of riding her chest locked. |
+| `active.jiggle.enabled` | `true` | Jiggle After Death: in her ragdoll her breasts sway on a damped spring of their own (`swing`, `twist`, `stiffness`, `damping`, `kg` in `tune.lua`) instead of riding her chest locked. |
 | `deathScreen` | `"delay"` | When the death screen comes up: `"game"` at once, as in the game; `"delay"` `reviveAt` seconds into her death; `"key"` (On Press in the F3 menu) only when you press Shift+F4. Shift+F4 shows it early, and once it is up hides it again (the death held, she stays down). |
 | `fewerGC` | `false` | Fewer garbage collection hitches: the engine no longer forces a pass every time it unloads part of the map (its regular pass once a minute still runs). Off puts the game's own behaviour back. |
 | `customizedRagdoll` | `false` | Support for [Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884) (settings.lua only, out of the F3 menu): its death camera instead of the Free Camera, and the death screen up at once but invisible, its F / R working with no holding needed (Shift+F4 shows it). This mod's ragdoll, cuts, struggle and face stay as they are. |
@@ -130,7 +127,9 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 
 In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the game pauses while it is open (`menuPause`), Q/E (LB/RB) switch the tab, the arrow keys pick (Up/Down) and change (Left/Right, or < and >), R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. The mouse works too: hover picks, click presses (or steps, on a value's arrows), the wheel scrolls. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over (a change to a setting the menu no longer has is dropped from it as the menu starts) ("Reset to settings.lua" deletes it). The menu needs no `FText_Constructor.lua` in `UE4SS_Signatures` (leave it as UE4SS shipped it, `dFText_Constructor.lua`: turned on, it closes the game at launch with the Steam overlay on). If F3 does nothing, the log's `menu:` lines say why; `settings.lua` sets everything without the menu.
 
-Every key of the mod can be changed in the menu's Keys tab: Enter on an action, then press the new key, with Ctrl, Shift or Alt if you like (Backspace cancels). A key another action had is swapped onto the old one. In `settings.lua` it's `keys = { split = "Ctrl+F11", menu = "Ctrl+F3" }` (UE4SS's key names: `F1`-`F12`, `A`-`Z`, `ZERO`-`NINE`, `NUM_ZERO`-`NUM_NINE`, `INS`, `DEL`, `HOME`, `END`, `PAGE_UP`, `PAGE_DOWN`; `"None"` unbinds one). The test keys show there only with Developer Keys on. The actions: `menu`, `hold`, `photo`, and the test keys `slice`, `split`, `mark`, `ragdoll`, `recover`, `face`, `death`, `blade`, `spawn`, `nextEnemy`, `spawner`, `kill`, `glass`. Another mod on the same key (a body slider's menu on F11) still gets it too, so move ours off it.
+F3 → Mod → Grouped Layout (Experimental) puts related options together and shows the row position; turn it off to restore the previous ordering immediately. Sub-options are dimmed when their parent setting is off, but remain selectable so you can adjust them in advance.
+
+Every key of the mod can be changed in the menu's Keys tab: Enter on an action, then press the new key, with Ctrl, Shift or Alt if you like (Backspace cancels). A key another action had is swapped onto the old one. In `settings.lua` it's `keys = { split = "Ctrl+F11", menu = "Ctrl+F3" }` (UE4SS's key names: `F1`-`F12`, `A`-`Z`, `ZERO`-`NINE`, `NUM_ZERO`-`NUM_NINE`, `INS`, `DEL`, `HOME`, `END`, `PAGE_UP`, `PAGE_DOWN`; `"None"` unbinds one). The test keys show there only with Developer Keys on. The actions: `menu`, `hold`, `photo`, and the test keys `slice`, `split`, `smash`, `ragdoll`, `recover`, `face`, `death`, `blade`, `spawn`, `nextEnemy`, `spawner`, `kill`, `glass`. Another mod on the same key (a body slider's menu on F11) still gets it too, so move ours off it.
 
 Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 
@@ -142,7 +141,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Proper Death Expression** by blabmice is built in (`ZZ_StellarBladeGore_Face_P`), credited below. To install it anyway, delete `ZZ_StellarBladeGore_Face_P.*` from `Paks/~mods`: two paks with the same asset keep the game loading forever.
 - **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.
 - **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: set `customizedRagdoll = true` in settings.lua (no longer in the F3 menu). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. **Delete `ZZ_StellarBladeGore_Face_P.pak`, `.ucas` and `.utoc` from `Paks/~mods`**: its `death_expression_p` carries a death face of its own (and its camera, so keep that one), and with both the game loads forever (reported). Its face plays then. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
-- **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs). Blood and Dirt (parked, off by default) would put its own blood on her too if turned on in settings.lua.
+- **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs). Blood and Dirt (experimental, off by default in F3) uses the native skin layer; Ultra Violence can add its own outfit/face blood separately.
 - **[ESE](https://www.nexusmods.com/stellarblade/mods/672)** (Shield and Destroyed) works alongside, in any load order: a part cut off her stays off when it puts her in another suit as her shield breaks or she dies.
 - **UUEPBS** (the body slider) works alongside: her sliders stay on through her deaths and cuts (before the next release, her deaths froze where she was cut).
 - **[Stellar Blade Play As](https://github.com/Warexpor/stellar-blade-play-as)** (play as Tachy, Raven or Scarlet, a mod of its own) works alongside: the cuts, struggle and dead face are hers as they are Eve's, and her death cry and moans are that character's own.
@@ -159,7 +158,7 @@ With `dev = true` in `settings.lua`:
 | F7 / F8 | Ragdoll her with a shove / get her up |
 | Alt+F7 / Alt+F8 | Lose Arm at Low HP's cut now: her left arm (no heals or gun) / her right arm (no sword). Needs Lose Arm at Low HP on |
 | F9 | Cut a limb, the head or the torso (grows back at a camp rest) |
-<!-- | F10 | A hit mark | -->
+| F10 | Random blunt smash on a test ragdoll; uses the limb/head/torso death odds. F8 restores her. Works without Blunt Smash or Smash Every Death enabled |
 | F11 | Split her in half |
 | F6 | Test the struggle: a ragdoll death with set cuts, the next each press (right arm, left leg, waist, left arm and right leg, both legs, left forearm, no cut), with F7's shove; she lies till F8 |
 | Alt+F6 | Test the animated death: plays the game's own death animations on her, the next each press (standing, two hit deaths, lying down), so a death animation mod's show; always the animated death, no cut; she lies till F8 |
@@ -171,7 +170,7 @@ With `dev = true` in `settings.lua`:
 
 For testing a game without this mod, the repo has the spawner on its own (`minimods/SBSpawner`, `./build.sh`; not released).
 
-These are the defaults; the F3 menu's Keys tab changes them. Its last two rows are the controller's combos (`menuPad`, `holdPad`): A, then hold the new buttons together and let go. With Ultra Violence installed, F9, F10 and F11 default to Alt+F9, Alt+F10 and Alt+F11 (it has its menu, outfit blood and blood stages on F9-F11).
+These are the defaults; the F3 menu's Keys tab changes them. Its last two rows are the controller's combos (`menuPad`, `holdPad`): A, then hold the new buttons together and let go. With Ultra Violence installed, Cut and Split default to Alt+F9 and Alt+F11. Blunt Smash stays on F10; rebind either mod’s F10 action if they conflict.
 
 F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own; a camp rest grows back what F9 cut off her alive).
 

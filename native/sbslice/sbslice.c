@@ -6949,9 +6949,78 @@ static void layout_cmd(const u16 *txt, int len)
     *o = 0;
     skin_result(out);
 }
+// a soft object path made by the engine's own MakeSoftObjectPath from the path after the ';' (ue_malloc'd parts: the
+// caller frees *sub). 0 when none could be made
+static u64 soft_path(process_event_fn pe, u64 cdo, u64 make, const u16 *src, int n, u16 **sub, int *snum, int *smax)
+{
+    *sub = 0; *snum = *smax = 0;
+    u16 *data = (u16 *)ue_malloc((u64)(n + 1) * 2);
+    if (!data) return 0;
+    for (int i = 0; i < n; i++) data[i] = src[i];
+    data[n] = 0;
+    // MakeSoftObjectPath(const FString& PathString) -> FSoftObjectPath { FName AssetPathName; FString SubPathString }
+    struct { u16 *data; int num, max; u64 name; u16 *sub; int snum, smax; } mp = { data, n + 1, n + 1, 0, 0, 0, 0 };
+    pe(cdo, make, &mp);
+    ue_free(data);
+    *sub = mp.sub; *snum = mp.snum; *smax = mp.smax;
+    return mp.name;
+}
+// "J=<library default object>,<MakeSoftObjectPath>,<Conv_SoftObjectReferenceToObject>;<asset path>": an asset asked
+// for by "J", in memory yet? Found by the engine's own soft pointer resolve (its object hash: a lookup, nothing loaded),
+// not UE4SS's StaticFindObject, which walks every object comparing names: four a poll for the assets still loading
+// were a 100 ms hitch every third of a second for the first 20 s of every level (perf, playtest). "ok <object> <1 or
+// 0>": 1 once it is fully in (no NeedLoad / NeedPostLoad, not async loading), "ok 0 0" while it isn't there
+static void find_cmd(const u16 *txt, int len)
+{
+    int semi = 0;
+    while (semi < len && txt[semi] && txt[semi] != ';') semi++;
+    if (semi >= len || txt[semi] != ';') { skin_result("err want J=<cdo>,<make>,<conv>;<path>"); return; }
+    u64 f[3] = { 0, 0, 0 };
+    parse_fields(txt, semi, f, 3);
+    for (int i = 0; i < 3; i++) if (f[i] < 0x10000 || !mem_readable(f[i], 8)) { skin_result("err bad object"); return; }
+    if (!RVA_GMALLOC || !*(u64 *)(exe + RVA_GMALLOC)) { skin_result("err no GMalloc"); return; }
+    u64 vt = *(u64 *)f[0];
+    if (!mem_readable(vt + PROCESS_EVENT_SLOT * 8, 8)) { skin_result("err no ProcessEvent"); return; }
+    process_event_fn pe = (process_event_fn)(*(u64 *)(vt + PROCESS_EVENT_SLOT * 8));
+    const u16 *src = txt + semi + 1;
+    int n = 0;
+    while (semi + 1 + n < len && src[n]) n++;
+    if (n <= 0 || n > 1000) { skin_result("err bad path"); return; }
+    u16 *sub; int snum, smax;
+    u64 name = soft_path(pe, f[0], f[1], src, n, &sub, &snum, &smax);
+    if (!name) { if (sub) ue_free(sub); skin_result("err no soft path made"); return; }
+    // Conv_SoftObjectReferenceToObject(const TSoftObjectPtr<UObject>& SoftObject) -> UObject*: the soft pointer
+    // (weak pointer, tag, path) at 0x00, the object at 0x28 (0x30 in all)
+    unsigned char cp[0x30];
+    for (int i = 0; i < 0x30; i++) cp[i] = 0;
+    *(u64 *)(cp + 0x10) = name;
+    *(u16 **)(cp + 0x18) = sub; *(int *)(cp + 0x20) = snum; *(int *)(cp + 0x24) = smax;
+    pe(f[0], f[2], cp);
+    if (sub) ue_free(sub);
+    u64 obj = *(u64 *)(cp + 0x28);
+    int done = 0;
+    if (obj >= 0x10000 && mem_readable(obj, 0x10) && RVA_GUOBJECTARRAY) {
+        int index = *(int *)(obj + 0xc);
+        u64 arr = exe + RVA_GUOBJECTARRAY + GUO_OBJOBJECTS;
+        if (index >= 0 && mem_readable(arr, 0x20) && index < *(int *)(arr + 0x14)) {
+            u64 *chunks = *(u64 **)arr;
+            u64 item = mem_readable((u64)chunks + (u64)(index / GUO_CHUNK) * 8, 8)
+                ? chunks[index / GUO_CHUNK] + (u64)(index % GUO_CHUNK) * GUO_ITEM : 0;
+            // (RF_NeedLoad 0x400, RF_NeedPostLoad 0x1000; AsyncLoading 1 << 27, Unreachable, PendingKill)
+            if (item && mem_readable(item, 0x10) && *(u64 *)item == obj)
+                done = !(*(u32 *)(obj + 8) & 0x1400) && !(*(u32 *)(item + 8) & ((1u << 27) | EIF_UNREACHABLE | EIF_PENDINGKILL));
+        }
+    } else obj = 0;
+    char out[48], *o = put(out, "ok ");
+    o = put_hex(o, obj);
+    o = put(o, done ? " 1" : " 0");
+    *o = 0;
+    skin_result(out);
+}
 static void load_cmd(const u16 *txt, int len)
 {
     if (len > 1 && txt[1] == '?') { layout_cmd(txt + 2, len - 2); return; }
+    if (len > 1 && txt[1] == '=') { find_cmd(txt + 2, len - 2); return; }
     int semi = 1;
     while (semi < len && txt[semi] && txt[semi] != ';') semi++;
     if (semi >= len || txt[semi] != ';') { skin_result("err want J<cdo>,<make>,<load>,<world>;<path>"); return; }
@@ -6966,14 +7035,8 @@ static void load_cmd(const u16 *txt, int len)
     int n = 0;
     while (semi + 1 + n < len && src[n]) n++;
     if (n <= 0 || n > 1000) { skin_result("err bad path"); return; }
-    u16 *data = (u16 *)ue_malloc((u64)(n + 1) * 2);
-    if (!data) { skin_result("err out of memory"); return; }
-    for (int i = 0; i < n; i++) data[i] = src[i];
-    data[n] = 0;
-    // MakeSoftObjectPath(const FString& PathString) -> FSoftObjectPath { FName AssetPathName; FString SubPathString }
-    struct { u16 *data; int num, max; u64 name; u16 *sub; int snum, smax; } mp = { data, n + 1, n + 1, 0, 0, 0, 0 };
-    pe(f[0], f[1], &mp);
-    ue_free(data);
+    struct { u64 name; u16 *sub; int snum, smax; } mp = { 0, 0, 0, 0 };
+    mp.name = soft_path(pe, f[0], f[1], src, n, &mp.sub, &mp.snum, &mp.smax);
     if (!mp.name) { if (mp.sub) ue_free(mp.sub); skin_result("err no soft path made"); return; }
     // LoadAsset(UObject* WorldContextObject, TSoftObjectPtr<UObject> Asset, FOnAssetLoaded OnLoaded,
     // FLatentActionInfo LatentInfo): 0x00, 0x08 (weak pointer, tag, path), 0x30 (delegate), 0x40 (linkage, UUID,

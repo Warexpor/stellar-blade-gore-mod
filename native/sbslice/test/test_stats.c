@@ -12,10 +12,14 @@ void stats_result(const char *s) { snprintf(res, sizeof res, "%s", s); }
 void stats_event(const char *s) { snprintf(evt, sizeof evt, "%s", s); }
 
 // every block handed out here is readable; anything else isn't
-#define NB 64
+#define NB 512
 static unsigned char *blk[NB];
 static u64 blen[NB];
 static int nblk;
+static int mem_queries;
+static u64 clock_ticks, clock_step;
+u64 boss_clock(void) { clock_ticks += clock_step; return clock_ticks; }
+u64 boss_hz(void) { return 1000000; }
 static unsigned char *mk(u64 n)
 {
     unsigned char *p = aligned_alloc(16, (n + 15) & ~15ull);
@@ -30,11 +34,13 @@ static int blk_of(u64 p)
 }
 int readable(u64 p, u64 n)
 {
+    mem_queries++;
     int i = blk_of(p);
     return i >= 0 && (p & 3) == 0 && p + n <= (u64)blk[i] + blen[i];
 }
 u64 readable_len(u64 p, u64 max)
 {
+    mem_queries++;
     int i = blk_of(p);
     if (i < 0) return 0;
     u64 left = (u64)blk[i] + blen[i] - p;
@@ -53,6 +59,22 @@ static int cmd(const char *s, float a, float b, float c, float d)
     float loc[3] = { a, b, c }, dir[3] = { d, 0, 0 };
     res[0] = 0;
     return stats_cmd(cmdbuf, n, loc, dir);
+}
+
+static int boss_finish(const char *s)
+{
+    int calls = 0;
+    do {
+        int before = mem_queries;
+        cmd(s, 0, 0, 0, 0);
+        if (mem_queries - before > 2 * BOSS_WORK + 16) {
+            check(0, "boss: a read exceeded its bounded memory work");
+            break;
+        }
+        calls++;
+    } while (!strcmp(res, "pending") && calls < 10000);
+    if (!strcmp(res, "pending")) check(0, "boss: search never completed");
+    return calls;
 }
 
 // an actor: 0x900 bytes, +0x6a8 -> a component (0x400), +0x158 -> a block whose +0x30 is stat 0
@@ -246,29 +268,110 @@ int main(void)
         bd[S_HP] = 400; bd[S_MAXHP] = 400; bd[S_SHIELD] = 0; bd[S_MAXSHIELD] = 10;
         char s6[64];
         snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo, 5456, 166);
-        cmd(s6, 0, 0, 0, 0);
+        boss_finish(s6);
         check(!strcmp(res, "ok found 3100.00 5456.00 0.00 166.00"), "boss: found by its row's maximum");
         check(npaths == keepn && ncand == keepc, "boss: her paths and candidates left as they were");
         bs[S_HP] = 2900;
-        cmd(s6, 0, 0, 0, 0);
+        boss_finish(s6);
         check(!strcmp(res, "ok 2900.00 5456.00 0.00 166.00"), "boss: read again through its path");
         unsigned char *bo2;
         actor(&bo2, 8000, 8184, 249, 249);
         snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo2, 5456, 166);
-        cmd(s6, 0, 0, 0, 0);
+        boss_finish(s6);
         check(!strcmp(res, "ok found by ratio 8000.00 8184.00 249.00 249.00"), "boss: both scaled by 1.5: found by their ratio");
         snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo2, 7000, 166);
         nboss = 0;
-        cmd(s6, 0, 0, 0, 0);
+        boss_finish(s6);
         check(!strncmp(res, "none nearest 8000.00 8184.00 249.00 249.00 at depth ", 52), "boss: no maximum or ratio of its: none, the nearest told");
         // a pooled boss used again: its HP over its maximum (set before it) is still found by its maximums, and read
         unsigned char *bo3;
         actor(&bo3, 248304, 12415, 240, 240);
         snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo3, 12415, 240);
-        cmd(s6, 0, 0, 0, 0);
+        boss_finish(s6);
         check(!strcmp(res, "ok found 248304.00 12415.00 240.00 240.00"), "boss: HP over its maximum still found by the maximums");
-        cmd(s6, 0, 0, 0, 0);
+        boss_finish(s6);
         check(!strcmp(res, "ok 248304.00 12415.00 240.00 240.00"), "boss: and read again");
+
+        // No manual cache reset when the requested row changes: a still-shaped old array must not win.
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo3, 9000, 166);
+        boss_finish(s6);
+        check(!strncmp(res, "none", 4), "boss: changed requested maximum invalidates the cached path");
+
+        // A pointer-rich actor with aliases and cycles: hundreds of chunks, never one long game-thread scan.
+        unsigned char *wide = mk(SCAN_ACTOR), *shared = mk(SCAN_L2), *last = 0;
+        for (int j = 0; j < 64; j++) {
+            last = mk(SCAN_L1);
+            *(u64 *)(wide + 0x800 + j * 8) = (u64)last;
+            *(u64 *)(last + 8) = (u64)wide;
+            *(u64 *)(last + 16) = (u64)shared;
+        }
+        unsigned char *arr = mk(SCAN_L2);
+        *(u64 *)(last + SCAN_L1 - 8) = (u64)arr;
+        float *late = (float *)(arr + 0x500);
+        late[S_HP] = 1234; late[S_MAXHP] = 5456; late[S_MAXSHIELD] = 166;
+        // An earlier ratio match must wait for the later exact match.
+        float *ratio = (float *)(wide + 0x200);
+        ratio[S_HP] = 8000; ratio[S_MAXHP] = 8184; ratio[S_MAXSHIELD] = 249;
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)wide, 5456, 166);
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "pending"), "boss: expensive first read yields instead of blocking");
+        int slices = boss_finish(s6);
+        check(slices > 10 && !strcmp(res, "ok found 1234.00 5456.00 0.00 166.00"),
+              "boss: resumed search reaches a late exact match ahead of an early ratio match");
+        late[S_HP] = 0;
+        check(boss_finish(s6) == 1 && !strcmp(res, "ok 0.00 5456.00 0.00 166.00"),
+              "boss: cached zero HP is read immediately without a scan");
+
+        // A second actor can complete while the first searches; glass cannon state stays untouched.
+        *(u64 *)(last + SCAN_L1 - 8) = 0;
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "pending"), "boss: lost path starts a bounded new search");
+        char other[64];
+        snprintf(other, sizeof other, "vb%llx,%x,%x", (unsigned long long)bo, 5456, 166);
+        boss_finish(other);
+        check(!strcmp(res, "ok found 2900.00 5456.00 0.00 166.00"), "boss: another actor reads independently during a scan");
+        boss_finish(s6);
+        check(!strcmp(res, "ok found by ratio 8000.00 8184.00 0.00 249.00"), "boss: ratio used only after the complete resumed search");
+        check(npaths == keepn && ncand == keepc, "boss: sliced searches leave her paths and candidates intact");
+
+        // A parent disappears between slices: no read from the detached block, and a later retry can find it again.
+        nboss = 0;
+        clock_step = 100; // ten operations consume the 1 ms clock budget, before the work-count limit
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)bo, 5456, 166);
+        int before = mem_queries;
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "pending") && mem_queries - before < 32, "boss: time budget yields before the work limit");
+        while (boss[0].scan.stage < 2) cmd(s6, 0, 0, 0, 0);
+        u64 old = *(u64 *)(bo + 0x6a8);
+        *(u64 *)(bo + 0x6a8) = 0;
+        boss_finish(s6);
+        check(!strncmp(res, "none", 4), "boss: detached parent is revalidated between slices");
+        *(u64 *)(bo + 0x6a8) = old;
+        boss_finish(s6);
+        check(!strcmp(res, "ok found 2900.00 5456.00 0.00 166.00"), "boss: completed miss can be retried after pooling");
+        clock_step = 0;
+
+        // More bosses than search slots: keep each in-flight cursor, and release slots at death/removal/reload.
+        nboss = 0;
+        unsigned char *waiting[MAX_BOSS + 1];
+        for (int j = 0; j <= MAX_BOSS; j++) {
+            waiting[j] = mk(SCAN_ACTOR);
+            snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)waiting[j], 5456, 166);
+            cmd(s6, 0, 0, 0, 0);
+            check(!strcmp(res, j < MAX_BOSS ? "pending" : "busy"), "boss: full search slots never evict pending work");
+        }
+        u64 saved_q = boss[1].scan.q;
+        snprintf(s6, sizeof s6, "vB%llx", (unsigned long long)waiting[0]);
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "ok") && !boss[0].scan.active && boss[1].scan.q == saved_q,
+              "boss: cancellation frees only its own search slot");
+        snprintf(s6, sizeof s6, "vb%llx,%x,%x", (unsigned long long)waiting[MAX_BOSS], 5456, 166);
+        cmd(s6, 0, 0, 0, 0);
+        check(!strcmp(res, "pending"), "boss: waiting actor can use the released slot");
+        boss_finish(s6);
+        check(!strcmp(res, "none"), "boss: bounded unsuccessful search completes");
+        cmd("vB0", 0, 0, 0, 0);
+        check(!nboss && npaths == keepn && ncand == keepc, "boss: level reload drops all boss scans, leaving her stats intact");
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS");

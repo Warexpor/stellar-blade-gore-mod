@@ -1,6 +1,6 @@
 -- The mod's keys, rebindable (tune.keys, the F3 menu's Keys tab): each action's key is "F11", "Ctrl+Shift+F5",
 -- "Alt+NUM_ONE" (UE4SS's Key names, Ctrl / Shift / Alt before it), or "None". Unset, the default here (the test keys
--- F9-F11 on Alt with Ultra Violence on: it has them). UE4SS's key binds can't be taken back, so every key below is
+-- Cut/Split on Alt with Ultra Violence on). UE4SS's key binds can't be taken back, so every key below is
 -- bound once at load with each set of modifiers; a press is looked up in the bindings as they are then, and a key
 -- with two sets down at once (Ctrl+F5 fired F5's bind too) goes to the one with the most modifiers. Another mod on the
 -- same key (a body slider's menu on F11, Nexus report) still gets it: moving ours off it is the way out
@@ -38,7 +38,8 @@ M.ACTIONS = {
   { id = "photo", label = "Photo Mode in a Death", def = "P", help = "In a death: opens the game's photo mode on her body. The death waits while it is open." },
   { id = "slice", label = "Test: Cut", def = "F9", uv = true, dev = true, help = "Developer Keys: cuts a limb, the head or the torso off her where she stands." },
   { id = "split", label = "Test: Split", def = "F11", uv = true, dev = true, help = "Developer Keys: ragdolls her and splits her in half along the camera's view." },
-  { id = "mark", label = "Test: Hit Mark", def = "F10", uv = true, dev = true, help = "Developer Keys: a living hit's wound on a part of her facing the camera." },
+  { id = "smash", label = "Test: Blunt Smash", def = "F10", dev = true, help = "Developer Keys: ragdolls her and smashes a random remaining part, using the limb/head/torso death odds. Test: Get Up restores her. Does not require Blunt Smash or Smash Every Death on." },
+  -- (parked with hit marks) { id = "mark", label = "Test: Hit Mark", def = "Alt+F10", dev = true, help = "Developer Keys: a living hit's wound on a part of her facing the camera." },
   { id = "ragdoll", label = "Test: Ragdoll", def = "F7", dev = true, help = "Developer Keys: ragdolls her with a shove. She stays down till Test: Get Up." },
   { id = "recover", label = "Test: Get Up", def = "F8", dev = true, help = "Developer Keys: gets her up from a test ragdoll or cut." },
   { id = "face", label = "Test: Death Face", def = "PAGE_UP", dev = true, help = "Developer Keys: her death face for 6 s, the next mood each press." },

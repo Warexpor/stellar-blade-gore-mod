@@ -59,7 +59,7 @@ M.ROWS = {
   { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the head comes off." },
   { key = "gore.death.torso", label = "Waist Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut in two at the waist, leaning a little at random." },
   { key = "gore.death.split", label = "Vertical Split Chance", kind = "num", min = 0, max = 100, step = 1, help = "Weight against the other chances: the body splits in two from head to hips. Like the others it is rolled when Hit Decides leaves the cut to chance (a tracked blade decides first); set only this one above 0 and every death splits." },
-  { key = "gore.noSplits", label = "No Vertical Splits", kind = "bool", help = "Off by default. On: she is never split in half from head to hips, by any blow, chance or hit after her death. A blade down her length takes the limbs it crossed instead, and the split chance goes to the others." },
+  { key = "gore.noSplits", label = "No Vertical Splits", kind = "bool", help = "Off by default. On: she is never split in half from head to hips, by any blow, chance or hit after her death. A blade down her length becomes a beheading or a waist cut based on where it struck; other cuts follow the usual rules. The split chance goes to the others." },
   -- (parked) { key = "gore.death.diagonal", label = "Diagonal Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut from over one shoulder down to the other hip; the head and the other arm go one way, that arm and the legs the other." },
   { key = "gore.death.moreLimbs", label = "Extra Limb Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a limb cut takes the next nearest limb too (0-1), and a third at the same chance again. At 0.35: 35% two or more limbs, 12% three. Rolled limb cuts only; a tracked blade cuts every limb it crosses." },
   { key = "gore.followUpCuts", label = "Follow-up Cuts", kind = "bool", help = "One swing cuts everything it went through: both arms and the body, say. Off: one cut a swing, the body when the blade went through it, else the limb it met first (Extra Limb Chance does nothing either). A laser trap still cuts along its beam." },
@@ -68,8 +68,8 @@ M.ROWS = {
   { key = "gore.oddsNear.enabled", label = "Chances Follow the Hit", kind = "bool", help = "The chances above lean to what is near where the blow landed: a swing at her waist cuts the waist, a nearby arm or leg, or splits her if it came down her length, never her head; a blow at her neck mostly beheads. Set only one chance above 0 and every death still does that one, wherever it hit. Off: the chances as they are." },
   { key = "gore.oddsNear.floor", label = "   Far Part Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "With Chances Follow the Hit: share of its chance a part far from the hit keeps (0-1). 0: never (a waist swing never beheads), 0.1: now and then, 1: as if off." },
   { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Enemy weapons swinging through Eve's dead body cut it again (a limb, the head or the body), up to 6 times a death. About a quarter leave only a wound." },
-  { key = "gore.smash.enabled", label = "Blunt Smash (Experimental)", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) smashes the arm, leg or head it hit: the part vanishes and the game's meat chunks burst out with blood, the stump stays. Blades still cut." },
-  { key = "gore.smash.always", label = "   Smash Every Death", kind = "bool", help = "With Blunt Smash on: every death smashes a part, whatever hit her. To try the smash out." },
+  { key = "gore.smash.enabled", label = "Blunt Smash (Experimental)", kind = "bool", help = "On by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit: the part vanishes and the game's meat chunks burst out with blood, the stump stays. Blades still cut." },
+  { key = "gore.smash.always", label = "   Smash Every Death", kind = "bool", help = "Off by default. With Blunt Smash on: every death smashes a part, whatever hit her. To try the smash out." },
   { key = "gore.laserCut", label = "Laser Cuts Along the Beam", kind = "bool", help = "A laser trap death cuts Eve along the beam that killed her: every arm, leg, her body or her head the beam's plane goes through comes off. Off: laser deaths roll the cut chances like any death with no blade seen." },
   { key = "gore.bluntRagdoll", label = "Blunt Kills Only Ragdoll", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) cuts nothing: Eve dies a plain ragdoll, and hits after it cut nothing either. Blades still cut. Goes before Blunt Smash." },
   { key = "gore.throw", label = "Cut Piece Force", kind = "num", min = 0, max = 800, step = 25, unit = " cm/s", help = "Speed a piece flies off with when it wasn't cut by the killing blow, e.g. a hit after death (0: it just drops). The killing blow's pieces fly with the blow (deathThrow in tune.lua)." },
@@ -107,7 +107,7 @@ M.ROWS = {
   { key = "active.push", label = "Death Push", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "How hard the killing blow throws Eve's body, on top of the game's own throw (1: default, 0: the game's alone, 2: twice the default)." },
   { key = "active.stiffness", label = "Ragdoll Stiffness", kind = "num", min = 0, max = 3, step = 0.25, help = "Muscle tone in her ragdoll as she falls. 0: limp from the start, 1: default (firm, going limp as she lands), 2-3: she holds her shape longer." },
   { key = "active.neutral.enabled", label = "Relaxed Pose In Flight", kind = "bool", help = "Thrown by a hard hit, her joints are pulled towards a relaxed, curled pose (knees and elbows bent, arms forward) until she lands, instead of her limbs flying out straight." },
-  { key = "active.jiggle.enabled", label = "Jiggle After Death (Experimental)", kind = "bool", help = "On by default, being tested. In her ragdoll her breasts sway and bounce on a soft spring with her falls and landings. Off: they stay locked to her chest, as before (loose, they used to shake her on the floor)." },
+  { key = "active.jiggle.enabled", label = "Jiggle After Death", kind = "bool", help = "On by default. In her ragdoll her breasts sway and bounce on a soft spring with her falls and landings. Off: they stay locked to her chest, as before (loose, they used to shake her on the floor)." },
   { key = "active.weaponCut.enabled", label = "Breakable Sword", kind = "bool", help = "On by default. When the killing blow's blade crosses her sword as it falls from her hand, the sword is cut in two there, each half falling on its own; a killing blow through her guard (blocked within half a second) always breaks it. Off: her sword always falls whole." },
   { section = "Enemies" },
   { key = "enemies.enabled", label = "Enemy Gore", kind = "bool", help = "Cuts and blood on humanoid enemies killed within 25 m of Eve." },
@@ -115,25 +115,19 @@ M.ROWS = {
   { key = "enemies.cutChance", label = "   Cut Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a kill cuts something off (0-1): along your swing when you swung, else a limb, the head or a waist cut at random." },
   { key = "enemies.pushScale", label = "Death Throw", kind = "num", min = 0, max = 4, step = 0.25, unit = "x", help = "Scales the game's own throw of a dying enemy (1: as the game, 0: it drops on the spot, 2: twice as far). Works with Enemy Gore off too." },
   { key = "enemies.push", label = "Extra Death Push", kind = "num", min = 0, max = 1000, step = 50, unit = " cm/s", help = "Speed added to every enemy death along the blow, slightly upward, on top of Death Throw (0: none). Works with Enemy Gore off too." },
-  -- (Blood and Dirt: parked, off and hidden till blood on her outfits can look like the game's own; tune.stains)
-  -- { section = "Blood and Dirt" },
-  -- { key = "stains.enabled", label = "Blood and Dirt (Experimental)", kind = "bool", help = "The game's own blood layer on Eve's skin, cut before release, switched back on. Hits that take HP bloody her, enemies hit near her splash her, falls and knockdowns dirty her, and her death soaks her. Swimming washes it off; a camp rest or her next life cleans her. Off: none, her materials as the game has them." },
-  -- { key = "stains.scale", label = "   Blood Amount", kind = "num", min = 0.25, max = 3, step = 0.25, unit = "x", help = "With Blood and Dirt on: how much blood every hit, splash and death puts on her (1: default, 2: twice as much)." },
-  -- { key = "stains.wounds.enabled", label = "   Wounds Where Hit", kind = "bool", help = "With Blood and Dirt on: a hit she lives through leaves a bleeding wound on her skin where it landed, drawn in the skin's own blood layer (not a decal), with drops of blood round it. A hit on her outfit soaks the cloth there with blood instead. Wounds pale in water and heal at a camp rest." },
-  -- { key = "stains.wounds.size", label = "   Wound Size", kind = "num", min = 2, max = 15, step = 1, unit = " cm", help = "With Wounds Where Hit on: the size of a wound's core (harder hits leave bigger ones). New wounds." },
-  -- { key = "stains.splash.enabled", label = "   Enemy Blood Splatter", kind = "bool", help = "With Blood and Dirt on: enemies hit or cut near her splash her with their blood, more the closer they are." },
-  -- { key = "stains.splash.range", label = "   Splatter Range", kind = "num", min = 100, max = 800, step = 50, unit = " cm", help = "With Enemy Blood Splatter on: how near an enemy has to be for its blood to reach her." },
-  -- { key = "stains.dirt.enabled", label = "   Dirt", kind = "bool", help = "With Blood and Dirt on: hard landings and knockdowns dirty her, and her body gets dirtier the longer it lies dead." },
-  -- { key = "stains.cloth.enabled", label = "   Stained Clothing", kind = "bool", help = "With Blood and Dirt on: blood soaks into her outfit where it lands on it (hits, drops), painted into the cloth's own colour, and dirt darkens and greys it. Outfits whose materials lack a colour texture or the game's brightness settings stay as they are." },
-  -- { key = "stains.sound.enabled", label = "   Wound Sound", kind = "bool", help = "With Blood and Dirt on: a wet blood sound (the game's own) on each hit that leaves a wound, over the hit's usual sound." },
-  -- { key = "stains.spatter.enabled", label = "   Blood Drops", kind = "bool", help = "With Blood and Dirt on: blood lands on her as drops, on her skin and her outfit: round her wounds, from enemies hit near her (on the side facing them), at her death and from Add Blood." },
-  -- { key = "stains.wash.enabled", label = "   Water Washes It Off", kind = "bool", help = "With Blood and Dirt on: swimming washes the blood and dirt off her (a few seconds); wounds stay, paler." },
-  -- { key = "stains.rest", label = "   Camp Rest Cleans Her", kind = "bool", help = "With Blood and Dirt on: resting at a camp cleans her and heals her wounds. Her next life always starts clean." },
-  -- { key = "stains.fade", label = "   Fades By Itself", kind = "num", min = 0, max = 30, step = 1, unit = " min", help = "With Blood and Dirt on: minutes for blood and dirt to fade by themselves (0: never, it stays till washed or rested off). Wounds don't fade." },
-  -- { button = "call", call = "stains.test_blood", label = "Add Blood", help = "Puts a quarter more blood on her and a dozen drops over her skin and outfit, to see it." },
-  -- { button = "call", call = "stains.test_wound", label = "Add Wound", help = "A wound on her arm, leg or body at random, on the side facing the camera, to see it." },
-  -- { button = "call", call = "stains.test_dirt", label = "Add Dirt", help = "Puts a quarter more dirt on her, to see it." },
-  -- { button = "call", call = "stains.clean", label = "Clean Her", help = "Takes all the blood, dirt and wounds off her at once." },
+  { section = "Blood and Dirt" },
+  { key = "stains.enabled", label = "Blood and Dirt (Experimental)", kind = "bool", help = "Experimental, off by default. Restores the game's unused blood and dirt mechanic: it builds on Eve as she takes damage or nearby enemies are hit, and clears with healing or swimming. Works best with the Skin Suit and exposed skin on some outfits; many outfits do not fully support it." },
+  { key = "stains.scale", label = "   Blood Amount", kind = "num", min = 0.25, max = 3, step = 0.25, unit = "x", help = "With Blood and Dirt on: blood gained from her damage and nearby enemy hits or cuts (1: default, 2: twice as much)." },
+  { key = "stains.splash.enabled", label = "   Enemy Blood Splatter", kind = "bool", help = "Enemies hit or cut near her add blood to her skin, more the closer they are." },
+  { key = "stains.splash.range", label = "      Splatter Range", kind = "num", min = 100, max = 2000, step = 100, unit = " cm", help = "Distance within which enemy hits and cuts bloody her skin. Default: 1000 cm (10 m)." },
+  { key = "stains.dirt.enabled", label = "   Dirt", kind = "bool", help = "Hard landings, knockdowns and lying dead add dirt through the game's existing skin layer." },
+  { key = "stains.heal.enabled", label = "   Healing Cleans Her", kind = "bool", help = "Recovering a share of missing HP gradually removes the same share of her blood and dirt. Healing to full clears both." },
+  { key = "stains.wash.enabled", label = "   Water Washes It Off", kind = "bool", help = "Swimming gradually washes blood and dirt off her skin." },
+  { key = "stains.rest", label = "   Camp Rest Cleans Her", kind = "bool", help = "Resting at a camp clears the blood and dirt from her skin. Her next life always starts clean." },
+  { key = "stains.fade", label = "   Fades By Itself", kind = "num", min = 0, max = 30, step = 1, unit = " min", help = "Minutes for blood and dirt to fade without healing or water (0: never)." },
+  { button = "call", call = "stains.test_blood", label = "Add Blood", help = "Gradually adds a quarter more blood through her native skin layer." },
+  { button = "call", call = "stains.test_dirt", label = "Add Dirt", help = "Gradually adds a quarter more dirt through her native skin layer." },
+  { button = "call", call = "stains.clean", label = "Clean Her", help = "Gradually clears blood and dirt from her skin." },
   { section = "Gameplay" },
   { key = "holdDown", label = "Stay Down After Knockdown", kind = "bool", help = "When knocked down, Eve stays on the ground until you dodge or jump. Off: she gets up by herself after a second, as in the game." },
   { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under Arm Comes Off Below of her HP (25% by default) cuts an arm off (Which Arm), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life." },
@@ -169,6 +163,7 @@ M.ROWS = {
   { key = "cameraMove", label = "   Fly Speed", kind = "num", min = 100, max = 2000, step = 50, unit = " cm/s", help = "How fast the death camera flies (Shift: three times that). It stays within 15 m of where it started." },
   { section = "Mod" },
   { key = "language", label = "Language", kind = "list", values = M.LANGS, names = M.LANG_NAMES, help = "The language of this menu: English, Chinese (Simplified), Japanese, Korean or Russian. The rest of the mod (settings.lua, the log, the README) stays in English." },
+  { key = "menuGrouped", label = "Grouped Layout (Experimental)", kind = "bool", help = "On by default. Groups related settings together. Off restores the previous menu order immediately; your settings stay as they are." },
   { key = "menuPadIcons", label = "Controller Icons", kind = "list", values = { "xbox", "playstation" },
     names = { xbox = "Xbox", playstation = "PlayStation" }, help = "Which controller's buttons this menu shows when you use a controller." },
   { key = "fewerGC", label = "Fewer GC Hitches", kind = "bool", help = "Stops the engine forcing a garbage collection each time it unloads part of the map, one of the causes of the game's own half-second freezes. Its regular pass once a minute still runs. Off: the game's own behaviour. Takes effect within a minute." },
@@ -305,6 +300,64 @@ local function set(path, v)
 end
 M.get = get
 
+-- Visual dependencies only: dim an unavailable child without hiding it or changing its saved value.
+M.DEPENDS = {
+  ["gore.smash.always"] = { { "gore.smash.enabled", true } },
+  ["gore.oddsNear.floor"] = { { "gore.oddsNear.enabled", true } },
+  ["enemies.cutChance"] = { { "enemies.enabled", true } },
+  ["convulse.face"] = { { "convulse.enabled", true } },
+  ["convulse.voice.enabled"] = { { "convulse.enabled", true } },
+  ["convulse.voice.volume"] = { { "convulse.enabled", true }, { "convulse.voice.enabled", true } },
+  ["convulse.neck.enabled"] = { { "convulse.enabled", true } },
+  ["struggle.strength"] = { { "deathMoves", true } }, ["struggle.length"] = { { "deathMoves", true } },
+  ["struggle.rise.alone"] = { { "deathMoves", true } }, ["convulse.armSwing.enabled"] = { { "deathMoves", true } },
+  ["gore.headRagdollChance"] = { { "active.animated", true }, { "gore.headRagdoll", false } },
+  ["gore.armRagdollChance"] = { { "active.animated", true }, { "gore.armRagdoll", false } },
+  ["gore.torsoLegs.rolled"] = { { "active.animated", true }, { "gore.torsoLegs.enabled", true } },
+  ["reviveAt"] = { { "deathScreen", "delay" } },
+  ["stains.splash.range"] = { { "stains.enabled", true }, { "stains.splash.enabled", true } },
+  ["gore.lowArm.healAt"] = { { "gore.lowArm.enabled", true }, { "gore.lowArm.healBack", true } },
+}
+for _, key in ipairs({ "gore.headRagdoll", "gore.legRagdoll", "gore.armRagdoll", "gore.torsoLegs.enabled" }) do
+  M.DEPENDS[key] = { { "active.animated", true } }
+end
+for _, key in ipairs({ "stains.scale", "stains.splash.enabled", "stains.dirt.enabled", "stains.heal.enabled",
+  "stains.wash.enabled", "stains.rest", "stains.fade", "stains.test_blood", "stains.test_dirt", "stains.clean" }) do
+  M.DEPENDS[key] = { { "stains.enabled", true } }
+end
+for _, key in ipairs({ "gore.lowArm.below", "gore.lowArm.side", "gore.lowArm.noHealGun", "gore.lowArm.noSword",
+  "gore.lowArm.notice", "gore.lowArm.healBack" }) do M.DEPENDS[key] = { { "gore.lowArm.enabled", true } } end
+M.DEPENDS["gore.lowArm.notice"] = { { "gore.lowArm.enabled", true }, { "gore.lowArm.noHealGun", true } }
+for _, key in ipairs({ "bosses.pick", "bosses.hpScale", "bosses.passive", "bosses.struggle", "bosses.face", "bosses.spawn_pick" }) do
+  M.DEPENDS[key] = { { "bosses.enabled", true } }
+end
+for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraBody", "cameraFlyAfter", "cameraBodyBone", "cameraTrack", "cameraMove" }) do
+  M.DEPENDS[key] = { { "cameraStill", true } }
+end
+M.DEPENDS.cameraBodyBone = { { "cameraStill", true }, { "cameraBody", true } }
+M.DEPENDS.cameraTrack = { { "cameraStill", true }, { "cameraBody", false } }
+function M.dimmed(row)
+  for _, dep in ipairs(M.DEPENDS[row_id(row)] or {}) do if get(dep[1]) ~= dep[2] then return true end end
+  return false
+end
+-- Reversible ordering only: no option, value, tab or binding is dropped.
+function M.group_rows(rows)
+  local function after(key, anchor)
+    local from, to
+    for i, r in ipairs(rows) do if r.key == key then from = i end; if r.key == anchor then to = i end end
+    if not from or not to then return end
+    local r = table.remove(rows, from)
+    if from < to then to = to - 1 end
+    table.insert(rows, to + 1, r)
+  end
+  after("gore.smash.enabled", "gore.enabled")
+  after("gore.smash.always", "gore.smash.enabled")
+  after("gore.bluntRagdoll", "gore.smash.always")
+  after("reviveAt", "deathScreen")
+  after("enemies.cutChance", "enemies.enabled")
+  return rows
+end
+
 -- the rows shown: the test keys' only with Developer Keys on (they do nothing without it). M.ALL holds every row;
 -- the selection stays on its row
 function M.refresh()
@@ -312,6 +365,7 @@ function M.refresh()
   local dev = get("dev") == true
   local rows = {}
   for _, r in ipairs(M.ALL or M.ROWS) do if not r.dev or dev then rows[#rows + 1] = r end end
+  if get("menuGrouped") ~= false then M.group_rows(rows) end
   M.ROWS, M.TABS = rows, nil
   -- (the first row shown too: kept at its old index, Developer Keys turned off scrolled the Mod tab past its own rows
   -- and showed only its last three, playtest)
@@ -696,6 +750,9 @@ local function build()
   -- tabs and rows on one grid: the same top, height and spacing, so a tab lines up with the row beside it
   local r0, rh, bh = 222, 58, 48
   ui.r0, ui.rh, ui.bh = r0, rh, bh
+  ui.context = text(400, 195, 12, "", { font = bold, spacing = 100 })
+  ui.counter = text(1160, 195, 12, "", { font = bold, centre = true })
+  tint(ui.context, 0.48, 0.50, 0.54); tint(ui.counter, 0.40, 0.42, 0.46)
   stage("widgets: tabs and rows")
   -- the tabs down the left
   for k, t in ipairs(tabs()) do
@@ -847,6 +904,8 @@ local function render()
   if s.sel > s.top + M.VISIBLE - 1 then s.top = s.sel - M.VISIBLE + 1 end
   -- (and no empty rows below a tab's end while rows above are scrolled off)
   if s.top > t.first and t.last - s.top + 1 < M.VISIBLE then s.top = math.max(t.first, t.last - M.VISIBLE + 1) end
+  try(function() set_text(ui.context, tab_name(t.name)); set_text(ui.counter, string.format("%d / %d", s.sel - t.first + 1, t.last - t.first + 1)) end)
+  show(ui.context, get("menuGrouped") ~= false); show(ui.counter, get("menuGrouped") ~= false)
   local langShown
   for k, tab in ipairs(ui.tabs) do
     local on = k == tk
@@ -858,6 +917,7 @@ local function render()
     local idx = s.top + i - 1
     local row = idx <= t.last and M.ROWS[idx] or nil
     local on = row ~= nil and idx == s.sel
+    local dim = row and M.dimmed(row)
     show_all(r.focus, on)
     local lab, val = row and label_of(row) or "", row and row.key and value_text(row) or ""
     -- (the Language row's value: its name in its own font, over the row's empty one)
@@ -878,13 +938,15 @@ local function render()
     local arrows = on and val ~= "" and row.kind ~= "key" and row.kind ~= "pad"
     show(r.la, arrows); show(r.ra, arrows)
     if on then
-      tint(r.lab, 0.022, 0.025, 0.05); tint(r.val, 0.022, 0.025, 0.05)
-      if r.labS then tint(r.labS, 0.022, 0.025, 0.05) end
+      local c = dim and 0.34 or 0.022
+      tint(r.lab, c, c, dim and 0.37 or 0.05); tint(r.val, c, c, dim and 0.37 or 0.05)
+      if r.labS then tint(r.labS, c, c, dim and 0.37 or 0.05) end
       tint(r.la, 0.02, 0.32, 0.9); tint(r.ra, 0.02, 0.32, 0.9)
     else
       -- a sub-setting (its label indented) a shade dimmer
-      local c = lab:sub(1, 1) == " " and 0.38 or 0.6
-      tint(r.lab, c, c, c * 1.03); tint(r.val, 0.85, 0.85, 0.86)
+      local c = dim and 0.30 or (lab:sub(1, 1) == " " and 0.48 or 0.6)
+      local v = dim and 0.48 or 0.85
+      tint(r.lab, c, c, c * 1.03); tint(r.val, v, v, v + 0.01)
       if r.labS then tint(r.labS, c, c, c * 1.03) end
     end
   end
@@ -1041,7 +1103,7 @@ local function step(dir)
   end
   set(row.key, v)
   s.changed[row.key] = true
-  if row.key == "dev" then M.refresh() end
+  if row.key == "dev" or row.key == "menuGrouped" then M.refresh() end
   -- (another language: the menu made again, in its strings and fonts)
   if row.key == "language" then
     if s.ui and valid(s.ui.w) then try(function() s.ui.w:RemoveFromParent() end) end
@@ -1240,6 +1302,7 @@ function M.tick(pawn)
     local r = g and g.native_ready and g.native_ready() and g.command and g.command("K")
     if type(r) == "string" and r:match(" fg0") then
       log("menu: the game's window lost focus (alt-tab): closed")
+      s.focusLost = true -- keep the transition even if the game stops ticking in the background
       M.close(pawn)
       return
     end

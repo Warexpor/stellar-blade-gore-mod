@@ -109,7 +109,9 @@ for _, x in ipairs(sg) do
     if k then kept[#kept + 1], off[#off + 1] = tonumber(k), tonumber(o) end
   end
 end
-check(acts >= 2, string.format("%d acts played out", acts))
+-- A short struggle after a delayed landing can finish one act and cut the next short as she dies. The air
+-- scenario checks that it waited, steered a complete act on landing, and reached its natural end below.
+check(acts >= (AIR and 1 or 2), string.format("%d acts played out", acts))
 check(#kept > 0, string.format("%d acts steered her joints", #kept))
 local sum = 0
 for _, k in ipairs(kept) do sum = sum + k end

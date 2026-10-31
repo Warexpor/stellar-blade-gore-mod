@@ -9,8 +9,7 @@
 -- (the chest heaving, the shoulders rising, the jaw dropping). Then a last gasp, and after it only small twitches of a
 -- hand, a foot or a calf, further apart, until tune.convulse.duration (8 s: the death screen comes about 10 s in).
 -- Her eyelids flutter and her face winces with the spasms (main.lua's death face, M.face). A cut-off arm or leg
--- twitches on its own too. Beheaded (an instant death) her body convulses but never gasps, and her face stays as it
--- is (her cry is cut off as the head comes away: gore.lua's vox.cut).
+-- twitches on its own too. After head loss only slight, silent leg twitches remain; gore.lua cuts off her cry.
 --
 -- Each movement is a muscle: a bone turned against its parent about the joint, its speed rising and falling over a
 -- tenth of a second or so (a gasp, half a second), the parent turned back by the child's share of their mass, so she
@@ -136,13 +135,21 @@ function M.init(c)
 end
 
 local function rag() return ctx.rag end
-local function headless(mesh) local r = rag(); return r and r.severed(mesh, "Bip001-Head") end
+local function headless(mesh)
+  local r, g = rag(), ctx.gore
+  return (r and r.severed and r.severed(mesh, "Bip001-Head"))
+    or (g and g.smashed and g.smashed.has(mesh, "Bip001-Head"))
+end
 -- split down her length (a vertical slash): her face stays and she makes no sound, as when beheaded
 local function split(mesh)
   local g = ctx.gore
   return g and g.cuts_on and select(2, g.cuts_on(mesh)) == true
 end
-local function still(mesh) return headless(mesh) or split(mesh) end
+local function torso_smashed(mesh)
+  local g = ctx.gore
+  return g and g.smashed and g.smashed.has(mesh, "Bip001-Spine1")
+end
+local function still(mesh) return headless(mesh) or split(mesh) or torso_smashed(mesh) end
 -- cut across the waist (Spine1, gore.lua's torso cut): her hips and legs are a corpse's, only the upper body moves
 -- (playtest: her legs kicked and her hips jerked with the gasps)
 local LOWER = { ["Bip001-Pelvis"] = true, ["Bip001-Spine"] = true }
@@ -151,7 +158,7 @@ for _, s in ipairs({ "L", "R" }) do
 end
 local function lower(comp, b)
   local r = rag()
-  return LOWER[b] and r and r.severed(comp, "Bip001-Spine1") or false
+  return LOWER[b] and not torso_smashed(st.mesh) and r and r.severed(comp, "Bip001-Spine1") or false
 end
 local function loc(comp, b) return try(function() local v = comp:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end) end
 local function cen(comp, b) return try(function() local v = comp:GetCenterOfMass(FName(b)); return vec(v.X, v.Y, v.Z) end) end
@@ -521,7 +528,7 @@ local function envelope(x, dur)
 end
 -- what the poses add now, by morph target name (nil: nothing)
 function M.face()
-  if not st or #st.faces == 0 then return nil end
+  if not st or headless(st.mesh) or torso_smashed(st.mesh) or #st.faces == 0 then return nil end
   local now, out, keep = os.clock(), {}, {}
   for _, e in ipairs(st.faces) do
     if now < e.at + e.dur then
@@ -915,13 +922,35 @@ end
 
 -- struggle.lua's try to sit up: the strain on her face over dur, and a moan with it. What played, for its log line
 function M.effort(dur, k)
-  if not st then return "" end
+  if not st or headless(st.mesh) or torso_smashed(st.mesh) then return "" end
   face("strain", k or 1, os.clock(), dur)
   return sound("moan", 0.8 + 0.4 * (k or 1), true)
 end
 
 -- the next event, by how far into her convulsions she is: x seconds since they began
 local function next_event(x, anim)
+  if st.smashed then
+    -- Only connected lower legs: no hips, chest, face, gasp, voice, or purposeful pushing.
+    local r, choices = rag(), {}
+    for _, sd in ipairs({ "L", "R" }) do
+      local b = "Bip001-" .. sd .. "-"
+      if not (r and (r.severed(st.mesh, b .. "Thigh") or r.severed(st.mesh, b .. "Calf") or r.severed(st.mesh, b .. "Foot"))) then
+        choices[#choices + 1] = b
+      end
+    end
+    local n = 0
+    if #choices > 0 and ctx.tune.deathMoves ~= false then
+      local b = choices[math.random(#choices)] .. (math.random() < 0.5 and "Calf" or "Foot")
+      local amp = 35 * math.max(0, math.min(cfg().strength or 1, 1)) * math.max(0, 1 - x / 4)
+      if pulse(st.mesh, nil, b, "plantar", amp, rnd(0.12, 0.18), os.clock(), anim, nil, nil, xaxis(st.mesh, b)) then
+        n = 1
+        if r then r.twitch(0.4) end
+      end
+    end
+    st.events = st.events + n
+    st.next = x + rnd(0.5, 1.0)
+    return "small leg twitch", n
+  end
   -- (with animBody off an animated death's end pose holds: her face only, but for a waist cut's upper body, flying
   -- in the ragdoll while her legs play the fall: its arms and head still move, playtest)
   local only = anim and not cfg().animBody
@@ -1066,6 +1095,14 @@ function M.tick(paused)
     return
   end
   st.t, st.dt = st.t + dt, dt
+  if (torso_smashed(st.mesh) or headless(st.mesh)) and not st.smashed then
+    -- A smash may interrupt an already running struggle/spasm: discard its queued muscle/face/voice events.
+    chains_drop("ragdoll")
+    st.smashed, st.pulses, st.faces, st.jolts = true, {}, {}, nil
+    st.onset, st.next, st.done = nil, 0, false
+    st.trail, st.down = {}, 0
+    log((headless(st.mesh) and "head gone" or "upper body smashed") .. ": silent minor leg twitches only")
+  end
   local anim = ctx.animated and ctx.animated()
   if not anim and next(st.chains) then chains_drop("ragdoll") end
   if not anim and not (rag() and rag().view()) then
@@ -1086,7 +1123,7 @@ function M.tick(paused)
   end
   local x = st.t - st.onset
   if x < 0 then return end
-  if x >= select(2, span()) then
+  if x >= (st.smashed and 4 or select(2, span())) then
     if not st.done then
       st.done = true
       log(string.format("over after %.0f s, %d movements", x, st.events))

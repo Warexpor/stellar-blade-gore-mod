@@ -17,7 +17,7 @@ return {
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
     noSplits = false,          -- true: she is never split top to bottom, by any blow, roll or hit after death (the
-                               -- limbs the blade crossed come off instead)
+                               -- lengthwise hits choose a neck or waist cut by hit position)
     followUpCuts = true,       -- one swing cuts everything it went through (both arms and her body); false: one cut
                                -- a swing, her body when it went through it (a laser trap still cuts along its beam)
     bladeFollow = 0.8,         -- share of deaths with a tracked blade where the blade alone decides the cut; the rest
@@ -37,11 +37,10 @@ return {
     afterHits = {
       enabled = true,          -- enemies swinging at her body after she died cut it again
     },
-    -- smash = {               (parked for now)
-    --   enabled = false,         -- a blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or
-    --                            -- upper body it hit to meat chunks instead of cutting it
-    --   always = false,          -- every death smashes, whatever hit her (to try it out)
-    -- },
+    smash = {
+      enabled = true,          -- blunt killing blows smash the part hit
+      always = false,          -- every death smashes, regardless of the blow (to try it out)
+    },
     laserCut = true,           -- a laser trap death cuts along the beam, everything it went through (false: the odds)
     bluntRagdoll = false,      -- a blunt killing blow (a hammer, a fist, a stomp) cuts nothing: a plain ragdoll death
                                -- (blades still cut)
@@ -74,18 +73,12 @@ return {
     },
   },
   stains = {
-    enabled = false,           -- (parked, not in the F3 menu) blood and dirt on her: the game's own blood layer on her skin, cut before
-                               -- release. Hits bloody her and leave wounds where they land, enemies hit near her splash
-                               -- her (drops on her skin and outfit), falls and knockdowns dirty her, blood soaks into her
-                               -- outfit where it lands; swimming washes it off, a camp rest cleans her
-    wounds = { enabled = true },  -- a wound where each hit landed
-    splash = { enabled = true },  -- enemies' blood onto her
-    dirt = { enabled = true },    -- dirt from falls, knockdowns and lying dead
-    cloth = { enabled = true },   -- her outfit stained too (blood where it lands, dirt all over)
-    spatter = { enabled = true }, -- blood drops on her (skin and outfit)
-    sound = { enabled = true },   -- a wet blood sound on each wound
-    wash = { enabled = true },    -- water washes it off
-    rest = true,               -- a camp rest cleans her
+    enabled = false,           -- experimental, F3 → Blood and Dirt: the game's own layer on her skin only
+    splash = { enabled = true }, -- enemy hits/cuts within 10 m splash blood onto her skin
+    dirt = { enabled = true }, -- hard landings, knockdowns and lying dead dirty her skin
+    heal = { enabled = true }, -- healing gradually clears blood and dirt
+    wash = { enabled = true }, -- swimming gradually washes both off
+    rest = true,               -- resting at a camp cleans her; a new life starts clean
     fade = 0,                  -- minutes to fade by itself (0: never)
   },
   convulse = {
@@ -139,7 +132,7 @@ return {
     stiffness = 1.0,           -- how stiff her ragdoll is: 0 limp as a sack, 1 as made, 2-3 she keeps her shape as
                                -- she falls and lies (a stiffer, more held-together body)
     jiggle = {
-      enabled = true,          -- experimental: her breasts sway on a spring of their own in the ragdoll (false: they
+      enabled = true,          -- her breasts sway on a spring of their own in the ragdoll (false: they
     },                         -- ride her chest locked, as ever)
     weaponCut = {
       enabled = true,          -- her sword breaks: cut in two where the killing blade crosses it, and always by a

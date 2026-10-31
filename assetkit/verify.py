@@ -7,7 +7,7 @@ Usage: verify.py <spec.json> <vanilla_json_dir> <repacked_json_dir> [--no-meshes
 import json, math, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from patch_shows import response_array, physics_table, disable_table, physics_bodies, joint_names, voice_pairs, notify_events, main_export
+from patch_shows import response_array, physics_table, disable_table, physics_bodies, joint_names, voice_pairs, notify_events, main_export, rename_package, niagara_drops
 import base64
 
 spec = json.load(open(sys.argv[1]))
@@ -49,6 +49,18 @@ for rel, job in spec["assets"].items():
         if not same:
             fail.append(f"{tag}: differs from {job['file']}")
         print(f"ok  {tag}  from {job['file']}")
+        continue
+
+    if job["mode"] == "niagara_drops":
+        import copy
+        expected = copy.deepcopy(v)
+        rename_package(expected, job["from"], rel)
+        niagara_drops(expected, job["keep"])
+        # Every compiled GPU/VM script, material, curve and collision interface must survive the IoStore round trip.
+        fields = lambda d: [(e["ObjectName"], sorted(e.get("Data", []), key=lambda p: p["Name"]), e.get("Extras")) for e in d["Exports"]]
+        if fields(o) != fields(expected):
+            fail.append(f"{tag}: drops-only clone differs from its expected exports")
+        print(f"ok  {tag}  only {job['keep']}, all compiled scripts/curves retained")
         continue
 
     if job["mode"] == "voice":

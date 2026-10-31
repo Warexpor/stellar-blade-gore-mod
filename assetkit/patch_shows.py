@@ -20,6 +20,7 @@ The spec lists, per asset (relative path under SB/Content, no extension):
   "extract": nothing shipped; build.sh only extracts the package into its cache (native/sbslice/test reads it)
   "vendor": ship a third-party asset as is ("file": legacy package under the repo, dumped by build.sh into
             $SB_VENDOR_JSON)
+  "niagara_drops": clone a cooked blood system, leaving only its collision-drop emitter/renderers enabled
   "voice":  add a voice to a CharacterSoundSet's VoiceSounds map, as a copy of the entry "like" with "set"
             fields changed ("sound": the SoundSource cue's package path)
   "notify": add an SBAnimNotify_CharSESound playing voice "voice" to an AnimSequence at time "at", keeping
@@ -302,6 +303,34 @@ def rename_package(d, src_rel, dst_rel):
     for e in d["Exports"]:
         if e["ObjectName"] == old_name:
             e["ObjectName"] = new_name
+
+
+def niagara_drops(d, keep):
+    """Keep compiled gravity/collision/shader data intact; suppress cinematic smoke and blood sheets."""
+    _, main = main_export(d)
+    handles = next(p["Value"] for p in main["Data"] if p["Name"] == "EmitterHandles")
+    found = []
+    for handle in handles:
+        fields = {p["Name"]: p for p in handle["Value"]}
+        enabled = fields["Name"]["Value"] == keep
+        if enabled:
+            found.append(keep)
+        fields["bIsEnabled"].update(Value=enabled, IsZero=not enabled)
+        emitter = d["Exports"][fields["Instance"]["Value"] - 1]
+        for prop in emitter["Data"]:
+            if prop["Name"] != "RendererProperties":
+                continue
+            for ref in prop["Value"]:
+                renderer = d["Exports"][ref["Value"] - 1]
+                flag = next((p for p in renderer["Data"] if p["Name"] == "bIsEnabled"), None)
+                if flag is None:
+                    flag = copy.deepcopy(fields["bIsEnabled"])
+                    renderer["Data"].insert(0, flag)  # NiagaraRendererProperties base field, before sprite fields
+                else:
+                    flag.update(Value=enabled, IsZero=not enabled)
+    if found != [keep]:
+        die(f"expected one collision-drop emitter {keep}, got {found}")
+    add_name(d, "bIsEnabled")
 
 
 def retarget(d, mapping):
@@ -837,8 +866,11 @@ def main():
         if mode == "vendor":
             d = json.load(open(os.path.join(os.environ["SB_VENDOR_JSON"], rel + ".json")))
         else:
-            d = load(job["from"] if mode in ("clone", "animshow") else rel)
-        if mode == "animshow":
+            d = load(job["from"] if mode in ("clone", "animshow", "niagara_drops") else rel)
+        if mode == "niagara_drops":
+            rename_package(d, job["from"], rel)
+            niagara_drops(d, job["keep"])
+        elif mode == "animshow":
             rename_package(d, job["from"], rel)
             anim_show(d, job)
         elif mode == "clone":

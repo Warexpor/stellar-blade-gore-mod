@@ -4,13 +4,18 @@
 -- 1 HP (the bar reads 0, no death screen: nothing); a death while swimming with no ragdoll (not taken over, named).
 -- A fall damage death cuts nothing; a blow on her mesh as she lands still does
 -- Any other death with no ragdoll from its show (an enemy's) is taken over too and cut; a scripted one is left alone
--- (seeded: its death's roll decides what is cut, and a head roll cuts nothing against the fake DLL; unseeded, it
--- failed one run in a few)
+-- The control always rolls a limb: a random head roll needs a face this fixture does not have.
 math.randomseed(1)
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
 local print = F.say
+local f = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
+f:write([[local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")
+s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
+return s]])
+f:close()
+F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
 local ok, err = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua")
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))

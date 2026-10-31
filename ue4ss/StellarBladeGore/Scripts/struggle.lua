@@ -44,6 +44,15 @@ local ctx, try, valid
 local function cfg() return ctx and ctx.tune.struggle or {} end
 local function sub_cfg(k) return (ctx.tune.struggle or {})[k] or {} end
 local function log(s) ctx.log("struggle: " .. s) end
+local function headless(mesh)
+  local r, g = ctx.rag, ctx.gore
+  return (r and r.severed and r.severed(mesh, "Bip001-Head"))
+    or (g and g.smashed and g.smashed.has(mesh, "Bip001-Head"))
+end
+local function torso_smashed(mesh)
+  local g = ctx.gore
+  return g and g.smashed and g.smashed.has(mesh, "Bip001-Spine1")
+end
 
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local function add(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
@@ -495,6 +504,7 @@ end
 -- when every limb read as off her)
 local function pick(mesh, alone)
   local g = ctx.gore
+  if torso_smashed(mesh) then return nil, "upper body smashed" end
   if g and g.cuts_on and select(2, g.cuts_on(mesh)) == true then return nil, "split" end
   -- (a waist cut: the lowest torso bone cut, nothing cut above it on her spine)
   local waist
@@ -1036,16 +1046,17 @@ local function die_start(mesh, f)
 end
 
 -- a struggle still to come or running (active.lua keeps her bodies awake for it)
-function M.due() return st ~= nil and not st.done end
+function M.due() return st ~= nil and not st.done and not torso_smashed(st.mesh) and not headless(st.mesh) end
 function M.busy()
-  if not (st and st.began and not st.done) then return false end
+  if not (st and st.began and not st.done) or torso_smashed(st.mesh) or headless(st.mesh) then return false end
   return not st.plan.alone or (st.act ~= nil and ACT[st.act.name].effort == true)
 end
-function M.rising() return st ~= nil and st.act ~= nil and ACT[st.act.name].effort == true end
+function M.rising() return st ~= nil and st.act ~= nil and not torso_smashed(st.mesh) and not headless(st.mesh) and ACT[st.act.name].effort == true end
 
 -- ---- the death ----
 function M.start(pawn, mesh)
   M.stop()
+  if torso_smashed(mesh) or headless(mesh) then return end
   -- (main.lua's F6 struggle test: on whatever deathMoves says, its plan sit-up only when it has no cut)
   local test = ctx.struggle_test
   if not test and (cfg().enabled == false or ctx.tune.deathMoves == false) then return end
@@ -1143,6 +1154,7 @@ local function step(mesh, dt)
 end
 
 function M.tick(paused)
+  if st and (torso_smashed(st.mesh) or headless(st.mesh)) then M.stop(); return end
   if not st or st.done then return end
   local now = os.clock()
   local dt = math.min(now - st.last, 0.1)
