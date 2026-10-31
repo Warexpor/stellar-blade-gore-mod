@@ -120,5 +120,42 @@ cut(pawn, E.mesh, nil, nil)
 check(called == 0, "laser cuts take priority over Smash Every Death")
 sw.laser_hit, G.blow = laser, blow
 G.smash = smash
+-- Full-body selection needs a real heavy blunt source and a steep direction; always is not evidence.
+local chosen
+G.smash = function(_, _, hit) chosen = hit.fullSmash; return true end
+local function fullcase(label, hit, want, weapons)
+  swing.who, swing.cls, swing.weapons = hit.attacker, "Unknown_C", {}
+  for _, name in ipairs(weapons or {}) do swing.weapons[#swing.weapons + 1] = { name = name } end
+  chosen = nil
+  sw.smash_kill(pawn, E.mesh, hit, "death")
+  check(chosen == want, label)
+end
+g.smash.always, g.smash.fullBody = false, true
+fullcase("heavy downward hit qualifies", { attacker = "Gorilla_1", wbone = "Fist", loc = chest, dir = v(0, 0, -1) }, true)
+fullcase("heavy horizontal hit stays local", { attacker = "Gorilla_1", loc = chest, dir = v(1, 0, 0) }, false)
+fullcase("ordinary stomp stays local", { attacker = "Unknown_1", loc = chest, dir = v(0, 0, -1) }, false)
+fullcase("invented direction stays local", { attacker = "Gorilla_1", made = true, loc = chest, dir = v(0, 0, -1) }, false)
+fullcase("rock fallback direction is not evidence", { rock = true, loc = chest, dir = v(0, 0, -1) }, false)
+g.smash.always = true
+fullcase("always cannot make a sword heavy blunt", { attacker = "Gorilla_1", loc = chest, dir = v(0, 0, -1) }, false, { "Sword" })
+g.smash.always, g.smash.fullBody = false, false
+fullcase("full-body switch off", { attacker = "Gorilla_1", loc = chest, dir = v(0, 0, -1) }, false)
+g.smash.fullBody = nil
+fullcase("missing full-body setting defaults off", { attacker = "Gorilla_1", loc = chest, dir = v(0, 0, -1) }, false)
+G.smash, g.smash.fullBody = smash, true
+local full = { attacker = "Gorilla_1", loc = chest, dir = v(0, 0, -1) }
+swing.who, swing.cls, swing.weapons = "Gorilla_1", "Unknown_C", {}
+check(sw.smash_kill(pawn, E.mesh, full, "death"), "full-body smash starts")
+for _ = 1, 100 do F.step(1/60); G.tick(pawn); G.pump() end
+check(E.hiddenBones["Bip001-Spine1"] and E.hiddenBones["Bip001-Pelvis"], "full-body smash hides torso and pelvis")
+check(G.has_cut(E.mesh, "Bip001-L-Thigh") and G.has_cut(E.mesh, "Bip001-Head"), "full-body smash rejects later cuts on all body parts")
+G.cleanup(pawn, E.mesh)
+check(not E.hiddenBones["Bip001-Spine1"] and not E.hiddenBones["Bip001-Pelvis"], "full-body recovery restores both")
+check(G.slice_bone(pawn, E.mesh, "Bip001-L-Thigh", nil, "test"), "prior leg cut starts")
+for _ = 1, 40 do F.step(1/60); G.tick(pawn); G.pump() end
+check(sw.smash_kill(pawn, E.mesh, { attacker = "Gorilla_1", loc = chest, dir = v(0, 0, -1) }, "death"), "smash after a prior cut starts")
+for _ = 1, 100 do F.step(1/60); G.tick(pawn); G.pump() end
+check(E.hiddenBones["Bip001-Spine1"] and not E.hiddenBones["Bip001-Pelvis"], "prior cut keeps its piece: only the upper body is smashed")
+G.cleanup(pawn, E.mesh)
 for _, e in ipairs(F.errors) do print("FAIL hook: " .. e); fails = fails + 1 end
 print(fails == 0 and "PASS" or "FAIL")

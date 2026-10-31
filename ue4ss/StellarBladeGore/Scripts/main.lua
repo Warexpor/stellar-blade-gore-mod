@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.6.0"
+local VERSION = "0.6.1"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -1880,6 +1880,7 @@ function screen.probe(pawn)
 end
 
 local function on_start(pawn, mesh)
+  local wasSimulating = try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true
   screen.cloth_give_back()
   log("ragdoll state at start: " .. ragdoll_state(pawn))
   screen.reset()
@@ -1902,6 +1903,14 @@ local function on_start(pawn, mesh)
   -- an outfit the data mod didn't patch: its loose bodies are locked to the body above them, and a mesh with no
   -- physics asset gets one (physfix.lua)
   if physfix then try(function() physfix.start(pawn, mesh) end) end
+  -- Assigning a missing physics asset recreates bodies and can stop the ragdoll that brought us here.
+  if wasSimulating and try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true then
+    try(function() mesh:SetSimulatePhysics(true) end)
+    try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
+    try(function() mesh:WakeAllRigidBodies() end)
+    log("ragdoll: restored simulation after physics asset setup: " .. tostring(try(function()
+      return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end)))
+  end
   if gore then
     local ok, n, all = pcall(gore.kawaii, mesh, false)
     if ok and (all or 0) > 0 then log(string.format("ragdoll: her outfit's KawaiiPhysics off (%d of %d nodes)", n, all))
@@ -3192,6 +3201,18 @@ function sw.smash_kill(pawn, mesh, h, why)
   local blunt, how = sw.blunt_of(h)
   log(string.format("death: the blow is %s (%s)", blunt and "blunt" or "a blade", how))
   if not blunt then return false end
+  -- Only a named heavy source and a measured steep swing qualify; fallback hit directions can be invented.
+  local s, d = g.smash or {}, h and h.dir
+  local realBlunt, realWhy = sw.blunt_of(h, true)
+  local mine = h.attacker == nil or h.attacker == swing.who
+  local source = table.concat({ tostring(realWhy), tostring(h.attacker), mine and tostring(swing.cls) or "",
+    tostring(sw.blunt_alias(h.attacker) or ""), mine and tostring(sw.blunt_alias(swing.cls) or "") or "" }, " "):lower()
+  local heavy = false
+  for _, name in ipairs({ "hammer", "gorilla", "juggernaut", "brute", "exosuit", "statue" }) do
+    if source:find(name, 1, true) then heavy = true; break end
+  end
+  h.fullSmash = s.fullBody == true and realBlunt and not h.made and not h.rock and h.loc and d and len(d) > 0.001
+    and d.Z / len(d) <= -0.85 and heavy or false
   local ok, r, later = pcall(gore.smash, pawn, mesh, h, why)
   if not ok then log("smash failed: " .. tostring(r)); return false end
   return r, later
@@ -5124,7 +5145,7 @@ function screen.piece_off(pawn)
 end
 function screen.cloth_tick(pawn)
   local c = screen.cloth
-  local due = c and os.clock() - c.at >= (screen.CLOTH_AFTER[c.i] or 0)
+  local due = c and not active and not screen.photoOn and os.clock() - c.at >= (screen.CLOTH_AFTER[c.i] or 0)
   if (c or screen.autoF8 or screen.clothColl or screen.clothSim) and screen.cloth_scene(pawn, due) then
     local had = screen.cloth or screen.autoF8 or screen.clothColl or screen.clothSim
     screen.cloth, screen.autoF8 = nil, nil

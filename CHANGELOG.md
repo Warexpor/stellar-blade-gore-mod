@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Fixed a large FPS drop during death: a pending hair reset repeatedly searched for cinematic sequences after its deadline even though the reset had to wait until recovery. The search now waits too.
+- Fixed a possible immediate end to a ragdoll when an outfit needs its missing physics asset restored at death: assigning the asset can recreate its bodies with simulation off, so simulation is restored if it was already running. A 0.6.0 report showed the asset being restored just before the ragdoll ended; the fix needs confirmation on that setup.
+- Full-Body Smash (experimental, F3 → Gore, off by default): a steep downward killing blow to the torso from a recognized heavy blunt attacker or weapon can smash Eve's entire body into meat and blood. Hits without a tracked direction and deaths after an earlier cut use the existing part smash.
+
 ## 0.6.0
 
 - Blunt Smash is enabled by default for blunt killing blows; Smash Every Death remains off. Head, torso and limbs produce appropriately sized meat and blood, with reduced rolling and small pools beneath the pieces. Upper-body smashes produce 44 pieces before deductions for missing parts, with flatter scatter that follows the falling body.

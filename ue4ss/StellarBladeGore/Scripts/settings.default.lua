@@ -39,6 +39,7 @@ return {
     },
     smash = {
       enabled = true,          -- blunt killing blows smash the part hit
+      fullBody = false,        -- experimental: heavy downward blunt hits to the torso smash the whole body
       always = false,          -- every death smashes, regardless of the blow (to try it out)
     },
     laserCut = true,           -- a laser trap death cuts along the beam, everything it went through (false: the odds)

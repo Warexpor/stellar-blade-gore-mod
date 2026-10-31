@@ -24,7 +24,22 @@ F.world = R.step
 for _, n in ipairs({ "P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3", "Eve_Dead_Down" }) do
   F.objects["/Game/Art/Show/CH_P_EVE_01/Basic/" .. n .. "." .. n] = F.obj(n, "SBShowData")
 end
+-- Model an outfit whose physics asset must be reattached at death, recreating its bodies.
+local realDofile, remake = dofile, false
+dofile = function(path)
+  local result = realDofile(path)
+  if path:match("physfix%.lua$") then
+    local start = result.start
+    result.start = function(...)
+      local r = start(...)
+      if remake then E.s.sim = false end
+      return r
+    end
+  end
+  return result
+end
 local ok, err = pcall(dofile, DIR .. "main.lua")
+dofile = realDofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -57,6 +72,17 @@ F.press("F8", "")
 F.run(1, pawn)
 check(F.find("recover %(ragdoll ended%)", r) ~= nil, "1: F8 got her up")
 if fails > 0 then dump(at) end
+
+-- Death starts with simulated bodies; asset setup recreates them as kinematic.
+F.run(2, pawn)
+at = mark()
+remake = true
+E.s.hp = 0; E.die(true)
+F.run(1, pawn)
+check(F.find("ragdoll: restored simulation after physics asset setup: true", at) ~= nil, "3: physics asset replacement restores the ragdoll")
+check(E.s.sim and not F.find("recover %(ragdoll ended%)", at), "3: death remains active after asset replacement")
+remake = false
+F.press("F8", ""); F.run(1, pawn)
 F.run(3, pawn)
 
 -- 2: the next press, a death again (she was up)

@@ -408,6 +408,7 @@ return {
       enabled = true,          --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
                                --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
       always = false,          --   every death smashes, blunt or not (to try it)
+      fullBody = false,        --   experimental: heavy steep downward blunt torso hits smash the entire body
       chunks = 10,             --   whole arm; counts 0-64, two spawned a tick; missing child parts reduce the count
       chunksForearm = 6,       --   forearm and hand
       chunksLeg = 16,          --   whole leg

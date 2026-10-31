@@ -69,6 +69,7 @@ M.ROWS = {
   { key = "gore.oddsNear.floor", label = "   Far Part Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "With Chances Follow the Hit: share of its chance a part far from the hit keeps (0-1). 0: never (a waist swing never beheads), 0.1: now and then, 1: as if off." },
   { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Enemy weapons swinging through Eve's dead body cut it again (a limb, the head or the body), up to 6 times a death. About a quarter leave only a wound." },
   { key = "gore.smash.enabled", label = "Blunt Smash (Experimental)", kind = "bool", help = "On by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit: the part vanishes and the game's meat chunks burst out with blood, the stump stays. Blades still cut." },
+  { key = "gore.smash.fullBody", label = "   Full-Body Smash (Experimental)", kind = "bool", help = "Off by default. A steep downward hit from a heavy blunt attacker or weapon to her torso can smash her whole body. Off: only the part hit is smashed." },
   { key = "gore.smash.always", label = "   Smash Every Death", kind = "bool", help = "Off by default. With Blunt Smash on: every death smashes a part, whatever hit her. To try the smash out." },
   { key = "gore.laserCut", label = "Laser Cuts Along the Beam", kind = "bool", help = "A laser trap death cuts Eve along the beam that killed her: every arm, leg, her body or her head the beam's plane goes through comes off. Off: laser deaths roll the cut chances like any death with no blade seen." },
   { key = "gore.bluntRagdoll", label = "Blunt Kills Only Ragdoll", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) cuts nothing: Eve dies a plain ragdoll, and hits after it cut nothing either. Blades still cut. Goes before Blunt Smash." },
@@ -303,6 +304,7 @@ M.get = get
 -- Visual dependencies only: dim an unavailable child without hiding it or changing its saved value.
 M.DEPENDS = {
   ["gore.smash.always"] = { { "gore.smash.enabled", true } },
+  ["gore.smash.fullBody"] = { { "gore.smash.enabled", true } },
   ["gore.oddsNear.floor"] = { { "gore.oddsNear.enabled", true } },
   ["enemies.cutChance"] = { { "enemies.enabled", true } },
   ["convulse.face"] = { { "convulse.enabled", true } },
@@ -351,7 +353,8 @@ function M.group_rows(rows)
     table.insert(rows, to + 1, r)
   end
   after("gore.smash.enabled", "gore.enabled")
-  after("gore.smash.always", "gore.smash.enabled")
+  after("gore.smash.fullBody", "gore.smash.enabled")
+  after("gore.smash.always", "gore.smash.fullBody")
   after("gore.bluntRagdoll", "gore.smash.always")
   after("reviveAt", "deathScreen")
   after("enemies.cutChance", "enemies.enabled")

@@ -44,5 +44,15 @@ check(count('her ponytail reset')==reset and count('auto F8:')==f8,'active seque
 F.classes.LevelSequenceActor=nil
 E.respawn(); F.run(6,pawn)
 check(count('her ponytail reset')>reset,'a later gameplay respawn still fixes hair')
+-- A reset queued during a death is not due until recovery; do not scan level sequences on every poll.
+local find, scans = FindAllOf, 0
+FindAllOf = function(cls) if cls == 'LevelSequenceActor' then scans = scans + 1 end; return find(cls) end
+E.respawn(); F.run(0.2,pawn); F.press('F7',''); F.run(0.5,pawn)
+local before = scans
+F.run(6,pawn)
+check(scans == before, 'no sequence scans while a pending hair reset waits for the ragdoll')
+F.press('F8',''); F.run(1,pawn)
+check(scans > before, 'pending reset checks sequences after recovery')
+FindAllOf = find
 check(#F.errors==0 and not F.find('tick error'),'no hook or tick errors')
 F.say(fails==0 and 'PASS' or 'FAIL')

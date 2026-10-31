@@ -649,6 +649,7 @@ function enemy.asset(comp) local m = valid(comp) and try(function() return comp.
 local function already_cut(mesh, bone)
   local a = addr(mesh)
   for _, c in ipairs(cuts) do
+    if c.addr == a and c.fullSmash then return true end
     if c.addr == a and c.bone == bone then return true end
     -- (or gone with a smashed part: an arm under her smashed upper body, a forearm under its smashed upper arm)
     if c.addr == a and c.smashed and try(function() return mesh:BoneIsChildOf(FName(bone), FName(c.bone)) end) == true then
@@ -3206,7 +3207,16 @@ local function stage_cut(q)
   end
   if not q.c then log("nothing cut (" .. q.why .. ")"); return false end
   -- Snapshot remaining flesh before this cut itself enters the gone-part list.
-  if q.smash then q.smashProfile = M.smashed.profile(q.mesh, q.bone) end
+  if q.smash then
+    q.smashProfile = M.smashed.profile(q.mesh, q.bone)
+    if q.fullSmash then
+      for _, bone in ipairs({ "Bip001-L-Thigh", "Bip001-R-Thigh" }) do
+        local leg = M.smashed.profile(q.mesh, bone)
+        q.smashProfile.count = math.min(64, q.smashProfile.count + leg.count)
+        q.smashProfile.blood = q.smashProfile.blood + leg.blood
+      end
+    end
+  end
   q.entry = { mesh = q.mesh, addr = addr(q.mesh), bone = q.bone, sm = enemy.asset(q.mesh), riders = {}, quiet = q.quiet }
   cuts[#cuts + 1] = q.entry
   -- (each with its mesh asset: the face's sinks are its own asset's, put back with it, cleanup_eve)
@@ -3733,20 +3743,21 @@ local function stage_open(q)
   if held ~= "" then world = world .. ", " .. held else fling() end
   mark("throw")
   -- (a smash's piece is gone: its cap and stub stay hidden, it neither drips nor bleeds)
-  for i, a in pairs(q.caps) do if valid(a) and not (q.smash and i == 2) then try(function() a:SetActorHiddenInGame(false) end) end end
+  for i, a in pairs(q.caps) do if valid(a) and not q.fullSmash and not (q.smash and i == 2) then try(function() a:SetActorHiddenInGame(false) end) end end
   for _, a in pairs(q.stubs or {}) do
-    if valid(a) and not (q.smash and a == q.pieceStub) then try(function() a:SetActorHiddenInGame(false) end) end
+    if valid(a) and not q.fullSmash and not (q.smash and a == q.pieceStub) then try(function() a:SetActorHiddenInGame(false) end) end
   end
   mark("show caps")
   if q.smash then
     q.entry.smashed = true
+    q.entry.fullSmash = q.fullSmash
     local ok, err = pcall(M.smashed.out, q)
     if not ok then log("smash failed: " .. tostring(err)) end
     mark("smash")
   end
   if g.blood ~= false then
     if not enemy.cur then blood_up(q.pawn) end
-    if q.parent then track_opening(q, q.caps[1], q.ob, q.mesh, q.rideB or q.parent) end
+    if q.parent and not q.fullSmash then track_opening(q, q.caps[1], q.ob, q.mesh, q.rideB or q.parent) end
     if not q.smash then track_opening(q, q.caps[2], q.ol, q.mesh, q.rideL or q.bone) end
   end
   mark("blood")
@@ -3773,7 +3784,7 @@ local function stage_open(q)
     local left = math.floor(duration / TICK_S + 0.5)
     later[#later + 1] = { n = 2, label = "stump bleed", fn = function()
       if not valid(q.mesh) then return end
-      if q.parent then bleed_from(q, q.caps[1], q.ob, q.rideB or q.parent, left) end
+      if q.parent and not q.fullSmash then bleed_from(q, q.caps[1], q.ob, q.rideB or q.parent, left) end
       if not q.smash then bleed_from(q, q.caps[2], q.ol, q.rideL or q.bone, left) end
     end }
   end
@@ -5291,7 +5302,8 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
   mark("start: lod")
   pending = { stage = "cut", wait = waited and 2 or 0, t0 = os.clock(), pawn = pawn, mesh = mesh, hit = hit, why = why, kind = kind,
     face = face, out = out, plane = plane, blade = blade, owner = enemy.cur, bone = M.bone_once, middle = M.splitMiddle,
-    smash = M.smash_once and not enemy.cur or nil, fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil,
+    smash = M.smash_once and not enemy.cur or nil, fullSmash = M.full_smash_once and not enemy.cur or nil,
+    fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil,
     quiet = why == "carried" or nil }
   aimed = nil
   -- the blade's plane and directions in her own frame, so they move with her until the cut is made
@@ -5479,10 +5491,18 @@ function M.smash(pawn, mesh, h, why)
     log("smash (" .. why .. "): her body, at her death")
     return false, "later"
   end
+  -- Previously detached pieces and their independent stump props must not disappear with the pelvis.
+  local full = kind == "torso" and h and h.fullSmash == true and M.cuts_on(mesh) == 0
+  if kind == "torso" and h and h.fullSmash and not full then
+    log("smash: earlier cuts on her body: upper body only")
+  end
+  if full then log("smash: full body (heavy downward torso hit)") end
   log(string.format("smash (%s): %s, %s", why, bone, d and string.format("%.0f cm from the blow", d) or "rolled (no blow seen)"))
   M.smash_once = true
+  M.full_smash_once = full
   local ok, result = pcall(M.slice_bone, pawn, mesh, bone, h and h.loc, why)
   M.smash_once = nil
+  M.full_smash_once = nil
   if not ok then error(result, 0) end
   return result
 end
@@ -5705,6 +5725,11 @@ function M.smashed.out(q)
   if not enemy.cur and ctx.rag and ctx.rag.smash_drop then try(function() ctx.rag.smash_drop(q.pawn, q.mesh, q.bone) end) end
   -- HideBoneByName scales the subtree to zero: read its centre first, before its joints collapse together.
   local nb, nv = M.smashed.hide(q)
+  if q.fullSmash then
+    local legs = { pawn = q.pawn, mesh = q.mesh, c = q.c, bone = "Bip001-Pelvis" }
+    local moreBones, moreVisible = M.smashed.hide(legs)
+    nb, nv = nb + moreBones, nv + moreVisible
+  end
   mark("smash hide")
   if not at then log("smash: nowhere to put the meat"); return end
   local profile = q.smashProfile or { count = 0, size = 1, blood = 0 }

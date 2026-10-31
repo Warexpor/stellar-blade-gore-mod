@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.6.0. See the [changelog](CHANGELOG.md).
+Version 0.6.1. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,14 +10,14 @@ Version 0.6.0. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.6.0.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.6.1.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.0`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.1`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
@@ -55,6 +55,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again: in an attack, the weapon at `minSpeed` (500) cm/s or more within `reach` (25) cm of her. |
 | `enemies.grab.enabled` | `true` | A death in an enemy's grab waits for the grab to end (at most `most`, 6 s): a limb or the head the killing blow cuts falls off at once; the ragdoll, a split or a cut across her waist come as it lets go. |
 | `gore.smash.enabled` | `true` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a brief spray of falling blood droplets fly out where it was, proportional to the remaining part, and the stump stays as a cut's. An upper-body smash leaves only small silent leg twitches. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always` is off by default: with it on, every death smashes, to try it. |
+| `gore.smash.fullBody` | `false` | Experimental. With Blunt Smash on, a tracked steep downward hit from a heavy blunt attacker or weapon to the torso can smash her whole body. An earlier cut or an untracked direction keeps the regular part smash. F3 → Full-Body Smash. |
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
 | `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. It stays off through a level change and its cutscene; a save loaded brings it back. F3 → Gameplay → Lose Arm at Low HP. |
