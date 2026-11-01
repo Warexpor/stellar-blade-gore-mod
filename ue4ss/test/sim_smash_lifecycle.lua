@@ -203,6 +203,27 @@ G.cleanup(pawn,E.mesh)
 rag.stop(pawn)
 check(sword.parent==originalParent and sword.restored,"waist-cut sword restores on recovery")
 T.ctx.animated, T.ctx.tune.gore.torsoLegs = oldAnimated, oldLegs
+-- A second cut callback may obtain a fresh wrapper for the same UE component.
+-- It must recognize the existing split, instead of making a third visible sword half.
+local splits = upvalue(rag.weapon_cut, "splits")
+local wrapper = F.obj("SwordWrapper", "SkeletalMeshComponent", {
+  SkeletalMesh=swordMesh, IsVisible=function() return true end,
+  GetAddress=function() return sword:GetAddress() end,
+  K2_GetComponentLocation=sword.K2_GetComponentLocation,
+  GetForwardVector=sword.GetForwardVector, GetRightVector=sword.GetRightVector, GetUpVector=sword.GetUpVector,
+})
+local stored = {w=sword, b=F.obj("SwordHalf", "SkeletalMeshComponent")}
+splits[#splits+1]=stored
+pawn.MeshInfoList = {ForEach=function(_, cb) cb(1, {get=function() return {MeshSlot=5, MeshComponent=wrapper} end}) end}
+F.objects["/Script/Engine.SkeletalMeshComponent"] = F.obj("SkeletalMeshComponent", "Class")
+local cutlog = #F.log_lines()+1
+local owner_before = E.mesh.GetOwner
+E.mesh.GetOwner = function() return pawn end
+rag.weapon_cut(E.mesh, E.bone("Bip001-R-Hand"), v(1,0,0), true)
+check(F.find("in two already", cutlog) ~= nil and #splits==1,
+  "repeated sword cut recognizes a fresh wrapper for the already split component")
+splits[#splits]=nil
+E.mesh.GetOwner = owner_before
 F.objects["/Script/Engine.BoxComponent"], pawn.MeshInfoList, pawn.AddComponentByClass = boxClass, oldInfo, oldAdd
 for _, e in ipairs(F.errors) do print("FAIL hook: "..e); fails=fails+1 end
 for _, l in ipairs(F.log_lines()) do

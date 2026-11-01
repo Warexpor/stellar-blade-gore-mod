@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.6.1"
+local VERSION = "0.6.2"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -1879,6 +1879,74 @@ function screen.probe(pawn)
   end
 end
 
+-- Short-lived CNS diagnostic: compare each breast bone with its parent before and during F7, including scale.
+-- The screenshot alone cannot tell which bone in a multi-body chain is responsible for a deformed mesh.
+function screen.breast_probe(mesh, phase)
+  local full = try(function() return mesh.SkeletalMesh:GetFullName() end) or ""
+  if not full:lower():find("/game/cnsrepacked/", 1, true) then return end
+  for _, side in ipairs({ "L", "R" }) do
+    local out = {}
+    for _, b in ipairs({ "Dm-" .. side .. "-Breast-Point", "Dm-" .. side .. "-Breast",
+      "Ab-" .. side .. "-Breast-Link", "Ab-" .. side .. "-Breast",
+      "Ab-" .. side .. "-Hip", "Ab-" .. side .. "-Hip-Reg" }) do
+      local s = try(function()
+        if mesh:GetBoneIndex(FName(b)) < 0 then return nil end
+        local parent = mesh:GetParentBone(FName(b))
+        local t, p = mesh:GetSocketTransform(FName(b), 0), mesh:GetSocketTransform(parent, 0)
+        local a, q = t.Rotation, p.Rotation
+        local dx, dy, dz = t.Translation.X - p.Translation.X, t.Translation.Y - p.Translation.Y, t.Translation.Z - p.Translation.Z
+        local x = q.W*a.X - q.X*a.W - q.Y*a.Z + q.Z*a.Y
+        local y = q.W*a.Y + q.X*a.Z - q.Y*a.W - q.Z*a.X
+        local z = q.W*a.Z - q.X*a.Y + q.Y*a.X - q.Z*a.W
+        local w = q.W*a.W + q.X*a.X + q.Y*a.Y + q.Z*a.Z
+        local scale = t.Scale3D
+        local sim = try(function() return mesh:IsSimulatingPhysics(FName(b)) end)
+        local vel = try(function() local v = mesh:GetPhysicsAngularVelocityInDegrees(FName(b))
+          return string.format("%.1f", math.sqrt(v.X*v.X+v.Y*v.Y+v.Z*v.Z)) end) or "?"
+        return string.format("%s parent=%s d=%.2f q=(%.3f,%.3f,%.3f,%.3f) scale=(%.3f,%.3f,%.3f) sim=%s spin=%s",
+          b, parent:ToString(), math.sqrt(dx*dx+dy*dy+dz*dz), x, y, z, w, scale.X, scale.Y, scale.Z, tostring(sim), vel)
+      end)
+      if s then out[#out + 1] = s end
+    end
+    if #out > 0 then log("breast probe " .. phase .. " " .. side .. ": " .. table.concat(out, "; ")) end
+  end
+end
+
+-- Wedding Dress 3504's simulated breast links and their parent can rotate far beyond their authored limits. Keep those bodies simulated
+-- for their joints, but use their animated bone transforms for skinning. The rest of the ragdoll stays physics-driven.
+-- This is scoped to the one diagnosed asset; its visual result still needs an in-game check.
+function screen.wedding_blend(mesh)
+  if saved.weddingBlend or saved.weddingBlendFailed then return end
+  local full = try(function() return mesh.SkeletalMesh:GetFullName() end) or ""
+  if not full:lower():find("/game/cnsrepacked/5a2518e03d16a0cd/", 1, true) then return end
+  if try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true then return end
+  local names = { "Dm-L-Breast", "Dm-R-Breast" }
+  for _, b in ipairs(names) do
+    if (try(function() return mesh:GetBoneIndex(FName(b)) end) or -1) < 0 then
+      saved.weddingBlendFailed = true; log("wedding blend: missing " .. b); return
+    end
+  end
+  local force = try(function() return mesh.bBlendPhysics end)
+  if force ~= true and force ~= false then saved.weddingBlendFailed = true; log("wedding blend: physics blend flag unreadable"); return end
+  if force then
+    -- bBlendPhysics bypasses per-body weights; retain the rest of her physics before clearing the override.
+    if not try(function() mesh:SetAllBodiesPhysicsBlendWeight(1.0, false); mesh:SetEnablePhysicsBlending(false); return true end) then
+      saved.weddingBlendFailed = true; log("wedding blend: could not prepare per-body weights"); return
+    end
+  end
+  local ok = true
+  for _, b in ipairs(names) do
+    if not try(function() mesh:SetAllBodiesBelowPhysicsBlendWeight(FName(b), 0.0, false, true); return true end) then ok = false end
+  end
+  if not ok then
+    for _, b in ipairs(names) do try(function() mesh:SetAllBodiesBelowPhysicsBlendWeight(FName(b), 1.0, false, true) end) end
+    if force then try(function() mesh:SetEnablePhysicsBlending(true) end) end
+    saved.weddingBlendFailed = true; log("wedding blend: could not set both link weights"); return
+  end
+  saved.weddingBlend = { mesh = mesh, forced = force }
+  log("wedding blend: both breast chains use animated skinning; remaining bodies use physics")
+end
+
 local function on_start(pawn, mesh)
   local wasSimulating = try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true
   screen.cloth_give_back()
@@ -2224,6 +2292,9 @@ local function on_end(pawn, mesh)
     try(function() mesh:SetCollisionEnabled(c.enabled) end)
   end
   recover(pawn, mesh, "ragdoll ended")
+  if saved.weddingBlend and saved.weddingBlend.forced and valid(saved.weddingBlend.mesh) then
+    try(function() saved.weddingBlend.mesh:SetEnablePhysicsBlending(true) end)
+  end
   if goreCtx.glass then goreCtx.glass.revived(pawn) end
 end
 
@@ -2295,6 +2366,7 @@ local function sandbox_ragdoll()
   local mesh = pawn and try(function() return pawn.Mesh end)
   if not valid(mesh) then log("F7: no Eve"); return end
   if active then log("F7: already ragdolled"); return end
+  screen.breast_probe(mesh, "before F7")
   local c = ragdoll_collision(mesh)
   on_start(pawn, mesh)
   saved.collision = c
@@ -3687,7 +3759,9 @@ function hm.lethal_watch(pawn, mesh)
       -- any other death without a ragdoll is taken over too (0.5.0 report: enemy attacks went straight to the death
       -- screen, no ragdoll), cut as any death; her swimming and the scripted deaths (hm.SCRIPTED) stay the game's
       -- (still falling, no landing: the level's kill volumes, Custom4's Dead_Empty, warp her back to safe ground)
-      local scripted = mn and hm.scripted(mn) or not fall and mm == 3 and "falling, a kill volume" or nil
+      -- A lethal physical hit while airborne is not evidence of a kill volume. Keep the game's
+      -- named scripted deaths, but let the normal no-show fallback handle a confirmed hit.
+      local scripted = mn and hm.scripted(mn) or not fall and mm == 3 and not lt.airHit and "falling, a kill volume" or nil
       local takes = a.enabled ~= false and not swim and not scripted
         and (not fall or a.fallRagdoll ~= false)
       if takes then
@@ -3710,6 +3784,7 @@ function hm.lethal_watch(pawn, mesh)
   gore.blocking = hm.blocking()
   local ws = weapon_swing(mesh)
   local m = meshHit and os.clock() - meshHit.t <= 0.5 and meshHit or nil
+  hm.lethal.airHit = m and m.loc and m.push and true or nil
   local at = ws and ws.at or (m and m.loc)
   if ws and ws.part and ws.pose and ws.pose[ws.part] then at = ws.pose[ws.part].t or at end
   hm.lethal.at = at
@@ -6360,6 +6435,9 @@ local function tick()
       log(string.format("death: her HP bar not found since the level loaded %.0f s ago: nothing cut at the hit",
         os.clock() - hm.barLost))
     end
+    -- This lethal hit has a death already. Keep its details for the cut, but never take it over after recovery:
+    -- the empty bar and visible death screen can outlive the ragdoll until the game finishes respawning her.
+    if hm.lethal then hm.lethal.missed = true end
     -- disarmed till the bar is seen above 0 again: it reads 0 through the respawn, and the watch fired there
     hm.armed = false
     -- how far she turned from her last tick alive (the game's death show turns her, playtest: a 180 before the cut)
@@ -6507,7 +6585,11 @@ local function tick()
   if active then
     no_snapshot(pawn)
     if rag then rag.tick(POLL_MS / 1000, tp.mark) end
+    screen.wedding_blend(mesh)
     if polls == 45 then log("ragdoll state at 1.5 s: " .. ragdoll_state(pawn)) end
+    if saved.manual and (polls == 6 or polls == 30 or polls == 90) then
+      screen.breast_probe(mesh, polls == 6 and "0.2 s" or polls == 30 and "1 s" or "3 s")
+    end
     local df = (tune.gore or {}).deathFace or {}
     if df.enabled ~= false and polls == math.max(1, math.floor((df.at or 0.3) * 1000 / POLL_MS)) then
       try(function() dface.start(pawn, mesh, "death") end)

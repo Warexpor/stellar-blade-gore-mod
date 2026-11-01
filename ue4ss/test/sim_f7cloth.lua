@@ -5,9 +5,10 @@
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
+F.sbslice.c = "ok verts=100 mode=0 limb=50 seam=10 vanished=0 unsunk=0 reweighted=2 stuck=0 watched=0 sinks=1,2 new=2 sinkmoved=2 held=2 active=10/0 cyc=1/0/0 pieces=0"
 local print = F.say
 local f = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
-f:write('local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")\ns.dev = true\nreturn s\n')
+f:write('local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")\ns.dev = true\ns.gore.bone = "Bip001-L-Thigh"\nreturn s\n')
 f:close()
 local ok, err = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua")
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
@@ -57,6 +58,67 @@ F.run(3, pawn)
 check(rawget(hair, "coll") == 3, "her hair's collision back on after (" .. tostring(rawget(hair, "coll")) .. ")")
 check((E.coll or 3) ~= 1, "her mesh not left query only after (" .. tostring(E.coll) .. ")")
 if fails > 0 then dump(at, "cloth"); dump(at, "ragdoll") end
+
+-- CNS bone probe captures relative pose and scale before and after a manual ragdoll.
+local oldSk, oldIndex, oldParent, oldTransform = rawget(mesh, "SkeletalMesh"), rawget(mesh, "GetBoneIndex"),
+  rawget(mesh, "GetParentBone"), rawget(mesh, "GetSocketTransform")
+rawset(mesh, "SkeletalMesh", F.obj("CNS_Test", "SkeletalMesh", { GetFullName = function()
+  return "SkeletalMesh /Game/CNSRepacked/5a2518e03d16a0cd/test/outfit.outfit" end }))
+local blend, all = {}, nil
+rawset(mesh, "bBlendPhysics", true)
+rawset(mesh, "SetEnablePhysicsBlending", function(self, v) rawset(self, "bBlendPhysics", v) end)
+rawset(mesh, "SetAllBodiesPhysicsBlendWeight", function(self, v) all = v end)
+rawset(mesh, "SetAllBodiesBelowPhysicsBlendWeight", function(self, b, v) blend[b:ToString()] = v end)
+rawset(mesh, "GetBoneIndex", function(self, b)
+  if b:ToString() == "Ab-L-Breast" then return 1 end
+  if b:ToString() == "Dm-L-Breast" or b:ToString() == "Dm-R-Breast" then return 1 end
+  return oldIndex and oldIndex(self, b) or -1
+end)
+rawset(mesh, "GetParentBone", function(self, b)
+  if b:ToString() == "Ab-L-Breast" then return F.fname("ProbeParent") end
+  return oldParent and oldParent(self, b) or F.fname("None")
+end)
+rawset(mesh, "GetSocketTransform", function(self, b, space)
+  if b:ToString() == "Ab-L-Breast" or b:ToString() == "ProbeParent" then
+    return { Translation = { X = b:ToString() == "Ab-L-Breast" and 3 or 0, Y = 4, Z = 0 },
+      Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Scale3D = { X = 1, Y = 1, Z = 1 } }
+  end
+  return oldTransform and oldTransform(self, b, space)
+end)
+at = mark()
+F.press("F7", "")
+F.run(3.5, pawn)
+check(F.find("breast probe before F7 L: Ab%-L%-Breast parent=ProbeParent d=3%.00", at) ~= nil,
+  "CNS breast probe records the pre-ragdoll parent distance")
+check(F.find("breast probe 1 s L:", at) ~= nil and F.find("breast probe 3 s L:", at) ~= nil,
+  "CNS breast probe records the ragdoll at 1 and 3 seconds")
+check(all == 1 and blend["Dm-L-Breast"] == 0 and blend["Dm-R-Breast"] == 0
+  and rawget(mesh, "bBlendPhysics") == false, "dress uses animation for breast chains including their parents")
+F.press("F8", "")
+F.run(1, pawn)
+check(rawget(mesh, "bBlendPhysics") == true, "original forced physics blend restored after recovery")
+rawset(mesh, "ClothBlendWeight", 0.7)
+at = mark()
+check(F.press("F9", ""), "F9 cut bound")
+F.run(2, pawn)
+check(rawget(mesh, "ClothBlendWeight") == 0 and F.find("wedding cloth: using skinned clothing after cut", at) ~= nil,
+  "a cut switches wedding cloth to skinned form")
+F.press("F8", "")
+F.run(1, pawn)
+check(rawget(mesh, "ClothBlendWeight") == 0.7, "recovery restores the original cloth blend")
+rawset(mesh, "SkeletalMesh", F.obj("Other_CNS", "SkeletalMesh", { GetFullName = function()
+  return "SkeletalMesh /Game/CNSRepacked/another/outfit.outfit" end }))
+blend, all = {}, nil
+F.press("F7", "")
+F.run(1, pawn)
+check(next(blend) == nil and all == nil and rawget(mesh, "bBlendPhysics") == true,
+  "other CNS outfits do not get the dress blend override")
+F.press("F8", "")
+F.run(1, pawn)
+rawset(mesh, "SkeletalMesh", oldSk)
+rawset(mesh, "GetBoneIndex", oldIndex)
+rawset(mesh, "GetParentBone", oldParent)
+rawset(mesh, "GetSocketTransform", oldTransform)
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")

@@ -1959,6 +1959,27 @@ int main(int argc, char **argv)
             skin_probe((u64)comp_a, 0, 0);
             sscanf(lastres, "ok stretched=%d", &still);
             printf("arm probe still: %.300s\n", lastres);
+            if (getenv("ARMSTRETCHDBG")) {
+                float *xx = malloc(12 * (size_t)NV);
+                for (int v = 0; v < NV; v++) skin_v(&ov_a[v], v, xx + 3 * (size_t)v);
+                for (int t = 0; t + 2 < NIDX; t += 3) {
+                    u32 a[3] = {idx[t], idx[t+1], idx[t+2]}; int stretched = 0;
+                    for (int k = 0; k < 3; k++) {
+                        int u = a[k], v = a[(k+1)%3];
+                        float old = dist3(pos + 3 * (size_t)u, pos + 3 * (size_t)v);
+                        float now = dist3(xx + 3 * (size_t)u, xx + 3 * (size_t)v);
+                        if (now > 3 * old && now > old + 15) stretched = 1;
+                    }
+                    if (!stretched) continue;
+                    printf("stretched triangle:");
+                    for (int k = 0; k < 3; k++) {
+                        int v = a[k]; printf(" v%d (%.1f %.1f %.1f)", v, xx[3*v],xx[3*v+1],xx[3*v+2]);
+                        for (int j = 0; j < MAX_INF; j++) if (ov_a[v].weights[j]) printf(" %s=%d",bname[ov_a[v].bones[j]],ov_a[v].weights[j]);
+                    }
+                    printf("\n");
+                }
+                free(xx);
+            }
             { char *h0 = strstr(lastres, "hidden="); if (h0) sscanf(h0, "hidden=%d", &still_hid); }
             still_hid = still - still_hid; // the visible ones
             float q[4] = { 0.3826834f, 0, 0, 0.9238795f };

@@ -87,7 +87,15 @@ if AIR then
   check(not F.find("convulse: from ", d0), "no post-death movement begun in the air")
   falling = false
 end
-F.run(18, pawn)
+local elapsed = 0
+while elapsed < 18 and not F.find("struggle: over after", d0) do F.run(0.1, pawn); elapsed = elapsed + 0.1 end
+if F.find("struggle: over after", d0) then
+  F.run(0.5, pawn); elapsed = elapsed + 0.5
+  local asleep = 0
+  for _, v in pairs(R.asleep) do if v then asleep = asleep + 1 end end
+  check(asleep == 0, "bodies remain awake for gravity after struggle ends")
+end
+F.run(math.max(0, 18 - elapsed), pawn)
 local sg = lines(d0, "struggle: ")
 for _, x in ipairs(sg) do print("  | " .. x:sub(1, 230)) end
 if WAIST then

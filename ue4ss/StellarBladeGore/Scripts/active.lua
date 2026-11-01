@@ -935,7 +935,12 @@ function M.weapon_cut(mesh, at, n, blocked)
     end
     local nm = tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end))
     local split_already = false
-    for _, sp in ipairs(splits) do if sp.w == w or sp.b == w then split_already = true end end
+    -- UE4SS can return a different Lua wrapper for the same component on the next lookup.
+    -- Compare the underlying addresses so a second death/cut callback cannot split it again.
+    local wa = addr(w)
+    for _, sp in ipairs(splits) do
+      if wa and (wa == addr(sp.w) or wa == addr(sp.b)) then split_already = true; break end
+    end
     if split_already then
       out[#out + 1] = nm .. ": in two already"
     elseif not reach then

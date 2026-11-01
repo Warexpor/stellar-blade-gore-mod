@@ -64,10 +64,15 @@ G.smashed.chunk=function(p,m,at,velocity,...)
   if #emitted==2 then drop=40 end
   return originalChunk(p,m,at,velocity,...)
 end
+-- Fix the random scatter during this one check so only the pelvis motion changes the spawn height.
+local random = math.random
+math.random = function(a, b) if a and b then return a elseif a then return 1 else return 0.5 end end
 G.smash(pawn,E.mesh,{loc=E.bone("Bip001-Spine2")},"death")
 frames(120)
+math.random = random
 G.smashed.chunk, E.mesh.GetSocketLocation = originalChunk, socket
-check(#emitted==44 and emitted[3] < emitted[1]-20,"later torso chunks follow the falling body instead of a fixed airborne source")
+check(#emitted==44 and math.abs(emitted[3] - emitted[1] + 40) < 0.01,
+  "later torso chunks follow the falling body instead of a fixed airborne source")
 G.cleanup(pawn,E.mesh)
 -- A long burst overlaps a second cut: each delayed diagnostic must retain its own chunk list.
 s.chunksLeg,s.chunks=64,3

@@ -182,6 +182,33 @@ if fails > 0 then dump(at, "death") end
 MONT = nil
 next_life()
 
+-- A real physical hit while jumping must not be mistaken for a kill volume if its show has no ragdoll.
+at = mark()
+E.s.mode, E.s.falling = 3, true
+local hit = E.bone("Bip001-Spine2")
+E.mesh.PhysicalHitForceVector = {X=711,Y=3,Z=2}
+E.mesh.PhysicalHitForceLocation = {X=hit.X,Y=hit.Y,Z=hit.Z}
+E.mesh.PhysicalHitForceTargetBone = F.fname("Bip001-Spine2")
+F.run(0.2, pawn)
+E.s.hp = 0
+F.run(0.2, pawn)
+E.die(false, 1000123)
+F.run(1, pawn)
+check(F.find("death: taken over %(no ragdoll from its show",at) ~= nil and E.s.sim,
+  "airborne death after a recorded hit: fallback ragdoll")
+check(not F.find("scripted death: falling, a kill volume",at), "airborne hit isn't treated as a kill volume")
+next_life()
+
+-- With no fresh hit, the same movement mode retains the kill-volume protection.
+at = mark()
+E.s.mode, E.s.falling, E.s.hp = 3, true, 0
+F.run(0.2, pawn)
+E.die(false, 1000123)
+F.run(1, pawn)
+check(not E.s.sim and F.find("scripted death: falling, a kill volume",at),
+  "unexplained airborne death remains with the game's kill-volume behavior")
+next_life()
+
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

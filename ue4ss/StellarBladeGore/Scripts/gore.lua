@@ -637,6 +637,20 @@ local function parent_bone(mesh, b)
   return p ~= "None" and p or nil
 end
 local function addr(o) return try(function() return o:GetAddress() end) end
+-- Simulated cloth can bypass cut skin weights; use the skinned form for this outfit until recovery.
+M.weddingCloth = {}
+function M.wedding_cloth(mesh)
+  local full = try(function() return mesh.SkeletalMesh:GetFullName() end) or ""
+  if not full:lower():find("/game/cnsrepacked/5a2518e03d16a0cd/", 1, true) then return end
+  local a = addr(mesh)
+  if not a or M.weddingCloth[a] then return end
+  local v = try(function() return mesh.ClothBlendWeight end)
+  if type(v) ~= "number" then log("wedding cloth: blend weight unreadable"); return end
+  if try(function() mesh.ClothBlendWeight = 0; return true end) then
+    M.weddingCloth[a] = { mesh = mesh, old = v, asset = addr(try(function() return mesh.SkeletalMesh end)) }
+    log("wedding cloth: using skinned clothing after cut")
+  end
+end
 -- the mesh asset's name, or nil: a component without a mesh hands Lua a null object, and UE4SS's GetFName on one
 -- crashes the game (pcall can't catch an access violation), so check it first
 local function mesh_name(comp)
@@ -3206,6 +3220,7 @@ local function stage_cut(q)
     if q.c then q.bone = b; break end
   end
   if not q.c then log("nothing cut (" .. q.why .. ")"); return false end
+  M.wedding_cloth(q.mesh)
   -- Snapshot remaining flesh before this cut itself enters the gone-part list.
   if q.smash then
     q.smashProfile = M.smashed.profile(q.mesh, q.bone)
@@ -4811,6 +4826,8 @@ local function stage_split_cut(q)
   cuts[#cuts + 1] = { mesh = q.mesh, addr = addr(q.mesh), bone = "split", saved = saved or nil, copy = saved and addr(q.body2) or nil,
     sm = enemy.asset(q.mesh) }
   cuts[#cuts + 1] = { mesh = q.body2, addr = addr(q.body2), bone = "split copy", sm = enemy.asset(q.body2) }
+  M.wedding_cloth(q.mesh)
+  M.wedding_cloth(q.body2)
   -- each half keeps the limbs on its side whole and lets the others go; the halves share the mesh's sinks, and each
   -- half's skin lets go of every helper past the plane, so the other half's sinks never pull on it (q.gone1, q.gone2:
   -- limb_sides, above)
@@ -5382,6 +5399,11 @@ function M.has_cut(mesh, bone) return already_cut(mesh, bone) end
 -- body's (a waist cut: its split's copy holds the other half, and a second split made a second one), returned second
 function M.swapped(mesh, forget)
   local a, out, olds, kept, quiet = addr(mesh), {}, {}, {}, {}
+  local wc = a and M.weddingCloth[a]
+  if wc and wc.asset ~= addr(try(function() return mesh.SkeletalMesh end)) then
+    try(function() mesh.ClothBlendWeight = wc.old end)
+    M.weddingCloth[a] = nil
+  end
   for i = #cuts, 1, -1 do
     local c = cuts[i]
     if c.addr == a and PARTS[c.bone] and not c.smashed and not enemy.owned[c] and c.sm and enemy.asset(mesh) ~= c.sm then
@@ -7566,6 +7588,10 @@ local function aside(l)
 end
 local function merge(l, more) for _, x in ipairs(more) do l[#l + 1] = x end end
 function M.cleanup(pawn, mesh)
+  for a, c in pairs(M.weddingCloth) do
+    if valid(c.mesh) and addr(c.mesh) == a then try(function() c.mesh.ClothBlendWeight = c.old end) end
+  end
+  M.weddingCloth = {}
   M.clear_marks()
   -- (a piece lying on its copy back on her first: its bones stayed hidden on her, the regrown arm unseen)
   if M.pieceHid then M.hide_pieces(nil, nil, false) end
@@ -8009,6 +8035,7 @@ function M.state() return native.state end
 -- nothing cut). Only those, by asset: the DLL drops its records of an asset gone with the old level by itself
 -- (assets_prune), and one of an enemy kind still around stays on its corpses' records till they go
 function M.forget(pawn)
+  M.weddingCloth = {}
   M.stubs = {}
   local wears = {}
   if pawn and native.state == "ready" then

@@ -1230,6 +1230,12 @@ function M.tick(paused)
   st.t = st.t + dt
   if st.t >= st.total then
     st.done = true
+    -- Settling may have already stopped her between attempts, or may stop her as the last attempt ends.
+    -- Let gravity move the released pose before the ragdoll is allowed to put its bodies to sleep.
+    if r and r.twitch then
+      r.twitch(1.5)
+      try(function() mesh:WakeAllRigidBodies() end)
+    end
     local p = body_at(mesh)
     log(string.format("over after %.1f s: %s; rolled %.0f to %.0f deg, %d stump reflexes, %d leg draws, chest up to %.0f deg, moved %.0f cm in all",
       st.t, #st.acts > 0 and table.concat(st.acts, ", ") or "no acts", st.rollMin or 0, st.rollMax or 0, st.reflexes, st.draws,

@@ -68,4 +68,36 @@ check(sets == before, "the dropped override not re-made while she lives (" .. (s
 physfix.start(nil, mesh)
 check(override == complete, "put back on her at her death")
 check(said("at her death: gave her CH_P_EVE_InnerSuit_Physics") ~= nil, "logged")
+
+-- CNS's own assets can have low authored damping without our joint fixes (the wedding dress does).
+local cns = asset("CH_P_EVE_02_Physics", 0x300, all)
+cns.GetFullName = function() return "PhysicsAsset /Game/CNSRepacked/example/CH_P_EVE_02_Physics.CH_P_EVE_02_Physics" end
+cns.SkeletalBodySetups:ForEach(function(_, e) e:get().DefaultInstance.LinearDamping = 0.2 end)
+local cnsSk = { PhysicsAsset = cns, GetAddress = function() return 0x901 end,
+  GetFName = function() return { ToString = function() return "CH_P_EVE_02_Body" end } end,
+  LODInfo = { { bAllowCPUAccess = true } } }
+local cnsSets = 0
+local cnsMesh = { SkeletalMesh = cnsSk, GetPhysicsAsset = function() return cns end,
+  SetPhysicsAsset = function() cnsSets = cnsSets + 1 end }
+physfix.check(nil, cnsMesh, false)
+check(said("outfit CH_P_EVE_02_Body, physics CH_P_EVE_02_Physics: NOT patched") ~= nil,
+  "low-damping CNS asset still gets the runtime physics fix")
+check(cnsSets == 1, "CNS bodies remade from the fixed asset")
+physfix.check(nil, cnsMesh, false)
+check(cnsSets == 1, "CNS bodies are not remade repeatedly")
+local function joint(b)
+  local p = { ConeLimit = { Swing1Motion = 0, Swing2Motion = 0, Swing1LimitDegrees = 45, Swing2LimitDegrees = 45 },
+    TwistLimit = { TwistMotion = 0, TwistLimitDegrees = 45 } }
+  return { child = "Bip001-" .. b, t = { DefaultInstance = { ProfileInstance = p } } }, p
+end
+local spine, ps = joint("Spine1")
+local clavicle, pc = joint("L-Clavicle")
+local elbow, pe = joint("L-Forearm")
+local head, ph = joint("Head")
+check(physfix.wedding_limits({spine, clavicle, elbow, head}) == 4, "wedding dress original profiles restored")
+check(ps.TwistLimit.TwistMotion == 1 and ps.ConeLimit.Swing1LimitDegrees == 10, "free spine is constrained")
+check(pc.TwistLimit.TwistLimitDegrees == 15 and pc.ConeLimit.Swing2LimitDegrees == 5, "clavicle limits restored")
+check(pe.ConeLimit.Swing1Motion == 2 and pe.ConeLimit.Swing2Motion == 2, "elbow swings locked")
+check(ph.TwistLimit.TwistMotion == 1 and ph.TwistLimit.TwistLimitDegrees == 15, "head twist constrained")
+
 print(fails == 0 and "PASS" or "FAIL")

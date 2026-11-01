@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2
+
+- Improved ragdoll compatibility with CNS-repacked outfits. Wedding Dress 3504 restores the original joint limits and uses animation for breast skinning during ragdoll; plain ragdoll was confirmed improved. After cuts and smashes its clothing uses skinned weights until recovery, and thigh-cut handling avoids pulling a hanging dress panel across the cut.
+- Reduced cut processing on large meshes; the wedding dress can still stutter when cut. Added dress-mesh and physics regression coverage and F7 breast and hip diagnostics.
+- A recent physical hit can trigger the missing-ragdoll fallback in mid-air without treating every falling death as a kill volume. The reported Karakuri laser case remains unconfirmed.
+- Prevented repeated sword-split callbacks from splitting the same component twice when UE4SS returns a new wrapper. Whether this caused the reported extra sword is unconfirmed.
+- Kept the ragdoll awake briefly after a struggle to allow gravity to relax the pose.
+- Prevented the missed-death watch from starting the same death again during respawn. This may address a reported render-resource crash, but the crash cause remains unconfirmed.
+
 ## 0.6.1
 
 - Fixed a large FPS drop during death: a pending hair reset repeatedly searched for cinematic sequences after its deadline even though the reset had to wait until recovery. The search now waits too.

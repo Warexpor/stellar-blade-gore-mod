@@ -326,6 +326,35 @@ function M.fix_joints(joints, lims, g)
   return n, nr
 end
 
+-- Wedding Dress 3504's repacked physics asset omits the game's joint-limit profiles, leaving broad/default
+-- angular limits even on the spine, clavicles, head and elbows. Restore the original EVE_02 values while keeping
+-- the dress's own joint frames; fix_joints then calculates the configured asymmetric bend ranges from its bind pose.
+M.weddingLimits = {
+  ["Spine"] = {5, 0, 0}, ["Spine1"] = {5, 10, 10}, ["Spine2"] = {5, 10, 10},
+  ["Neck"] = {15, 5, 10}, ["Head"] = {15, 15, 15},
+  ["L-Clavicle"] = {15, 5, 5}, ["R-Clavicle"] = {15, 5, 5},
+  ["L-UpperArm"] = {30, 45, 5}, ["R-UpperArm"] = {30, 45, 5},
+  ["L-Forearm"] = {50, 0, 0}, ["R-Forearm"] = {50, 0, 0},
+  ["L-Hand"] = {15, 45, 45}, ["R-Hand"] = {15, 45, 45},
+  ["L-Thigh"] = {30, 20, 5}, ["R-Thigh"] = {30, 20, 5},
+  ["L-Calf"] = {70, 0, 0}, ["R-Calf"] = {70, 0, 0},
+  ["L-Foot"] = {15, 20, 20}, ["R-Foot"] = {15, 20, 20},
+}
+function M.wedding_limits(joints)
+  local n = 0
+  for _, j in ipairs(joints) do
+    local l = M.weddingLimits[j.child:gsub("^Bip001%-", "")]
+    if l and try(function()
+      local p = j.t.DefaultInstance.ProfileInstance
+      p.TwistLimit.TwistMotion, p.TwistLimit.TwistLimitDegrees = ACM_LIMITED, l[1]
+      p.ConeLimit.Swing1Motion, p.ConeLimit.Swing1LimitDegrees = l[2] == 0 and ACM_LOCKED or ACM_LIMITED, l[2]
+      p.ConeLimit.Swing2Motion, p.ConeLimit.Swing2LimitDegrees = l[3] == 0 and ACM_LOCKED or ACM_LIMITED, l[3]
+      return true
+    end) then n = n + 1 end
+  end
+  return n
+end
+
 -- the bind pose of the bones named (a set), from sbslice.dll: bone -> { q, t }, or nil and why
 local function bind_pose(mesh, sk, names)
   local list, byIdx = {}, {}
@@ -590,6 +619,10 @@ local function fix_defaults(pa, mesh, sk)
   elseif g.ranges or #loose > 0 then
     why = "; no sbslice.dll, so no ranges and no joints for loose bodies"
   end
+  local full = try(function() return pa:GetFullName() end) or ""
+  if full:lower():find("/game/cnsrepacked/5a2518e03d16a0cd/art/character/pc/ch_p_eve_02/ch_p_eve_02_physics.", 1, true) then
+    why = why .. string.format("; wedding dress: restored %d original joint profiles", M.wedding_limits(joints))
+  end
   local nj, nr = M.fix_joints(joints, lims, g)
   if bind and #loose > 0 then
     local n, what = M.add_joints(pa, loose, bind)
@@ -771,7 +804,11 @@ function M.check(pawn, mesh, live)
     return s .. (ok and ", bodies re-made" or ", bodies NOT re-made")
   end
   -- an asset fixed here reads as patched from then on: it isn't
-  state = { patched = valid(pa) and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa, borrowed = borrowed:find("gave it") ~= nil }
+  -- CNS repacks its own assets; their authored damping can match our patch without any of our joint fixes.
+  -- A borrowed vanilla asset keeps its normal treatment even when the mesh itself came from CNS.
+  local paFull = valid(pa) and (try(function() return pa:GetFullName() end) or "") or ""
+  local cnsAsset = paFull:lower():find("/game/cnsrepacked/", 1, true) ~= nil
+  state = { patched = valid(pa) and not cnsAsset and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa, borrowed = borrowed:find("gave it") ~= nil }
   M.seen[addr] = { name = name(sk), state = state }
   -- (the asset's flag; sbslice.dll keeps every skeletal mesh's LOD0 CPU copy whatever it says)
   local forced = ctx and ctx.cpu_forced

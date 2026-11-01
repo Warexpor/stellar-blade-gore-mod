@@ -543,12 +543,13 @@ static void skin_point(const cut_ctx *c, const skin_info *o, const float *vp, fl
     }
 }
 
+static int fallback_bone(const cut_ctx *c, int s, int start, const unsigned char *drop);
 // move every weight of o on bones where drop[] says so to that bone's nearest ancestor that stays (and is in section
 // s's BoneMap), else to the strongest remaining bone, else to fallback. A helper rides its parent at a fixed offset
 // in a ragdoll (no body of its own), so its parent skins the vertex where the helper did; the strongest bone put a
 // split's shoulder skin on the chest, and it tore off the clavicle by up to 23 cm once she moved.
 // Returns 1 if it changed o, 0 if not, -1 if it had to leave o alone (nothing to put the weight on).
-static int keep_only(const cut_ctx *c, int s, skin_info *o, const unsigned char *drop, int fallback)
+static int keep_only(const cut_ctx *c, int s, skin_info *o, const unsigned char *drop, int start)
 {
     int nb = c->nb, target = -1, best = -1, gone = 0, rest = 0;
     int up[MAX_INF];
@@ -567,7 +568,8 @@ static int keep_only(const cut_ctx *c, int s, skin_info *o, const unsigned char 
         } else if (o->weights[i] > best) { best = o->weights[i]; target = mb; }
     }
     if (!gone) return 0;
-    if (target < 0) target = fallback;
+    // Only find a fallback when some weight actually needs one: most vertices keep all their original weights.
+    if (target < 0 && rest) target = fallback_bone(c, s, start, drop);
     if (rest && target < 0) return -1;
     unsigned char w[MAX_INF];
     for (int i = 0; i < MAX_INF; i++) {
@@ -2268,9 +2270,18 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             if (any_off) {
                 int *iside = vsink; // limb side vertices per island (vsink is the split's, later)
                 for (int v = 0; v < nv; v++) { upar[v] = v; icnt[v] = iwl[v] = iwb[v] = iside[v] = 0; iext[v] = iup[v] = idn[v] = 0; iown[v] = iownb[v] = ikw[v] = 0; iflag[v] = idec[v] = 0; }
+                // Sections usually have disjoint vertices. Then islands in core sections are never read below,
+                // so do not build their connectivity. Retain the full traversal for a mesh with cross-section faces.
+                int section_local = 1;
                 for (int i = 0; i + 2 < ni; i += 3) {
                     u32 a = ix[i], e = ix[i + 1], f = ix[i + 2];
                     if (a >= (u32)nv || e >= (u32)nv || f >= (u32)nv) continue;
+                    if (vsec[a] != vsec[e] || vsec[a] != vsec[f]) { section_local = 0; break; }
+                }
+                for (int i = 0; i + 2 < ni; i += 3) {
+                    u32 a = ix[i], e = ix[i + 1], f = ix[i + 2];
+                    if (a >= (u32)nv || e >= (u32)nv || f >= (u32)nv) continue;
+                    if (section_local && vsec[a] < MAX_RIM_SECTIONS && secore[vsec[a]]) continue;
                     uf_join(upar, (int)a, (int)e);
                     uf_join(upar, (int)a, (int)f);
                 }
@@ -2325,8 +2336,12 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     // stay close to the plane: the cape past an arm cut (18% of its weight on the arm, its 9% of vertices
                     // there hanging 67 cm down the arm) still goes whole
                     float mreach = vl < vb ? iup[r] : idn[r];
+                    // A few vertices can poke past the plane while still belonging to the body: a wedding dress
+                    // panel was pulled to both thigh stumps. Treat it as truly tied only when most vertices on the
+                    // minority side are themselves weighted mostly to that side.
                     if ((long long)mn * 100 > (long long)tot * ISLAND_MINOR_PCT && iup[r] > cross * ISLAND_TIED_REACH
-                        && idn[r] > cross * ISLAND_TIED_REACH && mreach <= cross * ISLAND_TIED_MAX) continue;
+                        && idn[r] > cross * ISLAND_TIED_REACH && mreach <= cross * ISLAND_TIED_MAX
+                        && (vl < vb ? iown[r] : iownb[r]) * 4 > vmn * 3) continue;
                     if ((long long)mn * 100 <= (long long)tot * ISLAND_MINOR_PCT) idec[r] = iwl[r] > iwb[r] ? 2 : 1;
                     // its few vertices past the plane reaching far down the other side, most of them on that side's
                     // bones: cut like the body. Sent whole, they lost those weights to the other side's: CH_P_EVE_14's
@@ -2885,7 +2900,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         if (cb >= 0)
             for (int i = 0; i < MAX_INF; i++)
                 if (o->weights[i] && o->bones[i] < nb && subb[o->bones[i]]) { cw += o->weights[i]; o->weights[i] = 0; }
-        int r = cw == 255 ? 1 : keep_only(&c, s, o, drop, fallback_bone(&c, s, side[v] || mode == MODE_SIDE ? b : parent_b, drop));
+        int r = cw == 255 ? 1 : keep_only(&c, s, o, drop, side[v] || mode == MODE_SIDE ? b : parent_b);
         // the body's skin with all its bones given up and no kept one in its section to go to: the nearest kept ancestor
         // is borrowed in. Left as it was, it went with the limb: CH_P_EVE_14's jacket hem 3-5 cm under a waist cut, on
         // Spine1 and the jacket's chest helpers, flew off with the upper body and tore 13 triangles off the seam (the
@@ -2899,7 +2914,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                 while (a >= 0 && a < nb && drop[a]) a = parent_of(&c, a);
                 if (a > 0 && a < nb && (inmap[(u64)s * nb + a] || borrow_bone(secs, s, a, inmap, nb))) got = 1;
             }
-            if (got) r = keep_only(&c, s, o, drop, fallback_bone(&c, s, side[v] || mode == MODE_SIDE ? b : parent_b, drop));
+            if (got) r = keep_only(&c, s, o, drop, side[v] || mode == MODE_SIDE ? b : parent_b);
         }
         if (cw) {
             int slot = -1;
