@@ -445,6 +445,7 @@ return {
                                --   enemy's second blow on her went unseen at 25, playtest)
       minSpeed = 500,          --   cm/s it moves at least, in an attack (one of its montages that isn't a walk, turn,
                                --   hit reaction...): 300 and any weapon passing by cut her (a brush, reported)
+      noMontageSpeed = 1500,   --   cm/s relative to the attacker when its animation graph exposes no montage
       max = 6,                 --   hits a death
       from = 0.6,              --   s into the death before the first (the killing swing itself doesn't count twice)
       rearm = 0.35,            --   s after an enemy's last cut (or the death) it may cut again, slowed down or not (a

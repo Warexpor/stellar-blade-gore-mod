@@ -474,7 +474,7 @@ local function standin_copy_gone(s)
 end
 -- the real sword hidden only while it is out: the game folds it back into her hairpin later (the stance without a
 -- sword, or out of battle), the same mesh at her head, and hidden there her pin was gone (playtest). Told by where it
--- is: on its way to her head (under STANDIN_OUT_CM after being further) the copy on the floor flies up to her hair,
+-- is: once it stays near her head the copy on the floor flies up to her hair,
 -- shrinking (STANDIN_FLY_S), as her sword folds itself back into the pin by itself; at her head (STANDIN_HEAD_CM,
 -- SHOW_S on end) hers is shown and the copy gone. Away from it again (drawn, No Sword Without It off) hidden, in a
 -- hand that isn't there. (Not by her cut hand: that lies on the floor with the piece)
@@ -489,7 +489,7 @@ local function standin_fly(s, dt, head)
   local at = vec(f.from.X + (to.X - f.from.X) * e, f.from.Y + (to.Y - f.from.Y) * e, f.from.Z + (to.Z - f.from.Z) * e)
   local r = 1 + (STANDIN_FLY_END - 1) * e
   try(function() f.root:K2_SetWorldLocation(at, false, {}, true) end)
-  try(function() s.copy:SetWorldScale3D(vec(r, r, r)) end)
+  try(function() s.copy:SetWorldScale3D(vec(f.scale.X * r, f.scale.Y * r, f.scale.Z * r)) end)
   return k >= 1
 end
 local function standin_fly_start(s)
@@ -500,8 +500,20 @@ local function standin_fly_start(s)
   if root ~= s.copy then try(function() root:SetSimulatePhysics(false) end); try(function() root:SetCollisionEnabled(0) end) end
   local from = v3_of(function() return root:K2_GetComponentLocation() end)
   if not from then return end
-  s.fly = { t = 0, from = from, root = root }
+  local scale = v3_of(function() return s.copy:K2_GetComponentToWorld().Scale3D end) or vec(1, 1, 1)
+  s.fly = { t = 0, from = from, root = root, scale = scale }
   log("her sword folds back into her hair: its copy flies up off the floor")
+end
+local function standin_fly_cancel(s)
+  local f = s.fly
+  try(function() f.root:K2_SetWorldLocation(f.from, false, {}, true) end)
+  try(function() s.copy:SetWorldScale3D(f.scale) end)
+  if f.root ~= s.copy then
+    try(function() f.root:SetCollisionEnabled(3) end)
+    try(function() f.root:SetSimulatePhysics(true) end)
+  end
+  s.fly = nil
+  log("her sword moved away from her hair: its copy falls again")
 end
 local function standins_watch(dt)
   for _, s in ipairs(standins) do
@@ -513,8 +525,8 @@ local function standins_watch(dt)
         s.age = (s.age or 0) + dt
         if not s.told and s.age >= 2 then s.told = true; log(string.format("her hidden sword %.0f cm from her head 2 s after the cut", d)) end
         s.near = d < STANDIN_HEAD_CM and (s.near or 0) + dt or 0
-        s.wasOut = s.wasOut or d > STANDIN_OUT_CM
-        if s.hidden and not s.fly and valid(s.copy) and (s.wasOut and d < STANDIN_OUT_CM or s.near > 0) then
+        if s.fly and d >= STANDIN_HEAD_CM then standin_fly_cancel(s) end
+        if s.hidden and not s.fly and valid(s.copy) and s.near >= STANDIN_SHOW_S then
           standin_fly_start(s)
         end
         local landed = s.fly and valid(s.copy) and standin_fly(s, dt, h)

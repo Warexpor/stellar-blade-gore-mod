@@ -1,5 +1,11 @@
 # Changelog
 
+- Hits after death can now recognize fast weapon swings from enemies whose attacks expose no montage. The playtest logged a 3533 cm/s pass rejected for that reason; actor movement is subtracted so a weapon carried past her does not count. The logged pass was near an already severed calf, so its actual visible result still needs a playtest.
+
+## Unreleased
+
+- Fixed the dropped sword shrinking and staying tiny after Eve loses her right arm alive: a false or interrupted return to her hair now leaves the sword at its original size with physics restored. Needs in-game confirmation.
+
 ## 0.6.2
 
 - Improved ragdoll compatibility with CNS-repacked outfits. Wedding Dress 3504 restores the original joint limits and uses animation for breast skinning during ragdoll; plain ragdoll was confirmed improved. After cuts and smashes its clothing uses skinned weights until recovery, and thigh-cut handling avoids pulling a hanging dress panel across the cut.

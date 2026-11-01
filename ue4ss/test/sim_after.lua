@@ -18,8 +18,12 @@ s.dev = true
 s.enemies.afterDeath = { enabled = true, time = 10 }
 -- (her death takes a limb, not her head or body: the hits after it then cut more)
 s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
-return s
 ]])
+if rawget(_G, "NO_MONTAGE") then
+  f:write("\ns.enemies.afterDeath.enabled = false\nreturn s\n")
+else
+  f:write("\nreturn s\n")
+end
 f:close()
 F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
 F.sbslice.f = "ok photo shield 1"
@@ -54,7 +58,7 @@ local function enemy(name, at)
       local n = b:ToString()
       local p = e.at
       if n == "Weapon_R" and e.play then
-        local k = (F.t - e.play.t0) / 1.5
+        local k = (F.t - e.play.t0) / (e.duration or 1.5)
         -- (from its hand out to the arc's start, the arc mid swing: across her arm, Y from -130 to +130 cm round it)
         local a0 = vec(ARM.X, ARM.Y - 130, ARM.Z - 11)
         if k <= 0.4 then
@@ -116,12 +120,33 @@ local function dump(from, pat)
   for i, x in ipairs(F.log_lines()) do if i >= from and (not pat or x:find(pat)) then print("  | " .. x:sub(1, 240)) end end
 end
 
-check(F.find("after death: trees looked up %(new enemies around%)") ~= nil, "the trees looked up ahead, while she lives")
+if not rawget(_G, "NO_MONTAGE") then
+  check(F.find("after death: trees looked up %(new enemies around%)") ~= nil, "the trees looked up ahead, while she lives")
+end
 near.at, far.at = vec(1300, 2000, 90), vec(1000, 2420, 90)
 F.run(1, pawn)
 local d0 = mark()
 E.s.hp = 0
 E.die(true)
+if rawget(_G, "NO_MONTAGE") then
+  F.run(0.7, pawn)
+  -- Fast translation of an otherwise stationary hand is movement, not a swing.
+  near.at = vec(1200, 2000, 90)
+  F.run(0.1, pawn)
+  near.at = vec(1040, 2000, 90)
+  F.run(0.1, pawn)
+  check(not F.find("no montage; relative weapon speed", d0), "walking past with a stationary hand does not cut")
+  near.at = vec(1300, 2000, 90)
+  F.run(0.1, pawn)
+  near.duration = 0.5
+  near.play = { a = anims[1], t0 = F.t }
+  F.run(2, pawn)
+  check(F.find("no montage; relative weapon speed", d0) ~= nil, "fast animation without a montage counts")
+  check(F.find("gore: cut .* %(after%)", d0) ~= nil, "the detected blow cuts")
+  check(#F.errors == 0 and not F.find("tick error"), "no errors")
+  print(fails == 0 and "PASS" or "FAIL")
+  return
+end
 F.run(4, pawn)
 check(det[1].bDead == true and det[1].TargetCancel == 2, "target searches take a dead target, dropped only once destroyed")
 check(alive[1].CheckType == 1, "'target alive' checks swapped")

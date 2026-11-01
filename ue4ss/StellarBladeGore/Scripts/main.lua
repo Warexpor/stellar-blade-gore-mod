@@ -2857,7 +2857,7 @@ local function track_swing(pawn, mesh)
       table.remove(sw.list, i)
       if swing == S then swing = sw.list[1] or sw.state() end
     elseif (S.bones and #S.bones > 0) or (S.weapons and #S.weapons > 0) then
-      local s = { t = now, p = {}, w = {}, pose = pose }
+      local s = { t = now, p = {}, w = {}, pose = pose, origin = try(function() return vof(S.actor:K2_GetActorLocation()) end) }
       for k, b in ipairs(S.bones or {}) do s.p[k] = try(function() return vof(S.mesh:GetSocketLocation(FName(b))) end) end
       for k, w in ipairs(S.weapons or {}) do
         if goreCtx.held(w.k) then
@@ -3479,12 +3479,20 @@ local function hits_after(pawn, mesh)
   -- only brushing her as it walked or turned by cut her (reported)
   local en = goreCtx.enemies
   local atk = not (en and en.attacking) or (goreCtx.held(S.k) and en.attacking(S.actor, S.addr))
+  local mn = not atk and en and en.montage_of and goreCtx.held(S.k) and select(3, en.montage_of(S.actor))
+  -- Some enemies attack through their animation graph without a montage. Require a much faster weapon motion
+  -- relative to the actor for those, so walking past her with a stationary weapon still cannot cut.
+  local prev, cur = hist[#hist - 1], hist[#hist]
+  local travel = prev.origin and cur.origin and sub(cur.origin, prev.origin)
+  local relative = travel and len(sub(sub(best.q, best.p), travel)) / (cur.t - prev.t)
+  if not atk and not mn and relative and relative >= (c.noMontageSpeed or 1500) then
+    atk = "fast swing without montage"
+  end
   if not atk or best.v < (c.minSpeed or 500) then
     if (ah.brushes or 0) < 3 then
       ah.brushes = (ah.brushes or 0) + 1
       -- (the montage it plays named: Raven's weapon 21 cm from her at 777 cm/s was "not attacking", and nothing said
       -- what it was doing, playtest)
-      local mn = not atk and en and en.montage_of and goreCtx.held(S.k) and select(3, en.montage_of(S.actor))
       log(string.format("after death: %s's %s passed %.0f cm from her %s at %.0f cm/s, %s: not a blow", tostring(S.who),
         best.name, d, bone, best.v, atk and string.format("under %s cm/s", c.minSpeed or 500)
           or string.format("not attacking (%s)", mn and ("montage " .. mn) or "no montage")))
@@ -3518,6 +3526,7 @@ local function hits_after(pawn, mesh)
   log(string.format("after death (%.1f s in): %s's %s at %.0f cm/s passed %.0f cm from her %s, hit %d of %d%s",
     os.clock() - ah.t0, tostring(S.who), best.name, best.v, d, bone, ah.n, c.max or 6,
     split and ", she is split: blood only" or ""))
+  if atk == "fast swing without montage" then log(string.format("after death: no montage; relative weapon speed %.0f cm/s", relative)) end
   gore.on_hit(pawn, mesh, at)
   if split then return end
   gore.aim(dir)

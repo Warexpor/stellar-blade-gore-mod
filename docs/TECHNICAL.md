@@ -1,5 +1,7 @@
 # Stellar Blade Gore Mod: technical notes
 
+Hits after death: an enemy with no active montage can still strike when its weapon or hand moves at least `afterHits.noMontageSpeed` (1500 cm/s) relative to its actor between samples; known non-attack montages stay rejected. `sim_after_nomontage` checks a fast graph-driven swing and actor translation. The observed pass was near a severed calf, so a live playtest remains necessary to establish its visible result.
+
 For the CNS dress investigation, F7 logs breast and hip relative transforms before and during ragdoll. A temporary test disabled the entire post-process graph and restored it during two F7 ragdolls; the breast links stayed twisted while the graph was off, so the temporary toggle was removed. This does not directly measure the physics-body pose. `assetkit/research/cns-wedding-findings.md` records the result and the separate mesh-weight calculation.
 
 For this exact wedding dress mesh, `screen.wedding_blend` waits for the pelvis to simulate, then gives the `Dm-L/R-Breast` subtrees physics blend weight zero. Their bodies and joints remain simulated, but their bone skinning should use the animated pose. Plain ragdoll improved when only `Ab-L/R-Breast-Link` was blended out; after some cuts the log also showed their `Dm-L/R-Breast` parent twisting, so the scope was extended to it. If `bBlendPhysics` forces all physics regardless of weights, the code gives the other bodies full physics weight first, clears the override, and restores it after recovery. The fake F7 test checks the calls and recovery, but cannot model Unreal's blend or establish the visual result.
@@ -74,6 +76,9 @@ Since 0.4.0 the pak carries no data table. Whole copies of `CharacterDeadTable` 
   With `cpuaccess` on, every patched mesh is a full copy in the outfits pak (all 134 make it about 560 MB compressed). An outfit mod's mesh is patched in its own version, see [Other mods](#other-mods). Use `outfits.only` / `outfits.skip` (mesh-name globs) in the spec to trim the list, or set `outfits.enabled` to false to drop all of it. Meshes and physics assets that don't round-trip byte-exactly through UAssetAPI are skipped and listed in the build log. `ClothingAssetCommon` exports stay raw bytes, because UAssetAPI loses cloth LOD data when it writes them back.
 
 Scripted deaths are left vanilla: swimming, ocean, sliding, desert hole and grinder. The laser and balance beam deaths get the injected ragdoll key above, and `main.lua` cuts them along the beam (`sw.laser_hit`: `SBLaserComponent.LaserSegmentArray`, each segment's `StartPosition` / `EndPosition` / `HitActor`; the components kept as they are made, `newobj.lua`, and seeded with the characters once a level, not looked for at the death: that `FindAllOf` was 35 ms of the death's cut frame).
+
+
+The living right-arm cut’s dropped sword copy waits until the real sword has stayed within 40 cm of Eve’s head for 0.3 s before flying back to her hair. If the real sword moves away during the 0.6 s flight, the copy returns to its starting position and original world scale, with its physics and collision restored; a completed return removes the copy and shows the real sword. `ue4ss/test/run.sh sword_return` covers a false approach, an interrupted flight and a completed return.
 
 ## Build / install
 
