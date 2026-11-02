@@ -30,6 +30,10 @@ end
 local far = enemy("CH_M_NA_14_Blueprint_C_far", vec(11000, 2000, 90))
 local near = enemy("CH_M_NA_14_Blueprint_C_near", vec(2500, 2000, 90))
 F.classes.SBCharacter = { pawn, far.obj, near.obj }
+for i = 1, 70 do
+  local e = enemy("Distant_" .. i, vec(20000 + i * 10, 2000, 90))
+  F.classes.SBCharacter[#F.classes.SBCharacter + 1] = e.obj
+end
 
 local ok, err = pcall(dofile, DIR .. "main.lua")
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
@@ -42,6 +46,11 @@ local function check(c, what)
   if not c then fails = fails + 1 end
 end
 local function mark() return #F.log_lines() + 1 end
+local biggest = 0
+for _, c in ipairs(F.cmds) do
+  if c.s:sub(1, 1) == "G" then biggest = math.max(biggest, (select(2, c.s:gsub(",", ",")) + 1) // 2) end
+end
+check(biggest >= 60, "fresh character guards validated in a batch (" .. biggest .. " entries)")
 
 -- 3 s at 60 fps: 90 polls
 far.reads, near.reads = 0, 0

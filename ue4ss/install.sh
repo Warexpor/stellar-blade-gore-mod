@@ -11,7 +11,7 @@ GAME=${SB_GAME:-$HOME/.local/share/Steam/steamapps/common/StellarBlade}
 BIN=$GAME/SB/Binaries/Win64
 URL=https://github.com/Chrisr0/RE-UE4SS/releases/download/3.1.0-6/UE4SS_v3.1.0-6.zip
 SHA=7c221c66f84ace0cfbb83130197572c455066a513fe315f3797b1da7f965931c
-CACHE=$ROOT/.cache/ue4ss
+CACHE=${SB_CACHE:-$ROOT/.cache}/ue4ss
 MODS=$BIN/ue4ss/Mods
 NEW=$MODS/StellarBladeGore
 OLDS=("$MODS/EveRagdollProbe" "$MODS/Severed") # the script's earlier names
@@ -19,12 +19,14 @@ OLDS=("$MODS/EveRagdollProbe" "$MODS/Severed") # the script's earlier names
 [[ -f $BIN/SB-Win64-Shipping.exe ]] || { echo "game not found at $GAME (set SB_GAME)"; exit 1; }
 
 # every script must load: gore.lua past Lua's 200 locals per chunk loaded as nothing in game, and no cut ran (playtest)
-if [[ ${1:-} != --uninstall* ]] && command -v luac >/dev/null; then
+LUAC=luac
+command -v luac5.4 >/dev/null && LUAC=luac5.4
+if [[ ${1:-} != --uninstall* ]] && command -v "$LUAC" >/dev/null; then
   for f in "$ROOT"/ue4ss/StellarBladeGore/Scripts/*.lua; do
-    luac -p "$f" || { echo "not installed: $f doesn't load"; exit 1; }
+    "$LUAC" -p "$f" || { echo "not installed: $f doesn't load"; exit 1; }
     # and reads no global but Lua's and UE4SS's: a local used above its definition is a nil global at run time
     # (gore.lua's seam hold called addr() before it was defined and never ran, playtest)
-    bad=$(luac -l -p "$f" | grep -o 'GETTABUP.*_ENV "[A-Za-z_0-9]*"' | grep -o '"[^"]*"' | tr -d '"' | sort -u |
+    bad=$("$LUAC" -l -p "$f" | grep -o 'GETTABUP.*_ENV "[A-Za-z_0-9]*"' | grep -o '"[^"]*"' | tr -d '"' | sort -u |
       grep -vxE 'assert|collectgarbage|debug|dofile|loadfile|load|error|io|ipairs|math|next|os|pairs|pcall|print|rawget|rawset|require|select|setmetatable|getmetatable|string|table|tonumber|tostring|type|xpcall|utf8|FName|FText|LoadAsset|StaticFindObject|StaticConstructObject|FindAllOf|FindFirstOf|FindObject|NotifyOnNewObject|RegisterHook|RegisterKeyBind|ExecuteInGameThread|ExecuteWithDelay|LoopAsync|DumpUSMAP|Key|ModifierKey|EInternalObjectFlags|EObjectFlags|UEHelpers' || true)
     [[ -z $bad ]] || { echo "not installed: $f reads undefined globals: $bad"; exit 1; }
   done
@@ -52,7 +54,20 @@ SRC=$CACHE/x/UE4SS_v3.1.0-6
 if [[ ! -d $BIN/ue4ss ]]; then
   cp "$SRC/dwmapi.dll" "$BIN/"
   cp -r "$SRC/ue4ss" "$BIN/"
+  # The pinned archive enables a signature that can crash UE4SS at launch.
+  sig="$BIN/ue4ss/UE4SS_Signatures"
+  if [[ -f $sig/FText_Constructor.lua ]]; then
+    mv "$sig/FText_Constructor.lua" "$sig/dFText_Constructor.lua"
+    echo "disabled UE4SS FText constructor signature for a fresh install"
+  fi
+elif [[ -f $BIN/ue4ss/UE4SS_Signatures/FText_Constructor.lua ]]; then
+  echo "WARNING: existing UE4SS has FText_Constructor.lua enabled; it can close the game at launch."
+  echo "Rename it to dFText_Constructor.lua after checking other mods that use UE4SS."
 fi
+# UE4SS 3.1.0-6 frees native hook data immediately when the bundled console mod unregisters
+# its own ClientRestart callback. Only patch the exact stock script and keep a backup.
+python3 "$ROOT/ue4ss/patch_console_hook.py" \
+  "$MODS/ConsoleEnablerMod/Scripts/main.lua" "$SRC/ue4ss/Mods/ConsoleEnablerMod/Scripts/main.lua"
 # keep the log and the schema-dump marker (also from the old name), replace everything else
 KEEP=$(mktemp -d)
 for d in "${OLDS[@]}" "$NEW"; do

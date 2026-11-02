@@ -67,9 +67,14 @@ M.ROWS = {
   -- (parked) { key = "gore.diagonal.enabled", label = "Diagonal Cuts", kind = "bool", help = "Cuts from over one shoulder down to the other hip: rolled by Diagonal Cut Chance, and from a tracked blade slanting across her body (20-60 degrees off her spine), which otherwise came out a waist cut or a split. Off: none." },
   { key = "gore.oddsNear.enabled", label = "Chances Follow the Hit", kind = "bool", help = "The chances above lean to what is near where the blow landed: a swing at her waist cuts the waist, a nearby arm or leg, or splits her if it came down her length, never her head; a blow at her neck mostly beheads. Set only one chance above 0 and every death still does that one, wherever it hit. Off: the chances as they are." },
   { key = "gore.oddsNear.floor", label = "   Far Part Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "With Chances Follow the Hit: share of its chance a part far from the hit keeps (0-1). 0: never (a waist swing never beheads), 0.1: now and then, 1: as if off." },
-  { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Enemy weapons swinging through Eve's dead body cut it again (a limb, the head or the body), up to 6 times a death. About a quarter leave only a wound." },
+  { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Weapon swings can cut Eve again; reported projectile hits can smash her when Blunt Smash is enabled. Up to 6 hits per death." },
   { key = "gore.smash.enabled", label = "Blunt Smash (Experimental)", kind = "bool", help = "On by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit: the part vanishes and the game's meat chunks burst out with blood, the stump stays. Blades still cut." },
-  { key = "gore.smash.fullBody", label = "   Full-Body Smash (Experimental)", kind = "bool", help = "Off by default. A steep downward hit from a heavy blunt attacker or weapon to her torso can smash her whole body. Off: only the part hit is smashed." },
+  { key = "gore.smash.fullBody", label = "   Full-Body Smash Override", kind = "bool", help = "Off by default. On: each smash can explode the whole body regardless of where it hit, using Full-Body Chance. Earlier cuts prevent a full-body explosion." },
+  { key = "gore.smash.fullBodyChance", label = "      Full-Body Chance", kind = "num", min = 0, max = 1, step = 0.05, pct = true, help = "Share of smashes that become full-body when the override is on. Set 100% for every eligible smash." },
+  { key = "gore.smash.overrideTargets", label = "   Custom Smash Mix", kind = "bool", help = "Off by default: smashes follow the hit. On: choose limb, head or upper body by the weights below. Full-Body Chance is rolled first." },
+  { key = "gore.smash.targetWeights.limb", label = "      Limb Smash Weight", kind = "num", min = 0, max = 100, step = 1, help = "Relative weight for a limb smash in Custom Smash Mix. The hit selects which limb." },
+  { key = "gore.smash.targetWeights.head", label = "      Head Smash Weight", kind = "num", min = 0, max = 100, step = 1, help = "Relative weight for a head smash in Custom Smash Mix." },
+  { key = "gore.smash.targetWeights.torso", label = "      Upper-Body Smash Weight", kind = "num", min = 0, max = 100, step = 1, help = "Relative weight for an upper-body smash in Custom Smash Mix. All weights zero returns to hit targeting." },
   { key = "gore.smash.always", label = "   Smash Every Death", kind = "bool", help = "Off by default. With Blunt Smash on: every death smashes a part, whatever hit her. To try the smash out." },
   { key = "gore.laserCut", label = "Laser Cuts Along the Beam", kind = "bool", help = "A laser trap death cuts Eve along the beam that killed her: every arm, leg, her body or her head the beam's plane goes through comes off. Off: laser deaths roll the cut chances like any death with no blade seen." },
   { key = "gore.bluntRagdoll", label = "Blunt Kills Only Ragdoll", kind = "bool", help = "Off by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) cuts nothing: Eve dies a plain ragdoll, and hits after it cut nothing either. Blades still cut. Goes before Blunt Smash." },
@@ -156,6 +161,7 @@ M.ROWS = {
   { key = "cameraStill", label = "Free Camera", kind = "bool", help = "At a death the camera stops riding her pawn and holds where it is until she gets up. Turn it with the mouse or right stick; fly it with WASD, Q/E or the left stick and triggers (Shift: faster); zoom with the mouse wheel or the D-pad (up in, down out), right up to her." },
   { key = "cameraMouse", label = "   Mouse Sensitivity", kind = "num", min = 0.5, max = 10, step = 0.5, help = "How fast the mouse turns the death camera." },
   { key = "cameraStick", label = "   Stick Sensitivity", kind = "num", min = 30, max = 400, step = 10, help = "How fast the right stick turns the death camera, in degrees a second at full tilt." },
+  { key = "cameraInvertY", label = "   Invert Vertical Look", kind = "bool", help = "Reverse vertical mouse and right-stick movement in the death camera." },
   { key = "cameraBody", label = "   Follow Her Body", kind = "bool", help = "On by default. The death camera stays locked on her body as it falls and tumbles, up and down too, while you turn and zoom round it. It stops following once you fly it. Off: it only slides after her on the level (Follow Strength)." },
   { key = "cameraFlyAfter", label = "   Fly After", kind = "num", min = 0, max = 10, step = 0.5, unit = " s", help = "Seconds into her death before WASD, Q/E or the left stick and triggers fly the camera. Till then it stays locked on her body while you turn and zoom round her; the first fly press after that lets go of her and flies it." },
   { key = "cameraBodyBone", label = "   Follow Point", kind = "list", values = { "upper", "pelvis" },
@@ -305,6 +311,8 @@ M.get = get
 M.DEPENDS = {
   ["gore.smash.always"] = { { "gore.smash.enabled", true } },
   ["gore.smash.fullBody"] = { { "gore.smash.enabled", true } },
+  ["gore.smash.fullBodyChance"] = { { "gore.smash.enabled", true }, { "gore.smash.fullBody", true } },
+  ["gore.smash.overrideTargets"] = { { "gore.smash.enabled", true } },
   ["gore.oddsNear.floor"] = { { "gore.oddsNear.enabled", true } },
   ["enemies.cutChance"] = { { "enemies.enabled", true } },
   ["convulse.face"] = { { "convulse.enabled", true } },
@@ -320,6 +328,9 @@ M.DEPENDS = {
   ["stains.splash.range"] = { { "stains.enabled", true }, { "stains.splash.enabled", true } },
   ["gore.lowArm.healAt"] = { { "gore.lowArm.enabled", true }, { "gore.lowArm.healBack", true } },
 }
+for _, key in ipairs({ "gore.smash.targetWeights.limb", "gore.smash.targetWeights.head", "gore.smash.targetWeights.torso" }) do
+  M.DEPENDS[key] = { { "gore.smash.enabled", true }, { "gore.smash.overrideTargets", true } }
+end
 for _, key in ipairs({ "gore.headRagdoll", "gore.legRagdoll", "gore.armRagdoll", "gore.torsoLegs.enabled" }) do
   M.DEPENDS[key] = { { "active.animated", true } }
 end
@@ -333,7 +344,7 @@ M.DEPENDS["gore.lowArm.notice"] = { { "gore.lowArm.enabled", true }, { "gore.low
 for _, key in ipairs({ "bosses.pick", "bosses.hpScale", "bosses.passive", "bosses.struggle", "bosses.face", "bosses.spawn_pick" }) do
   M.DEPENDS[key] = { { "bosses.enabled", true } }
 end
-for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraBody", "cameraFlyAfter", "cameraBodyBone", "cameraTrack", "cameraMove" }) do
+for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraInvertY", "cameraBody", "cameraFlyAfter", "cameraBodyBone", "cameraTrack", "cameraMove" }) do
   M.DEPENDS[key] = { { "cameraStill", true } }
 end
 M.DEPENDS.cameraBodyBone = { { "cameraStill", true }, { "cameraBody", true } }
@@ -354,7 +365,12 @@ function M.group_rows(rows)
   end
   after("gore.smash.enabled", "gore.enabled")
   after("gore.smash.fullBody", "gore.smash.enabled")
-  after("gore.smash.always", "gore.smash.fullBody")
+  after("gore.smash.fullBodyChance", "gore.smash.fullBody")
+  after("gore.smash.overrideTargets", "gore.smash.fullBodyChance")
+  after("gore.smash.targetWeights.limb", "gore.smash.overrideTargets")
+  after("gore.smash.targetWeights.head", "gore.smash.targetWeights.limb")
+  after("gore.smash.targetWeights.torso", "gore.smash.targetWeights.head")
+  after("gore.smash.always", "gore.smash.targetWeights.torso")
   after("gore.bluntRagdoll", "gore.smash.always")
   after("reviveAt", "deathScreen")
   after("enemies.cutChance", "enemies.enabled")
@@ -941,14 +957,14 @@ local function render()
     local arrows = on and val ~= "" and row.kind ~= "key" and row.kind ~= "pad"
     show(r.la, arrows); show(r.ra, arrows)
     if on then
-      local c = dim and 0.34 or 0.022
-      tint(r.lab, c, c, dim and 0.37 or 0.05); tint(r.val, c, c, dim and 0.37 or 0.05)
-      if r.labS then tint(r.labS, c, c, dim and 0.37 or 0.05) end
+      local c = dim and 0.43 or 0.022
+      tint(r.lab, c, c, dim and 0.46 or 0.05); tint(r.val, c, c, dim and 0.46 or 0.05)
+      if r.labS then tint(r.labS, c, c, dim and 0.46 or 0.05) end
       tint(r.la, 0.02, 0.32, 0.9); tint(r.ra, 0.02, 0.32, 0.9)
     else
       -- a sub-setting (its label indented) a shade dimmer
-      local c = dim and 0.30 or (lab:sub(1, 1) == " " and 0.48 or 0.6)
-      local v = dim and 0.48 or 0.85
+      local c = dim and 0.23 or (lab:sub(1, 1) == " " and 0.48 or 0.6)
+      local v = dim and 0.38 or 0.85
       tint(r.lab, c, c, c * 1.03); tint(r.val, v, v, v + 0.01)
       if r.labS then tint(r.labS, c, c, c * 1.03) end
     end

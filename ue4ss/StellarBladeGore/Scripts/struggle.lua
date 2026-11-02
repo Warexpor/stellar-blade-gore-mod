@@ -285,7 +285,8 @@ local function servo(mesh, b, t, k, dt, mid)
   local ang = math.deg(math.acos(clamp(dot(d, t), -1, 1)))
   local ax = norm(cross(d, t))
   local p = PARENT[b]
-  local wb, wp = spin(mesh, b), spin(mesh, p)
+  local disconnected = cut(mesh, b)
+  local wb, wp = spin(mesh, b), disconnected and vec(0, 0, 0) or spin(mesh, p)
   if not (wb and wp) then return ang end
   local rel = perp(sub(wb, wp), d) -- (its twist about itself left alone)
   local tr = st.trace[b]
@@ -314,9 +315,9 @@ local function servo(mesh, b, t, k, dt, mid)
   -- (the parent turned back with the bone and the limb below it carried along: turned alone, the joint between them
   -- came apart, the engine pulled it back together and took most of the turn with it, 44% kept with the elbows 106
   -- deg off, playtest)
-  local back = scale(dv, -share(b, p))
+  local back = disconnected and vec(0, 0, 0) or scale(dv, -share(b, p))
   push(mesh, b, dv)
-  push(mesh, p, back, "carry")
+  if not disconnected then push(mesh, p, back, "carry") end
   -- (what this step leaves of its turn against its parent: its own push and the parent's turn back; a child's turn
   -- back on it later in the step taken off as it comes, below. Read as only its own push, every reaction counted as
   -- a turn lost: 36% kept on a ragdoll nothing else moves)
@@ -475,7 +476,7 @@ local function pulses_tick(mesh, dt)
       p.v = v
       local sb = seen[p.b]
       if not sb then
-        local wb, wp = spin(mesh, p.b), spin(mesh, p.p)
+        local wb, wp = spin(mesh, p.b), not cut(mesh, p.b) and spin(mesh, p.p) or nil
         sb = { rel = wb and sub(wb, wp or vec(0, 0, 0)) or vec(0, 0, 0), T = vec(0, 0, 0), A = vec(0, 0, 0) }
         seen[p.b] = sb
       end
@@ -483,7 +484,7 @@ local function pulses_tick(mesh, dt)
       sb.T, sb.A = add(sb.T, scale(p.a, v)), add(sb.A, scale(p.a, d))
       push(mesh, p.b, scale(p.a, d))
       -- (the parent pushed back for the change asked, not for what gravity took)
-      push(mesh, p.p, scale(p.a, -dv * share(p.b, p.p)), "carry")
+      if not cut(mesh, p.b) then push(mesh, p.p, scale(p.a, -dv * share(p.b, p.p)), "carry") end
       if x < 1 then keep[#keep + 1] = p end
     else
       keep[#keep + 1] = p

@@ -60,6 +60,53 @@ local pickedHead, _, _, headDistances = G.smash_part(E.mesh, between(head, arm, 
 check(pickedHead == "Bip001-Head", "near face and arm: head surface takes priority (" .. tostring(pickedHead) .. "; " .. tostring(headDistances) .. ")")
 check(G.smash_part(E.mesh, between(chest, arm, 0.55)) == "Bip001-Spine1", "near chest and arm: torso surface takes priority")
 check(G.smash_part(E.mesh, arm) == "Bip001-L-UpperArm", "direct arm impact stays on the arm")
+-- Only genuinely ambiguous surface hits vary; clear direct and distant hits remain deterministic.
+local near = { {bone="head",d=14,surface=0,radius=14}, {bone="arm",d=15,surface=1,radius=4} }
+local chosen = {head=0,arm=0}
+for _=1,4000 do local c=G.smash_choose(near); chosen[c.bone]=chosen[c.bone]+1 end
+check(chosen.arm > 800 and chosen.arm < 1200, "near-tied impact varies at about 25 percent")
+near[1].d=2
+local clear=true
+for _=1,100 do clear=clear and G.smash_choose(near).bone=="head" end
+check(clear, "direct deep hit never jumps to a nearby part")
+near[1].d=14; near[2].surface=5
+clear=true
+for _=1,100 do clear=clear and G.smash_choose(near).bone=="head" end
+check(clear, "well-separated surface candidates never vary")
+-- Optional category weights override the hit only while enabled, and never select zero-weight kinds.
+local sm = tune.smash
+sm.overrideTargets=true; sm.targetWeights={limb=0,head=1,torso=0}
+check(G.smash_part(E.mesh, arm)=="Bip001-Head", "custom head-only mix overrides a limb hit")
+check(G.smash_part(E.mesh)=="Bip001-Head", "custom head-only mix works without a hit")
+sm.targetWeights={limb=1,head=0,torso=0}
+local _, _, limbKind=G.smash_part(E.mesh, chest)
+check(limbKind=="limb", "custom limb-only mix selects a limb")
+sm.targetWeights={limb=0,head=0,torso=1}
+check(G.smash_part(E.mesh, arm)=="Bip001-Spine1", "custom torso-only mix selects upper body")
+sm.targetWeights={limb=1,head=2,torso=3}
+local counts={limb=0,head=0,torso=0}
+for _=1,6000 do local _,_,kind=G.smash_part(E.mesh); counts[kind]=counts[kind]+1 end
+check(math.abs(counts.limb/6000-1/6)<0.025 and math.abs(counts.head/6000-2/6)<0.025 and math.abs(counts.torso/6000-3/6)<0.025,
+  "custom mix follows relative weights")
+sm.targetWeights={limb=0,head=0,torso=0}
+check(G.smash_part(E.mesh, arm)=="Bip001-L-UpperArm", "zero weights fall back to hit targeting")
+sm.overrideTargets=false
+-- Exercise the actual smash decision without running the expensive visual stages on every roll.
+local slice = G.slice_bone
+local results = { torso=0, other=0 }
+G.slice_bone = function(_, _, bone) results[bone == "Bip001-Spine1" and "torso" or "other"] = results[bone == "Bip001-Spine1" and "torso" or "other"] + 1; return true end
+sm.torsoHitChance=0.25
+for _=1,4000 do G.smash(pawn,E.mesh,{loc=chest},"balance") end
+check(results.torso > 850 and results.torso < 1150, "ordinary chest hits retain the torso about 25 percent of the time")
+local pending={loc=chest,early=true,smashTorsoRoll=true}
+local ok, later=G.smash(pawn,E.mesh,pending,"balance")
+pending.early=false
+check(not ok and later=="later" and G.smash(pawn,E.mesh,pending,"balance") and pending.smashTorsoRoll, "deferred torso retains its roll")
+sm.torsoHitChance=0; sm.overrideTargets=true; sm.targetWeights={limb=0,head=0,torso=1}
+local before=results.torso
+G.smash(pawn,E.mesh,{loc=chest},"balance")
+check(results.torso==before+1, "custom torso mix bypasses ordinary torso balancing")
+G.slice_bone=slice; sm.overrideTargets=false; sm.torsoHitChance=1
 -- Missing flesh must not be emitted twice when a later smash takes the parent part.
 for _, c in ipairs({
   { "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-L-UpperArm", "Bip001-L-Forearm", 4 },

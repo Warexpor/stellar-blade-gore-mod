@@ -16,7 +16,19 @@
 #   sbslice.c, anything shared     everything (no group)
 #   other Lua                      nothing here (the harness doesn't run it)
 set -euo pipefail
+# The harness uses mmap and other POSIX APIs. MSYS GCC supplies them on Windows;
+# its runtime does not provide the Linux sanitizer libraries.
+if [[ ${MSYSTEM:-} ]]; then
+  clang() {
+    local args=() arg
+    for arg in "$@"; do [[ $arg == -fsanitize=address,undefined ]] || args+=("$arg"); done
+    command /usr/bin/gcc "${args[@]}"
+  }
+  export -f clang
+  [[ -n ${SB_GAME:-} ]] && export SB_EXE="$SB_GAME/SB/Binaries/Win64/SB-Win64-Shipping.exe"
+fi
 cd "$(dirname "$0")"
+CACHE=${SB_CACHE:-../../../.cache}
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
 [[ $# -eq 0 ]] && SEL=" unit weapon stats rows addr alive newobj phys split waist arm head mark enemy "
@@ -77,8 +89,8 @@ if on phys; then
   r=$(ASAN_OPTIONS=detect_leaks=0 "$OUT-phys" | tail -1)
   echo "phys: $r"
   [[ $r == PASS ]] || fail=1
-  if [[ -f ../../../.cache/work/spec.json && -d ../../../.cache/work/json_out ]]; then
-    if r=$(python3 phys/parity.py ../../../.cache/work ../../../ue4ss/StellarBladeGore/Scripts "$OUT-parity" 2>&1); then
+  if [[ -f ${CACHE}/work/spec.json && -d ${CACHE}/work/json_out ]]; then
+    if r=$(python3 phys/parity.py "${CACHE}/work" ../../../ue4ss/StellarBladeGore/Scripts "$OUT-parity" 2>&1); then
       echo "$r" | tail -1
     else
       echo "$r" | grep -v '^ok '; fail=1
@@ -89,7 +101,10 @@ if on phys; then
 fi
 # the real-mesh runs: one line each, "label|env...|mesh[|vanilla cache]" (the cache's path may have spaces)
 jobs=()
-if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]]; then
+if [[ ! -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]]; then
+  echo "real meshes: no build cache, skipped"
+fi
+if [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]]; then
   for m in CH_P_EVE_09 CH_P_EVE_30; do
     for posed in "" 1; do
       p=${posed:+ (posed)}
@@ -151,31 +166,31 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   done
   # the outfit the ragdoll-death split sheets came from (playtest 14): its copy's neck skin hung partly on the head the
   # copy lets go. Plain, posed, and with her animation-driven correctives watched (none may be a sink)
-  if on split && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]]; then
+  if on split && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]]; then
     jobs+=("real split CH_P_EVE_10|POSED=|CH_P_EVE_10" "real split CH_P_EVE_10 (posed)|POSED=1|CH_P_EVE_10"
            "real split CH_P_EVE_10, correctives driven|DRIVEN=1|CH_P_EVE_10" "real split CH_P_EVE_09, correctives driven|DRIVEN=1|CH_P_EVE_09")
   fi
   # a split after her right arm came off, late in a session: the watch had seen every helper of the copy's side move,
   # and her left leg on the copy lay flattened on the plane, a third leg (playtest). Also with every helper moved
-  on split && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30.uasset ]] &&
+  on split && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30.uasset ]] &&
     jobs+=("real split CH_P_EVE_30 after the right arm, the copy's side moved|FLIP=1 ARMSPLIT=R ARMAT=0.38 BESIDE=2 SIDEMOVED=R|CH_P_EVE_30"
            "real split CH_P_EVE_30 after the right arm, every helper moved|FLIP=1 ARMSPLIT=R ARMAT=0.38 BESIDE=2 ALLMOVED=1|CH_P_EVE_30")
   # a waist cut once the watch has seen every helper move (playtest 30, InnerSuit after an arm and the head came off):
   # a moved helper still takes each side's seam, none stays on its old weights stretched between the halves
-  on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit.uasset ]] &&
+  on waist && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit.uasset ]] &&
     jobs+=("real waist cut CH_P_EVE_InnerSuit, every helper moved|WAIST=1 ALLMOVED=1|CH_P_EVE_InnerSuit"
            "real waist cut CH_P_EVE_InnerSuit after the left arm, every helper moved|WAIST=1 ARMFIRST=1 ALLMOVED=1|CH_P_EVE_InnerSuit")
   # InnerSuit1's thigh skin is two sections, one only half way round the leg: both make the cap's rim (the cap covered
   # half the stump, the seam's cones showing through the rest, playtest screenshot)
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit1.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit1.uasset ]] &&
     jobs+=("real thigh cut CH_P_EVE_InnerSuit1|PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_InnerSuit/CH_P_EVE_InnerSuit1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4|CH_P_EVE_InnerSuit1")
   # the playtest's killing swing through both legs (the right thigh, then the left near the knee along the blade): no
   # hip skin may follow the drivers the animation points after the flying legs (a spike out of her hips)
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
     jobs+=("real thigh cuts CH_P_EVE_09, both legs along a blade|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.77 LEGFIRST=Bip001-R-Thigh|CH_P_EVE_09")
   # side panels under her arms tied to both halves by weight, few vertices over the cut: cut with the body, not sent
   # whole with the legs to stand up off her hips (thirty-seventh playtest)
-  on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29.uasset ]] &&
+  on waist && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29.uasset ]] &&
     jobs+=("real waist cut CH_P_EVE_29|WAIST=1|CH_P_EVE_29" "real waist cut CH_P_EVE_29 (posed)|WAIST=1 POSED=1|CH_P_EVE_29")
   # the playtest's death: the right arm along a 52-degree blade, its shoulder helpers swinging while she played, then
   # the head (one swing, then head), on CH_P_EVE_29_TypeB
@@ -183,20 +198,20 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # at the lowest the jaw clearance takes it (tune.gore.jawDrop), the old plane, the head bone (headAt) and past it;
   # the head flung off stretches nothing
   FACE="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3"
-  on head && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3.uasset ]] &&
+  on head && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_Head/CH_P_EVE_Face_Jali3.uasset ]] &&
     for at in 0.5 0.7 1.0 1.2; do jobs+=("real face cut with the head at $at|HEAD=1 FACESINK=1 HEADAT=$at $FACE|CH_P_EVE_Face_Jali3"); done
   # and her body under it, cut as gore.lua cuts it with the face (MODE_PLANE, the head's radius)
-  on head && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
+  on head && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]] &&
     jobs+=("real head cut CH_P_EVE_09 body, plane under the face|HEAD=1 HEADPLANE=1 HEADAT=0.85|CH_P_EVE_09")
   # a cut high up the left arm on CH_P_EVE_30: the piece's cap and bone never ride Ab-L-Deltoid (under Dm-L-Deltoid-A,
   # which the animation keeps pointing at her shoulder: they stood straight down off the arm lying at 45 degrees)
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_30/CH_P_EVE_30.uasset ]] &&
     jobs+=("real arm cut CH_P_EVE_30 high up the arm|ARM=1 ARMAT=0.2|CH_P_EVE_30")
   E29B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB"
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_29/CH_P_EVE_29_TypeB.uasset ]] &&
     jobs+=("real right arm cut CH_P_EVE_29_TypeB, shoulder helpers driven|ARM=1 DRIVEN=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3 $E29B|CH_P_EVE_29_TypeB"
            "real right arm cut CH_P_EVE_29_TypeB along a blade, then the head|ARM=1 HEADAFTER=1 ARMTILT=52 ARMTILTDIR=6 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.3 $E29B|CH_P_EVE_29_TypeB")
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real thigh cut CH_P_EVE_10, her elbow by the hip|ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.47 ELBOWHIP=1|CH_P_EVE_10"
            "real calf cut CH_P_EVE_10|ARM=1 ARMBONE=Bip001-L-Calf ARMEND=Bip001-L-Foot ARMAT=0.5|CH_P_EVE_10"
            "real thigh cuts CH_P_EVE_10, both legs|HIPMOVED=1 ARM=1 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=0.4 LEGFIRST=Bip001-R-Thigh|CH_P_EVE_10"
@@ -209,7 +224,7 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # CH_P_EVE_20_TypeB's thigh posed, every helper on her spine seen moving a little over a long session: the stub still
   # takes a carrier (the least moved) and keeps her live pose (playtest: no carrier, the skin coned down past the cap)
   E20B="PKG=vanilla/SB/Content/Art/Character/PC/CH_P_EVE_20/CH_P_EVE_20_TypeB"
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_20/CH_P_EVE_20_TypeB.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_20/CH_P_EVE_20_TypeB.uasset ]] &&
     jobs+=("real thigh cut CH_P_EVE_20_TypeB posed, helpers moved a little|POSED=1 LOOSEMOVED=4 ARM=1 ARMBONE=Bip001-R-Thigh ARMEND=Bip001-R-Calf ARMAT=0.4 $E20B|CH_P_EVE_20_TypeB")
   # CH_P_EVE_14's thigh, its leg straps (chains off the hip, along the thigh) over the plane kept on the body as gore.lua
   # does, mid-thigh and high up: its laces down the leg (14% of their vertices past the plane, on the leg's bones) are
@@ -218,28 +233,28 @@ if [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH
   # its body cut along a blade (gore.lua body_blade: under her bust, 0.3 from Spine1 to Spine2, leaned at most bodyTilt
   # 15 degrees off square), after the left arm too: no skin torn between the halves (playtest: a forearm, then her body
   # on a 32-degree blade)
-  on waist && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
+  on waist && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
     jobs+=("real waist cut CH_P_EVE_14_1 under the bust, along a 15-degree blade|WAIST=1 WAISTAT=0.3 WAISTTILT=15 $E14|CH_P_EVE_14_1"
            "real waist cut CH_P_EVE_14_1 under the bust, along a 15-degree blade, after the left arm|WAIST=1 ARMFIRST=1 WAISTAT=0.3 WAISTTILT=15 WAISTTILTDIR=2 $E14|CH_P_EVE_14_1")
-  on arm && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
+  on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_14/CH_P_EVE_14_1.uasset ]] &&
     for at in 0.4 0.2; do
       jobs+=("real thigh cut CH_P_EVE_14_1 at $at, leg straps kept on the body|ARM=1 KEEPCAPE=1 CAPE=Ab_LLA01,Ab_LLB01 ARMBONE=Bip001-L-Thigh ARMEND=Bip001-L-Calf ARMAT=$at $E14|CH_P_EVE_14_1")
     done
   # her sword broken at the blow (weapon_split) on the real mesh, along its length and through the guard, where it has
   # more crossed parts than free bones for their sinks (the playtest's cut face stretched at 0.23)
   SW=Art/Character/Weapon/Sword/CH_W_Sword_01/CH_W_Sword_01
-  if on weapon && [[ -f ../../../.cache/work/vanilla/SB/Content/$SW.uasset ]]; then
+  if on weapon && [[ -f ${CACHE}/work/vanilla/SB/Content/$SW.uasset ]]; then
     # (53 degrees: the most a break leans in game, active.lua's weaponCut.across 0.6; 0.55-0.68 its breakAt)
     for w in 0.1 0.23 0.3 0.5 0.55 0.62 0.68 0.9; do
       for t in 0 53; do jobs+=("real sword split at $w, $t degrees off square|WEAPON=1 WAT=$w WTILT=$t PKG=vanilla/SB/Content/$SW|CH_W_Sword_01"); done
     done
   fi
-  on mark && [[ -f ../../../.cache/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
+  on mark && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]] &&
     jobs+=("real hit mark CH_P_EVE_10|MARK=1|CH_P_EVE_10" "real hit mark CH_P_EVE_10 (posed)|MARK=1 POSED=1|CH_P_EVE_10")
 fi
 # the enemies' bodies (tune.enemies.kinds; ./build.sh extracts them for this, `extract` jobs): an arm, the head, across
 # the waist, with the nosink list gore.lua sends for an enemy (ENEMY=1). ENEMY_VANILLA=<legacy cache> points elsewhere
-EV=${ENEMY_VANILLA:-../../../.cache/work/vanilla}
+EV=${ENEMY_VANILLA:-${CACHE}/work/vanilla}
 if on enemy; then
   for m in CH_M_NA_16/CH_M_NA_16 CH_M_NA_17/CH_M_NA_17 CH_M_NA_17/CH_M_NA_17_1 CH_M_NA_19/CH_M_NA_19 CH_M_NA_35/CH_M_NA_35 \
            CH_M_NA_40/CH_M_NA_40 CH_M_NA_40/CH_M_NA_40_B CH_M_NA_40/CH_M_NA_40_C CH_M_NA_45/CH_M_NA_45; do

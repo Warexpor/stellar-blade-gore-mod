@@ -32,4 +32,22 @@ check(not s.fly and copy.scale.X==2 and copy.scale.Y==3 and copy.scale.Z==4 and 
   'interrupted return restores original scale, position and physics')
 dist=20; watch(0.3); watch(0.6)
 check(copy.dead and box.dead and real.hidden==false and #dropped==0, 'completed return shows the real sword and removes the copy')
+-- Snap-to-target can replace scale while restoring a dropped or gripped sword.
+local back = up(A.stop, 'weapons_back')
+local gripBack = up(A.stop, 'grip_back')
+local gripped = up(gripBack, 'gripped')
+local parent = {}
+local weapon = { scale=v(2,3,4), loc=v(1,2,3) }
+function weapon:K2_AttachToComponent() self.scale=v(1,1,1) end
+function weapon:K2_SetRelativeLocationAndRotation(loc, rot) self.loc=loc; self.rot=rot end
+function weapon:SetRelativeScale3D(scale) self.scale=scale end
+local saved={comp=weapon, parent=parent, loc=v(1,2,3), rot={Pitch=0,Yaw=0,Roll=0}, scale=v(2,3,4)}
+for _=1,4 do
+  dropped[1]=saved
+  back()
+  check(weapon.scale.X==2 and weapon.scale.Y==3 and weapon.scale.Z==4 and weapon.loc.Z==3, 'recovery restores the full sword transform')
+end
+gripped[1]=saved
+gripBack()
+check(weapon.scale.X==2 and weapon.scale.Y==3 and weapon.scale.Z==4, 'grip recovery restores sword scale')
 print(fails==0 and 'PASS' or 'FAIL')

@@ -72,6 +72,17 @@ G.cleanup(pawn,E.mesh)
 local made=#W.spheres
 frames(90)
 check(#W.spheres==made and live()==0, "recovery mid-burst cancels pending batches")
+T.ctx.tune.gore.smash.fullBody=true
+T.ctx.tune.gore.smash.fullBodyChance=1
+n0=#W.spheres
+G.smash(pawn,E.mesh,{loc=E.bone("Bip001-Spine2")},"death")
+for _=1,30 do frames(1); if #W.spheres>n0 then break end end
+check(#W.spheres-n0==4,"full-body burst limits the first batch to four pieces")
+G.cleanup(pawn,E.mesh)
+made=#W.spheres
+frames(90)
+check(#W.spheres==made and live()==0,"recovery cancels pending full-body batches")
+T.ctx.tune.gore.smash.fullBody=false
 -- HideBone scales a subtree to zero; the burst must sample its centre before doing that.
 local socket=E.mesh.GetSocketLocation
 E.mesh.GetSocketLocation=function(self,b)
@@ -134,8 +145,19 @@ pawn.AddComponentByClass = function()
   box.K2_DestroyComponent=function(self) self.__dead=true end
   return box
 end
+-- Duplicate slot entries (including different wrappers of the same component) must create only one drop box.
+local addBox = pawn.AddComponentByClass
+local boxes = 0
+pawn.AddComponentByClass = function(...) boxes = boxes + 1; return addBox(...) end
+pawn.MeshInfoList = { ForEach = function(_, cb)
+  cb(1, {get=function() return {MeshSlot=5,MeshComponent=sword} end})
+  cb(2, {get=function() return {MeshSlot=6,MeshComponent=sword} end})
+end }
 grips[sword:GetAddress()]=originalGrip()
 rag.smash_drop(pawn,E.mesh,"Bip001-Spine1")
+check(boxes == 1, "duplicate weapon slots create one dropped sword")
+pawn.AddComponentByClass = addBox
+pawn.MeshInfoList = { ForEach = function(_,cb) cb(1,{get=function() return {MeshSlot=5,MeshComponent=sword} end}) end }
 check(sword.parent==box and not grips[sword:GetAddress()],"torso smash releases held sword onto its physics box")
 rag.stop(pawn)
 check(sword.parent==originalParent and sword.restored and box.__dead,"recovery returns dropped sword to original socket and transform")

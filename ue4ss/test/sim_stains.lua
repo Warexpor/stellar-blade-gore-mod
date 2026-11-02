@@ -1,9 +1,10 @@
 -- Native skin-layer behaviour: no replacement materials/painting; damage, healing, water, range and no cut flash.
 local F = require("fake")
-local values, writes = {}, {}
+local values, writes, lastCollection = {}, {}, nil
 F.objects["/Game/Art/FX/MPC/MPC_PCDirtyOffset.MPC_PCDirtyOffset"] = F.obj("SkinCollection", "MaterialParameterCollection")
 F.objects["/Script/Engine.Default__KismetMaterialLibrary"] = F.obj("KML", "KismetMaterialLibrary", {
-  SetScalarParameterValue = function(_, _, _, name, value)
+  SetScalarParameterValue = function(_, _, collection, name, value)
+    lastCollection = collection
     values[tostring(name)] = value
     writes[#writes + 1] = { name = tostring(name), value = value, at = F.t }
   end,
@@ -174,6 +175,14 @@ E.s.mode=1
 S.add(0.6,0.6,"dead water"); run(1)
 E.s.mode=4; run(5,true)
 check(close(state.blood,0) and close(state.dirt,0), "underwater dead body washes clean without new floor dirt")
+-- A collection can be unloaded and reloaded without a new pawn; never reuse its old Lua wrapper.
+E.s.mode=1
+local oldCollection = F.objects["/Game/Art/FX/MPC/MPC_PCDirtyOffset.MPC_PCDirtyOffset"]
+local newCollection = F.obj("SkinCollectionReloaded", "MaterialParameterCollection")
+rawset(oldCollection, "__freed", true)
+F.objects["/Game/Art/FX/MPC/MPC_PCDirtyOffset.MPC_PCDirtyOffset"] = newCollection
+S.add(0.2, 0, "collection reload"); run(0.3)
+check(lastCollection == newCollection, "material collection is reacquired after unload with the same pawn")
 -- Toggle off releases ownership instead of continually zeroing the game's collection.
 c.enabled=false; run(0.2)
 values.BloodOffset,values.DirtOffset=0.19,0.21

@@ -89,6 +89,10 @@ for _, x in ipairs(F.log_lines()) do if x:find("dissolving back in on a copy") a
 check(ys == 0, "her cut's weights not copied onto the copy")
 check(undo ~= nil, "the cut undone under the copy (sbslice x)")
 check(gone ~= nil, "the copy destroyed")
+local releaseCopy
+local copyCommand = copy and string.format("sbslice x%x,0,1", copy:GetAddress())
+for i=e0+1,#F.events do if F.events[i].what==copyCommand then releaseCopy=i; break end end
+check(releaseCopy and gone and releaseCopy<gone, "regrow copy releases its own render weights before destruction")
 check(#rs > 0, "the sinks put back (sbslice r)")
 local early = 0
 for _, i in ipairs(rs) do if not gone or i < gone then early = early + 1 end end

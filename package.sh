@@ -13,9 +13,11 @@ grep -q "^## $VERSION\b" "$ROOT/CHANGELOG.md" || { echo "CHANGELOG.md has no '##
 # the README names the version in its intro, the zip's name and the log line to look for: all of them this one
 OTHER=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/README.md" | grep -vxF "$VERSION" | grep -vxF "3.1.0" | sort -u || true)
 [[ -z $OTHER ]] || { echo "README.md names another version: $OTHER"; exit 1; }
-OUT=$ROOT/release
-STAGE=$ROOT/.cache/release/stage
-PAKDIR=$ROOT/.cache/release/paks
+OUT=${SB_RELEASE:-$ROOT/release}
+CACHE=${SB_CACHE:-$ROOT/.cache}
+export SB_CACHE="$CACHE"
+STAGE=$CACHE/release/stage
+PAKDIR=$CACHE/release/paks
 
 if [[ ${1:-} == --reuse ]]; then
   [[ -f $ROOT/dist/ZZ_StellarBladeGore_P.utoc ]] || { echo "dist/ is empty: run ./build.sh"; exit 1; }
@@ -35,9 +37,9 @@ cp "$PAKDIR"/ZZ_StellarBladeGore_P.{utoc,ucas,pak} "$PAKS/"
 cp "$PAKDIR"/ZZ_StellarBladeGore_Face_P.{utoc,ucas,pak} "$PAKS/"
 cp "$SCRIPTS"/*.lua "$MODS/StellarBladeGore/Scripts/"
 # (no FText constructor signature: UE4SS calls it as the game starts, and with the Steam overlay on that call
-# closes the game at launch, why Stellar Blade's UE4SS packs ship it disabled as dFText_Constructor.lua; 0.4.1 report)
-"$ROOT/native/sbslice/build.sh" "$ROOT/.cache/release/sbslice" >/dev/null
-cp "$ROOT/.cache/release/sbslice/main.dll" "$MODS/SBSlice/dlls/main.dll"
+# closes the game at launch, so the install instructions tell players to disable it; 0.4.1 report)
+"$ROOT/native/sbslice/build.sh" "$CACHE/release/sbslice" >/dev/null
+cp "$CACHE/release/sbslice/main.dll" "$MODS/SBSlice/dlls/main.dll"
 # enabled.txt turns a mod on without touching mods.txt (UE4SS 3 reads both)
 touch "$MODS/StellarBladeGore/enabled.txt" "$MODS/SBSlice/enabled.txt"
 sed -n '/^<!-- install -->$/,/^<!-- \/install -->$/p' "$ROOT/README.md" | sed '1d;$d' > "$STAGE/StellarBladeGore-README.md"

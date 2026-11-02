@@ -51,8 +51,8 @@ return {
   hideHud = true,              -- the rest of the HUD (HP bar, skills, minimap, notices) hidden through a death, back as
                                -- she is up again; the death and revive screens keep to deathScreen
   newObjectWatch = true,       -- characters, the death and photo mode widgets, photo mode's pawn and knockdown checks
-                               -- caught as they are made (newobj.lua: sbslice.dll's listener, or UE4SS's NotifyOnNewObject
-                               -- without it). false: none caught, characters found by FindAllOf every 10 s, photo mode's
+                               -- caught as they are made (newobj.lua: sbslice.dll's listener). If it fails, general watches
+                               -- stay off; characters are found by FindAllOf. false: none caught, photo mode's
                                -- early freeze lost. "ue4ss": NotifyOnNewObject for all, as up to 0.5.0 (UE4SS 3.1.0-6 only)
   keepFresh = 2,               -- s: a character or widget seen as it spawned is checked alive (sbslice "G") this soon, or
                                -- never held (characters are found again with FindAllOf)
@@ -68,6 +68,7 @@ return {
   cameraMouse = 3,             --   the held view turns this many degrees a unit of mouse input, all the way round, up and
                                --   down (SB reads about 0.06 a frame for a slow move)
   cameraStick = 150,           --   and this many degrees a second at the right stick's full tilt
+  cameraInvertY = false,       --   reverse vertical mouse and right-stick movement in the death camera
   cameraBody = true,           --   the point it turns about rides her pelvis, up and down too, every frame (as Customized
                                --   Ragdoll's camera does), till it is flown; false: it slides after her (cameraTrack)
   cameraBodyBone = "upper",    --   which part of her: "upper" (her chest, Spine2) or "pelvis" (Customized Ragdoll's)
@@ -408,7 +409,11 @@ return {
       enabled = true,          --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
                                --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
       always = false,          --   every death smashes, blunt or not (to try it)
-      fullBody = false,        --   experimental: heavy steep downward blunt torso hits smash the entire body
+      fullBody = false,        --   optional full-body chance on any smash
+      fullBodyChance = 0.25,   --   fraction of smashes made full-body (1: every smash)
+      overrideTargets = false, --   choose a weighted local smash category instead of following the hit
+      targetWeights = { limb = 1, head = 1, torso = 1 }, -- relative weights, all zero uses hit targeting
+      torsoHitChance = 0.25,   --   ordinary torso hits kept as torso; otherwise nearest surviving head/limb
       chunks = 10,             --   whole arm; counts 0-64, two spawned a tick; missing child parts reduce the count
       chunksForearm = 6,       --   forearm and hand
       chunksLeg = 16,          --   whole leg
@@ -423,7 +428,7 @@ return {
       chunkPoolRadius = 11,     --   maximum radius in cm for each chunk's small pool
       splash = false,          --   the game's meat splash effect (NS_A_MeatSplash) on top of the hit blood
       burst = true,            --   short scaled blood burst; no cinematic smoke/sheets
-      burstScale = 1,          --   blood burst size follows remaining flesh (0-2, capped at three-quarter size)
+      burstScale = 1,          --   blood burst size follows remaining flesh (0-2, capped at 0.825 size)
       limbBleedScale = 0.8,    --   smaller surviving stump bleed for smashed arms and legs
       bleedTimeScale = 0.84,   --   smash stump bleeding lasts 84% of the ordinary cut duration
       -- material = "...",     --   optional override. Default: the actual cut seam's material instance, including
@@ -438,8 +443,8 @@ return {
       blunt = { "hammer", "club", "mace", "fist", "punch", "gorilla", "juggernaut", "brute", "exosuit",
         "hunchback", "statue", "bodybag", "lump", "roadblock", "hedgeboar" },
     },
-    afterHits = {              -- an enemy's weapon swinging through her once she is dead cuts her again: a limb, the
-      enabled = true,          --   head or (while she is whole) her body in two along the swing, else a hit mark
+    afterHits = {              -- enemy weapon swings cut her again; reported projectile hits can smash her again
+      enabled = true,          --   projectile smashes also require smash.enabled; both share the hit limit
       reach = 25,              --   cm its weapon's blade passes from a part of her...
       handReach = 40,          --   ...or its hand bone, with no weapon mesh (the fingers or claws past it: a hands-only
                                --   enemy's second blow on her went unseen at 25, playtest)
@@ -631,11 +636,11 @@ return {
     sliceFx = false,           -- the game's flesh-slice burst at the cut: it drops a static meat stub made for
                                -- monster stumps, which hangs in the air where she was cut
     bleedTime = 2.5,           -- seconds both openings keep bleeding (0 = until she recovers)
-    bleedAxis = "z",           -- the player-hit blood effect's cone axis, pointed out of each
+    bleedAxis = "-z",          -- BloodLoop falls along local -Z, pointed out of each
                                -- opening: "z", "x", "-z", "-x" (the F3 menu re-reads it; the "bleed: opening faces" log line
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
-    bleedSize = 0.6,           -- the bleed's size (the effect's scale; the spurts are as many)
-    bleedPulse = 0.35,         -- seconds between spurts while an opening bleeds (each follows the stump's turn)
+    bleedSize = 0.6,           -- the continuous bleed effect's scale
+    bleedPulse = 0.35,         -- seconds between the separate 0.6.0-style stump spurts
     capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps and lids
     capMatte = {               -- caps and lids matte: the meat's textures on the game's character gore master
       enabled = false,         --   (the meat material's shine is baked in, the stumps looked wet; matte, they looked too
@@ -664,8 +669,8 @@ return {
     splatLife = 30,            --   s the splat under a hit she lives through stays (a death's stay till she is up)
     pool = true,               -- floor blood: a cut's openings (F9, F11 too) drip while they move and pool where they rest
                                -- (without a cut: one pool begins under the body after 1 s)
-    poolScale = 1.15,          --   pool size multiplier (15% larger than the base radii)
-    poolGrow = 5,              --   seconds for a pool to reach most of its size (it keeps spreading slowly)
+    poolScale = 0.85,          --   pool size multiplier (15% smaller than the base radii)
+    poolGrow = 8,              --   growth timescale in seconds (63% of its size after this long)
     poolTime = 12,             --   seconds each opening is followed
     dripEvery = 18,            --   cm between drips while it moves
     maxDecals = 150,           --   drips and pools in all (at the cap the oldest drip goes, a pool only when no

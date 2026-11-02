@@ -1,6 +1,8 @@
 -- the held death camera after a zoomed-in death: a grab's close-up (a boss holding her and hitting) or the gun's aim
 -- kept that view held till she got up (playtest). Her usual view, learnt while she lives (the field of view and the
 -- camera's distance most polls had), is eased out to
+local sf = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
+sf:write("return { cameraInvertY = true }\n"); sf:close()
 local F = require("fake")
 local E = require("eve")
 local R = require("rag")
@@ -24,7 +26,7 @@ rawset(ctl, "IsInputKeyDown", function() return false end)
 local fovs = {}
 local cam = F.obj("CameraActor_0", "CameraActor", {
   CameraComponent = F.obj("CameraComponent", "CameraComponent", { SetFieldOfView = function(_, f) fovs[#fovs + 1] = f end }),
-  K2_SetActorLocationAndRotation = function(self, l) self.at = l end,
+  K2_SetActorLocationAndRotation = function(self, l, r) self.at, self.rot = l, r end,
 })
 F.objects["/Script/Engine.CameraActor"] = F.obj("CameraActor", "Class")
 F.objects["/Script/Engine.Default__GameplayStatics"] = F.obj("Default__GameplayStatics", "GameplayStatics", {
@@ -60,6 +62,15 @@ local function off_body()
   return l and math.sqrt((l.X - p.X) ^ 2 + (l.Y - p.Y) ^ 2 + (l.Z - p.Z) ^ 2)
 end
 check(F.find("camera: following her body", at) ~= nil, "1: it follows her body")
+local pitch = cam.rot and cam.rot.Pitch or 0
+rawset(ctl, "GetInputAnalogKeyState", function(_, k) return k.KeyName:ToString() == "MouseY" and 1 or 0 end)
+F.run(0.1, pawn)
+check(cam.rot and cam.rot.Pitch < pitch, "inverted vertical mouse input turns pitch down")
+pitch = cam.rot and cam.rot.Pitch or 0
+rawset(ctl, "GetInputAnalogKeyState", function(_, k) return k.KeyName:ToString() == "Gamepad_RightY" and 1 or 0 end)
+F.run(0.1, pawn)
+check(cam.rot and cam.rot.Pitch < pitch, "inverted vertical stick input turns pitch down")
+rawset(ctl, "GetInputAnalogKeyState", function() return 0 end)
 local o = off_body()
 check(o and math.abs(o - 300) < 5, "1: the camera 300 cm off her upper body (" .. tostring(o) .. ")")
 E.respawn(); F.run(20, pawn)

@@ -1,5 +1,15 @@
 # To do
 
+## Reports without logs (2026-11-02)
+
+- Startup crashes: the locally reproduced UE4SS FText signature crash is documented in Install. Native watcher failure no longer silently selects the known unsafe general UE4SS callback path, but neither proves the cause of the reports. The immediate photo-mode pawn callback remains a UE4SS callback. Test both UE4SS builds and collect UE4SS.log, stellarbladegore.log and any crash dump.
+- Blood and Dirt plus Ultra Violence: an attack crash is reported; the other mod is not installed here and no stack was supplied. Compatibility is unconfirmed. Test each feature alone and together with the exact versions, logging and crash dump; do not copy another mod's implementation without checking permissions.
+- Breakable Sword: duplicate weapon-slot candidates are now deduplicated; an earlier fix already guarded repeated split callbacks by address. Neither proves the reported whole sword plus half is fixed; reproduce a guard-break death.
+- Play As Scarlet skin: fixed-slot hiding replaced by recognized material names; test the reported Ocean string boss replacer. Unrecognized hair may stay visible, and the separate Eve hairstyle can retain the hat.
+- Raven NPC skin: Play As uses Eve's CH_P_EVE_11 outfit, not Raven's boss mesh, so NPC-only replacements do not affect it. Boss mesh compatibility with Eve's skeleton, materials, physics and cuts needs investigation before swapping.
+- NPC vertical splits are intentionally disabled because the player split path assumes Eve-specific components. Enabling them requires an enemy-safe split/cleanup path and real mesh tests. Player vertical splits that fail the geometry check intentionally retry then fall back to a waist cut; reproduce with the named NPC replacers before changing that safety check.
+- Death camera vertical inversion is now available in F3 Camera and settings.lua; verify mouse and controller directions in game.
+
 ## Sandbox: first playtest (untried in game)
 
 Built and passing `ue4ss/test/run.sh bosses voiceas` and `native/sbslice/test/real/playas.sh`; nothing of it seen in game yet. F3 → Sandbox, Sandbox Bosses on, Spawn Boss; the `bosses:` log lines say what happened. Play As is its own mod now ([Stellar Blade Play As](https://github.com/Warexpor/stellar-blade-play-as), its own TODO.md); here only what this mod does to her as them: the gore log's `voice: she looks like ...`.

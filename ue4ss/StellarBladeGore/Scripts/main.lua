@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.6.2"
+local VERSION = "0.6.3"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -935,6 +935,9 @@ screen.GC_S = 0.25
 function screen.gc_ran(now_too)
   local g = screen.gc
   if g.off then return false end
+  -- The probe makes synchronous native lifetime requests. Do not add those round
+  -- trips to the busiest frames of a death, including the hitch-triggered probes.
+  if active and screen.deathAt and os.clock() - screen.deathAt < screen.DEATH_S then return false end
   -- looked at every GC_S s, and in a hitch's frame (each frame cost too much: 15 fps, playtest)
   local now = os.clock()
   if not now_too and now < (g.next or 0) then return false end
@@ -1219,7 +1222,7 @@ local function camera_orbit()
   local mx, my, sx, sy = axis(pc, KEYS.mx), axis(pc, KEYS.my), dead(axis(pc, KEYS.sx)), dead(axis(pc, KEYS.sy))
   local km, kst = tune.cameraMouse or 3, tune.cameraStick or 150
   local dy = mx * km + sx * kst * dt
-  local dp = my * km + sy * kst * dt
+  local dp = (my * km + sy * kst * dt) * (tune.cameraInvertY and -1 or 1)
   if not h.turned and (dy ~= 0 or dp ~= 0) then
     h.turned = true
     log(string.format("camera: turning with the player (mouse %.2f %.2f, stick %.2f %.2f)", mx, my, sx, sy))
@@ -1957,6 +1960,7 @@ local function on_start(pawn, mesh)
   if goreCtx.convulse then try(function() goreCtx.convulse.start(pawn, mesh) end) end
   if goreCtx.struggle then try(function() goreCtx.struggle.start(pawn, mesh) end) end
   ah.n, ah.armedBy, ah.t0, ah.blunt, ah.brushes, ah.misses, ah.gated, ah.lastBy, ah.missBy = 0, {}, os.clock(), nil, 0, 0, nil, {}, {}
+  ah.projectiles, ah.projectileRecent, ah.projectileAt = {}, {}, nil
   no_snapshot(pawn)
   hold = nil
   hold_capsule(pawn)
@@ -2561,9 +2565,31 @@ local function live_chars()
   -- Once a session when the watch hands them out as they are made, else once a level)
   if not goreCtx.lasersSeeded and goreCtx.seededAt and os.clock() - goreCtx.seededAt > 1 then
     goreCtx.lasersSeeded = true
-    for _, o in ipairs(try(function() return FindAllOf("SBLaserComponent") end) or {}) do
+    local scanAt = os.clock()
+    local found = try(function() return FindAllOf("SBLaserComponent") end) or {}
+    for _, o in ipairs(found) do
       local k = goreCtx.keep(o)
       if k then goreCtx.lasers[k.addr] = k end
+    end
+    local ms = (os.clock() - scanAt) * 1000
+    if ms >= 10 then log(string.format("laser components looked up (%d): %.0f ms", #found, ms)) end
+  end
+  -- First-time guards used to invoke the native helper once per character. Seeded levels can contain
+  -- dozens of characters, so validate fresh guards together before the normal per-frame cache path.
+  local fresh, now = {}, os.clock()
+  for _, e in pairs(chars) do
+    local k = e.k
+    if k and not k.idx and not k.dead and now - k.t <= (tune.keepFresh or 2) then fresh[#fresh + 1] = k end
+  end
+  for i = 1, #fresh, 64 do
+    local part = { table.unpack(fresh, i, math.min(i + 63, #fresh)) }
+    if goreCtx.alive_ask(part) then
+      for _, k in ipairs(part) do
+        if k.alive and k.idx and not k.listed then
+          k.asked, k.listed = now, true
+          goreCtx.heldList[#goreCtx.heldList + 1] = k
+        elseif not k.alive then k.dead = true end
+      end
     end
   end
   local out = {}
@@ -2624,7 +2650,10 @@ function sw.near(mesh, within, most)
   if not at then return {} end
   local reach = within or (tune.gore or {}).attackerReach or 800
   local out = {}
-  for _, e in ipairs(live_chars()) do
+  local scanAt = os.clock()
+  local live = live_chars()
+  local listAt = os.clock()
+  for _, e in ipairs(live) do
     local a = e.obj
     -- (its place first: the flags only for one within reach, two engine reads less for every other)
     local l = e.addr ~= me and not ignored(e.cls) and goreCtx.char_at(e)
@@ -2636,6 +2665,11 @@ function sw.near(mesh, within, most)
   end
   table.sort(out, function(x, y) return x.d < y.d end)
   while #out > (most or #out) do table.remove(out) end
+  local endAt = os.clock()
+  if (endAt - scanAt) * 1000 >= 15 then
+    log(string.format("nearby characters detail: %d candidates, list %.0f ms, positions %.0f ms", #live,
+      (listAt - scanAt) * 1000, (endAt - listAt) * 1000))
+  end
   return out, at
 end
 -- the nearest other character within tune.gore.attackerReach of her: who most likely killed her
@@ -2689,6 +2723,89 @@ local SWING_NAMES = { "weapon", "blade", "sword", "knife", "claw", "axe", "spear
 -- started over each time another came nearer, and among a pack of them the killing swing went unseen, playtest)
 function sw.state() return { addr = nil, actor = nil, mesh = nil, bones = nil, who = nil, hist = {} } end
 local swing = sw.state() -- the nearest one followed, or the one whose blade made the killing blow (weapon_swing)
+-- The same impact may arrive through several hooks. Retain only primitive data and bound both queues.
+function sw.projectile_record(h, key)
+  -- A short, bounded history lets a simultaneous volley affect the killing smash.
+  -- Only distinct known projectile objects/IDs count; the same impact can use multiple hooks.
+  local volley = sw.projectileVolley or {}
+  for i = #volley, 1, -1 do
+    if h.t - volley[i].t > 0.35 or h.t < volley[i].t then table.remove(volley, i) end
+  end
+  local duplicate = not key
+  for _, r in ipairs(volley) do
+    if key == r.key or (h.src ~= r.src and dist(h.loc, r.loc) < 25) then duplicate = true; break end
+  end
+  if not duplicate then
+    volley[#volley + 1] = { t = h.t, key = key, loc = h.loc, src = h.src, hit = h }
+    if #volley > 8 then table.remove(volley, 1) end
+  end
+  sw.projectileVolley = volley
+  h.volley = #volley
+  for _, r in ipairs(volley) do r.hit.volley = #volley end
+  sw.projectileLast = h
+  local g, c = tune.gore or {}, (tune.gore or {}).afterHits or {}
+  if (key and duplicate) or not active or ah.blunt or g.enabled == false or c.enabled == false or (g.smash or {}).enabled ~= true
+    or not ah.t0 or h.t < ah.t0 or ah.n >= (c.max or 6) then return end
+  local recent = ah.projectileRecent or {}
+  for i = #recent, 1, -1 do
+    local r = recent[i]
+    if h.t - r.t > 0.25 then table.remove(recent, i)
+    elseif (key and r.key and key == r.key) or (h.src ~= r.src and dist(h.loc, r.loc) < 25) then return end
+  end
+  recent[#recent + 1] = {t=h.t, loc=h.loc, key=key, src=h.src}
+  if #recent > 8 then table.remove(recent, 1) end
+  ah.projectileRecent = recent
+  ah.projectiles = ah.projectiles or {}
+  if #ah.projectiles < 4 then ah.projectiles[#ah.projectiles + 1] = h end
+end
+-- The native projectile result carries the actual target GUID and hit point for every projectile type
+-- that uses this broadcast. Ignore misses, blocks and other targets; never infer one from proximity.
+function sw.projectile_event(_, _turn, projectile, target, _alias, result, location, _normal, bone, direction)
+  local function val(p) return try(function() return p:get() end) end
+  local pawn = os.clock() - pawnSeen < 0.5 and cachedPawn or nil
+  local mine = pawn and try(function() return pawn.BroadcastSpawnInfo.ActorGuid end)
+  local id, who, kind = val(projectile), val(target), val(result)
+  if type(mine) ~= "number" or mine == 0 or who ~= mine or type(id) ~= "number" or id == 0 or kind ~= 1 then return end
+  local loc, dir = try(function() return vof(val(location)) end), try(function() return vof(val(direction)) end)
+  if not loc then return end
+  if not dir or len(dir) < 1e-3 then dir = { X = 0, Y = 0, Z = -1 } end
+  local bn = try(function() return val(bone):ToString() end)
+  sw.projectile_record({ t = os.clock(), loc = loc, dir = dir, push = dir, bone = bn,
+    projectile = true, src = "projectile hit result", id = id }, "id:" .. tostring(id))
+end
+-- Single-player collision callbacks can run without a network broadcast. Require Eve as the actual target.
+function sw.projectile_collision(context, _component, other, _othercomp, a, b, sweep)
+  local pawn = os.clock() - pawnSeen < 0.5 and cachedPawn or nil
+  local target = try(function() return other:get() end)
+  local pa = pawn and try(function() return pawn:GetAddress() end)
+  local ta = target and try(function() return target:GetAddress() end)
+  if not (pa and ta and pa == ta) then return end
+  local obj = try(function() return context:get() end)
+  local hit = try(function() return sweep:get() end) or try(function() return b:get() end)
+  local loc = hit and (try(function() return vof(hit.ImpactPoint) end) or try(function() return vof(hit.Location) end))
+  if not loc or len(loc) < 1 then loc = obj and try(function() return vof(obj:K2_GetActorLocation()) end) end
+  if not loc then return end
+  local dir = obj and try(function() return vof(obj:GetVelocity()) end)
+  if not dir or len(dir) < 1e-3 then dir = { X = 0, Y = 0, Z = -1 } end
+  local key = obj and try(function() return "object:" .. tostring(obj:GetAddress()) end)
+  sw.projectile_record({ t = os.clock(), loc = loc, dir = dir, push = dir, projectile = true, src = "projectile collision" }, key)
+  log("projectile collision on Eve at " .. v3(loc))
+end
+function sw.projectile_hit()
+  local h = sw.projectileLast
+  if h and os.clock() - h.t >= 0 and os.clock() - h.t <= 0.6 then return h end
+end
+-- Some kills report a projectile only in ActorDead, without a separate hit result.
+function sw.death_projectile(mesh)
+  local d = hm.deadMsg
+  if not (d and os.clock() - d.t >= 0 and os.clock() - d.t <= 1 and type(d.proj) == "number"
+    and d.proj > 0 and d.proj < 0xffffffff and not (hm.FALL_FX and hm.FALL_FX[d.effect or -1])) then return nil end
+  local m = meshHit and math.abs(meshHit.t - d.t) < 0.6 and meshHit or nil
+  local loc = m and m.loc or try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Spine1"))) end)
+  if not loc then return nil end
+  local dir = m and m.push or { X = 0, Y = 0, Z = -1 }
+  return { t = d.t, loc = loc, dir = dir, push = dir, projectile = true, src = "death projectile ID", id = d.proj }
+end
 -- The Gorilla B throws a large rock whose shake position can be well below its visible impact. Its two known
 -- projectile blueprints expose EventOnHit with a world-space hit location. Watch the native base so their hooks are
 -- installed as the classes load; never infer a rock from the enemy name or a random synthetic swing.
@@ -2713,7 +2830,41 @@ function sw.rock_watch(o)
   if ok then sw.rockHooks[cls] = true end
   log("hook rock " .. cls .. ": " .. (ok and "ok" or tostring(err)))
 end
-screen.late[#screen.late + 1] = function() goreCtx.newobj.watch("/Script/SB.SBProjectile", sw.rock_watch) end
+-- Blueprint projectile hit events may execute without either native collision callback or the
+-- network broadcasts. The event has no target argument, so require a successful hit close to Eve.
+sw.projectileHooks = {}
+function sw.projectile_blueprint_event(context, location, result)
+  local kind = try(function() return result:get() end)
+  local at = try(function() return vof(location:get()) end)
+  local pawn = os.clock() - pawnSeen < 0.5 and cachedPawn or nil
+  local mesh = pawn and try(function() return pawn.Mesh end)
+  if kind ~= 1 or not at or not valid(mesh) then return end
+  local near
+  for _, bone in ipairs({ "Bip001-Head", "Bip001-Spine2", "Bip001-Spine1", "Bip001-Pelvis", "Bip001-L-Thigh", "Bip001-R-Thigh" }) do
+    local p = try(function() return vof(mesh:GetSocketLocation(FName(bone))) end)
+    local d = p and dist(at, p)
+    if d and (not near or d < near) then near = d end
+  end
+  if not near or near > 45 then return end
+  local dir = { X = 0, Y = 0, Z = -1 }
+  local obj = try(function() return context:get() end)
+  local key = obj and try(function() return "object:" .. tostring(obj:GetAddress()) end)
+  sw.projectile_record({ t = os.clock(), loc = at, dir = dir, push = dir, projectile = true, src = "projectile blueprint hit" }, key)
+  log(string.format("projectile blueprint hit %.0f cm from Eve at %s (%s)", near, v3(at), key or "identity unavailable"))
+end
+function sw.projectile_watch(o)
+  sw.rock_watch(o)
+  local full = try(function() return o:GetClass():GetFullName() end)
+  local path = type(full) == "string" and full:match(" (%/Game/%S+_C)$")
+  if not path or sw.projectileHooks[path] then return end
+  sw.projectileHooks[path] = true
+  local ok, err = pcall(RegisterHook, path .. ":EventOnHit", function(...)
+    local good, why = pcall(sw.projectile_blueprint_event, ...)
+    if not good then log("projectile blueprint hit hook error: " .. tostring(why)) end
+  end)
+  log("hook projectile blueprint " .. path .. ": " .. (ok and "ok" or tostring(err)))
+end
+screen.late[#screen.late + 1] = function() goreCtx.newobj.watch("/Script/SB.SBProjectile", sw.projectile_watch) end
 function sw.rock_hit(mesh, m)
   local r = sw.rockLast
   if not (r and m and m.loc and math.abs(r.t - m.t) < 0.35 and os.clock() - r.t < 1 and dist(r.loc, m.loc) < 150) then return nil end
@@ -3094,6 +3245,8 @@ local function death_hit(pawn, mesh)
     end
     if best and math.abs(best.t - t) < 0.1 then return best.pose, os.clock() - best.t end
   end
+  local projectile = sw.projectile_hit() or sw.death_projectile(mesh)
+  if projectile then return projectile end
   local h = last_hit(g.hitWindow or 0.6)
   if h and h.dir and h.fwd then
     h.push = h.push or h.fwd
@@ -3219,6 +3372,7 @@ function sw.blunt_of(h, real)
   local s = g.smash or {}
   if (s.enabled ~= true and g.bluntRagdoll ~= true) or not h then return false, "off" end
   if s.enabled == true and s.always == true and not real then return true, "smash.always" end
+  if h.projectile then return true, "projectile hit result" end
   if h.rock then return true, "Gorilla rock projectile" end
   local function judge(what, text)
     local low = tostring(text or ""):lower()
@@ -3273,18 +3427,6 @@ function sw.smash_kill(pawn, mesh, h, why)
   local blunt, how = sw.blunt_of(h)
   log(string.format("death: the blow is %s (%s)", blunt and "blunt" or "a blade", how))
   if not blunt then return false end
-  -- Only a named heavy source and a measured steep swing qualify; fallback hit directions can be invented.
-  local s, d = g.smash or {}, h and h.dir
-  local realBlunt, realWhy = sw.blunt_of(h, true)
-  local mine = h.attacker == nil or h.attacker == swing.who
-  local source = table.concat({ tostring(realWhy), tostring(h.attacker), mine and tostring(swing.cls) or "",
-    tostring(sw.blunt_alias(h.attacker) or ""), mine and tostring(sw.blunt_alias(swing.cls) or "") or "" }, " "):lower()
-  local heavy = false
-  for _, name in ipairs({ "hammer", "gorilla", "juggernaut", "brute", "exosuit", "statue" }) do
-    if source:find(name, 1, true) then heavy = true; break end
-  end
-  h.fullSmash = s.fullBody == true and realBlunt and not h.made and not h.rock and h.loc and d and len(d) > 0.001
-    and d.Z / len(d) <= -0.85 and heavy or false
   local ok, r, later = pcall(gore.smash, pawn, mesh, h, why)
   if not ok then log("smash failed: " .. tostring(r)); return false end
   return r, later
@@ -3418,6 +3560,25 @@ local function hits_after(pawn, mesh)
   local g = tune.gore or {}
   local c = g.afterHits or {}
   if not gore then return end
+  local q = ah.projectiles
+  if q and #q > 0 then
+    local now = os.clock()
+    while q[1] and now - q[1].t > 1.5 do table.remove(q, 1) end
+    if q[1] and not ah.blunt and ah.n < (c.max or 6) and (g.smash or {}).enabled == true
+      and now - ah.t0 >= (c.from or 0.6)
+      and now - (ah.projectileAt or ah.t0) >= (c.rearm or 0.35) and not gore.busy() then
+      local h = table.remove(q, 1)
+      local _, split = gore.cuts_on(mesh)
+      if not split then
+        gore.aim(h.push or h.dir)
+        local ok, made = pcall(gore.smash, pawn, mesh, h, "after")
+        if ok and made then
+          ah.n, ah.projectileAt = ah.n + 1, now
+          log(string.format("projectile after death: smash %d of %d (%s)", ah.n, c.max or 6, h.src))
+        elseif not ok then log("projectile after death: smash failed: " .. tostring(made)) end
+      end
+    end
+  end
   -- every enemy followed, not only the nearest (the one swinging at her body needn't be: enemies.lua's swings after
   -- death), each armed again once its own weapon slowed down (one cut a swing)
   local best, S
@@ -3798,7 +3959,8 @@ function hm.lethal_watch(pawn, mesh)
   if ws and ws.part and ws.pose and ws.pose[ws.part] then at = ws.pose[ws.part].t or at end
   hm.lethal.at = at
   -- (the blow seen: a blunt one crunches, a blade slices)
-  local h = ws and death_hit(pawn, mesh)
+  local h = sw.projectile_hit() or sw.death_projectile(mesh) or (ws and death_hit(pawn, mesh))
+  if h and h.projectile then hm.lethal.projectile = h; at = h.loc; hm.lethal.at = at end
   local blunt = h and not h.made and sw.blunt_of(h)
   if at then gore.wound(pawn, mesh, at, blunt and "crunch" or nil) end
   log(string.format("lethal hit: her HP bar at 0, the wound %s", at and ("at " .. v3(at) .. (ws and ws.part and (" (" .. ws.part .. ")") or "")) or "nowhere (no blade seen)"))
@@ -4689,6 +4851,10 @@ function hm.at.key()
 end
 local function gore_cut(pawn, mesh, h, hit)
   local g = tune.gore or {}
+  if hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.projectile then
+    h = hm.lethal.projectile
+    h.early = nil
+  end
   -- cut at the hit already (hm.lethal_watch): the blow's further cuts and her sword's now
   if hm.lethal and hm.lethal.cut and os.clock() - hm.lethal.t < 5 then
     hm.lethal.cut = nil
@@ -4774,7 +4940,7 @@ local function gore_cut(pawn, mesh, h, hit)
       and "none" or hm.death_roll(h ~= nil and not h.made, near)
   end
   -- a split rolled where the killing blade crossed both her arms: they come off instead, armsOverSplit of the time
-  if roll == "split" and h and not h.made and math.random() < (g.armsOverSplit or 0.6) then
+  if roll == "split" and not gore.only_split() and h and not h.made and math.random() < (g.armsOverSplit or 0.6) then
     h.armsOnly = true
     local ok, cut = pcall(gore.blow, pawn, mesh, h, "death")
     h.armsOnly = nil
@@ -4912,12 +5078,15 @@ function screen.photo_coll_save(pawn)
   local list = {}
   local comps = screen.cloth_meshes(pawn)
   comps[#comps + 1] = try(function() return pawn.CapsuleComponent end)
+  comps[#comps + 1] = body
+  local seen = {}
   for _, m in ipairs(comps) do
-    if valid(m) and not (valid(body) and m:GetAddress() == body:GetAddress()) then
+    if valid(m) and not seen[m:GetAddress()] then
+      seen[m:GetAddress()] = true
       local e = try(function() return m:GetCollisionEnabled() end)
       local k = e and goreCtx.keep(m)
       if k then
-        k.enabled, k.resp = e, {}
+        k.enabled, k.resp, k.body = e, {}, valid(body) and m:GetAddress() == body:GetAddress()
         for ch = 0, 31 do k.resp[ch] = try(function() return m:GetCollisionResponseToChannel(ch) end) end
         list[#list + 1] = k
       end
@@ -4929,7 +5098,7 @@ function screen.photo_coll_restore()
   local list = screen.photoColl
   screen.photoColl = nil
   if not list or not goreCtx.alive_ask(list) then return end
-  local fixed = {}
+  local fixed, bodyFixed = {}, {}
   for _, k in ipairs(list) do
     if k.alive and valid(k.obj) then
       local m, what = k.obj, {}
@@ -4944,12 +5113,14 @@ function screen.photo_coll_restore()
         end
       end
       if #what > 0 then
-        fixed[#fixed + 1] = (try(function() return m:GetFName():ToString() end) or "?") .. " " .. table.concat(what, " ")
+        local out = k.body and bodyFixed or fixed
+        out[#out + 1] = (try(function() return m:GetFName():ToString() end) or "?") .. " " .. table.concat(what, " ")
       end
     end
   end
   log(string.format("photo mode closed: her other meshes' collision as before it: %s",
     #fixed > 0 and ("put back on " .. table.concat(fixed, "; ")) or "unchanged"))
+  log("photo mode closed: body collision " .. (#bodyFixed > 0 and ("restored on " .. table.concat(bodyFixed, "; ")) or "unchanged"))
 end
 function screen.photo_key(label)
   if not active or saved.manual or (camHeld and camHeld.photo) or screen.photoOn or not gore then return end
@@ -5202,18 +5373,36 @@ screen.AUTO_F8_S = 2
 -- active level sequences, including cutscenes that have not switched to their camera yet.
 function screen.cloth_scene(pawn, sequences)
   screen.view(pawn)
-  if (screen.vtClass or ""):lower():find("cinecamera", 1, true) then return true end
+  if (screen.vtClass or ""):lower():find("cinecamera", 1, true) then
+    screen.clothSceneReason = "camera " .. screen.vtClass
+    return true
+  end
   if not sequences then return false end
+  local blockers = {}
   for _, actor in ipairs(try(function() return FindAllOf("LevelSequenceActor") end) or {}) do
     local player = valid(actor) and try(function() return actor.SequencePlayer end)
-    if valid(player) and try(function() return player:IsPlaying() end) == true then return true end
+    if valid(player) and try(function() return player:IsPlaying() end) == true then
+      local name = try(function() return actor:GetFullName() end) or "unknown"
+      -- These B07 environment objects animate cranes, robot arms and boxes during ordinary gameplay.
+      if not name:match(":PersistentLevel%.EnvObj_SE05_[%w_]+$") then
+        blockers[#blockers + 1] = name
+      end
+    end
+  end
+  if #blockers > 0 then
+    screen.clothSceneReason = "sequence " .. table.concat(blockers, "; ")
+    return true
   end
   return false
 end
 function screen.auto_f8(pawn)
   if not screen.autoF8 or os.clock() < screen.autoF8 then return end
   if active or screen.photoOn or screen.cloth or hm.regrow or hm.ghost then return end
-  if screen.cloth_scene(pawn, true) then screen.autoF8 = nil; return end
+  if screen.cloth_scene(pawn, true) then
+    log("cloth: skipped automatic recovery during cinematic (" .. (screen.clothSceneReason or "unknown") .. ")")
+    screen.autoF8 = nil
+    return
+  end
   local mesh = try(function() return pawn.Mesh end)
   if not valid(mesh) or (gore and #(gore.cut_parts(mesh) or {}) > 0) then return end
   screen.autoF8, screen.autoF8Ran = nil, os.clock()
@@ -5235,7 +5424,7 @@ function screen.cloth_tick(pawn)
     screen.cloth, screen.autoF8 = nil, nil
     local n = screen.cloth_restore(true)
     if screen.clothSim then screen.clothSim.at = -math.huge; screen.cloth_sim_tick() end
-    if had then log(string.format("cloth: skipped hair reset during cinematic; restored %d mesh collisions", n)) end
+    if had then log(string.format("cloth: skipped hair reset during cinematic (%s); restored %d mesh collisions", screen.clothSceneReason or "unknown", n)) end
     return
   end
   screen.cloth_sim_tick()
@@ -5324,6 +5513,20 @@ local function hook_once()
   for _, f in ipairs({ "NotifyBP_ReInitActor", "NotifyBP_InitActor", "NotifyBP_SetMesh", "ApplyMeshInfo" }) do
     h(bp .. f, f)
   end
+  for _, f in ipairs({ "OnPhysicsShapeHit", "OnCollisionOriginBeginOverlap" }) do
+    local path = "/Script/SB.SBProjectile:" .. f
+    local okc, errc = pcall(RegisterHook, path, function(...)
+      local ok2, e = pcall(sw.projectile_collision, ...)
+      if not ok2 then log("projectile collision hook error: " .. tostring(e)) end
+    end)
+    log("hook projectile " .. f .. ": " .. (okc and "ok" or tostring(errc)))
+  end
+  local projectile_fn = "/Script/SB.SBNetworkPlayerController:ClientBroadcast_ProjectileHitResult"
+  local okp, errp = pcall(RegisterHook, projectile_fn, function(...)
+    local ok2, e = pcall(sw.projectile_event, ...)
+    if not ok2 then log("projectile hit hook error: " .. tostring(e)) end
+  end)
+  log("hook ClientBroadcast_ProjectileHitResult: " .. (okp and "ok" or tostring(errp)))
   local dead_fn = "/Script/SB.SBNetworkPlayerController:ClientBroadcast_ActorDead"
   local okd, errd = pcall(RegisterHook, dead_fn, function(...)
     local ok2, e = pcall(hm.on_actor_dead, ...)
@@ -5380,7 +5583,7 @@ local function animated_marker(pawn)
   return v and math.abs(v - ANIM_MARK) < 0.5, v
 end
 local anim_fall
-local function animated_death(pawn, mesh, push)
+local function animated_death(pawn, mesh, hit)
   local a = tune.active or {}
   if a.enabled == false or (a.animated == false and not hm.at.on) then return false end
   -- with the cuts off nothing would ever switch her fall to the ragdoll: a plain ragdoll, as the menu says (reported)
@@ -5391,6 +5594,13 @@ local function animated_death(pawn, mesh, push)
   local marked, v = animated_marker(pawn)
   if not marked then
     log(string.format("death: ragdoll show (ImpulseLimitVelocity %s)", tostring(v)))
+    return false
+  end
+  -- The game's light-hit show may be marked animated even when a projectile killed her. Keep its
+  -- already-running ragdoll; the lethal-watch record survives longer than the immediate hit event.
+  local lethal = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.projectile
+  if not hm.at.on and ((hit and (hit.projectile or hit.rock)) or (lethal and lethal.projectile)) then
+    log("death: projectile hit, the ragdoll instead of an animated fall")
     return false
   end
   -- in the air: her fall animation played on mid-air and she sank at 1.2 m/s for 3 s (thirty-fifth playtest)
@@ -5431,7 +5641,7 @@ local function animated_death(pawn, mesh, push)
     if try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName(b), true, true); return true end) then kept[#kept + 1] = b end
   end
   if #kept > 0 then log("death: the parts cut off her alive simulate on: " .. table.concat(kept, ", ")) end
-  return anim_fall(pawn, mesh, push)
+  return anim_fall(pawn, mesh, hit and hit.push)
 end
 
 -- her fall plays on as the death (the show's own, or one of DEATH_FALLS over it)
@@ -5531,8 +5741,8 @@ function screen.photo_watch(pawn, mesh)
   screen.photoOpened = nil
   screen.photoAfter = now + ((tune.gore or {}).photoGrace or 0.5)
   screen.stillTill = now + 1
-  if rag and rag.photo_hold then rag.photo_hold(false) end
   screen.photo_coll_restore()
+  if rag and rag.photo_hold then rag.photo_hold(false) end
   sw.drop()
   log("photo mode closed: the enemy's weapon trail starts over")
   screen.photo_unhold("photo mode closed")
@@ -6457,7 +6667,7 @@ local function tick()
     end
     local h = death_hit(pawn, mesh)
     tp.mark("death hit")
-    if animated_death(pawn, mesh, h and h.push) then goreCtx.pose.hold(mesh)
+    if animated_death(pawn, mesh, h) then goreCtx.pose.hold(mesh)
     elseif rag then rag.start(pawn, mesh, "death", h and h.push) end
     hm.at.on = nil
     tp.mark("fall")
@@ -6627,7 +6837,8 @@ local function forget_world(pawn)
   active, polls, after, respawned, lastRecover = false, 0, -1, false, -100
   saved, hits, pending, animDeath = {}, {}, {}, nil
   rel.loc, rel.rot = nil, nil
-  meshHit, meshKey, sw.rockLast = nil, nil, nil
+  meshHit, meshKey, sw.rockLast, sw.projectileLast, hm.deadMsg = nil, nil, nil, nil, nil
+  sw.projectileVolley = nil
   hm.q, hm.pct, hm.gkeys, hm.guardT, hm.guardWhy = {}, nil, nil, nil, nil
   sw.drop(); swingBones = {}
   chars, charsSeeded = {}, false

@@ -97,6 +97,11 @@ local SMC = "/Script/Engine.SkeletalMeshComponent"
 local smcPath, meshIsa = rawget(F.objects[SMC], "__path"), rawget(E.mesh, "__isa")
 rawset(F.objects[SMC], "__path", SMC)
 rawset(E.mesh, "__isa", { [SMC] = true })
+local bodyResponses, bodyEnabled = {}, 3
+rawset(E.mesh, "GetCollisionEnabled", function() return bodyEnabled end)
+rawset(E.mesh, "SetCollisionEnabled", function(_, value) bodyEnabled = value end)
+rawset(E.mesh, "GetCollisionResponseToChannel", function(_, ch) return bodyResponses[ch] or 2 end)
+rawset(E.mesh, "SetCollisionResponseToChannel", function(_, ch, value) bodyResponses[ch] = value end)
 local hair = F.obj("SBHair", "SkeletalMeshComponent", {
   __isa = { [SMC] = true }, en = 3, resp = {},
   GetCollisionEnabled = function(self) return self.en end,
@@ -110,16 +115,18 @@ rawset(pawn, "RootComponent", F.obj("Root4", "CapsuleComponent", { AttachChildre
 at = mark()
 E.die(true)
 F.run(2, pawn)
+local expectedBodyResponse = bodyResponses[5] or 2
 F.press("P", "")
 F.run(1, pawn)
 -- (photo mode's own switch: query only while on, set blocking everything as it closes)
 hair.en = 1
 F.run(2, pawn)
-hair.en, hair.resp[5] = 3, 2
+hair.en, hair.resp[5], bodyEnabled, bodyResponses[5] = 3, 2, 1, expectedBodyResponse == 0 and 2 or 0
 photo = false
 F.run(1.5, pawn)
 check(F.find("her other meshes' collision as before it: put back on SBHair ch5 2>0", at) ~= nil, "4: her hair's response to her bodies put back")
 check(hair.resp[5] == 0 and hair.en == 3, "4: her hair ignores PhysicsBody again (" .. tostring(hair.resp[5]) .. ")")
+check(bodyEnabled == 3 and bodyResponses[5] == expectedBodyResponse, "4: her ragdoll mesh collision and channel responses are restored")
 if fails > 0 then dump(at, "photo") end
 next_life()
 

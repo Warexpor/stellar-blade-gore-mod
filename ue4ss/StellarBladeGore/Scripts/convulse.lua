@@ -410,7 +410,9 @@ local function pulses_tick(now, dt)
       -- arm swings showed none, playtest; struggle.lua's step-to-step check found none of it kept)
       turn(p.comp, p.b, scale(p.a, d))
       -- (the parent pushed back for the change asked, not for what gravity took)
-      if p.k > 0 then turn(p.comp, p.p, scale(p.a, -dv * p.k), true) end
+      if p.k > 0 and not (rag() and rag().severed(p.comp, p.b)) then
+        turn(p.comp, p.p, scale(p.a, -dv * p.k), true)
+      end
       if x < 1 then keep[#keep + 1] = p end
     elseif now < p.at then
       keep[#keep + 1] = p
@@ -929,6 +931,11 @@ end
 
 -- the next event, by how far into her convulsions she is: x seconds since they began
 local function next_event(x, anim)
+  if st.smashed and st.quietLegs then
+    -- A destroyed upper body leaves the pelvis and legs passive.
+    st.next = x + 1
+    return nil, 0
+  end
   if st.smashed then
     -- Only connected lower legs: no hips, chest, face, gasp, voice, or purposeful pushing.
     local r, choices = rag(), {}
@@ -1095,13 +1102,16 @@ function M.tick(paused)
     return
   end
   st.t, st.dt = st.t + dt, dt
+  if torso_smashed(st.mesh) and not st.quietLegs then
+    st.quietLegs, st.pulses = true, {}
+  end
   if (torso_smashed(st.mesh) or headless(st.mesh)) and not st.smashed then
     -- A smash may interrupt an already running struggle/spasm: discard its queued muscle/face/voice events.
     chains_drop("ragdoll")
     st.smashed, st.pulses, st.faces, st.jolts = true, {}, {}, nil
     st.onset, st.next, st.done = nil, 0, false
     st.trail, st.down = {}, 0
-    log((headless(st.mesh) and "head gone" or "upper body smashed") .. ": silent minor leg twitches only")
+    log(st.quietLegs and "upper body smashed: lower body passive" or "head gone: silent minor leg twitches only")
   end
   local anim = ctx.animated and ctx.animated()
   if not anim and next(st.chains) then chains_drop("ragdoll") end

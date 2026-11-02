@@ -13,6 +13,7 @@ local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")
 s.dev = true
 s.active = s.active or {}
 s.active.animated = false
+s.gore.smash.enabled = false
 return s
 ]])
 f:close()
@@ -25,9 +26,10 @@ for _, n in ipairs({ "P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3", "Eve_Dead_Down"
   F.objects["/Game/Art/Show/CH_P_EVE_01/Basic/" .. n .. "." .. n] = F.obj(n, "SBShowData")
 end
 -- Model an outfit whose physics asset must be reattached at death, recreating its bodies.
-local realDofile, remake = dofile, false
+local realDofile, remake, runtimeTune = dofile, false, nil
 dofile = function(path)
   local result = realDofile(path)
+  if path:match("/tune%.lua$") then runtimeTune = result end
   if path:match("physfix%.lua$") then
     local start = result.start
     result.start = function(...)
@@ -94,6 +96,28 @@ check(F.find("her death starts with it", at) ~= nil and not F.find("already down
 F.press("F8", "")
 F.run(1, pawn)
 check(F.find("recover %(ragdoll ended%)", at) ~= nil, "2: F8 got her up")
+if fails > 0 then dump(at) end
+
+-- A projectile death can use the game's animated-show marker. It must retain its physics even with smash off.
+E.respawn(); F.run(2, pawn)
+assert(runtimeTune).active.animated = true
+rawset(pawn, "RagdollInfo", { ImpulseLimitVelocity = 701 })
+at = mark()
+local head = E.bone("Bip001-Head")
+F.fire("/Script/SB.SBNetworkPlayerController:ClientBroadcast_ProjectileHitResult", F.param(nil), F.param(1),
+  F.param(991), F.param(4242), F.param(F.fname("Result")), F.param(1), F.param(head),
+  F.param({X=0,Y=0,Z=1}), F.param(F.fname("Bip001-Head")), F.param({X=1,Y=0,Z=0}))
+E.s.hp=0; E.die(true, 0)
+F.run(0.5, pawn)
+check(F.find("death: projectile hit, the ragdoll instead of an animated fall", at) ~= nil,
+  "projectile death bypasses an animated show even with Blunt Smash disabled")
+check(E.s.sim and not F.find("death: animated fall, physics off", at), "projectile death keeps body physics on")
+F.press("F8", ""); F.run(1, pawn)
+E.respawn(); F.run(2, pawn)
+at = mark()
+E.s.hp=0; E.die(true, 0); F.run(0.5, pawn)
+check(F.find("death: animated fall, physics off", at) ~= nil, "ordinary marked death can still use its animation")
+F.press("F8", ""); F.run(1, pawn)
 if fails > 0 then dump(at) end
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end

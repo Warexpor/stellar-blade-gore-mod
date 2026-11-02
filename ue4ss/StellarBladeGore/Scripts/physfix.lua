@@ -1103,6 +1103,10 @@ function M.arm_collision(mesh, pa)
     for _, a in ipairs({ "Bip001-L-UpperArm", "Bip001-L-Forearm", "Bip001-L-Hand" }) do
       for _, b in ipairs({ "Bip001-R-UpperArm", "Bip001-R-Forearm", "Bip001-R-Hand" }) do cand[#cand + 1] = { a, b } end
     end
+    -- Hands and forearms also need to stop on the head; skip pairs already touching at ragdoll start.
+    for _, a in ipairs({ "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-R-Forearm", "Bip001-R-Hand" }) do
+      cand[#cand + 1] = { a, "Bip001-Head" }
+    end
     -- her forearms and hands against her thighs, and her legs against each other (the hips swing 15 deg in: the
     -- legs stop on each other instead of crossing)
     for _, a in ipairs({ "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-R-Forearm", "Bip001-R-Hand" }) do

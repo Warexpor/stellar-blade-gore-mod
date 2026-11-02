@@ -36,11 +36,34 @@ E.respawn(); F.run(8,pawn)
 check(count('her ponytail reset')==reset and count('auto F8:')==f8,'reinitialization during cinematic cannot queue a later reset')
 manager.ViewTarget.Target=pawn; F.run(7,pawn)
 check(count('her ponytail reset')==reset and count('auto F8:')==f8,'cinematic requests do not replay after the scene')
--- Active sequences can precede the camera switch.
+-- A known ambient moving box runs a sequence in gameplay; it must not block the reset.
 local sequence=F.obj('Sequence','LevelSequencePlayer',{IsPlaying=function() return true end})
-F.classes.LevelSequenceActor={F.obj('Scene','LevelSequenceActor',{SequencePlayer=sequence})}
+local ambient=F.obj('Box','LevelSequenceActor',{SequencePlayer=sequence,
+  GetFullName=function() return 'LevelSequenceActor /Game/Art/BG/WorldMap/SubLevel/B07/B07_Area05_Architecture_08.B07_Area05_Architecture_08:PersistentLevel.EnvObj_SE05_BoxEnvMove02' end})
+local ambient2=F.obj('Box2','LevelSequenceActor',{SequencePlayer=sequence,
+  GetFullName=function() return 'LevelSequenceActor /Game/Art/BG/WorldMap/SubLevel/B07/B07_Area05_Architecture_08.B07_Area05_Architecture_08:PersistentLevel.EnvObj_SE05_BoxEnvMove01' end})
+local crane=F.obj('Crane','LevelSequenceActor',{SequencePlayer=sequence,
+  GetFullName=function() return 'LevelSequenceActor /Game/Art/BG/WorldMap/SubLevel/B07/B07_Area05_LD_Unload.B07_Area05_LD_Unload:PersistentLevel.EnvObj_SE05_Crane_MoveType2' end})
+local robot=F.obj('Robot','LevelSequenceActor',{SequencePlayer=sequence,
+  GetFullName=function() return 'LevelSequenceActor /Game/Art/BG/WorldMap/SubLevel/B07/B07_Area05_LD_Unload.B07_Area05_LD_Unload:PersistentLevel.EnvObj_SE05_RobotArmType01_02_2' end})
+F.classes.LevelSequenceActor={ambient,ambient2,crane,robot}
+E.respawn(); F.run(7,pawn)
+check(count('her ponytail reset')>reset,'known background box, crane and robot sequences do not block gameplay hair reset')
+reset, f8=count('her ponytail reset'), count('auto F8:')
+-- Active cinematic sequences can precede the camera switch, including alongside the ambient box.
+local scene1=F.obj('Scene','LevelSequenceActor',{SequencePlayer=sequence,GetFullName=function() return 'SceneOne' end})
+local scene2=F.obj('Scene2','LevelSequenceActor',{SequencePlayer=sequence,GetFullName=function() return 'SceneTwo' end})
+F.classes.LevelSequenceActor={ambient,scene1,crane,scene2,robot}
+local oldFind, sceneScans = FindAllOf, 0
+FindAllOf = function(cls) if cls == 'LevelSequenceActor' then sceneScans = sceneScans + 1 end; return oldFind(cls) end
 E.respawn(); F.run(6,pawn)
 check(count('her ponytail reset')==reset and count('auto F8:')==f8,'active sequence blocks a reset with the ordinary camera')
+local stoppedScans = sceneScans
+F.run(4,pawn)
+check(stoppedScans > 0 and sceneScans == stoppedScans, 'persistent sequence does not cause repeated world scans')
+check(F.find('skipped hair reset during cinematic %(sequence '), 'log identifies the sequence blocking the reset')
+check(F.find('sequence SceneOne; SceneTwo'), 'log records all active blockers in one scan')
+FindAllOf = oldFind
 F.classes.LevelSequenceActor=nil
 E.respawn(); F.run(6,pawn)
 check(count('her ponytail reset')>reset,'a later gameplay respawn still fixes hair')

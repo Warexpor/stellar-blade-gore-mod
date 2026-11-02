@@ -7,7 +7,7 @@ function S.boot(settings)
   local pawn = E.make(F)
   local DIR = "ue4ss/Mods/StellarBladeGore/Scripts/"
   local f = assert(io.open(DIR .. "settings.lua", "w"))
-  f:write('local s = dofile("' .. DIR .. 'settings.default.lua")\ns.dev = true\n' .. (settings or "") .. '\nreturn s\n')
+  f:write('local s = dofile("' .. DIR .. 'settings.default.lua")\ns.dev = true\n' .. (settings or "") .. '\ns.gore.smash.torsoHitChance = 1\nreturn s\n')
   f:close()
   F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
   F.sbslice.k, F.sbslice.f = "ok collapsed 2", "ok photo shield 1"
@@ -29,7 +29,7 @@ function S.boot(settings)
     c.SetCollisionResponseToAllChannels = function(self, n) for i = 0, 31 do self.resp[i] = n end end
     c.SetCollisionResponseToChannel = function(self, ch, n) self.resp[ch] = n end
     c.SetGenerateOverlapEvents = function(self, on) self.overlaps = on end
-    c.K2_SetWorldLocationAndRotation = function(self, at) self.at = copy(at) end
+    c.K2_SetWorldLocationAndRotation = function(self, at) self.at = copy(at); self.spawnAt = copy(at) end
     c.K2_GetComponentLocation = function(self) return copy(self.at) end
     c.SetBoxExtent = function(self, e) self.extent = copy(e); self.radius = e.X end
     c.SetHiddenInGame = function(self, on) self.hidden = on end
@@ -126,7 +126,7 @@ function S.boot(settings)
     for i = 1, math.huge do
       local name, value = debug.getupvalue(fn, i)
       if not name then break end
-      if name == "sw" or name == "swing" or name == "hm" or name == "gore_cut" then state[name] = value end
+      if name == "sw" or name == "swing" or name == "hm" or name == "gore_cut" or name == "hits_after" then state[name] = value end
       if name ~= "_ENV" then scan(value) end
     end
   end

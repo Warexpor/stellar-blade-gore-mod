@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.6.2. See the [changelog](CHANGELOG.md).
+Version 0.6.3. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -10,16 +10,18 @@ Version 0.6.2. See the [changelog](CHANGELOG.md).
 You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **The game folder** below is `StellarBlade`, the one with `SB` in it: in Steam, right-click Stellar Blade > Manage > Browse local files.
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
-2. **This mod.** Extract `StellarBladeGore-0.6.2.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+   **Check the signature even if UE4SS was already installed:** in `SB/Binaries/Win64/ue4ss/UE4SS_Signatures`, rename `FText_Constructor.lua` to `dFText_Constructor.lua` if present. The linked UE4SS archive enables it, and it can close the game at startup. If `dFText_Constructor.lua` already exists, move the enabled file to a backup outside this directory instead of overwriting it. Other UE4SS mods may depend on this signature; check their instructions if they stop working.
+2. **This mod.** Extract `StellarBladeGore-0.6.3.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.2`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.3`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
+- Game closes at startup: check the FText signature in step 1; `UE4SS.log` may end with `Crashed calling FText constructor`.
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
 - The log has no `sbslice.dll ready`: `ue4ss/Mods/SBSlice` is missing, or lacks its `enabled.txt` or `dlls/main.dll`.
 - Your antivirus deleted `SBSlice/dlls/main.dll`: a false positive (a few scanners' machine-learning guesses, not a known threat; the source is in this repo and the DLL is built from it). Restore it from quarantine and add an exclusion for the `ue4ss/Mods/SBSlice` folder, or extract it from the zip again after adding the exclusion.
@@ -55,7 +57,9 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again: in an attack, the weapon at `minSpeed` (500) cm/s or more within `reach` (25) cm of her. |
 | `enemies.grab.enabled` | `true` | A death in an enemy's grab waits for the grab to end (at most `most`, 6 s): a limb or the head the killing blow cuts falls off at once; the ragdoll, a split or a cut across her waist come as it lets go. |
 | `gore.smash.enabled` | `true` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a brief spray of falling blood droplets fly out where it was, proportional to the remaining part, and the stump stays as a cut's. An upper-body smash leaves only small silent leg twitches. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always` is off by default: with it on, every death smashes, to try it. |
-| `gore.smash.fullBody` | `false` | Experimental. With Blunt Smash on, a tracked steep downward hit from a heavy blunt attacker or weapon to the torso can smash her whole body. An earlier cut or an untracked direction keeps the regular part smash. F3 → Full-Body Smash. |
+| `gore.smash.fullBody` | `false` | Optional full-body override for smashes anywhere on the body. F3 → Full-Body Smash Override; set Full-Body Chance to 100% for every eligible smash. Earlier cuts prevent a full-body result. |
+| `gore.smash.fullBodyChance` | `0.25` | Chance of a full-body result when the override is enabled (0–1); full-body is rolled before Custom Smash Mix. |
+| `gore.smash.overrideTargets` | `false` | Optional Custom Smash Mix: choose limb, head or upper body by `gore.smash.targetWeights` relative weights. A limb choice uses the nearest limb to the hit. All weights zero falls back to ordinary hit targeting. |
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
 | `gore.lowArm.enabled` | `false` | A hit (a blow, not a fall) that leaves her under `below` (a quarter) of her HP cuts an arm off (`side`), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life. It stays off through a level change and its cutscene; a save loaded brings it back. F3 → Gameplay → Lose Arm at Low HP. |
@@ -108,6 +112,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `language` | `"en"` | The F3 menu's language: `"en"` English, `"zh"` Chinese (Simplified), `"ja"` Japanese, `"ko"` Korean, `"ru"` Russian. F3 → Mod → Language. The rest (this README, `settings.lua`, the log) stays in English. |
 | `cameraStill` | `true` | After her death you control the camera up to the death screen: mouse or right stick turns it round her, WASD and Q/E (down/up) or the left stick and triggers fly it, Shift flies faster, the mouse wheel or the D-pad (up in, down out) zooms it in to 15 cm off her. It follows her body closely till you fly it (Follow Her Body), and stops short of walls. Once flown it is a free camera: the mouse or stick turns it where it stands, and the wheel or D-pad moves it along the view. |
 | `cameraMouse` / `cameraStick` | 3 / 150 | Its mouse and stick speed. |
+| `cameraInvertY` | false | Reverse vertical mouse and stick movement in the death camera. |
 | `cameraBody` | `true` | It follows her body closely, up and down too, as it falls and tumbles, till you fly it; zoom and walls ease rather than jump. `false`: it only slides after her on the level. |
 | `cameraFlyAfter` | 1.5 | Seconds into her death before WASD / Q/E (or the left stick and triggers) fly it; till then it stays locked on her while you turn and zoom round her, and the first fly press after lets go of her. |
 | `cameraBodyBone` | `"upper"` | Which part of her it follows and turns round: `"upper"` (her chest) or `"pelvis"`. |
@@ -126,7 +131,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `verboseLog` | `false` | A detailed log (every death's bone speeds, each cut stage, every slow frame...), for a bug report when asked for one. Off, slow frames are summed up once a minute. |
 | `dev` | `false` | Test keys and the enemy spawner (see below). |
 
-In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the game pauses while it is open (`menuPause`), Q/E (LB/RB) switch the tab, the arrow keys pick (Up/Down) and change (Left/Right, or < and >), R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. The mouse works too: hover picks, click presses (or steps, on a value's arrows), the wheel scrolls. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over (a change to a setting the menu no longer has is dropped from it as the menu starts) ("Reset to settings.lua" deletes it). The menu needs no `FText_Constructor.lua` in `UE4SS_Signatures` (leave it as UE4SS shipped it, `dFText_Constructor.lua`: turned on, it closes the game at launch with the Steam overlay on). If F3 does nothing, the log's `menu:` lines say why; `settings.lua` sets everything without the menu.
+In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the game pauses while it is open (`menuPause`), Q/E (LB/RB) switch the tab, the arrow keys pick (Up/Down) and change (Left/Right, or < and >), R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. The mouse works too: hover picks, click presses (or steps, on a value's arrows), the wheel scrolls. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over (a change to a setting the menu no longer has is dropped from it as the menu starts) ("Reset to settings.lua" deletes it). The menu needs no `FText_Constructor.lua` in `UE4SS_Signatures` (disable it as described in Install: when enabled, it can close the game at launch). If F3 does nothing, the log's `menu:` lines say why; `settings.lua` sets everything without the menu.
 
 F3 → Mod → Grouped Layout (Experimental) puts related options together and shows the row position; turn it off to restore the previous ordering immediately. Sub-options are dimmed when their parent setting is off, but remain selectable so you can adjust them in advance.
 
@@ -142,7 +147,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **Proper Death Expression** by blabmice is built in (`ZZ_StellarBladeGore_Face_P`), credited below. To install it anyway, delete `ZZ_StellarBladeGore_Face_P.*` from `Paks/~mods`: two paks with the same asset keep the game loading forever.
 - **Alternative Death Animations** by boogibogie works alongside: its stand, down and explosion deaths play, and her ragdoll, cuts and death face come on top.
 - **[Customized Ragdoll](https://www.nexusmods.com/stellarblade/mods/3884)**: set `customizedRagdoll = true` in settings.lua (no longer in the F3 menu). Its death camera follows her, and the death screen comes up at once but invisible, F / R working; this mod's ragdoll, cuts, struggle and face as ever. Its own ragdoll physics (and its `[` `]` `\` keys) stay off: they would undo the cuts. **Delete `ZZ_StellarBladeGore_Face_P.pak`, `.ucas` and `.utoc` from `Paks/~mods`**: its `death_expression_p` carries a death face of its own (and its camera, so keep that one), and with both the game loads forever (reported). Its face plays then. It ships the same `death_anim_p` pak name as Alternative Death Animations, so one replaces the other. Off, its ragdoll swaps her physics asset at her death and fights this mod's.
-- **Ultra Violence** (blood on Eve and her outfit) works alongside: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs). Blood and Dirt (experimental, off by default in F3) uses the native skin layer; Ultra Violence can add its own outfit/face blood separately.
+- **Ultra Violence** (blood on Eve and her outfit) has been used alongside this mod: its outfit and face blood, drawn on a see-through copy of her mesh, is cut with her, and its blood comes off her when she respawns after a death (on its own it would stay). Both need the same UE4SS 3.1.0 (Git SHA `d3d1004`, the one this mod installs). Blood and Dirt (experimental, off by default in F3) uses the native skin layer; Ultra Violence can add its own outfit/face blood separately. A crash while attacking with both enabled has been reported and is not yet explained; turn Blood and Dirt off if it occurs and share the logs.
 - **[ESE](https://www.nexusmods.com/stellarblade/mods/672)** (Shield and Destroyed) works alongside, in any load order: a part cut off her stays off when it puts her in another suit as her shield breaks or she dies.
 - **UUEPBS** (the body slider) works alongside: her sliders stay on through her deaths and cuts (before the next release, her deaths froze where she was cut).
 - **[Stellar Blade Play As](https://github.com/Warexpor/stellar-blade-play-as)** (play as Tachy, Raven or Scarlet, a mod of its own) works alongside: the cuts, struggle and dead face are hers as they are Eve's, and her death cry and moans are that character's own.
@@ -178,6 +183,22 @@ F7, F9 and F11 leave her as they are until F8 (a death gets her up on its own; a
 Shift+F4 during her death brings up the death screen if it isn't up yet (`deathScreen`), and holds the death once it is: no death screen and she stays down until Shift+F4 again (the screen comes back then), dev or not. On a controller it's D-pad down + R1 held for a second (`holdPad`, `holdPadFor`). P (on a controller the game's own photo mode combo, D-pad left + R1 unless rebound) in a death opens the game's photo mode on her dead body; the death waits while it is open and goes on as it closes (held with Shift+F4 first, it stays held); the game's own photo mode key works with pieces cut off her too (while she lives, what was cut off stays where it fell and its poses and expressions apply to her; its hide option hides her caps and stubs too). Photo mode's camera up close no longer hides her (`photoUnhide`, `photoNearClip` in tune.lua). On its first start with dev on, the mod also dumps the game's reflection schema for the asset tools.
 
 ## Building from source
+
+### Windows development
+
+The Windows launcher uses MSYS2 CLANG64 at `C:\msys64` and a Windows .NET 10 SDK in `.cache/windows/dotnet`. Install the MSYS2 packages `git`, `python`, `zip`, `unzip`, `gcc`, `mingw-w64-clang-x86_64-clang`, `mingw-w64-clang-x86_64-llvm`, `mingw-w64-clang-x86_64-lld`, `mingw-w64-clang-x86_64-rust`, and `mingw-w64-clang-x86_64-lua54`. The launcher locates Steam's game folder; pass `-GamePath` if needed. Windows build artifacts are kept in `.cache/windows`, separate from the Linux cache.
+
+```powershell
+.\windows.ps1 -Action native
+.\windows.ps1 -Action test-lua
+.\windows.ps1 -Action test-native
+.\windows.ps1 -Action check-build
+.\windows.ps1 -Action check-package
+```
+
+`check-build` writes its paks under `.cache/windows/dist`; `check-package` builds a release archive under `.cache/windows/package-check`. Use `build` to write to `dist`, `package` for `release`, `build-install` to build and install the paks, and `install` to install UE4SS, the Lua scripts and the native helper. The native harness uses MSYS GCC without the Linux sanitizers; real-mesh and physics-parity tests need the Windows asset build cache. The asset build uses hard links and requires the game and project to be on the same volume.
+
+### Linux
 
 On Linux, with `git`, `cargo`, `clang`, `llvm-dlltool`, `python3` and `curl`. The .NET 10 SDK is fetched if it's missing.
 

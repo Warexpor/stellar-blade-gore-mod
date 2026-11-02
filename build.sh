@@ -12,7 +12,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
-CACHE=$ROOT/.cache
+CACHE=${SB_CACHE:-$ROOT/.cache}
+export SB_CACHE="$CACHE"
 GAME=${SB_GAME:-$HOME/.local/share/Steam/steamapps/common/StellarBlade}
 PAKS=$GAME/SB/Content/Paks
 MODS=$PAKS/~mods
@@ -57,6 +58,7 @@ for p in "$ROOT"/assetkit/patches/retoc-*.patch; do
   if ! git -C "$CACHE/retoc" apply --reverse --check "$p" 2>/dev/null; then git -C "$CACHE/retoc" apply "$p"; fi
 done
 RETOC=$CACHE/retoc/target/release/retoc
+[[ ${MSYSTEM:-} ]] && RETOC=$RETOC.exe
 log "building retoc"
 (cd "$CACHE/retoc" && cargo build -q --release -p retoc_cli)
 
@@ -74,7 +76,7 @@ fi
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 
 log "building sbtool"
-"$DOTNET" build -c Release -v q -nologo "$ROOT/assetkit/sbtool" -o "$CACHE/sbtool" >/dev/null
+"$DOTNET" build -c Release -v q -nologo "$ROOT/assetkit/sbtool" -o "$CACHE/sbtool" -p:UAssetAPIDir="$(if [[ ${MSYSTEM:-} ]]; then cygpath -m "$CACHE/UAssetAPI"; else printf '%s' "$CACHE/UAssetAPI"; fi)"
 SBTOOL=("$DOTNET" "$CACHE/sbtool/sbtool.dll")
 
 # mappings/SB.usmap is UE4SS's DumpUSMAP of the running game (full engine + SB schema). Without it, fall back
@@ -86,6 +88,7 @@ else
   python3 "$ROOT/assetkit/mkusmap.py" "$CACHE/sbsdk" "$CACHE/sb.usmap" | head -1
   export SB_USMAP=$CACHE/sb.usmap
 fi
+if [[ ${MSYSTEM:-} ]]; then export SB_USMAP=$(cygpath -m "$SB_USMAP"); fi
 
 W=$CACHE/work
 SRC=$CACHE/source
@@ -95,7 +98,11 @@ SRC=$CACHE/source
 # zzmod<rank>x_P. Ours and their earlier names are left out; a container retoc can't open (encrypted, another
 # version) is skipped with a note. mods.txt: "<mod> <package>" for each package a mod ships, in load order.
 rm -rf "$SRC"; mkdir -p "$SRC"
-ln -s "$PAKS"/*.utoc "$PAKS"/*.ucas "$SRC/"
+if [[ ${MSYSTEM:-} ]]; then
+  ln "$PAKS"/*.utoc "$PAKS"/*.ucas "$SRC/"
+else
+  ln -s "$PAKS"/*.utoc "$PAKS"/*.ucas "$SRC/"
+fi
 : > "$SRC/mods.txt"; : > "$SRC/remount.txt"
 load_order() { # ~mods-relative paths on stdin, in the order the game mounts them
   python3 -c 'import sys; print("".join(sorted(sys.stdin, key=str.lower)), end="")'
@@ -108,7 +115,11 @@ while IFS= read -r rel; do
   if ! "$RETOC" info "$toc" >/dev/null 2>&1; then log "mods: $rel can't be read (encrypted or another format), skipped"; continue; fi
   rank=$((rank + 1))
   link=$(printf 'zzmod%04dx_P' "$rank")
-  ln -s "$toc" "$SRC/$link.utoc"; ln -s "${toc%.utoc}.ucas" "$SRC/$link.ucas"
+  if [[ ${MSYSTEM:-} ]]; then
+    ln "$toc" "$SRC/$link.utoc"; ln "${toc%.utoc}.ucas" "$SRC/$link.ucas"
+  else
+    ln -s "$toc" "$SRC/$link.utoc"; ln -s "${toc%.utoc}.ucas" "$SRC/$link.ucas"
+  fi
   # a mod cooked in a project of another name mounts at ../../../<Project>/Content/ (SBPR does): still /Game/,
   # so its packages replace the game's; remount.txt notes them for legacy() below
   "$RETOC" list --path "$toc" | awk -v m="$stem" -v rm="$SRC/remount.txt" '$NF ~ /\.uasset$/ { p = $NF
@@ -282,7 +293,11 @@ fi
 log "verifying"
 # read back through a composite of global.utoc (script objects) + the mod containers
 mkdir -p "$W/composite"
-ln -sf "$PAKS/global.utoc" "$PAKS/global.ucas" "$W/composite/"
+if [[ ${MSYSTEM:-} ]]; then
+  ln "$PAKS/global.utoc" "$PAKS/global.ucas" "$W/composite/"
+else
+  ln -sf "$PAKS/global.utoc" "$PAKS/global.ucas" "$W/composite/"
+fi
 cp "$DIST/$NAME".* "$W/composite/"
 [[ -d $LF ]] && cp "$DIST/$FACE".* "$W/composite/"
 [[ -d $LO ]] && cp "$DIST/$OUTFITS".* "$W/composite/"

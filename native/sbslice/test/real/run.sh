@@ -6,15 +6,20 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../../.." && pwd)
+CACHE=${SB_CACHE:-$ROOT/.cache}
 MESH=${1:-CH_P_EVE_09}
 OUT=${TMPDIR:-/tmp}/sbslice-real
 mkdir -p "$OUT"
-VANILLA=${VANILLA:-$ROOT/.cache/work/vanilla}
+VANILLA=${VANILLA:-$CACHE/work/vanilla}
 PKG=${PKG:-vanilla/SB/Content/Art/Character/PC/$MESH/$MESH}
 [[ -f $(dirname "$VANILLA")/$PKG.uasset ]] || { echo "no $PKG in $VANILLA (run ./build.sh first)"; exit 2; }
 if [[ ! -f $OUT/$MESH.bin ]]; then
-  DOTNET_ROOT=$ROOT/.cache/dotnet PATH=$ROOT/.cache/dotnet:$PATH \
-    "$ROOT/.cache/meshtool/meshtool" dump "$VANILLA" "$ROOT/mappings/SB.usmap" "$PKG" "$OUT/$MESH.$$.json" >/dev/null
+  if [[ ${MSYSTEM:-} ]]; then
+    "$CACHE/dotnet/dotnet.exe" "$CACHE/meshtool/meshtool.dll" dump "$VANILLA" "$ROOT/mappings/SB.usmap" "$PKG" "$OUT/$MESH.$$.json" >/dev/null
+  else
+    DOTNET_ROOT=$CACHE/dotnet PATH=$CACHE/dotnet:$PATH \
+      "$CACHE/meshtool/meshtool" dump "$VANILLA" "$ROOT/mappings/SB.usmap" "$PKG" "$OUT/$MESH.$$.json" >/dev/null
+  fi
   python3 "$HERE/pack.py" "$OUT/$MESH.$$.json" "$OUT/$MESH.bin.$$" && mv -f "$OUT/$MESH.bin.$$" "$OUT/$MESH.bin"
   rm -f "$OUT/$MESH.$$.json"
 fi

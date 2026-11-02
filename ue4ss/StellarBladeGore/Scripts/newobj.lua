@@ -2,8 +2,8 @@
 -- checks), through sbslice.dll ("O", new_watch there): the engine's own listener queues them on whatever thread makes
 -- them, and they are handed to the watchers here, on her tick, one at a time. UE4SS's NotifyOnNewObject ran our Lua on
 -- that thread itself: with the Nexus "SB UE4SS 1.3" build the game crashed at launch in its Lua (a callback on a
--- loading thread and her tick in the mod's Lua at once, a Nexus report's dump). Without sbslice.dll (it refused:
--- another game build) it is NotifyOnNewObject as before; tune.newObjectWatch = false watches nothing.
+-- loading thread and her tick in the mod's Lua at once, a Nexus report's dump). If the native watcher fails, the
+-- general watches stay off; UE4SS callbacks are used only when explicitly requested.
 -- UE4SS's Lua can't make an object of an address, so sbslice leaves each one in an object property of the cheat
 -- manager's default object (CheatManager's DebugCameraControllerRef, unused on a default object) for this to read
 local M = {}
@@ -69,9 +69,14 @@ local function decide()
   if ctx.tune.newObjectWatch == "ue4ss" then state, err = "asked", "newObjectWatch \"ue4ss\"" end
   if state == "ready" then err = setup() end
   if not err then st.mode = "native"; return end
-  st.mode = "lua"
-  log("watched as they are made by UE4SS's NotifyOnNewObject (" .. err .. ")")
-  for _, w in ipairs(watchers) do lua_watch(w) end
+  if ctx.tune.newObjectWatch == "ue4ss" then
+    st.mode = "lua"
+    log("watched as they are made by UE4SS's NotifyOnNewObject (" .. err .. ")")
+    for _, w in ipairs(watchers) do lua_watch(w) end
+  else
+    st.mode = "off"
+    log("native watcher unavailable (" .. tostring(err) .. "); general watches off, using polling where available")
+  end
 end
 
 -- her tick: the ones made since, to their watchers

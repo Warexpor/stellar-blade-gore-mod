@@ -101,6 +101,14 @@ check(E.hiddenBones[ARM] == nil, "4: its bones not hidden")
 local tries = 0
 for i, x in ipairs(F.log_lines()) do if i >= at and x:find("left on her mesh") then tries = tries + 1 end end
 check(tries == 1, string.format("4: tried once (%d)", tries))
+local failedCopy = E.added[#E.added]
+local release, destroy
+local releaseCmd = failedCopy and string.format("sbslice x%x,0,1", failedCopy:GetAddress())
+for i,event in ipairs(F.events) do
+  if event.what==releaseCmd then release=i end
+  if failedCopy and event.what==failedCopy.__name.." destroyed" then destroy=i end
+end
+check(release and destroy and release<destroy, "4: failed pose releases copied weights before destroying the copy")
 
 if fails > 0 then dump(1, "piece") end
 print(fails == 0 and "PASS" or "FAIL")

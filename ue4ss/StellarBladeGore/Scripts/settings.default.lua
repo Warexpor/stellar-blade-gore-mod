@@ -39,7 +39,10 @@ return {
     },
     smash = {
       enabled = true,          -- blunt killing blows smash the part hit
-      fullBody = false,        -- experimental: heavy downward blunt hits to the torso smash the whole body
+      fullBody = false,        -- optional: roll full-body smash on any smash, regardless of impact location
+      fullBodyChance = 0.25,   -- share of smashes made full-body while enabled; 1 = every smash
+      overrideTargets = false, -- optional weighted choice of local smash type instead of hit-based type
+      targetWeights = { limb = 1, head = 1, torso = 1 }, -- relative weights; all 0 falls back to hit targeting
       always = false,          -- every death smashes, regardless of the blow (to try it out)
     },
     laserCut = true,           -- a laser trap death cuts along the beam, everything it went through (false: the odds)
@@ -115,6 +118,7 @@ return {
                                -- game's own camera, which jerks after her body)
   cameraMouse = 3,             --   mouse speed
   cameraStick = 150,           --   right stick speed, degrees a second
+  cameraInvertY = false,       --   reverse vertical mouse and right-stick movement
   cameraBody = true,           --   it follows her body closely, up and down too, till you fly it (false: it only
                                --   slides after her on the level, cameraTrack)
   cameraFlyAfter = 1.5,        --   seconds into her death before WASD / Q/E (or the left stick and triggers) fly it;

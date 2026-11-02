@@ -427,6 +427,7 @@ local function weapons_back()
       if try(function()
         w:K2_AttachToComponent(d.parent, d.socket or FName("None"), 2, 2, 2, false)
         if d.loc and d.rot then w:K2_SetRelativeLocationAndRotation(d.loc, d.rot, false, {}, true) end
+        if d.scale then w:SetRelativeScale3D(d.scale) end
         return true
       end) then n = n + 1 end
     end
@@ -678,7 +679,10 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
   for _, w in ipairs(extra or {}) do cand[#cand + 1] = w end
   for _, w in ipairs(cand) do
     local a = try(function() return w:GetAddress() end)
-    if not (a and held[a]) and (not only or only(w)) then list[#list + 1] = w end
+    if a and not held[a] and (not only or only(w)) then
+      held[a] = true -- the same component can occur in multiple slots or in extra
+      list[#list + 1] = w
+    end
   end
   if only and #list == 0 then return "" end
   for _, w in ipairs(list) do
@@ -698,12 +702,13 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
       local d = { comp = w, box = box, parent = try(function() return w:GetAttachParent() end),
         socket = try(function() return w:GetAttachSocketName() end),
         loc = try(function() local v = w.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
-        rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end) }
+        rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end),
+        scale = try(function() local v = w.RelativeScale3D; return vec(v.X, v.Y, v.Z) end) }
       -- (one her grip held: back onto its prop bone on recovery, not her hand)
       local ga = addr(w)
       local o = ga and gripped[ga]
       local hold = (o and o.hand) or (soft and soft.hand) or holding_hand(mesh, w)
-      if o then d.parent, d.socket, d.loc, d.rot, gripped[ga] = o.parent, o.socket, o.loc, o.rot, nil end
+      if o then d.parent, d.socket, d.loc, d.rot, d.scale, gripped[ga] = o.parent, o.socket, o.loc, o.rot, o.scale, nil end
       dropped[#dropped + 1] = d
       local ok = try(function()
         local wl, f, r, u = w:K2_GetComponentLocation(), w:GetForwardVector(), w:GetRightVector(), w:GetUpVector()
@@ -784,7 +789,8 @@ local function grip_start(mesh, g)
       local o = { comp = w, hand = hand, parent = try(function() return w:GetAttachParent() end),
         socket = try(function() return w:GetAttachSocketName() end),
         loc = try(function() local v = w.RelativeLocation; return vec(v.X, v.Y, v.Z) end),
-        rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end) }
+        rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end),
+        scale = try(function() local v = w.RelativeScale3D; return vec(v.X, v.Y, v.Z) end) }
       -- (KeepWorld: where the animation had it, in her fingers)
       if try(function() w:K2_AttachToComponent(mesh, FName(hand), 1, 1, 1, false); return true end) then
         gripped[a] = o
@@ -857,6 +863,7 @@ local function grip_back()
     if valid(o.comp) and valid(o.parent) and try(function()
       o.comp:K2_AttachToComponent(o.parent, o.socket or FName("None"), 2, 2, 2, false)
       if o.loc and o.rot then o.comp:K2_SetRelativeLocationAndRotation(o.loc, o.rot, false, {}, true) end
+      if o.scale then o.comp:SetRelativeScale3D(o.scale) end
       return true
     end) then n = n + 1 end
   end
@@ -1788,6 +1795,14 @@ local function settle(dt)
   end
   run.asleep = true
   tone_stop()
+  -- Identify any fast-spinning body before stopping it; useful when a playtest reports visible shaking.
+  local fastest, fastBone, fastComponent = 0, nil, 0
+  for i, c in ipairs(comps) do
+    if valid(c) then
+      local speed, bone = turning(c)
+      if speed > fastest then fastest, fastBone, fastComponent = speed, bone, i end
+    end
+  end
   local n = 0
   -- her convulsions or struggle still to come: stopped but left awake. A body put to sleep took the turns they gave
   -- it (read back at once) and never moved (playtest: an arm's centre of mass 0.1 cm over a 164 deg/s swing)
@@ -1807,6 +1822,7 @@ local function settle(dt)
   run.settled = true
   log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies %s, %d spins slowed to the cap, %d flung bodies slowed, %d launched", run.t, top,
     drift == math.huge and -1 or drift, n, run.awake and "stopped, kept awake for her last movements" or "asleep", run.clamped or 0, run.flung or 0, run.launched or 0))
+  log(string.format("settle rotation: fastest %s %.0f deg/s (component %d)", tostring(fastBone), fastest, fastComponent))
   if run.rolls then log("rolled about the bone since the start (deg): " .. roll_report(run.mesh, run.rolls)) end
 end
 

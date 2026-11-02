@@ -4,8 +4,9 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 CUE4PARSE_REV=de0e4e956d33fd6f3a6d417e9faccf24afc5603c
-src=$root/.cache/cue4parse
-dotnet=${DOTNET:-$root/.cache/dotnet/dotnet}
+cache=${SB_CACHE:-$root/.cache}
+src=$cache/cue4parse
+dotnet=${DOTNET:-$cache/dotnet/dotnet}
 [[ $dotnet == */* ]] && export DOTNET_ROOT=$(dirname "$dotnet")
 
 if [[ ! -d $src/.git ]]; then
@@ -22,4 +23,6 @@ git -C "$src" submodule update -q --init --recursive
 sed -i "s|return fullPath.Replace('/', '\\\\\\\\');|return fullPath;|" "$src/CUE4Parse-Conversion/ExportSession.cs"
 grep -q "return fullPath;" "$src/CUE4Parse-Conversion/ExportSession.cs"
 
-"$dotnet" build "$here/meshtool.csproj" -c Release -o "$root/.cache/meshtool" -v q -nologo
+project_src=$src
+[[ ${MSYSTEM:-} ]] && project_src=$(cygpath -m "$src")
+"$dotnet" build "$here/meshtool.csproj" -c Release -o "$cache/meshtool" -p:CUE4ParseDir="$project_src" -v q -nologo

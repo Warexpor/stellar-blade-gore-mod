@@ -1,10 +1,82 @@
 # Changelog
 
+## 0.6.3
+
 - Hits after death can now recognize fast weapon swings from enemies whose attacks expose no montage. The playtest logged a 3533 cm/s pass rejected for that reason; actor movement is subtracted so a weapon carried past her does not count. The logged pass was near an already severed calf, so its actual visible result still needs a playtest.
 
-## Unreleased
+- The full-body smash's vanilla grinder blood cloud is now killed outright at removal instead of left to its looping system: a playtest showed it lingering indefinitely. The component is stopped with Deactivate and destroyed after about three seconds instead (DeactivateImmediate is not on this build's component), and stop and destroy failures are logged. Whether the effect reads correctly in-game still needs verification.
+
+- Full-body smash chunk pools are now sized past the meat sitting on them and start at half size instead of growing from a speck: a playtest showed the fixed small pools hiding under their own chunks. Every chunk of a full-body smash is now tracked so each leaves a pool, on the shared spread budgets; local smashes keep the first-few cap. Chunk pools start at a visible size and develop in seconds while body pools spread slowly, and up to four pools start per pass now that each costs about a millisecond rooted. Pool materials preload first, the killing blow pre-requests still-unrooted death blood over async, and broken async deliveries fall back to sync after 5 s instead of 20 s, so early deaths no longer pay a full object scan per pool. Frame cost, hitch behavior and appearance need in-game verification.
+
+- Full-body smashes add the vanilla grinder blood cloud, distribute the meat across the body's captured pose in bounded faster batches, and create pools only under tracked settled pieces. The visual result and frame cost need in-game verification.
+
+- Distinct nearby projectile impacts reported within 0.35 seconds now select a full-body smash on an intact body, even with the normal full-body override off. Early post-death projectile impacts wait for the existing delay instead of being dropped. Recognition and the visual result still need an in-game check.
+
+- Recognized projectile kills keep the ragdoll when the game's death show would otherwise select an animated fall, independently of the Blunt Smash setting. Projectile detection and the visual result still need in-game verification.
+
+- Hits After Death now routes reported projectile impacts into additional smashes when Blunt Smash is enabled. Duplicate callbacks are filtered and the short queue is bounded and deferred while a cut is in progress; existing death delay and hit limits apply. The latest test logged projectile hits at deaths but none afterward, so whether the game reports rocket impacts on a corpse still needs an in-game test.
+
+- Restore the ragdoll body's collision state as well as its other components before releasing the photo-mode hold, to reduce a possible source of post-photo stretching and spinning. The last test showed a physics kick after closing photo mode but did not establish its cause; the safeguard needs an in-game test.
+- Start a main-body blood pool even when small wound decals or chunk pools exist; only an existing torso-sized wound pool replaces it. Floor geometry, decal limits and body movement can still limit the pool. In-game appearance needs verification.
+
+- Avoid a startup use-after-free in the pinned UE4SS console mod: its completed ClientRestart hook stays dormant instead of unregistering itself from inside its own callback. The installer only patches the stock script and backs it up; customized versions are left untouched. Three launch crash stacks match this UE4SS failure path, but repeated in-game launches are still needed to confirm the fix.
+
+- Ordinary hit-based smashes keep a torso result on 25% of chest-targeted hits and otherwise choose the nearest available head or limb. Custom mix and full-body overrides remain independent. Smash blood clouds are scaled up by 10%; the visual balance needs an in-game test.
+
+- Stump blood spurts now leave small floor spots until recovery. Because the game's GPU particles don't expose their landing positions to Lua, the spots are traced near each spurt rather than placed at the particles' exact impacts. New spots stop at the existing decal budget; existing spots are not recycled before recovery. Appearance and performance need an in-game check.
+
+- Restore the 0.6.0 player-hit blood spurts at stumps as a separate repeating layer over the continuous blood loop. Restarts are limited to one per frame to reduce stacking; their appearance and performance need an in-game test. The continuous effect's outward-then-downward direction remains unresolved.
+
+- The 0.6.3 test still cut a turret-shot death and showed no change in stump-flow direction or width. Watch Blueprint projectile hit events near Eve as an additional possible smash signal; the event has no target, so nearby unrelated hits can be misclassified and coverage is not established. Add two separately queued blood sources across the measured opening to make width independent of Niagara component scale. The effect still lacks a verified outward initial velocity; visual appearance, frame cost and actual turret event delivery require testing.
+
+- Added target-checked single-player projectile collision hooks alongside the network reports, scaled stump blood across the measured opening and oriented its local downward axis outward, and reduced allocations in stump-bone geometry. The GC diagnostic now pauses for the first six seconds of a death to keep its synchronous lifetime checks off busy frames. The latest log also showed HUD, cut, physics and movement spikes; these changes do not eliminate every hitch. Projectile/explosion coverage and blood direction, especially the effect's world-space particles, require an in-game test.
+
+- Recognize projectile hits using the game's target-specific projectile result and projectile IDs on its death broadcast, and route recognized projectile kills through smash. This covers the common broadcast paths, but delivery for every projectile/explosion in single-player is not established offline. Existing smash and cut switches still apply.
+- Stop upper-body movement applying reaction to a severed lower spine, preserve a dropped or gripped sword's relative scale on recovery, use the game's looping `NS_A_BloodLoop` for stump flow, and reduce impact work by batching fresh character-lifetime checks, sharing repeated blood-tint updates, and servicing ready effects one per frame. Focused simulations pass; the visual result, F8 pin drift, game-event coverage and measured frame times require an in-game test.
+
+- Dim dependent F3 options more strongly. Add hand/forearm-to-head collision pairs when their shapes are separated at ragdoll start; pairs already touching remain disabled to avoid explosive separation. Stop the deliberately scheduled lower-leg twitches after an upper-body smash. The waist-cut struggle already excludes leg actions; passive physics may still move the thighs. Focused simulations pass; visual appearance and collision need an in-game check.
+
+- Release temporary mesh skin-weight overrides before destroying regrow copies, failed settled-piece copies, and a failed split copy after a previous cut. These paths could leave an Unreal render resource unreleased; a 0.6.2 death-crash report shows that error, but its exact trigger and stack are unknown. Focused simulations check release ordering; an in-game test is still needed.
+
+- When vertical split is the only enabled death-cut weight, a blade crossing both arms no longer replaces it with arm cuts. If both split planes fail, the death remains uncut instead of silently substituting a waist cut; a diagnostic is logged. This respects the setting but does not establish compatibility with any particular replacement mesh. Focused simulations pass; in-game testing with the reported NPC skins is still needed.
+
+- Added optional full-body smash override and adjustable percentage (100% makes every eligible smash full-body), plus an optional weighted limb/head/upper-body mix in F3 and settings. Both overrides default off; existing hit-based selection and cut behavior remain the default. Earlier cuts prevent full-body destruction. This replaces the former heavy downward-hit requirement when full-body override is enabled; in-game testing remains needed.
+
+- Rebalanced blunt smash targeting: clear hits remain local, while nearly tied surface-level impacts have a 25% chance to select a nearby tied part. When experimental Full-Body Smash is enabled, qualifying heavy downward torso hits have a 25% chance of a full-body result; otherwise they smash the upper torso. Focused simulations passed, including low-HP arm loss and regrowth; in-game balance still needs testing.
+
+- Spread expensive ready impact effects over separate gore updates and play smash sound layers separately. The last smash stacked 45 ms of sound and a 12 ms blood burst in a 91 ms hitch. Queued visuals and sounds can start later during busy deaths; in-game timing and appearance still need verification.
+
+- Reduce repeated lookups for rooted blood decals, Niagara effects and gore sounds by reusing wrappers only while the native object-lifetime guard validates them. Added timings for the complete decal setup and for the nearby-character and laser-component scans. A playtest still recorded death-cut, sound, bleed, pool, convulsion and scan spikes; in-game verification remains necessary.
+
+- Spread floor-blood opening position samples across three pool updates after a multi-cut death repeatedly spent 11–13 ms in tracking/decal work. Each opening is sampled about every 0.3 s, so moving trails and new pools can respond later; pool resizing remains continuous. Added the location/direction weighting factors to death-cut logs to investigate infrequent waist cuts. In-game performance, trail appearance and waist frequency still need checking.
+
+- Reduced hit and cut frame work: the immediate hit burst keeps its floor splat for a later update, splats reuse their floor trace, and cut sound, floor splat and the two stump bleeds run on separate updates. Reuse process-lifetime engine class/default object lookups; ordinary asset wrappers continue to be looked up afresh. In-game timings and appearance need verification; other cut, tracking and loading hitches remain.
+
+- Reduced the default blood-pool radius by another 15% and increased its growth timescale from 5 to 8 seconds. Added a separate stock of prebuilt bone-stub actors with their core material, to reduce on-cut actor and material setup; slow-stage logs now split material, repositioning and attachment. Performance and appearance need an in-game test; hit and pool-tracking delays remain under investigation.
+
+- Made default blood pools about 13% smaller in radius and stopped growth time accumulating while floor checks block a pool, preventing a sudden catch-up at the start. Added timing breakdowns for slow pool updates and bone-stub construction; cut and smash hitches still need investigation and an in-game test.
+
+- Reduced blood floor tracing and limited tracked smash fragments to the first few after a playtest showed severe hitches and slow, snapping pools. Fewer fragments leave pools and the sparser floor checks can miss narrow obstacles. The impact on in-game performance and growth still needs verification; other cut stages and body shaking remain under investigation.
+
+- Spread floor-blood pool wall and floor checks across updates, with a shared four-trace budget and round-robin scheduling. A playtest logged repeated pool updates taking up to 79 ms during a multi-cut death; pools can now spread more slowly when many wounds are active. Added a one-time report of the fastest-spinning main body just before the ragdoll settles. In-game performance and the reported body shaking still need verification.
+
+- Removed the attempted deferred hair reset after a playtest showed continuing stutter and no visual improvement. The log now identifies the camera or sequence that prevents the reset; the hair and pin issue remains under investigation.
+
+- Continuously playing B07 environmental box, crane and robot sequences no longer block the spawn hair reset. Other sequences still block it; the log lists every active blocker in one scan. Whether this corrects the hair and pin needs a playtest.
+
+- Blood and Dirt now reacquires its material collection before writing instead of retaining a potentially freed asset wrapper. This is preventative; the reported crash with Ultra Violence remains unconfirmed.
+
+- Deduplicated weapon components before dropping them when multiple weapon slots refer to the same component. This prevents duplicate drop boxes for that case; whether it explains the reported extra whole sword still needs a playtest.
+
+- Added an Invert Vertical Look option for the death camera, affecting both mouse and right stick; it defaults off.
+
+- If the native object watcher fails, general object watches now fall back to polling where available instead of silently enabling UE4SS callbacks known to crash some setups. Some detection may be reduced; this is a preventative fix, not a confirmed explanation for the current crash reports.
+
+- Prevented a known startup crash on fresh development installs by disabling the FText signature enabled in the pinned UE4SS archive. Existing UE4SS installations are left unchanged with a warning; installation instructions explain how to disable it.
 
 - Fixed the dropped sword shrinking and staying tiny after Eve loses her right arm alive: a false or interrupted return to her hair now leaves the sword at its original size with physics restored. Needs in-game confirmation.
+
+## Unreleased
 
 ## 0.6.2
 
@@ -274,7 +346,7 @@
 - F3 menu takes the mouse: its cursor shows, hovering picks a row or tab, a click opens a tab, steps a value on its arrows or presses the row (as Enter), the wheel moves up and down.
 - F3 menu: < and > (Comma and Period) change a value (the arrow keys never reached the menu: they are now read through their own key binds, and repeat when held, as the D-pad does), and the key hints show Enter (A / Cross) as Select. On a controller the Keys tab's rows no longer wait 10 s for a keyboard key. The Keys tab has Menu (Controller) and Death Hold (Controller): A, then hold the new buttons together and let go (B alone cancels), saved to menu.lua.
 - Shift+F4 brings the death screen up at once: held hidden, its You Die intro never ran, so it played from its start once shown, 2-3 s before the buttons. It now plays at the game's speed from 2 s in, past its lead-in (the log names it). Its intro is about half in by then, so it popped in with no transition (playtest): the screen also fades in over half a second.
-- F3 crashed the game for players whose UE4SS couldn't find the game's FText constructor (`Failed to find FText::FText(FString&&)` in UE4SS.log; 0.4.1 report, reproduced): UE4SS makes every FText from Lua with it, so the menu's first text called address 0. The menu's text is now made by sbslice.dll (the game's own FText function, called only once the menu is up), so F3 works without UE4SS's `FText_Constructor.lua` signature, which UE4SS packs ship disabled as `dFText_Constructor.lua` for a reason: with it on and the Steam overlay on, the game closes at launch. Should the DLL be unable, the menu falls back to UE4SS's FText, and failing that isn't made (F3 logs why). The menu's widget stage logs its parts too.
+- F3 crashed the game for players whose UE4SS couldn't find the game's FText constructor (`Failed to find FText::FText(FString&&)` in UE4SS.log; 0.4.1 report, reproduced): UE4SS makes every FText from Lua with it, so the menu's first text called address 0. The menu's text is now made by sbslice.dll (the game's own FText function, called only once the menu is up), so F3 works without UE4SS's `FText_Constructor.lua` signature, which needs to be disabled as `dFText_Constructor.lua`: with it on and the Steam overlay on, the game closes at launch. Should the DLL be unable, the menu falls back to UE4SS's FText, and failing that isn't made (F3 logs why). The menu's widget stage logs its parts too.
 - Tachy's bone and core on her stumps are as sharp as on Tachy (playtest: blurry): the texture streamer sizes a texture by the meshes it knows draw it, and the stumps' procedural meshes tell it nothing, so away from Tachy her textures sat at a low mip. Each texture of her material is now flagged to stay fully loaded (the log counts them once).
 - Shift+F4 before 10 s into her death brings the death screen up then, not at 10 s (playtest): the game's own delay before its intro was set to `reviveAt`, so an earlier Shift+F4 showed an empty screen. The delay is the game's 0 again, and the mod holds the screen hidden as `deathScreen` says.
 - The death screen's hooks are registered one a second instead of all four in one frame, a 206-213 ms freeze about 20 s into each session (playtest).

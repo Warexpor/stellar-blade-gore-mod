@@ -29,19 +29,22 @@ local function approach(x, target, step)
   return x < target and math.min(target, x + step) or math.max(target, x - step)
 end
 local function write(pawn, now)
-  -- Libraries/collection belong to this world; dropped without querying them when the pawn changes.
-  if not st.kml or not st.mpc then
-    if now >= (st.retry or 0) then
-      st.retry = now + 1
-      st.kml, st.mpc = obj(KML), obj(MPC)
-    end
+  -- A Lua wrapper does not keep an asset alive. Reacquire these objects before each write instead of
+  -- retaining a collection that can be freed by GC while the same player pawn is still alive.
+  local kml, mpc
+  if now >= (st.retry or 0) then
+    kml, mpc = obj(KML), obj(MPC)
+    if not (kml and mpc) then st.retry = now + 1 end
   end
   try(function() pawn.BloodValue = st.blood; pawn.DirtValue = st.dirt end)
-  if st.kml and st.mpc then
-    try(function() st.kml:SetScalarParameterValue(pawn, st.mpc, FName("BloodOffset"), st.blood) end)
-    try(function() st.kml:SetScalarParameterValue(pawn, st.mpc, FName("DirtOffset"), st.dirt) end)
+  if kml and mpc then
+    try(function() kml:SetScalarParameterValue(pawn, mpc, FName("BloodOffset"), st.blood) end)
+    try(function() kml:SetScalarParameterValue(pawn, mpc, FName("DirtOffset"), st.dirt) end)
+    return true
   end
+  return false
 end
+
 function M.add(blood, dirt, why)
   if not on() then return end
   local mx = number(cfg().max, 1, 0, 1)
@@ -222,8 +225,7 @@ function M.tick(pawn, mesh, dead)
   local bpBlood = try(function() return pawn.BloodValue end)
   local bpDirt = try(function() return pawn.DirtValue end)
   if st.writtenB ~= st.blood or st.writtenD ~= st.dirt or bpBlood ~= st.blood or bpDirt ~= st.dirt then
-    write(pawn, now)
-    if st.kml and st.mpc then st.writtenB, st.writtenD = st.blood, st.dirt end
+    if write(pawn, now) then st.writtenB, st.writtenD = st.blood, st.dirt end
   end
   local finish = os.clock()
   if (finish - start) * 1000 >= ((ctx.tune.gore or {}).slowMs or 15) then
