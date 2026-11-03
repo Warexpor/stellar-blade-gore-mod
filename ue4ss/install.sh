@@ -74,6 +74,7 @@ for d in "${OLDS[@]}" "$NEW"; do
   for l in probe.log severed.log stellarbladegore.log; do
     [[ -f $d/$l ]] && cat "$d/$l" >> "$KEEP/stellarbladegore.log"
   done
+  [[ -f $d/stellarbladegore.log.old ]] && cp "$d/stellarbladegore.log.old" "$KEEP/stellarbladegore.log.old"
   [[ -f $d/usmap.done ]] && cp "$d/usmap.done" "$KEEP/"
 done
 # the player's settings.lua and the in-game menu's menu.lua stay as they left them (main.lua makes settings.lua

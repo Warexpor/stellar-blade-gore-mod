@@ -94,6 +94,49 @@ if E._weapons_on_ragdoll then
   check(attached == nil, "its socket's bone simulating: left as it is")
 end
 
+-- Spawned bosses drop weapons onto a dedicated simulated box, then restore the pooled actor's pose and attachment.
+local boxes, master = {}, body
+local boxclass = F.obj("BoxComponent", "Class")
+F.objects["/Script/Engine.BoxComponent"] = boxclass
+raven.AddComponentByClass = function()
+  local box = F.obj("BossWeaponBox", "BoxComponent")
+  for _, method in ipairs({ "K2_SetWorldLocationAndRotation", "SetBoxExtent", "SetHiddenInGame", "SetCollisionProfileName",
+    "SetCollisionResponseToChannel", "SetCollisionEnabled", "SetMassOverrideInKg" }) do box[method] = function() end end
+  box.SetSimulatePhysics = function(_, on) box.sim = on end
+  box.K2_DestroyComponent = function() box.destroyed = true end
+  boxes[#boxes + 1] = box
+  return box
+end
+sword.SkeletalMesh.GetImportedBounds = function() return { Origin = v(0, 0, 0), BoxExtent = v(50, 4, 1) } end
+sword.IsVisible = function() return true end
+sword.GetAttachSocketName = function() return F.fname("SC_Weapon") end
+sword.K2_GetComponentLocation = function() return v(2, 3, 120) end
+sword.K2_GetComponentRotation = function() return { Pitch = 0, Yaw = 0, Roll = 0 } end
+sword.GetForwardVector = function() return v(1, 0, 0) end
+sword.GetRightVector = function() return v(0, 1, 0) end
+sword.GetUpVector = function() return v(0, 0, 1) end
+sword.RelativeLocation, sword.RelativeRotation, sword.RelativeScale3D = v(1, 2, 3), { Pitch = 1, Yaw = 2, Roll = 3 }, v(1, 1, 1)
+sword.MasterPoseComponent = { Get = function() return master end }
+sword.SetMasterPoseComponent = function(_, m) master = m end
+sword.K2_SetRelativeLocationAndRotation = function(_, l, r) sword.restoredLoc, sword.restoredRot = l, r end
+sword.SetRelativeScale3D = function(_, s) sword.restoredScale = s end
+local dropped = { obj = raven, mesh = body, kind = { alias = "B_Raven" } }
+E._drop_boss_weapons(dropped)
+check(#boxes == 1 and boxes[1].sim and attached.p == boxes[1] and master == nil and #dropped.weaponDrops == 1,
+  "boss weapon: detached from master pose onto a simulated box")
+E._restore_boss_weapons(dropped, true)
+check(attached.p == body and attached.sock == "SC_Weapon" and master == body and boxes[1].destroyed
+  and sword.restoredLoc.X == 1 and sword.restoredScale.X == 1, "pooled boss: weapon attachment, transform and master pose restored")
+local attach_ok = sword.K2_AttachToComponent
+sword.K2_AttachToComponent = function(self, p, ...)
+  if p ~= body then return false end
+  return attach_ok(self, p, ...)
+end
+E._drop_boss_weapons(dropped)
+check(boxes[2].destroyed and master == body and attached.p == body and #dropped.weaponDrops == 0,
+  "failed drop: destroy the box and restore the original attachment and master pose")
+sword.K2_AttachToComponent = attach_ok
+
 -- a passive boss's hand on her neck: no grab
 local herMesh = F.obj("EveMesh", "SkeletalMeshComponent")
 herMesh.GetSocketLocation = function() return v(0, 0, 150) end

@@ -218,6 +218,23 @@ local savedDeath, savedSplit, savedBlow, savedLaser = g.death, G.split, G.blow, 
 g.smash.enabled, g.noSplits, g.deathSplit, g.armsOverSplit = false, false, true, 1
 g.death={limb=0,head=0,torso=0,diagonal=0,split=100}
 check(G.only_split(), "split-only configuration detected")
+g.death.diagonal=15; g.diagonal.enabled=false
+check(G.only_split(), "a parked diagonal weight does not override split-only odds")
+local random = math.random
+math.random = function() return 0.1 end
+check(hm.death_roll(true, {limb=1,head=1,torso=1,split=0,diagonal=0}) == "split",
+  "disabled diagonal weight cannot send a vertical-only death to the blade")
+math.random = function() return 0.99 end
+local savedFollow = g.bladeFollow
+g.bladeFollow = 0
+check(hm.death_roll(true, {limb=1,head=1,torso=1,split=1,diagonal=100}) == "split",
+  "disabled diagonal weight cannot dilute proximity-adjusted split odds")
+g.diagonal.enabled=true
+check(not G.only_split(), "an enabled diagonal weight permits normal alternatives")
+check(hm.death_roll(true, {limb=1,head=1,torso=1,split=1,diagonal=100}) == "odds",
+  "enabled diagonal weight remains a proximity-adjusted alternative")
+math.random, g.bladeFollow = random, savedFollow
+g.diagonal.enabled=false; g.death.diagonal=0
 check(hm.death_roll(true, {limb=1,head=1,torso=1,split=0,diagonal=0})=="split", "split-only survives a level hit even if proximity excludes splits")
 local splitCalls, blowCalls = 0, 0
 G.split=function() splitCalls=splitCalls+1; return true end

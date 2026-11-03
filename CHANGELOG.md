@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+## 0.6.4
+
+- Prologue Tachy joins the Sandbox Bosses (Tachy (prologue NPC), CharacterTable 20020). Spawning her makes her row mortal (her Immortal_Infinite swapped for its dispel, refused untouched when the dispel isn't there), damageable while one of yours is up, dying by the common ragdoll deaths at scaled HP; everything is put back exactly afterwards. Whether her AI engages Eve is unverified and needs an in-game test: she may stand until cut like a passive boss.
+
+- A spawned Tachy wearing a Phase1 body (the Naked Tachy outfit's CH_M_NA_21_Phase1_Body) no longer gets the regular body's physics asset assigned at spawn: no compatible Phase1 physics asset exists in the game or the mod, and the mismatch stopped the ragdoll at once while restarting it stretched the body. The body is left as it is, marked unsupported, and gets no death struggle or restart; its state is still logged. Needs an in-game check with the outfit on.
+
+- Spawned sandbox bosses now release visible weapon components onto separate simulated collision boxes when their ragdolls begin. Original attachments and master poses are restored for reused actors, including when a drop fails. This targets the reported floating weapons and needs an in-game check across the different bosses and outfit mods.
+
+- Soften struggle steering, rocking, breathing and reflexes, and reduce the force and frequency of convulsion arm and neck movements. Gasps and final tremors are gentler. These are visual tuning changes and need an in-game playtest; Struggle Strength and Length remain available.
+
+- Reduce repeated engine calls while sampling enemy weapons, and check the boss HUD only when a recently hit boss has no usable HP reading. The impact on stutter needs a game test; other logged hitches include voice processing and engine garbage collection.
+
+- Vertical-split validation now excludes material slots hidden on the source mesh, including Play As hair sections inherited by the copy. The custom Tachy and Scarlet tests repeatedly fell back to waist cuts with tens of thousands of unsunk vertices; hidden sections are a likely contributor, but the actual visible split still needs an in-game retest.
+
+- Preserve the previous log backup across reinstalls and append to the current log if rotation fails, so a failed rotation cannot erase the last session. These changes improve diagnostics; the reported outfit crash and loading delay remain unconfirmed.
+
+- When death setup recreates Eve's physics bodies, re-break the joints of cuts that already opened, keeping their existing chain exclusions. This addresses a likely cause of waist cuts reattaching after boss finishers; simulations cover rebuilt and unchanged physics, but the reported visual behavior and separation position still need in-game verification.
+- For testing the reported Brute death crash, restore the pre-0.6.3 gore-sound lookup and same-update smash layers without removing sounds. This reverses two audio changes, but the audio-thread stack does not establish the cause; the same crash address appeared previously even with mod sound loading delayed. In-game testing is needed, and smash sound playback may hitch more.
+
+- Mesh copies used for splits, photo mode and regrowth now inherit material-section visibility on each LOD. Sections hidden by Play As stay hidden on the copy. The effect on the reported Scarlet outfit still needs an in-game check.
+- A saved diagonal-cut weight no longer defeats the vertical-only setting while diagonal cuts are disabled. Both the death roll and the two-arm override now exclude that inactive weight; this may contribute to the reported Scarlet split failure, but its cause remains unconfirmed and needs an in-game check.
+
 ## 0.6.3
 
 - Hits after death can now recognize fast weapon swings from enemies whose attacks expose no montage. The playtest logged a 3533 cm/s pass rejected for that reason; actor movement is subtracted so a weapon carried past her does not count. The logged pass was near an already severed calf, so its actual visible result still needs a playtest.

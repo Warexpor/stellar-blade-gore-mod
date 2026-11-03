@@ -447,6 +447,18 @@ int main(void)
                proj, point, badsink, off, leg_off, legs, moved);
         modebad |= proj < 2 || point != 1 || badsink || off || leg_off || moved;
         skin_restore(0);
+        // A hidden material section must not contribute vertices or failed sinks to split validation.
+        free(override_w); override_w = 0;
+        cut_hidden = (u64)1 << *(unsigned short *)(sec + SEC_MATERIAL);
+        skin_cut((u64)comp_buf, 0, SPINE, sp, sn, MODE_SIDE, 0, 0, -1);
+        int vv = -1, vu = -1, vd = -1;
+        if ((q = strstr(lastres, " vverts="))) sscanf(q + 8, "%d", &vv);
+        if ((q = strstr(lastres, " vvanished="))) sscanf(q + 11, "%d", &vd);
+        if ((q = strstr(lastres, " vunsunk="))) sscanf(q + 9, "%d", &vu);
+        printf("hidden split metrics: vertices %d, vanished %d, unsunk %d\n", vv, vd, vu);
+        modebad |= vv != 0 || vd != 0 || vu != 0;
+        cut_hidden = 0;
+        skin_restore(0);
         // the same with the whole body turned 90 degrees about z: the sinks flatten in their bones' frames as posed
         free(override_w); override_w = 0;
         float qz[4] = { 0, 0, 0.70710678f, 0.70710678f };

@@ -65,8 +65,12 @@ mesh.GetPhysicsAsset = function() return override or nil end
 for _ = 1, 3 do physfix.check(nil, mesh, false) end
 check(sets == before, "the dropped override not re-made while she lives (" .. (sets - before) .. " re-makes)")
 -- her death: given back before her bodies simulate
+local remakes = physfix.remakes or 0
 physfix.start(nil, mesh)
 check(override == complete, "put back on her at her death")
+check((physfix.remakes or 0) == remakes + 1, "asset reassignment records a physics-body remake")
+physfix.start(nil, mesh)
+check((physfix.remakes or 0) == remakes + 1, "unchanged asset does not record a physics-body remake")
 check(said("at her death: gave her CH_P_EVE_InnerSuit_Physics") ~= nil, "logged")
 
 -- CNS's own assets can have low authored damping without our joint fixes (the wedding dress does).

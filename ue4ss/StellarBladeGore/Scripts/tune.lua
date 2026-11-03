@@ -754,23 +754,23 @@ return {
     gain = 5,                  -- a joint turns at gain x the angle it is off by, deg/s, plus what the gap has summed
     hold = 8,                  --   to (hold x angle x s, at most holdMax: gravity and the floor take a steady share of
     holdMax = 200,             --   every turn, and without it a limb sagged short; 5/220/3000/0.08 barely moved her)...
-    speed = 160,               --   ...at most this (320 with accel 6000 and a 1.3 surge looked frantic, playtest)
-    accel = 2500,              -- deg/s^2 a joint's turn may change by at most (her muscles' strength: an arm held up
+    speed = 130,               --   ...at most this (320 with accel 6000 and a 1.3 surge looked frantic, playtest)
+    accel = 1900,              -- deg/s^2 a joint's turn may change by at most (her muscles' strength: an arm held up
                                --   against gravity needs about 1400)
     response = 0,              -- s a joint takes to get to the speed asked (0: at once, each step)
-    shake = 0.6,               -- cm the hand on a stump trembles
+    shake = 0.4,               -- cm the hand on a stump trembles
     wrist = 0.6,               -- times the strength her wrists are held in line with the forearm while an arm moves
                                --   (0: limp, as they flopped about before)
     reachMax = 0.88,           -- share of a limb's length its end is sent out to at most: the elbow or knee always a
                                --   little bent (0.97 reached with her arms straight as a mannequin's, playtest)
     drag = {                   -- a hand or foot planted and pulling (crawl, heels, scrabbling knees) moves her torso
       enabled = true,          --   along the floor up to speed cm/s, accel cm/s^2 at most: the floor's grip. Without
-      speed = 35,              --   it every stroke swept the air and she stayed put (playtest)
-      accel = 250,
+      speed = 28,              --   it every stroke swept the air and she stayed put (playtest)
+      accel = 180,
     },
     bleed = {                  -- her strength over the struggle: 1 + surge at the start, falling off over the first
       frantic = 0.25,          --   frantic share, down to low by last, then to nothing as she dies (her acts slower as
-      surge = 0.1,             --   she weakens: down to half the pace)
+      surge = 0.03,            --   she weakens: down to half the pace)
       low = 0.25,
       last = 0.85,             --   share in that she dies: last tremors, a last breath, her head rolling aside
     },
@@ -796,8 +796,8 @@ return {
     },
     roll = {                   -- her rolling about her length
       side = 55,               --   deg over towards her side in a clutch, the wound up (90: fully on her side)...
-      rock = 25,               --   ...rocking back by up to this
-      gain = 2.5, speed = 70, accel = 400,
+      rock = 18,               --   ...rocking back by up to this
+      gain = 2.5, speed = 55, accel = 300,
     },
     rise = {                   -- trying to sit up (or prop up on an elbow), on her back: her belly curling her chest
       enabled = true,          --   and head up, shaking, feet braced, a groan, then giving out and dropping back
@@ -808,7 +808,7 @@ return {
       give = 0.4,              --   s letting go
       curl = 1.0,              --   times the curl: spine 20, chest 40, neck 60 deg forward (propping: 0.8 of it)
       power = 1.5,             --   times strength for the curl (her trunk is heavy)
-      shake = 2,               --   deg the chest and neck shake at 8-11 Hz
+      shake = 1.2,             --   deg the chest and neck shake at 8-11 Hz
     },
     push = {                   -- no arms: her heels shoving her along on her back
       bend = 0.55,             --   share of a push drawing the feet up (the rest driving them out)
@@ -816,25 +816,25 @@ return {
     },
     breath = {                 -- her chest heaving
       enabled = true,
-      depth = 4,               --   deg her chest tilts at full strength (a third of it as she fades)
-      fast = 1.1,              --   s a breath at full strength...
+      depth = 3,               --   deg her chest tilts at full strength (a third of it as she fades)
+      fast = 1.3,              --   s a breath at full strength...
       slow = 2.6,              --   ...and nearly gone
     },
     reflex = {                 -- a stump's stub jerking on its own: 1-2 jerks with a quiver, more often while strong
       enabled = true,
-      speed = 80,              --   deg/s at a jerk's peak
-      quiver = 15,             --   deg/s of 10-14 Hz quiver on it
+      speed = 55,              --   deg/s at a jerk's peak
+      quiver = 9,              --   deg/s of 10-14 Hz quiver on it
     },
   },
   convulse = {                 -- convulse.lua: her body's last movements once she lies dead (ragdoll or her animated
     enabled = true,            --   fall's end pose): agonal spasms and gasps fading, a last gasp, then small twitches
     strength = 1.0,            -- times every movement's size
-    jerk = 260,                -- deg/s a spasm turns a bone at its peak (a gasp about half, a late twitch a third)
+    jerk = 190,                -- deg/s a spasm turns a bone at its peak (a gasp about half, a late twitch a third)
     jolt = {                   -- a gasp jerks her whole body slightly (a ragdoll death; not beheaded or split, which
       enabled = true,          --   never gasp): a short upward pulse, the chest most, the head lagging, hips and arms barely
-      lift = 1.2,              --   cm the chest comes up (her face's fade weakens it to about 0.6 of that; 2.5 was too deep, playtest)
-      rise = 0.14,             --   s the pulse takes (the rest a little longer); then she falls back on her own
-      last = 1.3,              --   her last gasp's, times lift
+      lift = 0.8,              --   cm the chest comes up (her face's fade weakens it further)
+      rise = 0.20,             --   s the pulse takes (the rest a little longer); then she falls back on her own
+      last = 1.1,              --   her last gasp's, times lift
     },
     steer = false,             -- each movement steered to the speed it asks every tick (closed loop); off: each tick's
                                --   change of speed added, as the neck's struggle was made. The arm swings are steered
@@ -872,10 +872,10 @@ return {
                                --   they looked like the ragdoll glitching
     armSwing = {               -- her arm swinging (also with body off, beheaded or split): lifting slowly from the
       enabled = true,          --   shoulder and falling back, the elbow a beat later, the hand turning after it; now
-      chance = 0.35,           --   and then back the other way. Share of her movements that are one (later: half)
-      speed = 150,             --   deg/s at the shoulder's peak (the elbow 0.5-0.8 of it; at 150 and 300 the swings showed nothing
+      chance = 0.25,           --   and then back the other way. Share of her movements that are one (later: half)
+      speed = 105,             --   deg/s at the shoulder's peak (the elbow 0.5-0.8 of it; at 150 and 300 the swings showed nothing
                                --   while they were impulses, which never landed: set as velocity now)
-      time = { 0.7, 1.2 },     --   s each swing takes, speeding up and slowing down smoothly
+      time = { 0.9, 1.4 },     --   s each swing takes, speeding up and slowing down smoothly
       hand = 0.5,              --   the hand's turn, times speed
       back = 0.4,              --   share that swing back the other way before dropping
       crawl = 0.35,            --   share that are a crawl's stroke instead: reaching past her head, then dragging back
@@ -899,12 +899,12 @@ return {
     },
     neck = {                   -- her neck muscles struggling (also with body off): her head straining to lift or
       enabled = true,          --   turn, shaking with the effort, giving out and dropping back, then sharp jerks of it
-      chance = 0.3,            --   share of her face's movements that are one (later: half that, the strain weaker)
-      strain = 110,            --   deg/s at the strain's peak (a slow push, `strainTime` s)
-      strainTime = { 0.7, 1.3 },
-      tremor = 55,             --   deg/s of the shaking over it, `hz` times a second, half of it crossways
+      chance = 0.2,            --   share of her face's movements that are one (later: half that, the strain weaker)
+      strain = 80,             --   deg/s at the strain's peak (a slow push, `strainTime` s)
+      strainTime = { 0.9, 1.5 },
+      tremor = 30,             --   deg/s of the shaking over it, `hz` times a second, half of it crossways
       hz = { 7, 11 },
-      jerk = 170,              --   deg/s of each jerk after it gives out (2-4, a quarter second apart, weakening)
+      jerk = 100,              --   deg/s of each jerk after it gives out (2-4, a quarter second apart, weakening)
       animScale = 0.35,        --   all of that in an animated death: its head simulates alone off an animated neck, nothing
                                --   holding it in her neck's range, and at full strength it bent ~70 deg, a snapped neck
     },
@@ -1155,6 +1155,15 @@ return {
       { key = "royalguard", alias = "B_RoyalGuard", label = "Royal Guard Sister", id = 50500, row = "M_RoyalGuardFemale", face = true,
         distance = 600, bp = "/Game/Art/Character/NPC/CH_NPC_Rael/Blueprints/CH_NPC_Rael_Blueprint",
         physics = "/Game/Art/Character/NPC/CH_NPC_Rael/CH_NPC_Rael_Physics" },
+      -- prologue Tachy (the NPC ally: N_TachyNPC, immortal allied NPC). immortal: her row's immortality effect and
+      -- its dispel (refused at spawn when the dispel isn't in the EffectTable, the row untouched). Whether her
+      -- N_TachyNPC_AI engages Eve is unverified: her detect task wants Check_AttackTachyNPC and Check_Detect on
+      -- its targets, so she may stand until cut like a passive boss. Experimental, needs an in-game test.
+      { key = "tachynpc", alias = "B_TachyNPC", label = "Tachy (prologue NPC)", id = 20020, row = "N_TachyNPC", face = true,
+        distance = 700, bp = "/Game/Art/Character/NPC/CH_NPC_TachyNPC/Blueprints/CH_NPC_TachyNPC_Blueprint",
+        physics = "/Game/Art/Character/NPC/CH_NPC_TachyNPC/CH_NPC_TachyNPC_Body_Physics",
+        immortal = { "Immortal_Infinite", "Immortal_Infinite_Dispel" },
+        note = "prologue NPC: AI engagement unverified in game" },
     },
   },
   stains = {                   -- experimental: only the game's native blood/dirt layer on her skin

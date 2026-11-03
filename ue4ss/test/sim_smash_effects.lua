@@ -105,7 +105,7 @@ F.objects["/Script/Niagara.Default__NiagaraFunctionLibrary"]=F.obj("Niagara","Ni
   SpawnSystemAttached=function(_,sys,_,bone,at) return effect(sys,at,tostring(bone)) end,
 })
 local gs=F.objects["/Script/Engine.Default__GameplayStatics"]
-gs.PlaySoundAtLocation=function(_,_,sound,at,_,volume) sounds[#sounds+1]={path=sound.__name,at=at,volume=volume} end
+gs.PlaySoundAtLocation=function(_,_,sound,at,_,volume) sounds[#sounds+1]={path=sound.__name,at=at,volume=volume,t=F.t} end
 gs.SpawnDecalAtLocation=function(_,_,mat,_,at,_,life)
   local d=F.obj("FloorBlood","DecalComponent",{at=at,mat=mat,life=life})
   d.SetWorldScale3D=function(self,s) self.scale=s end
@@ -192,10 +192,19 @@ check(#effects==beforeHitEffects+1 and #decals==beforeHitDecals,"hit burst is im
 run(0.15)
 check(#decals>beforeHitDecals,"deferred hit splat reaches the floor")
 -- Real lethal-hit crunch, then the queued opening less than the usual 0.35 s sound gap later.
+local beforeSmashSounds=#sounds
 G.wound(pawn,E.mesh,at,"crunch")
 G.smash(pawn,E.mesh,{loc=at},"death")
 run(1)
-check(#sounds>=3,"blunt crunch and wet smash layers both played despite the sound gap")
+check(#sounds>=beforeSmashSounds+3,"blunt crunch and wet smash layers both played despite the sound gap")
+check(sounds[beforeSmashSounds+2] and sounds[beforeSmashSounds+3]
+  and sounds[beforeSmashSounds+2].t==sounds[beforeSmashSounds+3].t,
+  "the actual smash plays both sound layers in the same update")
+local guarded, guardedCalls = G.guarded_asset, 0
+G.guarded_asset=function(...) guardedCalls=guardedCalls+1; return guarded(...) end
+G.sfx("smash",pawn,at,true)
+G.guarded_asset=guarded
+check(guardedCalls==0,"gore sound playback reacquires cues without the guarded wrapper cache")
 for i=1,20 do
   local before=#sounds
   G.sfx("smash",pawn,at,true)

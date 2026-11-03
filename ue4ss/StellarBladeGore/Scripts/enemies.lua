@@ -33,6 +33,7 @@ local pick = 1       -- the kind F5 spawns
 local hand = {}      -- Eve's right hand, the last HAND_S seconds: { t, p }
 local n = 0
 local freed = false  -- the mouse is given to the spawner window
+local restore_boss_weapons
 
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local function sub(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
@@ -136,6 +137,7 @@ local function remove_all()
     local obj = e and e.obj
     if e and e.kind.row and ctx.bosses then ctx.bosses.gone(a, e) end
     if e and e.cut and ctx.gore then ctx.gore.enemy_gone(a, e.mesh, nil) end
+    if e and restore_boss_weapons then restore_boss_weapons(e, true) end
     known[a] = nil
     if obj and valid(obj) and try(function() return obj.bActorIsBeingDestroyed end) == false then
       if try(function() obj:K2_DestroyActor(); return true end) then nr = nr + 1 end
@@ -427,6 +429,97 @@ local function weapons_on_ragdoll(e)
   if #out > 0 then log(string.format("%s: its weapon onto its ragdoll: %s", e.kind.alias, table.concat(out, "; "))) end
 end
 M._weapons_on_ragdoll = weapons_on_ragdoll
+
+-- A spawned boss's visible weapons need their own rigid bodies. Some follow the boss's master pose, so simply
+-- reattaching their component to a hand does not release the pose or let the sword fall. Remember the original
+-- attachment for pooled actors; never touch objects from a vanished/destroyed world.
+restore_boss_weapons = function(e, touch)
+  for _, d in ipairs(e.weaponDrops or {}) do
+    if touch and valid(d.comp) and valid(d.parent) then
+      try(function()
+        d.comp:K2_AttachToComponent(d.parent, d.socket or FName("None"), 2, 2, 2, false)
+        if d.loc and d.rot then d.comp:K2_SetRelativeLocationAndRotation(d.loc, d.rot, false, {}, true) end
+        if d.scale then d.comp:SetRelativeScale3D(d.scale) end
+        if valid(d.master) then d.comp:SetMasterPoseComponent(d.master, true) end
+      end)
+    end
+    if touch and valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
+  end
+  e.weaponDrops = nil
+end
+local function drop_boss_weapons(e)
+  local o, mesh = e.obj, e.mesh
+  local cls = try(function() return StaticFindObject("/Script/Engine.BoxComponent") end)
+  if not valid(cls) then log(e.kind.alias .. ": weapon drop unavailable: no BoxComponent class"); return end
+  local candidates, seen = {}, {}
+  local function add(c)
+    local a = valid(c) and addr(c)
+    if a and not seen[a] and a ~= addr(mesh) and try(function() return c:IsVisible() end) == true then
+      seen[a] = true; candidates[#candidates + 1] = c
+    end
+  end
+  try(function() o.MeshInfoList:ForEach(function(_, item)
+    local i = item:get()
+    if i.MeshSlot >= 5 and i.MeshSlot <= 8 then add(i.MeshComponent) end
+  end) end)
+  for _, cp in ipairs(WEAPON_CLASSES) do
+    local c = try(function() return StaticFindObject(cp) end)
+    for _, w in ipairs(valid(c) and try(function() return o:K2_GetComponentsByClass(c) end) or {}) do
+      local nm = try(function() return (w.SkeletalMesh or w.StaticMesh):GetFName():ToString() end) or ""
+      local socket = try(function() return w:GetAttachSocketName():ToString() end) or ""
+      if nm:lower():find("weapon", 1, true) or socket:lower():find("weapon", 1, true) then add(w) end
+    end
+  end
+  local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
+  for _, w in ipairs(candidates) do
+    local bounds = try(function() return w.SkeletalMesh:GetImportedBounds() end)
+      or try(function() return w.StaticMesh:GetBounds() end)
+    local b = bounds and try(function() return { o = vof(bounds.Origin), e = vof(bounds.BoxExtent) } end)
+    local parent = try(function() return w:GetAttachParent() end)
+    local pos = try(function() return w:K2_GetComponentLocation() end)
+    local rot = try(function() return w:K2_GetComponentRotation() end)
+    if b and b.o and b.e and valid(parent) and pos and rot then
+      local box = try(function() return o:AddComponentByClass(cls, true, id, false) end)
+      if valid(box) then
+        local d = { comp = w, box = box, parent = parent, socket = try(function() return w:GetAttachSocketName() end),
+          loc = try(function() return vof(w.RelativeLocation) end),
+          rot = try(function() local r = w.RelativeRotation; return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end),
+          scale = try(function() return vof(w.RelativeScale3D) end),
+          master = try(function() return w.MasterPoseComponent:Get() end) }
+        e.weaponDrops = e.weaponDrops or {}; e.weaponDrops[#e.weaponDrops + 1] = d
+        local ok = try(function()
+          local f, r, u = w:GetForwardVector(), w:GetRightVector(), w:GetUpVector()
+          local at = vec(pos.X + f.X*b.o.X + r.X*b.o.Y + u.X*b.o.Z,
+            pos.Y + f.Y*b.o.X + r.Y*b.o.Y + u.Y*b.o.Z, pos.Z + f.Z*b.o.X + r.Z*b.o.Y + u.Z*b.o.Z)
+          box:K2_SetWorldLocationAndRotation(at, rot, false, {}, true)
+          local ex = { math.max(1.5, math.min(b.e.X, 60)), math.max(1.5, math.min(b.e.Y, 60)), math.max(1.5, math.min(b.e.Z, 60)) }
+          local thin = ex[1] <= ex[2] and (ex[1] <= ex[3] and 1 or 3) or (ex[2] <= ex[3] and 2 or 3)
+          ex[thin] = 0.75
+          box:SetBoxExtent(vec(ex[1], ex[2], ex[3]), false)
+          box:SetHiddenInGame(true, false)
+          box:SetCollisionProfileName(FName("PhysicsActor"), true)
+          box:SetCollisionResponseToChannel(2, 0)
+          box:SetCollisionEnabled(3)
+          box:SetSimulatePhysics(true)
+          box:SetMassOverrideInKg(FName("None"), 1.5, true)
+          if valid(d.master) then w:SetMasterPoseComponent(nil, true) end
+          if w:K2_AttachToComponent(box, FName("None"), 1, 1, 1, false) == false then error("weapon attach failed") end
+          return true
+        end)
+        if not ok then
+          restore_boss_weapons({ weaponDrops = { d } }, true)
+          table.remove(e.weaponDrops)
+          log(e.kind.alias .. ": weapon drop failed; attachment restored")
+        end
+      end
+    else
+      log(e.kind.alias .. ": weapon drop skipped: missing bounds or attachment")
+    end
+  end
+  if e.weaponDrops and #e.weaponDrops > 0 then log(string.format("%s: dropped %d weapon(s)", e.kind.alias, #e.weaponDrops))
+  elseif #candidates == 0 then log(e.kind.alias .. ": no visible weapon component found to drop") end
+end
+M._drop_boss_weapons, M._restore_boss_weapons = drop_boss_weapons, restore_boss_weapons
 local function adopt(o, a, cls, k, cuts)
   local mesh = try(function() return o.Mesh end)
   if not valid(mesh) then return nil end
@@ -464,6 +557,7 @@ local function gone(a, e, how, why)
   known[a] = nil
   if e.kind.row and ctx.bosses then ctx.bosses.gone(a, e) end
   if e.cut and ctx.gore then try(function() ctx.gore.enemy_gone(a, e.mesh, how) end) end
+  restore_boss_weapons(e, how == nil)
   if e.cut then log(string.format("%s %x %s: its gore removed", e.kind.alias, a, why)) end
 end
 
@@ -1287,7 +1381,7 @@ function M.tick(pawn, mesh, tm)
             if near then poll_hit(e) end
             if sim and not hidden(e) then
               e.dead, e.t, e.still, e.looks = true, os.clock(), 0, looks(e.mesh)
-              local okw, ew = pcall(weapons_on_ragdoll, e)
+              local okw, ew = pcall(k.row and mine[c.addr] and drop_boss_weapons or weapons_on_ragdoll, e)
               if not okw then log("weapon on its ragdoll: " .. tostring(ew)) end
               -- (its outfit's KawaiiPhysics off on its ragdoll, as hers: gore.kawaii)
               if ctx.gore and ctx.gore.kawaii then

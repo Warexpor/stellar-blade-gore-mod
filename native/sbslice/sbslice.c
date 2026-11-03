@@ -1819,6 +1819,13 @@ static void pose_range(void *ctx, int lo, int hi)
 #define POSE_SECS 512
 static unsigned short *pose_bmap[POSE_SECS];
 static int pose_nbmap[POSE_SECS];
+// Material slots hidden on this component; used only for split validation metrics.
+static u64 cut_hidden;
+static int split_visible(u64 secs, int sec)
+{
+    unsigned int material = *(unsigned short *)(secs + (u64)sec * 0xe8 + SEC_MATERIAL);
+    return material >= 64 || !(cut_hidden & ((u64)1 << material));
+}
 static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw, int mode, float radius, int forced_sink, int remap)
 {
     // the cut's cost in CPU cycles (rdtsc, no import): the weights worked out, the engine's override built from them,
@@ -2099,6 +2106,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     u32 maxinf = *(u32 *)(sw + SW_MAX_INFLUENCES);
     int wide = *(unsigned char *)(sw + SW_16BIT_INDEX) != 0;
     int nlimb = 0, nseam = 0, moved = 0, stuck = 0, unsunk = 0, vanished = 0, carried = 0, unbanded = 0, widened = 0, outward = 0;
+    int visible_verts = 0, visible_vanished = 0, visible_unsunk = 0;
     // a split half's spine (its top ride bone to its lowest): skin its sheet would flatten out past her side, further
     // from the spine on the plane than it is now, collapses to its band's point inside instead. A plane slanting across
     // her (a diagonal) flattened her flank's skin out past her side along its normal, a sheet standing out of the cut
@@ -2131,7 +2139,9 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         int base = *(int *)(sec + SEC_BASE_VERTEX), cnt = *(int *)(sec + SEC_NUM_VERTICES);
         unsigned short *bmap = *(unsigned short **)(sec + SEC_BONE_MAP);
         int nbmap = *(int *)(sec + SEC_BONE_MAP + 8);
+        int visible = split_visible(secs, s);
         for (int v = base; v < base + cnt && v < nv; v++) {
+            visible_verts += visible;
             skin_info *o = &out[v];
             vsec[v] = (u16)s;
             u32 off = 0, cn;
@@ -2212,9 +2222,9 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
                     } else if (head) vkind[v] = 4;
                 }
                 vroot[v] = (unsigned char)(top < 0 ? 0 : top);
-                if (vkind[v]) { seam[v] = 1; vanished++; }
+                if (vkind[v]) { seam[v] = 1; vanished++; visible_vanished += visible; }
             }
-            if (side[v] && !seclimb[s]) { side[v] = 0; seam[v] = 1; vanished++; }
+            if (side[v] && !seclimb[s]) { side[v] = 0; seam[v] = 1; vanished++; visible_vanished += visible; }
         }
     }
     c.skm = 0;
@@ -2733,7 +2743,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // a section whose limb side has seam vertices but nothing to collapse them onto: that side vanishes
     for (int s = 0; s < c.nsec; s++) {
         if (secsink[s * 2 + 1] != -2) continue;
-        for (int v = 0; v < nv; v++) if (vsec[v] == s && side[v]) { side[v] = 0; seam[v] = 1; vanished++; }
+        for (int v = 0; v < nv; v++) if (vsec[v] == s && side[v]) { side[v] = 0; seam[v] = 1; vanished++; visible_vanished += split_visible(secs, s); }
         if (secsink[s * 2] == -1) secsink[s * 2] = find_sink(&sa, s, 0);
     }
     for (int v = 0; v < nv; v++) nlimb += side[v];
@@ -2873,6 +2883,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             }
 #endif
             unsunk++;
+            visible_unsunk += split_visible(secs, s);
         }
         // an earlier cut's seam vertex: already all on its sink. Only this component's: a split's copy shares the
         // mesh asset, and a vertex of its kept half that the vanilla skin puts wholly on a helper the other half had
@@ -3260,6 +3271,11 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     o = put(o, " seam="); o = put_int(o, nseam);
     o = put(o, " vanished="); o = put_int(o, vanished);
     o = put(o, " unsunk="); o = put_int(o, unsunk);
+    if (mode == MODE_SIDE && cut_hidden) {
+        o = put(o, " vverts="); o = put_int(o, visible_verts);
+        o = put(o, " vvanished="); o = put_int(o, visible_vanished);
+        o = put(o, " vunsunk="); o = put_int(o, visible_unsunk);
+    }
     if (unbanded) { o = put(o, " unbanded="); o = put_int(o, unbanded); }
     if (outward) { o = put(o, " outward="); o = put_int(o, outward); }
     if (widened) { o = put(o, " widened="); o = put_int(o, widened); }
@@ -7370,15 +7386,17 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         return;
     }
     if (txt[0] != 'c' && txt[0] != 'x') { skin_result("err unknown command"); return; }
-    u64 f[7] = { 0, 0, 0, 0, 0, 0, 0 };
-    int k = parse_fields(txt + 1, len - 1, f, 7);
+    u64 f[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    int k = parse_fields(txt + 1, len - 1, f, 8);
     if (f[0] < 0x10000) { skin_result("err bad component"); return; }
     if (txt[0] == 'x') { skin_clear(f[0], (int)f[1], k > 2 && f[2]); return; }
     if (k < 3) { skin_result("err want c<comp>,<lod>,<bone>"); return; }
     float l2 = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
     if (l2 < 1e-8f) { skin_result("err no plane normal"); return; }
     float kk = rsqrt(l2), nrm[3] = { dir[0] * kk, dir[1] * kk, dir[2] * kk };
+    cut_hidden = k > 7 ? f[7] : 0;
     skin_cut(f[0], (int)f[1], (int)f[2], loc, nrm, (int)f[3], (float)f[4] * 0.1f, (int)f[5], k > 6 ? (int)f[6] : -1);
+    cut_hidden = 0;
 }
 
 static const u16 REQ[] = u"ue4ss\\Mods\\StellarBladeGore\\sbslice.req";

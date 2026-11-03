@@ -98,6 +98,16 @@ local function field_byte(dt, rs, row, off, b)
   if b and b ~= was and not field(dt, rs, row, at, u & ~(0xff << shift) | b << shift) then return nil, "not written" end
   return was
 end
+-- whether an EffectTable row exists (a dispel to swap in must be one; an FName alone proves nothing)
+local function effect_exists(name)
+  local dt, rs = table_of(M.EFFECT)
+  if not dt then return nil end
+  local off = offsets(rs)
+  local _, any = next(off)
+  if not any then return nil end
+  local v = field(dt, rs, name, any - any % 4)
+  return v ~= nil
+end
 -- the EffectTable's floors and Scarlet's immortality let go of (once, while any row is mortal)
 local function let_go()
   if holds then return end
@@ -147,6 +157,16 @@ function M.prepare(k)
   if not dt then return "no CharacterTable loaded" end
   local off = offsets(rs)
   local was, out = {}, {}
+  -- its immortality dispelled (a row that lists none stays mortal as it is). A kind whose immortality is some
+  -- other effect names it in k.immortal; its dispel must exist in the EffectTable or nothing is changed at all
+  -- (writing an effect that isn't there would corrupt the row until it is put back).
+  local imm, disp = M.IMMORTAL, M.DISPEL
+  if k.immortal then
+    imm, disp = k.immortal[1], k.immortal[2]
+    if disp and effect_exists(disp) == false then
+      return string.format("not spawned: %s not in the EffectTable, %s left as the game has it", disp, k.row)
+    end
+  end
   -- its deaths: another row's (a ragdoll in each)
   local deadAs = k.deadAs or cfg().deadAs or "M_SkullSword"
   local di = name_idx(deadAs)
@@ -154,8 +174,23 @@ function M.prepare(k)
   if not old then return "its DeadAlias not set: " .. tostring(err) end
   was.DeadAlias = old
   out[#out + 1] = "dies as " .. deadAs
-  local n = swap_names(dt, rs, k.row, off.DefaultEffectArray, M.IMMORTAL, M.DISPEL)
-  if n and n > 0 then was.immortal = true; out[#out + 1] = "not immortal" else out[#out + 1] = "had no " .. M.IMMORTAL end
+  local n = swap_names(dt, rs, k.row, off.DefaultEffectArray, imm, disp)
+  if n and n > 0 then was.immortal = { imm, disp }; out[#out + 1] = "not immortal"
+  else out[#out + 1] = "had no " .. imm end
+  -- an ally that takes no damage while the player lives (prologue Tachy): damageable while one of yours is up
+  local df = "bApplyDamageWhenPlayerAlive"
+  if off[df] then
+    local at = off[df] - off[df] % 4
+    local old4 = field(dt, rs, k.row, at)
+    local wasB = old4 and (old4 >> (off[df] % 4 * 8) & 0xff)
+    if wasB == 0 then
+      if field(dt, rs, k.row, at, old4 & ~(0xff << (off[df] % 4 * 8)) | 1 << (off[df] % 4 * 8)) then
+        was[df] = old4
+        out[#out + 1] = "damageable"
+      end
+    end
+  end
+  if k.note then out[#out + 1] = k.note end
   local sc = math.max(math.min(tonumber(cfg().hpScale) or 0.25, 1), 0.01)
   for _, f in ipairs({ "MaxHP", "MaxShield" }) do
     local v = field(dt, rs, k.row, off[f])
@@ -187,7 +222,10 @@ local function put_back(row, why)
   local off, n = r.off, 0
   for f, v in pairs(r.was) do
     if f == "immortal" then
-      if swap_names(dt, rs, row, off.DefaultEffectArray, M.DISPEL, M.IMMORTAL) then n = n + 1 end
+      local pair = type(v) == "table" and v or { M.IMMORTAL, M.DISPEL }
+      if swap_names(dt, rs, row, off.DefaultEffectArray, pair[2], pair[1]) then n = n + 1 end
+    elseif f == "bApplyDamageWhenPlayerAlive" then
+      if field(dt, rs, row, off[f] - off[f] % 4, v) then n = n + 1 end
     elseif field(dt, rs, row, off[f], v) then
       n = n + 1
     end
@@ -215,6 +253,17 @@ local function own_physics(e)
   local pa = try(function() return mesh:GetPhysicsAsset() end)
   local path = valid(pa) and try(function() return pa:GetFullName() end) or "none"
   local sm = try(function() return mesh.SkeletalMesh:GetFName():ToString() end) or "?"
+  -- A Phase1 body (the Naked Tachy outfit's CH_M_NA_21_Phase1_Body) references a
+  -- CH_M_NA_21_Phase1_Body_PhysicsAsset that neither the mod nor the vanilla paks ship. The regular
+  -- CH_M_NA_21_Body_Physics does not match its body setup: playtests showed the ragdoll stopping at once
+  -- and a restarted simulation stretching the body across the map. Leave it alone and mark it, so the
+  -- death watch logs the state but never drives or restarts it.
+  if sm:find("Phase1", 1, true) then
+    e.physUnsupported = true
+    log(string.format("%s's body %s is a Phase1 mesh with no compatible physics asset in the game or the outfit mod: left as it is, no struggle or restart", e.kind.alias, sm))
+    log(string.format("%s: %s", e.kind.alias, M.physics_line(e)))
+    return
+  end
   local dir = want:match("^(.*)/[^/]+$")
   if valid(pa) and path:find(dir, 1, true) then
     log(string.format("%s's body %s: its own physics asset (%s)", e.kind.alias, sm, path:match("([^/]+)$") or path))
@@ -343,7 +392,11 @@ function M.died(pawn, a, e)
   local d = { e = e, t = os.clock() }
   local df = (ctx.tune.gore or {}).deathFace or {}
   if cfg().face ~= false and df.enabled ~= false and ctx.new_face then d.faceAt = os.clock() + (df.at or 0.3) end
-  d.struggle = new_struggle(e)
+  if e.physUnsupported then
+    log(string.format("%s %x: no death struggle (its Phase1 body has no compatible physics asset)", e.kind.alias, a))
+  else
+    d.struggle = new_struggle(e)
+  end
   dead[a] = d
   if e.kind.physics then
     d.probe = { 0.1, 0.3, 0.6, 1.0, 2.0 }
@@ -515,8 +568,15 @@ function M.tick(pawn)
   -- one still up at 0: its HP read, else the boss bar (the nearest live one spawned here is the one it shows; one
   -- far off isn't: another enemy's bar at 0 took it down from across the level), hit in the last 10 s
   if next(live) and cfg().zeroKill ~= false then
-    local p = bar()
-    local her = try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
+    -- The HUD is only a fallback for a recently hit boss whose HP is unavailable. Avoid its widget scan and
+    -- distance reads on every poll when all HP readings are available or nobody has been hit.
+    local needBar = false
+    for _, x in pairs(live) do
+      local hit = x.e.hit and x.e.hit.t
+      if not x.downed and not x.hp and hit and now - hit < 10 then needBar = true; break end
+    end
+    local p = needBar and bar() or nil
+    local her = p and try(function() local l = pawn:K2_GetActorLocation(); return { X = l.X, Y = l.Y, Z = l.Z } end)
     local best, bd, reader, readAt
     local reach = tonumber(cfg().barReach) or 3000
     for a, x in pairs(live) do

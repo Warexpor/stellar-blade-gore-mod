@@ -26,15 +26,18 @@ for _, n in ipairs({ "P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3", "Eve_Dead_Down"
   F.objects["/Game/Art/Show/CH_P_EVE_01/Basic/" .. n .. "." .. n] = F.obj(n, "SBShowData")
 end
 -- Model an outfit whose physics asset must be reattached at death, recreating its bodies.
-local realDofile, remake, runtimeTune = dofile, false, nil
+local realDofile, remake, runtimeTune, gore = dofile, false, nil, nil
+local broken = {}
+E.mesh.BreakConstraint = function(_, _, _, bone) broken[#broken + 1] = tostring(bone) end
 dofile = function(path)
   local result = realDofile(path)
   if path:match("/tune%.lua$") then runtimeTune = result end
+  if path:match("/gore%.lua$") then gore = result end
   if path:match("physfix%.lua$") then
     local start = result.start
     result.start = function(...)
       local r = start(...)
-      if remake then E.s.sim = false end
+      if remake then E.s.sim = false; result.remakes = (result.remakes or 0) + 1 end
       return r
     end
   end
@@ -86,6 +89,32 @@ check(E.s.sim and not F.find("recover %(ragdoll ended%)", at), "3: death remains
 remake = false
 F.press("F8", ""); F.run(1, pawn)
 F.run(3, pawn)
+
+-- A waist cut made before death must stay disconnected if asset setup rebuilds its constraints.
+at = mark()
+check(gore.slice_bone(pawn, E.mesh, "Bip001-Spine1", nil, "test"), "early waist cut starts")
+F.run(0.6, pawn)
+check(F.find("gore: Bip001%-Spine1 off %(test%)", at) ~= nil, "early waist cut opens before death")
+broken = {}
+remake = true
+E.s.hp = 0; E.die(true)
+F.run(0.5, pawn)
+local rebroken = false
+for _, b in ipairs(broken) do if b == "Bip001-Spine1" then rebroken = true end end
+check(rebroken and F.find("re%-broke cuts after physics asset setup: Bip001%-Spine1", at),
+  "death re-breaks the existing waist joint after physics bodies are recreated")
+remake = false
+F.press("F8", ""); F.run(2, pawn)
+
+-- A death with unchanged physics must not re-break an existing cut.
+at = mark()
+check(gore.slice_bone(pawn, E.mesh, "Bip001-Spine1", nil, "test"), "second early waist cut starts")
+F.run(0.6, pawn)
+broken = {}
+E.s.hp = 0; E.die(true)
+F.run(0.5, pawn)
+check(not F.find("re%-broke cuts after physics asset setup", at), "unchanged physics does not re-break existing cuts")
+F.press("F8", ""); F.run(3, pawn)
 
 -- 2: the next press, a death again (she was up)
 at = mark()

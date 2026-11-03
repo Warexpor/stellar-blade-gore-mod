@@ -20,22 +20,24 @@ FName = function(s)
   return f
 end
 -- the table: rows of u32 fields at offsets, and DefaultEffectArray's names
-local OFF = { DeadAlias = 0x10, MaxHP = 0x14, MaxShield = 0x18, DespawnTimeAfterDeath = 0x1c, DefaultEffectArray = 0x20 }
+local OFF = { DeadAlias = 0x10, MaxHP = 0x14, MaxShield = 0x18, DespawnTimeAfterDeath = 0x1c, DefaultEffectArray = 0x20, bApplyDamageWhenPlayerAlive = 0x24 }
 local function f2u(v) return string.unpack("<I4", string.pack("<f", v)) end
 local rowsMem = {
-  M_Tachy = { [0x10] = idx("M_Tachy"), [0x14] = 109120, [0x18] = 3310, [0x1c] = f2u(134.5),
+  M_Tachy = { [0x10] = idx("M_Tachy"), [0x14] = 109120, [0x18] = 3310, [0x1c] = f2u(134.5), [0x24] = 1,
     eff = { "Rank_Boss", "M_Tachy_HitCheckCount", "Passive_Immortal", "M_Tachy_Phase1", "M_Tachy_Default" } },
-  M_Raven = { [0x10] = idx("M_Raven"), [0x14] = 248304, [0x18] = 4805, [0x1c] = f2u(1.0),
+  M_Raven = { [0x10] = idx("M_Raven"), [0x14] = 248304, [0x18] = 4805, [0x1c] = f2u(1.0), [0x24] = 1,
     eff = { "Rank_Boss", "Passive_Immortal", "M_Common_HitProjectileCheckCount" } },
-  M_RoyalGuardFemale = { [0x10] = idx("M_RoyalGuardFemale"), [0x14] = 35455, [0x18] = 908, [0x1c] = f2u(1.0),
+  M_RoyalGuardFemale = { [0x10] = idx("M_RoyalGuardFemale"), [0x14] = 35455, [0x18] = 908, [0x1c] = f2u(1.0), [0x24] = 1,
     eff = { "Passive_Immortal", "M_RoyalGuardFemale_Phase1", "Check_TagWeakPointX", "M_RoyalGuardFemale_FX_On" } },
+  N_TachyNPC = { [0x10] = idx("N_TachyNPC"), [0x14] = 40000, [0x18] = 2000, [0x1c] = f2u(1.0), [0x24] = 0,
+    eff = { "N_TachyNPC_Default", "Immortal_Infinite" } },
 }
 local function snapshot()
   local o = {}
   for r, m in pairs(rowsMem) do
     local e = {}
     for i, n in ipairs(m.eff) do e[i] = n end
-    o[r] = { m[0x10], m[0x14], m[0x18], m[0x1c], table.concat(e, ",") }
+    o[r] = { m[0x10], m[0x14], m[0x18], m[0x1c], table.concat(e, ","), m[0x24] }
   end
   return o
 end
@@ -91,7 +93,7 @@ local function command(s)
   if c == "d" then
     local was = m[f[5]] or 0
     if f[6] then m[f[5]] = f[6] end
-    return string.format("ok row %016x %016x %016x", 0x1234, was, m[f[5]])
+    return string.format("ok row %016x %016x %016x", 0x1234, was, m[f[5]] or 0)
   elseif c == "N" then
     local from, to, n = byIdx[f[6]], byIdx[f[8]], 0
     for i, nm in ipairs(m.eff) do if nm == from then m.eff[i] = to; n = n + 1 end end
@@ -339,7 +341,7 @@ B.gone(0xb055, e)
 for _ = 1, 20 do F.t = F.t + 1; B.tick(pawn) end
 local after = snapshot()
 local same = true
-for r, v in pairs(before) do for i = 1, 5 do if after[r][i] ~= v[i] then same = false; print("  " .. r .. " field " .. i .. ": " .. tostring(v[i]) .. " -> " .. tostring(after[r][i])) end end end
+for r, v in pairs(before) do for i = 1, 6 do if after[r][i] ~= v[i] then same = false; print("  " .. r .. " field " .. i .. ": " .. tostring(v[i]) .. " -> " .. tostring(after[r][i])) end end end
 check(same, "none left: both rows put back as the game had them")
 check(next(B._rows()) == nil, "nothing left to put back")
 local effSame = true
@@ -391,6 +393,25 @@ local mv, mvs = tachy_mesh(own)
 B.adopted(0xb0a3, { obj = F.obj("CH_M_NA_21_Blueprint_C_10", "CH_M_NA_21_Blueprint_C", { Mesh = mv }), mesh = mv, kind = kinds.tachy }, true)
 check(mvs.sets == 0 and has("its own physics asset %(CH_M_NA_21_Body_Physics"), "a vanilla Tachy body: left as it is")
 
+-- A Phase1 body (Naked Tachy): no compatible physics asset exists in the game or the mod, so nothing is
+-- assigned, no struggle starts, and the death watch only logs the state (no restart that stretched her)
+local mp_st = { pa = nil, sets = 0, sim = false }
+local mp = F.obj("TachyPhase1Mesh", "SkeletalMeshComponent", { SkeletalMesh = F.obj("CH_M_NA_21_Phase1_Body", "SkeletalMesh"),
+  GetPhysicsAsset = function() return mp_st.pa end,
+  SetPhysicsAsset = function(self, p, re) mp_st.pa, mp_st.sets, self.PhysicsAssetOverride = p, mp_st.sets + 1, p end,
+  IsSimulatingPhysics = function() return mp_st.sim end,
+  SetSimulatePhysics = function(_, v) mp_st.sim = v end, SetAllBodiesSimulatePhysics = function(_, v) mp_st.sim = v end })
+logs = {}
+local ep1 = { obj = F.obj("CH_M_NA_21_Blueprint_C_11", "CH_M_NA_21_Blueprint_C", { Mesh = mp }), mesh = mp, kind = kinds.tachy }
+B.adopted(0xb0a4, ep1, true)
+check(mp_st.sets == 0 and ep1.physUnsupported == true and has("Phase1 mesh with no compatible physics asset.*left as it is"),
+  "a Phase1 Tachy body: nothing assigned, marked unsupported")
+mp_st.sim = false
+B.died(pawn, 0xb0a4, ep1)
+local d1 = B._dead()[0xb0a4]
+check(d1 and d1.struggle == nil and has("no death struggle %(its Phase1 body"),
+  "a Phase1 Tachy death: no struggle, state only logged")
+
 -- the Royal Guard Sister (her actor Rael's): her row made mortal, and Passive Bosses stands her still
 check(kinds.royalguard and B.prepare(kinds.royalguard) == nil, "the Royal Guard Sister's row made mortal")
 local g = rowsMem.M_RoyalGuardFemale
@@ -415,4 +436,23 @@ check(gb.stops == 1 and rael.Controller == nil and has("B_RoyalGuard 4a1 stands 
 tune.bosses.passive = false
 F.t = F.t + 0.3; B.tick(pawn)
 check(gb.running and rael.Controller == gai and has("B_RoyalGuard 4a1 fights again"), "passive off: she fights again")
+
+-- prologue Tachy (N_TachyNPC): refused while her dispel isn't in the EffectTable (row untouched), mortal and
+-- damageable once it is, everything put back on forget
+logs = {}
+local npcWhy = B.prepare(kinds.tachynpc)
+check(npcWhy ~= nil and npcWhy:find("Immortal_Infinite_Dispel") and npcWhy:find("not in the EffectTable")
+  and byIdx[rowsMem.N_TachyNPC[0x10]] == "N_TachyNPC" and rowsMem.N_TachyNPC.eff[2] == "Immortal_Infinite"
+  and rowsMem.N_TachyNPC[0x24] == 0 and rowsMem.N_TachyNPC[0x14] == 40000,
+  "prologue Tachy without a dispel: refused, her row untouched")
+effMem.Immortal_Infinite_Dispel = { [0x50] = 0x2200 }
+check(B.prepare(kinds.tachynpc) == nil, "prologue Tachy with a dispel: her row made mortal")
+local npcRow = rowsMem.N_TachyNPC
+check(byIdx[npcRow[0x10]] == "M_SkullSword" and npcRow.eff[2] == "Immortal_Infinite_Dispel" and npcRow[0x24] == 1
+  and npcRow[0x14] == 10000 and has("damageable") and has("AI engagement unverified"),
+  "she dies as M_SkullSword, not immortal, damageable, a quarter HP, AI caveat logged")
+B.forget()
+check(byIdx[npcRow[0x10]] == "N_TachyNPC" and npcRow.eff[2] == "Immortal_Infinite" and npcRow[0x24] == 0
+  and npcRow[0x14] == 40000 and has("N_TachyNPC's row put back as the game has it %(level reloaded%): 6 fields"),
+  "forget: her row put back exactly (deaths, immortality, damage flag, HP)")
 print(fails == 0 and "PASS" or "FAIL")

@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.6.3"
+local VERSION = "0.6.4"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -59,9 +59,19 @@ local USMAP_DONE = "ue4ss/Mods/StellarBladeGore/usmap.done"
 
 -- a log of its own each start, the last one kept as .old (it was appended to forever: 19 MB of every session since
 -- the install, and a report meant digging for the one that counted). Past lg.max bytes only errors are written
-os.remove(LOG_PATH .. ".old")
-os.rename(LOG_PATH, LOG_PATH .. ".old")
-local lg = { fh = io.open(LOG_PATH, "w"), bytes = 0, max = 20 * 1024 * 1024 }
+local lg
+do
+local previous = io.open(LOG_PATH, "r")
+local rotated, rotateError = true, nil
+if previous then
+  previous:close()
+  os.remove(LOG_PATH .. ".old")
+  rotated, rotateError = os.rename(LOG_PATH, LOG_PATH .. ".old")
+end
+-- Never truncate the previous session if a locked file or permissions prevent rotation.
+lg = { fh = io.open(LOG_PATH, rotated and "w" or "a"), bytes = 0, max = 20 * 1024 * 1024 }
+if not rotated then print("[" .. MOD .. "] log rotation failed; appending to preserve the previous session: " .. tostring(rotateError) .. "\n") end
+end
 local function log(s)
   local line = string.format("[%s] %s", os.date("%H:%M:%S"), s)
   print("[" .. MOD .. "] " .. line .. "\n")
@@ -1974,6 +1984,7 @@ local function on_start(pawn, mesh)
   -- that ship their own physics asset) overlap at rest and fling
   -- an outfit the data mod didn't patch: its loose bodies are locked to the body above them, and a mesh with no
   -- physics asset gets one (physfix.lua)
+  local remakes = physfix and (physfix.remakes or 0) or 0
   if physfix then try(function() physfix.start(pawn, mesh) end) end
   -- Assigning a missing physics asset recreates bodies and can stop the ragdoll that brought us here.
   if wasSimulating and try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true then
@@ -1982,6 +1993,9 @@ local function on_start(pawn, mesh)
     try(function() mesh:WakeAllRigidBodies() end)
     log("ragdoll: restored simulation after physics asset setup: " .. tostring(try(function()
       return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end)))
+  end
+  if physfix and (physfix.remakes or 0) > remakes and gore and gore.rebreak_cuts then
+    try(function() gore.rebreak_cuts(mesh) end)
   end
   if gore then
     local ok, n, all = pcall(gore.kawaii, mesh, false)
@@ -2935,11 +2949,16 @@ local function swing_weapons(actor)
   return out
 end
 -- a point given in a component's space, in the world
-local function comp_point(c, p)
+local function comp_blade(c, o, axis)
   return try(function()
     local wl, f, r, u = c:K2_GetComponentLocation(), c:GetForwardVector(), c:GetRightVector(), c:GetUpVector()
-    return { X = wl.X + f.X * p.X + r.X * p.Y + u.X * p.Z, Y = wl.Y + f.Y * p.X + r.Y * p.Y + u.Y * p.Z,
-      Z = wl.Z + f.Z * p.X + r.Z * p.Y + u.Z * p.Z }
+    local x = wl.X + f.X * o.X + r.X * o.Y + u.X * o.Z
+    local y = wl.Y + f.Y * o.X + r.Y * o.Y + u.Y * o.Z
+    local z = wl.Z + f.Z * o.X + r.Z * o.Y + u.Z * o.Z
+    local dx = f.X * axis.X + r.X * axis.Y + u.X * axis.Z
+    local dy = f.Y * axis.X + r.Y * axis.Y + u.Y * axis.Z
+    local dz = f.Z * axis.X + r.Z * axis.Y + u.Z * axis.Z
+    return { a = { X = x - dx, Y = y - dy, Z = z - dz }, b = { X = x + dx, Y = y + dy, Z = z + dz } }
   end)
 end
 function sw.drop() swing, sw.list = sw.state(), {} end
@@ -3012,9 +3031,8 @@ local function track_swing(pawn, mesh)
       for k, b in ipairs(S.bones or {}) do s.p[k] = try(function() return vof(S.mesh:GetSocketLocation(FName(b))) end) end
       for k, w in ipairs(S.weapons or {}) do
         if goreCtx.held(w.k) then
-          local a = comp_point(w.comp, { X = w.o.X - w.ax.X, Y = w.o.Y - w.ax.Y, Z = w.o.Z - w.ax.Z })
-          local b = comp_point(w.comp, { X = w.o.X + w.ax.X, Y = w.o.Y + w.ax.Y, Z = w.o.Z + w.ax.Z })
-          if a and b then s.w[k] = { a = a, b = b } end
+          local blade = comp_blade(w.comp, w.o, w.ax)
+          if blade then s.w[k] = blade end
         end
       end
       local h = S.hist
@@ -3782,16 +3800,22 @@ end
 function hm.death_roll(seen, near)
   local g = tune.gore or {}
   local odds, total = g.death or {}, 0
-  for _, k in ipairs(KINDS) do total = total + math.max(tonumber(odds[k]) or 0, 0) end
+  local function weight(k)
+    if k == "diagonal" and ((g.diagonal or {}).enabled == false or g.deathSplit == false or g.noSplits == true) then return 0 end
+    return math.max(tonumber(odds[k]) or 0, 0)
+  end
+  for _, k in ipairs(KINDS) do total = total + weight(k) end
   -- (gore.noSplits: none at all, its share rolled as the others)
-  local sp = g.noSplits == true and 0 or math.max(tonumber(odds.split) or 0, 0)
-  if g.noSplits == true then total = total - math.max(tonumber(odds.split) or 0, 0) end
+  local sp = g.noSplits == true and 0 or weight("split")
+  if g.noSplits == true then total = total - weight("split") end
   -- (odds that are all split still split every death, blade or not)
   local follow = math.min(math.max(tonumber(g.bladeFollow) or 1, 0), 1)
   if seen and not (total > 0 and sp >= total) and math.random() < follow then return "blade" end
   if near then
     local nt = 0
-    for _, k in ipairs(KINDS) do nt = nt + math.max(tonumber(odds[k]) or 0, 0) * (near[k] or 0) end
+    for _, k in ipairs(KINDS) do
+      if k ~= "split" or g.noSplits ~= true then nt = nt + weight(k) * (near[k] or 0) end
+    end
     if nt > 0 then sp, total = sp * (near.split or 0), nt end
   end
   if g.deathSplit ~= false and total > 0 and math.random() * total < sp then

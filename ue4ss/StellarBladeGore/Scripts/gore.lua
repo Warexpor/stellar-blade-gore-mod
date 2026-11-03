@@ -174,7 +174,7 @@ local native = { state = "init", waited = 0 }
 local spawned = {}  -- Niagara components to remove on recovery
 local bleeds = {}   -- looping blood and separately pulsed stump spurts, stopped after `left` ticks
 local later = {}    -- { n, fn }: run fn in n ticks (a split's blood, once the halves have come apart)
-M.impactSteps = { ["cut sound"] = true, ["smash sound layer"] = true, ["smash blood burst"] = true,
+M.impactSteps = { ["cut sound"] = true, ["smash blood burst"] = true,
   ["smash mesh load"] = true, ["smash chunks"] = true, ["smash hit blood"] = true,
   ["smash splat"] = true, ["cut splat"] = true, ["body stump bleed"] = true,
   ["piece stump bleed"] = true, ["stump spurt"] = true, ["burst ground spot"] = true, ["hit splat"] = true }
@@ -417,7 +417,7 @@ end
 -- force: even right after another gore sound (a smash's burst a few frames after its crunch). vol: times
 -- soundVolume. aside: neither held back by the other gore sounds nor holding them back (a wound's layer: the cut
 -- that may follow it still plays)
-local function sfx(kind, pawn, at, force, vol, aside, stagger)
+local function sfx(kind, pawn, at, force, vol, aside)
   local g = cfg()
   if g.sounds == false or not at then return end
   local gs = load_obj("/Script/Engine.Default__GameplayStatics")
@@ -441,7 +441,7 @@ local function sfx(kind, pawn, at, force, vol, aside, stagger)
   local played = {}
   local function play(path)
     if not valid(pawn) then return end
-    local snd = M.guarded_asset(path)
+    local snd = load_obj(path)
     if snd then
       -- no owning actor: the cues' concurrency is per owner, so a cut right after another on her was dropped as the
       -- same sound playing again (leg cuts came out silent, fifteenth playtest)
@@ -459,12 +459,8 @@ local function sfx(kind, pawn, at, force, vol, aside, stagger)
       log("sound " .. path .. " didn't load")
     end
   end
-  for i, path in ipairs(pick and sets[pick] or {}) do
-    if stagger and i > 1 then
-      later[#later + 1] = { n = 1, label = "smash sound layer", fn = function() play(path) end }
-    else play(path) end
-  end
-  log(string.format("sound %s: %s%s", kind, #played > 0 and table.concat(played, ", ") or "none", stagger and " (additional layers queued)" or ""))
+  for _, path in ipairs(pick and sets[pick] or {}) do play(path) end
+  log(string.format("sound %s: %s", kind, #played > 0 and table.concat(played, ", ") or "none"))
 end
 M.sfx = sfx
 
@@ -1996,7 +1992,7 @@ end
 
 -- one decal on the floor under p, r cm across (radius); its box reaches 8 cm into and out of the floor (20 cm drew
 -- the pools far up a wall beside them, playtest)
--- Rooted effects, sounds and floor materials have their cached identity checked by the native object guard.
+-- Rooted effects and floor materials have their cached identity checked by the native object guard.
 -- Never trust an unguarded cached asset wrapper: freed objects can reuse its address.
 M.guardedAssets = {}
 function M.guarded_asset(path)
@@ -3855,6 +3851,7 @@ local function stage_open(q)
   local skip = {}
   for _, c in ipairs(q.c.kept or {}) do skip[c] = true end
   local tops = M.break_limb(q.mesh, q.bone, q.c.at, skip)
+  q.entry.opened, q.entry.kept = true, q.c.kept
   if not enemy.cur and PARTS[q.bone] and (PARTS[q.bone].kind == "head"
     or q.smash and PARTS[q.bone].kind == "torso") then vox.cut() end
   local broke = true
@@ -3975,7 +3972,7 @@ local function stage_open(q)
   local at = q.c.at
   later[#later + 1] = { n = 1, label = "cut sound", fn = function()
     if not valid(q.pawn) then return end
-    if q.smash then sfx("smash", q.pawn, at, true, nil, nil, true); return end
+    if q.smash then sfx("smash", q.pawn, at, true); return end
     sfx((q.why == "after" or q.bone == "Bip001-Head" or q.bone == "Bip001-Spine1" or q.bone:find("Thigh") or q.bone:find("Calf"))
       and "big" or "cut", q.pawn, at)
   end }
@@ -4050,9 +4047,20 @@ local function clone_of(pawn, src)
   end
   try(function() c:SetSkeletalMesh(src.SkeletalMesh, true) end)
   local nm = try(function() return src:GetNumMaterials() end) or 0
+  local lods = math.max(1, try(function() return src:GetNumLODs() end) or 1)
   for i = 0, nm - 1 do
     local m = try(function() return src:GetMaterial(i) end)
     if m then try(function() c:SetMaterial(i, m) end) end
+    -- Play As hides Scarlet's embedded hair by material section. SetSkeletalMesh and SetMaterial do not copy that
+    -- visibility state, so a new half (or a photo/regrow copy) must inherit it explicitly.
+    for lod = 0, lods - 1 do
+      if try(function() return src:IsMaterialSectionShown(i, lod) end) == false then
+        try(function() c:ShowMaterialSection(i, i, false, lod) end)
+        if try(function() return c:IsMaterialSectionShown(i, lod) end) ~= false then
+          try(function() c:ShowMaterialSection(i, false, lod) end)
+        end
+      end
+    end
   end
   place_like(c, src)
   force_lod(c)
@@ -4195,7 +4203,13 @@ local function side_cut(comp, bone, at, n, gone)
   local index = try(function() return comp:GetBoneIndex(FName(bone)) end)
   if not index or index < 0 then return "err no bone " .. bone end
   send_nosink(comp, nil, true, not enemy.cur and M.side_drivers(comp, gone) or nil)
-  return command(string.format("c%x,0,%x,%x,0", comp:GetAddress(), index, MODE.side), at, n)
+  -- Ignore hidden material slots when judging a split; Play As keeps its separate hair copy visible.
+  local hidden = 0
+  local nm = math.min(64, try(function() return comp:GetNumMaterials() end) or 0)
+  for i = 0, nm - 1 do
+    if try(function() return comp:IsMaterialSectionShown(i, 0) end) == false then hidden = hidden | (1 << i) end
+  end
+  return command(string.format("c%x,0,%x,%x,0,0,ffffffff,%x", comp:GetAddress(), index, MODE.side, hidden), at, n)
 end
 
 local function nearest_bone(comp, p, list)
@@ -5075,9 +5089,11 @@ function M.stage_split_copy(q)
   end
   -- each half must keep a real share of her, all sunk: a plane that grazed her left one half a sliver and the other
   -- a whole body nothing could sink (85506 vertices unsunk), standing over her as if nothing was cut
-  local nv = num(r1, "verts") or 0
-  local k1, k2 = nv - (num(r1, "vanished") or 0), nv - (num(r2, "vanished") or 0)
-  local un = (num(r1, "unsunk") or 0) + (num(r2, "unsunk") or 0)
+  local nv = num(r1, "vverts") or num(r1, "verts") or 0
+  local nv2 = num(r2, "vverts") or num(r2, "verts") or 0
+  local k1 = nv - (num(r1, "vvanished") or num(r1, "vanished") or 0)
+  local k2 = nv2 - (num(r2, "vvanished") or num(r2, "vanished") or 0)
+  local un = (num(r1, "vunsunk") or num(r1, "unsunk") or 0) + (num(r2, "vunsunk") or num(r2, "unsunk") or 0)
   local least = cfg().splitMinShare or 0.12
   if nv > 0 and (math.min(k1, k2) < nv * least or un > nv * 0.02) then
     log(string.format("split (%s) degenerate: halves keep %d and %d of %d vertices, %d unsunk",
@@ -5381,9 +5397,10 @@ end
 function M.only_split()
   local g, w = cfg(), cfg().death or {}
   if g.noSplits == true or g.deathSplit == false or (tonumber(w.split) or 0) <= 0 then return false end
-  for _, key in ipairs({"limb", "head", "torso", "diagonal"}) do
+  for _, key in ipairs({"limb", "head", "torso"}) do
     if (tonumber(w[key]) or 0) > 0 then return false end
   end
+  if (g.diagonal or {}).enabled ~= false and (tonumber(w.diagonal) or 0) > 0 then return false end
   return true
 end
 local start -- below; a degenerate split falls back to a waist cut through it
@@ -6211,6 +6228,23 @@ function M.cut_parts(mesh, lying)
     if c.addr == a and PARTS[c.bone] and not c.smashed and not (lying and c.quiet) then out[#out + 1] = c.bone end
   end
   return out
+end
+
+function M.rebreak_cuts(mesh)
+  local a, done = addr(mesh), {}
+  for _, c in ipairs(cuts) do
+    if c.addr == a and c.opened and PARTS[c.bone] and not c.quiet then
+      local at = bone_loc(mesh, c.bone)
+      if at then
+        local skip = {}
+        for _, b in ipairs(c.kept or {}) do skip[b] = true end
+        M.break_limb(mesh, c.bone, at, skip)
+        done[#done + 1] = c.bone
+      end
+    end
+  end
+  if #done > 0 then log("re-broke cuts after physics asset setup: " .. table.concat(done, ", ")) end
+  return #done
 end
 -- photo mode with a piece off her alive: her mesh used to stop ticking (its animation pulled the piece back onto her,
 -- physics being paused), and photo mode's poses and expressions never showed (reported). Now the piece goes onto a

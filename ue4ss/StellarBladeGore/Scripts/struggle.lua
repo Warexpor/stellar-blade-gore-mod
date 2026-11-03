@@ -1034,14 +1034,14 @@ local function die_start(mesh, f)
   local n = 0
   for i = 1, math.min(#ends, math.random(2, 4)) do
     local b = ends[math.random(#ends)]
-    pulse(b, across(mesh, b) or f.front, rnd(60, 110), rnd(0.08, 0.12), st.t + rnd(0, 0.9), 30, rnd(9, 13))
+    pulse(b, across(mesh, b) or f.front, rnd(40, 75), rnd(0.10, 0.15), st.t + rnd(0, 0.9), 18, rnd(9, 13))
     n = n + 1
   end
   -- (at least half a breath more, ending where her chest stands still, at most 1.6 s off)
   st.lastBreath = math.pi / 2 + math.ceil(((st.breathPh or 0) + math.pi / 2) / math.pi) * math.pi
   -- (her face turning away: a turn of the head about her neck, gravity takes it on)
   if not cut(mesh, P .. "Head") then
-    pulse(P .. "Head", scale(f.up, math.random() < 0.5 and 1 or -1), rnd(90, 130), rnd(0.6, 0.8), st.t + rnd(0.4, 0.8))
+    pulse(P .. "Head", scale(f.up, math.random() < 0.5 and 1 or -1), rnd(60, 90), rnd(0.7, 0.9), st.t + rnd(0.4, 0.8))
   end
   log(string.format("%.1f s: dying, %d last tremors, her head rolling aside", st.t, n))
 end

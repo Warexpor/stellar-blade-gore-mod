@@ -659,7 +659,11 @@ function M.asset(mesh)
 end
 
 -- her bodies re-made (SetPhysicsAsset): main.lua sets her ponytail's cloth up again after it (ctx.on_remade)
-local function remade(ok) if ok and ctx and ctx.on_remade then try(ctx.on_remade) end end
+local function remade(ok)
+  if not ok then return end
+  M.remakes = (M.remakes or 0) + 1
+  if ctx and ctx.on_remade then try(ctx.on_remade) end
+end
 
 -- every gameplay tick: a new outfit mesh is checked once, and an unpatched physics asset fixed (bodies re-made
 -- from it while they are kinematic). live: she is ragdolled already, so the bodies are left as they are
@@ -728,6 +732,7 @@ function M.check(pawn, mesh, live)
     -- death started with none (InnerSuit, physics <nil>, after a dozen "given again" in a second)
     if o then try(function() sk.PhysicsAsset = o end) end
     if o and try(function() mesh:SetPhysicsAsset(o, true); return true end) then
+      M.remakes = (M.remakes or 0) + 1
       pa = o
       borrowed = string.format(" (the mesh has none: gave it %s)", path)
     elseif not ctx.may_load() then
@@ -754,6 +759,7 @@ function M.check(pawn, mesh, live)
       if o and o ~= pa then
         try(function() sk.PhysicsAsset = o end)
         if try(function() mesh:SetPhysicsAsset(o, true); return true end) then
+          M.remakes = (M.remakes or 0) + 1
           pa = o
           borrowed = string.format(" (its own %s has no body on %s: gave it %s)", own, table.concat(miss, ","), path)
         end

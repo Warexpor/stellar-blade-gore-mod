@@ -7,6 +7,19 @@ local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
 local print = F.say
+-- Another mod hid material 2 on both LODs; a copied mesh must preserve that visibility.
+E.mesh.GetNumLODs = function() return 2 end
+E.mesh.IsMaterialSectionShown = function(_, id) return id ~= 2 end
+local addComponent = pawn.AddComponentByClass
+pawn.AddComponentByClass = function(...)
+  local c = addComponent(...)
+  c.sectionHidden = {}
+  c.IsMaterialSectionShown = function(self, id, lod) return not self.sectionHidden[lod .. ':' .. id] end
+  c.ShowMaterialSection = function(self, id, section, show, lod)
+    self.sectionHidden[lod .. ':' .. id] = not show or nil
+  end
+  return c
+end
 -- Developer Keys and Lose Arm at Low HP on
 local SET = "ue4ss/Mods/StellarBladeGore/Scripts/settings.lua"
 local f = assert(io.open(SET, "w"))
@@ -65,6 +78,8 @@ if not l then dump(rest, "regrow") end
 -- the dissolve, then the hand-off's fade, sampled each frame on the copy's first material
 local e0 = #F.events
 local copy = E.added[#E.added]
+check(copy and copy.sectionHidden['0:2'] and copy.sectionHidden['1:2'] and not copy.sectionHidden['0:1'],
+  "the copy preserves hidden material sections on each LOD")
 -- (on her as she walks: only placed where her mesh was, it stood there while she walked off, reported)
 check(copy and copy.parent == E.mesh and copy.attachRules[1] == 2, "the copy attached to her mesh, snapped onto it")
 local samples = {}
