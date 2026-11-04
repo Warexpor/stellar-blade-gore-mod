@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.6.4"
+local VERSION = "0.6.5"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -3654,6 +3654,9 @@ function hm.lethal_watch(pawn, mesh)
         log(string.format("death NOT seen: the death screen is up %.1f s after her HP bar hit 0 (%s) and she never "
           .. "ragdolled (%s%s); its death show has no ragdoll key of the pak's", now - lt.t, proof, what,
           swim and ", swimming" or scripted and (", a scripted death: " .. scripted) or ""))
+        -- no ragdoll and no scripted cause: her death shows may not be ours any more (another death mod rewrote
+        -- them after us); look again, and the re-run names the fields it fought over
+        if goreCtx.tables and not swim and not scripted then pcall(goreCtx.tables.recheck_dead) end
       end
     end
   end

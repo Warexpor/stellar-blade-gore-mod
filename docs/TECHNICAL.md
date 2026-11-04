@@ -142,7 +142,9 @@ The 12:09 playtest logged enemy swing tracking up to 164 ms and boss checks aver
 
 Vertical split validation sends the source component's hidden LOD0 material slots to the native cut. The cut still processes all sections, but reports visible vertex, vanished and unsunk totals separately; the fallback decision uses those totals. This targets the custom Tachy and Scarlet playtests, where the copied half repeatedly reported 34,633 and 96,651–144,559 unsunk vertices, respectively, while Play As hid embedded hair. The exact hidden-section contribution and resulting split geometry need in-game confirmation; visible unsunk vertices still trigger the fallback. Material slots above 63 are conservatively counted as visible.
 
-The current working version is 0.6.4. The Lua entry point supplies the version shown at startup and used for native DLL version metadata and release packaging.
+The current working version is 0.6.5. The Lua entry point supplies the version shown at startup and used for native DLL version metadata and release packaging.
+
+A re-run of the Player death-show writes on the same table object that finds a show no longer ours means another mod rewrote it after us (death-sequence mods in collections such as DEGEN AIO); the re-run names the fields (`tables.lua` `fought`, `recheck_dead` after a ragdoll-less non-scripted death). This detects the fight but does not resolve load-order crashes; the conflicting mods must be disabled.
 
 At startup the mod rotates its current log to `.old`. If rotation fails, it opens the current log in append mode instead of truncating it; the installer also carries `.old` across reinstalls. This preserves available evidence but does not establish the cause of the reported outfit-dependent death crash or long loading delay.
 

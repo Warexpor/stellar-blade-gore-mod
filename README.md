@@ -2,7 +2,7 @@
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Version 0.6.4. See the [changelog](CHANGELOG.md).
+Version 0.6.5. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -11,14 +11,14 @@ You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **Th
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
    **Check the signature even if UE4SS was already installed:** in `SB/Binaries/Win64/ue4ss/UE4SS_Signatures`, rename `FText_Constructor.lua` to `dFText_Constructor.lua` if present. The linked UE4SS archive enables it, and it can close the game at startup. If `dFText_Constructor.lua` already exists, move the enabled file to a backup outside this directory instead of overwriting it. Other UE4SS mods may depend on this signature; check their instructions if they stop working.
-2. **This mod.** Extract `StellarBladeGore-0.6.4.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.6.5.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.4`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.6.5`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - Game closes at startup: check the FText signature in step 1; `UE4SS.log` may end with `Crashed calling FText constructor`.
@@ -153,6 +153,7 @@ Every other knob is in `tune.lua` next to it. `settings.lua` wins over it.
 - **[Stellar Blade Play As](https://github.com/Warexpor/stellar-blade-play-as)** (play as Tachy, Raven or Scarlet, a mod of its own) works alongside: the cuts, struggle and dead face are hers as they are Eve's, and her death cry and moans are that character's own.
 - **Character swap mods** (EVE2Tachy, EVE2Raven) work: the cuts follow the meshes on Eve. Don't use them with Play As set to anyone but Eve: both put meshes on her.
 - **Mods that edit the game's data tables** (movesets, shops, items, effects) work: the mod no longer ships whole `CharacterDeadTable` and `EffectTable` copies, it changes only its own rows in game. A mod that changes the `Player` row's death shows conflicts with it: the mod's are written over them.
+- **Death-sequence mods and big collections (e.g. the DEGEN AIO pack)** conflict: this mod needs the `Player` row's eight death shows (its own ragdoll deaths), and a mod that replaces them owns her deaths instead — no ragdoll, no cuts, or a crash. If her deaths stay vanilla after installing a collection, turn off its death mods first (reported: the game fatally errored before the title screen until the collection's death-sequence mods were removed). A death with no ragdoll and no scripted cause re-checks the shows, and the log names the fields another mod rewrote (`another mod rewrote her death shows after us`).
 <!-- /install -->
 
 ## Dev mode

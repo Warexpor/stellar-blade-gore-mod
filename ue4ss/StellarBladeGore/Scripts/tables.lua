@@ -230,18 +230,25 @@ local function effect_rows()
   return PENDING
 end
 
--- CharacterDeadTable, Player: the death shows and the revive screen's delay
+-- CharacterDeadTable, Player: the death shows and the revive screen's delay. A re-run on the same table
+-- object that finds a show no longer ours means another mod rewrote it after us (death-sequence mods, e.g. in
+-- the DEGEN AIO collection, replace these shows and crash or own her deaths): named in the log with what to do.
+-- The last table address written (nil until the first clean run), to tell a rewrite from a remade table.
+M.wroteDead = nil
 local function dead_rows()
   local dt, rs = table_of(M.DEAD)
   if not dt then return nil end
+  local a = addr(dt)
   local fs = fields(rs)
   local row = name_idx(M.DEAD_ROW)
   if not row then return "Player NOT changed: no name" end
-  local set, same, failed = 0, 0, {}
+  local set, same, failed, fought = 0, 0, {}, {}
   for field, show in pairs(M.SHOWS) do
     local f = fs[field]
     local r = f and ctx.gore.command(string.format("D%x,%x,%x,0,%x;%s", addr(dt), addr(rs), row, f.off, show)) or "no field"
-    if r == "ok str set" then set = set + 1 elseif r == "ok str same" then same = same + 1 else failed[#failed + 1] = field .. ": " .. r end
+    if r == "ok str set" then set = set + 1; if M.wroteDead == a then fought[#fought + 1] = field end
+    elseif r == "ok str same" then same = same + 1
+    else failed[#failed + 1] = field .. ": " .. r end
   end
   -- the game's own 0 in every mode: the screen and its intro start at once, and main.lua holds it hidden as
   -- deathScreen says (its intro waits while it is hidden). At reviveAt the game started the intro only then, so
@@ -252,8 +259,12 @@ local function dead_rows()
     local was = ctx.gore.row_float(dt, M.DEAD_ROW, k .. "DeadUIDelayTime", delay)
     if was then delays = delays + 1 end
   end
-  return string.format("Player: %d death shows set, %d already ours%s, revive screen delay %g s in %d of %d", set, same,
-    #failed > 0 and (", NOT: " .. table.concat(failed, "; ")) or "", delay, delays, #M.DELAYS)
+  -- (a later re-run on this same object is a rewrite check: any "set" above fought us)
+  if #failed == 0 then M.wroteDead = a end
+  return string.format("Player: %d death shows set, %d already ours%s, revive screen delay %g s in %d of %d%s", set, same,
+    #failed > 0 and (", NOT: " .. table.concat(failed, "; ")) or "", delay, delays, #M.DELAYS,
+    #fought > 0 and ("; another mod rewrote her death shows after us (" .. table.concat(fought, ", ") ..
+      "): turn off other death-sequence mods (see Compatibility), or her deaths stay theirs") or "")
 end
 
 -- every few seconds till both are done (sbslice.dll answers a few seconds after the start). A table object made again
@@ -373,5 +384,9 @@ end
 
 -- the revive screen's delay changed in game (the menu): Player's delays written again
 function M.redo_dead() M.done[M.DEAD] = nil; M.next = 0 end
+
+-- a death with no ragdoll and no scripted cause: her shows may not be ours any more (another mod rewrote them
+-- after us); look again, and the re-run names the fields it fought over
+function M.recheck_dead() M.done[M.DEAD] = nil; M.next = 0 end
 
 return M

@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.6.4
+## 0.6.5
+
+- Name the culprit when another death mod rewrites her death shows: the Player row's shows are re-checked after a death with no ragdoll and no scripted cause, and a re-run on the same table object that finds a show no longer ours logs `another mod rewrote her death shows after us (...)` with the fields. Turn off other death-sequence mods (see Compatibility), or her deaths stay theirs. `tables_fight` passes; a real clash with a death collection still needs an in-game check.
 
 - Fix the yellow suit's right-arm strap hanging dead after an F9 piece recovery: the cleanup's physics remake stopped simulated accessories with everything else and nothing restarted them. A recovery that undid a piece now schedules the same cloth reset as an equip. `piece`, `clothscan`, `photo`, `f6` and `fall` pass; strap swing after F8 needs an in-game check.
 
