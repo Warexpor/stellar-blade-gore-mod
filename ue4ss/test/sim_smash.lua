@@ -95,6 +95,10 @@ sm.overrideTargets=false
 local slice = G.slice_bone
 local results = { torso=0, other=0 }
 G.slice_bone = function(_, _, bone) results[bone == "Bip001-Spine1" and "torso" or "other"] = results[bone == "Bip001-Spine1" and "torso" or "other"] + 1; return true end
+sm.torsoHitChance=nil
+for _=1,20 do G.smash(pawn,E.mesh,{loc=chest},"balance") end
+check(results.torso==20 and results.other==0, "default chest hits stay on the torso")
+results.torso, results.other = 0, 0
 sm.torsoHitChance=0.25
 for _=1,4000 do G.smash(pawn,E.mesh,{loc=chest},"balance") end
 check(results.torso > 850 and results.torso < 1150, "ordinary chest hits retain the torso about 25 percent of the time")

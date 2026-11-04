@@ -10,6 +10,7 @@
 -- hand, a foot or a calf, further apart, until tune.convulse.duration (8 s: the death screen comes about 10 s in).
 -- Her eyelids flutter and her face winces with the spasms (main.lua's death face, M.face). A cut-off arm or leg
 -- twitches on its own too. After head loss only slight, silent leg twitches remain; gore.lua cuts off her cry.
+-- A pending or completed vertical split stops all convulsions, faces, gasps and queued muscle work.
 --
 -- Each movement is a muscle: a bone turned against its parent about the joint, its speed rising and falling over a
 -- tenth of a second or so (a gasp, half a second), the parent turned back by the child's share of their mass, so she
@@ -27,6 +28,7 @@ local M = {}
 local ctx, try, valid
 local function cfg() return ctx.tune.convulse or {} end
 local function log(s) ctx.log("convulse: " .. s) end
+local FN = setmetatable({}, { __index = function(t, b) local f = FName(b); t[b] = f; return f end })
 
 local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 local function add(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
@@ -140,10 +142,10 @@ local function headless(mesh)
   return (r and r.severed and r.severed(mesh, "Bip001-Head"))
     or (g and g.smashed and g.smashed.has(mesh, "Bip001-Head"))
 end
--- split down her length (a vertical slash): her face stays and she makes no sound, as when beheaded
+-- Split halves have no death movements, including while the split is still being prepared.
 local function split(mesh)
   local g = ctx.gore
-  return g and g.cuts_on and select(2, g.cuts_on(mesh)) == true
+  return g and ((g.split_on and g.split_on(mesh)) or (g.cuts_on and select(2, g.cuts_on(mesh)) == true))
 end
 local function torso_smashed(mesh)
   local g = ctx.gore
@@ -160,36 +162,36 @@ local function lower(comp, b)
   local r = rag()
   return LOWER[b] and not torso_smashed(st.mesh) and r and r.severed(comp, "Bip001-Spine1") or false
 end
-local function loc(comp, b) return try(function() local v = comp:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end) end
-local function cen(comp, b) return try(function() local v = comp:GetCenterOfMass(FName(b)); return vec(v.X, v.Y, v.Z) end) end
-local function wvel(comp, b) return try(function() local v = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(v.X, v.Y, v.Z) end) end
+local function loc(comp, b) return try(function() local v = comp:GetSocketLocation(FN[b]); return vec(v.X, v.Y, v.Z) end) end
+local function cen(comp, b) return try(function() local v = comp:GetCenterOfMass(FN[b]); return vec(v.X, v.Y, v.Z) end) end
+local function wvel(comp, b) return try(function() local v = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(v.X, v.Y, v.Z) end) end
 -- a change of a body's turn (deg/s, added to its angular velocity), its centre of mass moved round the joint with it
 -- (w x r): turned about its middle alone, the joint dragged it back (playtest: an arm swing turned 0 deg). The bodies
 -- below it on her (DOWN, up to a cut) turn with it about the same joint; a parent's push back (alone) moves them round
 -- its joint without turning them (struggle.lua's "carry": left behind, the joint came apart and took the turn)
 local function turn(comp, b, w, alone)
-  try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(b)) end)
+  try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FN[b]) end)
   if b == "Bip001-Pelvis" then return end
   local at = loc(comp, b)
   if not at then return end
   local wr, r = scale(w, math.pi / 180), rag()
   local c = cen(comp, b)
-  if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FName(b)) end) end
+  if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FN[b]) end) end
   for _, x in ipairs(DOWN[b] or {}) do
     if r and (r.severed(comp, x) or not r.live(comp, x)) then break end
-    if not alone then try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FName(x)) end) end
+    if not alone then try(function() comp:SetPhysicsAngularVelocityInDegrees(w, true, FN[x]) end) end
     local cx = cen(comp, x)
-    if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FName(x)) end) end
+    if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FN[x]) end) end
   end
 end
 local function xaxis(comp, b)
   return try(function()
-    local q = comp:GetSocketTransform(FName(b), 0).Rotation
+    local q = comp:GetSocketTransform(FN[b], 0).Rotation
     local x, y, z, w = q.X, q.Y, q.Z, q.W
     return vec(1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y))
   end)
 end
-local function simulating(comp, b) return try(function() return comp:IsSimulatingPhysics(FName(b)) end) == true end
+local function simulating(comp, b) return try(function() return comp:IsSimulatingPhysics(FN[b]) end) == true end
 
 -- her frame on a component: up her spine, her right, her front
 local function frame(comp)
@@ -252,14 +254,14 @@ local function hold(root, s)
   local k = s and (a.strong or 600) or (a.weak or 40)
   local data = { bIsLocalSimulation = true, OrientationStrength = k, AngularVelocityStrength = k * (a.damping or 0.15),
     PositionStrength = 0, VelocityStrength = 0, MaxLinearForce = 0, MaxAngularForce = 0 }
-  try(function() p:ApplyPhysicalAnimationSettingsBelow(FName(root), data, true) end)
+  try(function() p:ApplyPhysicalAnimationSettingsBelow(FN[root], data, true) end)
 end
 local function cut_off(root)
   for _, b in ipairs(CUTS[root] or {}) do if rag() and rag().severed(st.mesh, b) then return true end end
   return false
 end
 local function gravity(root, on)
-  for _, b in ipairs(CHAIN[root]) do try(function() st.mesh:SetEnableBodyGravity(on, FName(b)) end) end
+  for _, b in ipairs(CHAIN[root]) do try(function() st.mesh:SetEnableBodyGravity(on, FN[b]) end) end
 end
 -- the chain under root simulating till `till` (os.clock()): true when it does
 local function chain_open(root, till)
@@ -267,7 +269,7 @@ local function chain_open(root, till)
   if c then
     c.till, c.phase = math.max(c.till, till), "twitch"
     hold(root, false)
-    try(function() st.mesh:SetAllBodiesBelowPhysicsBlendWeight(FName(root), 1.0, false, true) end)
+    try(function() st.mesh:SetAllBodiesBelowPhysicsBlendWeight(FN[root], 1.0, false, true) end)
     return true
   end
   if not CHAIN[root] or cut_off(root) then return false end
@@ -275,8 +277,8 @@ local function chain_open(root, till)
   local inner = INNER[root] and st.chains[INNER[root]]
   if inner then st.chains[INNER[root]] = nil; till = math.max(till, inner.till)
   elseif simulating(st.mesh, root) then return false end
-  if not try(function() st.mesh:SetAllBodiesBelowSimulatePhysics(FName(root), true, true); return true end) then return false end
-  try(function() st.mesh:SetAllBodiesBelowPhysicsBlendWeight(FName(root), 1.0, false, true) end)
+  if not try(function() st.mesh:SetAllBodiesBelowSimulatePhysics(FN[root], true, true); return true end) then return false end
+  try(function() st.mesh:SetAllBodiesBelowPhysicsBlendWeight(FN[root], 1.0, false, true) end)
   gravity(root, false)
   hold(root, false)
   st.chains[root] = { till = till, phase = "twitch" }
@@ -289,10 +291,10 @@ local function chain_close(root, why)
   gravity(root, true)
   -- (a drive left on would pull a piece cut off meanwhile, or her ragdoll, towards the pose)
   local p = st.pac
-  if valid(p) then try(function() p:ApplyPhysicalAnimationSettingsBelow(FName(root), { bIsLocalSimulation = true, OrientationStrength = 0,
+  if valid(p) then try(function() p:ApplyPhysicalAnimationSettingsBelow(FN[root], { bIsLocalSimulation = true, OrientationStrength = 0,
     AngularVelocityStrength = 0, PositionStrength = 0, VelocityStrength = 0, MaxLinearForce = 0, MaxAngularForce = 0 }, true) end) end
   if why == "ragdoll" or cut_off(root) then return end
-  try(function() st.mesh:SetAllBodiesBelowSimulatePhysics(FName(root), false, true) end)
+  try(function() st.mesh:SetAllBodiesBelowSimulatePhysics(FN[root], false, true) end)
 end
 local function chains_tick(now)
   local a = cfg().anim or {}
@@ -307,7 +309,7 @@ local function chains_tick(now)
     elseif c.phase == "blend" then
       local w = 1 - (now - c.t) / blend
       if w <= 0 then chain_close(root)
-      else try(function() st.mesh:SetAllBodiesBelowPhysicsBlendWeight(FName(root), w, false, true) end) end
+      else try(function() st.mesh:SetAllBodiesBelowPhysicsBlendWeight(FN[root], w, false, true) end) end
     end
   end
 end
@@ -366,7 +368,9 @@ local function pulses_tick(now, dt)
   local keep, seen = {}, {}
   local cap = (cfg().accel or 6000) * math.max(dt or 0, 1 / 120)
   for _, p in ipairs(st.pulses) do
-    if now >= p.at and valid(p.comp) then
+    if lower(p.comp, p.b) then
+      -- A waist cut can arrive after this pulse was queued.
+    elseif now >= p.at and valid(p.comp) then
       local x = math.min(1, (now - p.at) / p.dur)
       local v = p.amp * math.sin(math.pi * x)
       -- (the shaking strongest mid-strain, gone at both ends: no step in speed)
@@ -375,7 +379,7 @@ local function pulses_tick(now, dt)
       p.v = v
       if p.started == nil then
         p.started = true
-        try(function() p.comp:WakeRigidBody(FName(p.b)) end)
+        try(function() p.comp:WakeRigidBody(FN[p.b]) end)
       end
       -- (its turn against its parent read once a tick per bone; T: what this tick's pulses on it asked so far, A: what
       -- they added)
@@ -624,7 +628,7 @@ local function jolt(k)
   st.jolts = {}
   for b, f in pairs(JOLT) do
     if r.live(comp, b) and not r.severed(comp, b) and not lower(comp, b) then
-      st.jolts[#st.jolts + 1] = { comp = comp, b = FName(b), at = st.t + f[2], T = T * (1 + f[2] * 4), peak = peak * f[1], vx = 0, vy = 0 }
+      st.jolts[#st.jolts + 1] = { comp = comp, b = FN[b], bone = b, at = st.t + f[2], T = T * (1 + f[2] * 4), peak = peak * f[1], vx = 0, vy = 0 }
     end
   end
   if #st.jolts == 0 then st.jolts = nil; return "" end
@@ -637,6 +641,7 @@ local function jolt_tick()
   if not js then return end
   local r, live = rag(), 0
   for _, e in ipairs(js) do
+    if lower(e.comp, e.bone) then e.done = true end
     local tt = st.t - e.at
     if tt >= 0 and not e.done and valid(e.comp) then
       local s = tt < e.T and math.sin(math.pi * tt / e.T) or 0
@@ -955,7 +960,7 @@ local function next_event(x, anim)
       end
     end
     st.events = st.events + n
-    st.next = x + rnd(0.5, 1.0)
+    st.next = x + rnd(1.5, 2.5)
     return "small leg twitch", n
   end
   -- (with animBody off an animated death's end pose holds: her face only, but for a waist cut's upper body, flying
@@ -1049,6 +1054,7 @@ end
 -- ---- the death ----
 function M.start(pawn, mesh)
   M.stop()
+  if split(mesh) then return end
   local c = cfg()
   if c.enabled == false then return end
   st = { pawn = pawn, mesh = mesh, t = 0, pulses = {}, chains = {}, faces = {}, events = 0, gasped = -100,
@@ -1088,6 +1094,7 @@ local function at_rest(anim)
 end
 
 function M.tick(paused)
+  if st and split(st.mesh) then M.stop(); return end
   if not st then return end
   local now = os.clock()
   local dt = math.min(now - st.last, 0.1)

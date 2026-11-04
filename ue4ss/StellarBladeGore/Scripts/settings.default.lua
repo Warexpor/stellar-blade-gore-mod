@@ -39,13 +39,14 @@ return {
     },
     smash = {
       enabled = true,          -- blunt killing blows smash the part hit
-      fullBody = false,        -- optional: roll full-body smash on any smash, regardless of impact location
-      fullBodyChance = 0.25,   -- share of smashes made full-body while enabled; 1 = every smash
+      fullBody = true,         -- broad, centred impacts can smash the full body; narrow/unknown hits stay local
+      fullBodyChance = 0.25,   -- maximum full-body chance, reduced by estimated impact coverage
       overrideTargets = false, -- optional weighted choice of local smash type instead of hit-based type
       targetWeights = { limb = 1, head = 1, torso = 1 }, -- relative weights; all 0 falls back to hit targeting
       always = false,          -- every death smashes, regardless of the blow (to try it out)
     },
     laserCut = true,           -- a laser trap death cuts along the beam, everything it went through (false: the odds)
+    asyncLoad = true,          -- the cuts' effects, materials and sounds loaded ahead by the game's async loader
     bluntRagdoll = false,      -- a blunt killing blow (a hammer, a fist, a stomp) cuts nothing: a plain ragdoll death
                                -- (blades still cut)
     lowArm = {
@@ -146,6 +147,7 @@ return {
   deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
                                -- hides it again once it is up (she stays down till you press it again)
+  reviveAt = 10,               -- the death screen (and the revive item's) held hidden this many seconds into the death
   fewerGC = false,            -- fewer garbage collection hitches: no forced pass each time the game unloads part of
                               -- the map (its regular pass a minute still runs); off by default: the game's own behaviour
   customizedRagdoll = false,  -- with Customized Ragdoll (Nexus 3884) installed: its death camera, and the death screen

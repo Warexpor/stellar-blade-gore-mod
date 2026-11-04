@@ -57,8 +57,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.afterHits.enabled` | `true` | Enemies still swinging at her body cut it again: in an attack, the weapon at `minSpeed` (500) cm/s or more within `reach` (25) cm of her. |
 | `enemies.grab.enabled` | `true` | A death in an enemy's grab waits for the grab to end (at most `most`, 6 s): a limb or the head the killing blow cuts falls off at once; the ragdoll, a split or a cut across her waist come as it lets go. |
 | `gore.smash.enabled` | `true` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a brief spray of falling blood droplets fly out where it was, proportional to the remaining part, and the stump stays as a cut's. An upper-body smash leaves only small silent leg twitches. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always` is off by default: with it on, every death smashes, to try it. |
-| `gore.smash.fullBody` | `false` | Optional full-body override for smashes anywhere on the body. F3 → Full-Body Smash Override; set Full-Body Chance to 100% for every eligible smash. Earlier cuts prevent a full-body result. |
-| `gore.smash.fullBodyChance` | `0.25` | Chance of a full-body result when the override is enabled (0–1); full-body is rolled before Custom Smash Mix. |
+| `gore.smash.fullBody` | `true` | Broad, centered impacts can smash the whole body. F3 → Full-Body Smashes. Estimated coverage of the upper and lower trunk governs eligibility; narrow hits and unknown hit sizes stay local. Earlier cuts prevent a full-body result. |
+| `gore.smash.fullBodyChance` | `0.25` | Maximum full-body chance (0–1), reduced by estimated body coverage squared. Even 100% cannot turn a narrow hit into a full-body smash. Measured impact area also guides local targeting; Custom Smash Mix remains an explicit category override. |
 | `gore.smash.overrideTargets` | `false` | Optional Custom Smash Mix: choose limb, head or upper body by `gore.smash.targetWeights` relative weights. A limb choice uses the nearest limb to the hit. All weights zero falls back to ordinary hit targeting. |
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
@@ -216,9 +216,9 @@ On Linux, with `git`, `cargo`, `clang`, `llvm-dlltool`, `python3` and `curl`. Th
 ./package.sh
 ```
 
-That builds the release zip in `release/`. Its paks are built without the other mods. `native/sbslice/test/run.sh` runs the cut tests on real meshes and must print `PASS`. `ue4ss/test/run.sh` runs the scripts against a made-up game (no game needed: a fall death, the regrow, the struggle, attacks after death, a level reload with an arm or her head off, the stumps' left-right mirroring, a cape on an arm cut, the death camera after a zoomed-in death, the async preloads, a cut's stages in fewer frames, and a sweep of every key and many deaths) and must print `PASS` for each scenario.
+That builds the release zip in `release/`. Its paks are built without the other mods. `native/sbslice/test/run.sh` runs the cut tests on real meshes and must print `PASS`. `ue4ss/test/run.sh` runs the scripts against a made-up game (no game needed, default list in `ue4ss/test/run.sh`) and must print `PASS` for each scenario.
 
-How it all works: [docs/TECHNICAL.md](docs/TECHNICAL.md).
+How it all works: [docs/TECHNICAL.md](docs/TECHNICAL.md). See [docs/TESTING.md](docs/TESTING.md) for what the simulations cover and their limits. The [runtime map](docs/ARCHITECTURE.md) describes module ownership and change boundaries.
 
 ## Credits
 

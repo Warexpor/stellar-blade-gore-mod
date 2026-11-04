@@ -794,6 +794,21 @@ function M.check(pawn, mesh, live)
         weld = weld .. (ok and ", bodies re-made" or ", bodies NOT re-made"); remade(ok)
       end
     end
+    -- yellow-suit strap check (right-arm accessories going static): list every non-main body with its type and
+    -- parent once per asset, so the log shows which bone a strap rides. One line per new outfit.
+    local acc = {}
+    for _, bs in ipairs(bodies_of(pa)) do
+      local b = try(function() return bs.BoneName:ToString() end) or ""
+      if b ~= "" and not MAIN[b] then
+        local t = try(function() return bs.PhysicsType end)
+        local p = try(function() return mesh:GetParentBone(FName(b)):ToString() end) or "?"
+        acc[#acc + 1] = string.format("%s(%s>%s)", b, tostring(t), tostring(p))
+      end
+    end
+    if #acc > 0 then
+      table.sort(acc)
+      log(string.format("outfit %s accessories: %s", name(sk), table.concat(acc, " ")))
+    end
   end
   -- the neutral pose's drives, once an asset (after fix_defaults on an unpatched one: its frames turn there)
   local function neutral_pass()

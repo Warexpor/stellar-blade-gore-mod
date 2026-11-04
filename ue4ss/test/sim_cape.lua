@@ -96,4 +96,27 @@ do
   tops, stay = M.kept_chains(m, "Bip001-L-Thigh", hip, knee, v(10, 0, 90), v(0, 0, -1))
   check(#tops == 0, "a leg strap past the plane still goes with the leg")
 end
+-- Ragdoll cape hierarchy is warmed incrementally and reused only for the same skeleton and physics layout.
+do
+  local R = dofile("ue4ss/Mods/StellarBladeGore/Scripts/active.lua")
+  local pa = F.obj("capePhysics", "PhysicsAsset")
+  local names={"Root", "Arm", "Cape1", "Cape2"}
+  pa.SkeletalBodySetups={ ForEach=function(_, cb) for i,n in ipairs(names) do cb(i,{get=function() return {BoneName=FName(n)} end}) end end }
+  local skeleton=F.obj("capeSkeleton", "SkeletalMesh")
+  local parents={Arm="Root", Helper="Arm", Cape1="Helper", Cape2="Cape1"}
+  local calls=0
+  local m=F.obj("capeComponent", "SkeletalMeshComponent", {SkeletalMesh=skeleton})
+  m.GetParentBone=function(_, b) calls=calls+1; return FName(parents[tostring(b)] or "None") end
+  R.init({ tune={active={}}, try=function(f) local ok,r=pcall(f); if ok then return r end end,
+    valid=function(x) return x~=nil and not x.__dead end, physics_of=function() return pa end, log=function() end })
+  for _=1,#names do R.warm_cape(m) end
+  local warmed=calls
+  local up=R.cape_parents(m)
+  check(up and up.Arm=="Root" and up.Cape1=="Arm" and up.Cape2=="Cape1", "cape parent cache matches the skeletal ancestry")
+  check(calls==warmed,"warm cape hierarchy needs no parent-bone engine calls")
+  m.SkeletalMesh=F.obj("otherSkeleton", "SkeletalMesh")
+  parents.Cape2="Arm"
+  local changed=R.cape_parents(m)
+  check(changed and changed.Cape2=="Arm" and calls>warmed,"new skeleton rebuilds cape hierarchy")
+end
 print(fails == 0 and "PASS" or "FAIL")

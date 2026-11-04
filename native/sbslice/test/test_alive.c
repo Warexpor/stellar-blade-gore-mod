@@ -6,7 +6,14 @@
 // dropped with nothing written, and a later asset at the same address with another index isn't taken for it. Run:
 // ./test/run.sh alive
 #include "host.h"
-int mem_readable(u64 p, u64 n) { (void)n; return p >= 0x10000; }
+static u64 watched_arr, watched_chunks;
+static int arr_reads, chunk_reads;
+int mem_readable(u64 p, u64 n) {
+    (void)n;
+    if (p == watched_arr) arr_reads++;
+    if (p == watched_chunks || p == watched_chunks + 8) chunk_reads++;
+    return p >= 0x10000;
+}
 static unsigned char objs[4][0x40];
 int main(void)
 {
@@ -30,7 +37,11 @@ int main(void)
     int fails = 0;
     u64 f[] = { (u64)objs[0], 5, (u64)objs[1], 70, (u64)objs[2], 0xffffffff, (u64)objs[3], GUO_CHUNK + 9,
                 (u64)objs[0], GUO_CHUNK + 3, (u64)objs[0], GUO_CHUNK + 400 };
+    watched_arr = arr; watched_chunks = (u64)chunks;
     alive_cmd(f, 12);
+    if (arr_reads != 1 || chunk_reads != 2) {
+        printf("FAIL repeated array/chunk checks: %d, %d\n", arr_reads, chunk_reads); fails++;
+    }
     const char *want = "ok 101:65539 000";
     if (strcmp(lastres, want)) { printf("FAIL got \"%s\", want \"%s\"\n", lastres, want); fails++; }
     *(u32 *)(chunk0 + 5 * GUO_ITEM + 8) = EIF_UNREACHABLE;

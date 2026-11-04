@@ -113,9 +113,9 @@ function M.on(id, fn)
   M.handlers[id] = fn
 end
 
--- every key with every set of modifiers but all three, bound once (UE4SS's input thread: noted, run by flush)
+-- Every key with each set of modifiers, bound once (input thread: noted, run by flush).
 function M.register()
-  local sets = { {}, { "Shift" }, { "Ctrl" }, { "Alt" }, { "Ctrl", "Shift" }, { "Ctrl", "Alt" }, { "Shift", "Alt" } }
+  local sets = { {}, { "Shift" }, { "Ctrl" }, { "Alt" }, { "Ctrl", "Shift" }, { "Ctrl", "Alt" }, { "Shift", "Alt" }, { "Ctrl", "Shift", "Alt" } }
   local n = 0
   for _, k in ipairs(M.LIST) do
     local key = Key[k.enum]
@@ -138,7 +138,7 @@ function M.register()
   for _, d in ipairs({ { "UP_ARROW", "up" }, { "DOWN_ARROW", "down" }, { "LEFT_ARROW", "left" }, { "RIGHT_ARROW", "right" } }) do
     if Key[d[1]] and pcall(RegisterKeyBind, Key[d[1]], function() M.nav[#M.nav + 1] = d[2] end) then n = n + 1 end
   end
-  log(string.format("keys: %d binds (%d keys, 7 sets of modifiers each, and the menu's arrows)", n, #M.LIST))
+  log(string.format("keys: %d binds (%d keys, 8 sets of modifiers each, and the menu's arrows)", n, #M.LIST))
 end
 
 -- the keys pressed since the last frame: each to the action bound to it (game thread, game_tick). The menu taking a

@@ -77,10 +77,16 @@ function S.boot(settings)
       for _, c in ipairs(self.comps) do c.__dead = true end
     end
     a.SetActorHiddenInGame = function(self, on) self.hidden = on end
+    a.K2_GetRootComponent = function(self) return self.StaticMeshComponent end
+    a.K2_SetActorLocation = function(self, pos) self.at = copy(pos); self.StaticMeshComponent.at = copy(pos) end
+    a.K2_SetActorRotation = function(self, rot) self.rot = rot end
+    a.SetActorScale3D = function(self, size) self.scale = copy(size) end
+    a.K2_AttachToComponent = function(self, parent, bone) self.parent, self.bone = parent, bone end
     return a
   end
   gs.FinishSpawningActor = function(_, a) if world.failFinish then return nil end return a end
   F.objects["/Script/Engine.Default__GameplayStatics"] = gs
+  F.objects["/Engine/BasicShapes/Sphere.Sphere"] = F.obj("FlowSphere", "StaticMesh")
   for i = 1, 4 do
     local n = "SM_meat_0" .. i
     F.objects["/Game/Art/FX/SM/" .. n .. "." .. n] = F.obj(n, "StaticMesh", {
@@ -126,7 +132,7 @@ function S.boot(settings)
     for i = 1, math.huge do
       local name, value = debug.getupvalue(fn, i)
       if not name then break end
-      if name == "sw" or name == "swing" or name == "hm" or name == "gore_cut" or name == "hits_after" then state[name] = value end
+      if name == "sw" or name == "swing" or name == "hm" or name == "death_hit" or name == "gore_cut" or name == "hits_after" then state[name] = value end
       if name ~= "_ENV" then scan(value) end
     end
   end

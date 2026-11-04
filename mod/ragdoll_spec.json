@@ -56,6 +56,7 @@
       "from": "Art/Show/Dead/Dead_Monster_EffectType_Explosion",
       "set": {
         "ImpulsePower": 2500.0,
+        "ImpulseLimitVelocity": 702.0,
         "bOverrideHitBone": false
       },
       "show_voices": [
@@ -71,6 +72,7 @@
       "from": "Art/Show/Dead/Dead_Monster_EffectType_ExplosionLight",
       "set": {
         "ImpulsePower": 2000.0,
+        "ImpulseLimitVelocity": 702.0,
         "bOverrideHitBone": false
       },
       "show_voices": [

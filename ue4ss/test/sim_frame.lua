@@ -48,4 +48,27 @@ check(M.back_bone("Bip001-Head") == "Bip001-Head" and M.back_bone("Bip001-Spine1
 local o = { z = v(0, 0, 1), x = v(1, 0, 0) }
 M.pair(o, nil, nil, 1)
 check(o.tx and near(o.tx, v(1, 0, 0)), "no back: the rim's axis")
+-- A cap/stub is built in the cut's old world pose and may be attached a few frames later. The reposition must carry
+-- both its location and its orientation with the selected bone before attachment.
+local function safe(f) local ok, value = pcall(f); if ok then return value end end
+M.init({ tune = { gore = {} }, try = safe, valid = function(x) return x and x:IsValid() end, may_load = function() return true end })
+local mth = F.obj("math", "KismetMathLibrary", { MakeRotFromXZ = function(_, fwd, up) return { fwd = fwd, up = up } end })
+F.objects["/Script/Engine.Default__KismetMathLibrary"] = mth
+local pose = { Translation = v(10,20,30), Rotation = { X=0,Y=0,Z=0,W=1 } }
+local mesh = F.obj("mesh", "SkeletalMeshComponent", { GetSocketTransform = function() return pose end })
+local loc, rot = v(11,22,30), nil
+local actor = F.obj("cap", "StaticMeshActor", {
+  GetActorForwardVector = function() return v(1,0,0) end,
+  GetActorUpVector = function() return v(0,0,1) end,
+  K2_GetActorLocation = function() return loc end,
+  K2_SetActorLocation = function(_, x) loc = x end,
+  K2_SetActorRotation = function(_, x) rot = x end,
+})
+M.posed = M.snap({ { mesh, { "Bip001-L-UpperArm" } } })
+local h = math.sqrt(0.5)
+pose = { Translation = v(110,220,330), Rotation = { X=0,Y=0,Z=h,W=h } }
+M.repose(actor, mesh, "Bip001-L-UpperArm")
+check(near(loc, v(108,221,330)), "moving bone: cap and stub location follows the cut pose")
+check(rot and near(rot.fwd, v(0,1,0)) and near(rot.up, v(0,0,1)), "moving bone: cap and stub orientation follows the cut pose")
+M.posed = nil
 print(fails == 0 and "PASS" or "FAIL")

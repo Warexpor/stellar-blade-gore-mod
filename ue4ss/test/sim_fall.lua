@@ -13,6 +13,7 @@ local print = F.say
 local f = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
 f:write([[local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")
 s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
+s.gore.smash.enabled = false -- the landing-hit control asserts a cut, not the separate blunt-smash behavior
 return s]])
 f:close()
 F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"

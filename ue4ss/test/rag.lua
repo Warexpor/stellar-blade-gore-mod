@@ -102,9 +102,14 @@ function R.install(F, E, opts)
   R.lin = {}
   rawset(mesh, "SetPhysicsLinearVelocity", function(_, v, plus, b)
     local n = key(b)
-    if plus and live(n) then R.lin[n] = add(R.lin[n] or vec(0, 0, 0), v) end
+    if not live(n) then return end
+    if plus then R.lin[n] = add(R.lin[n] or vec(0, 0, 0), v)
+    else V[n] = vec(v.X, v.Y, v.Z) end
   end)
-  rawset(mesh, "SetAllPhysicsLinearVelocity", function() end)
+  rawset(mesh, "SetAllPhysicsLinearVelocity", function(_, v, plus)
+    if not plus and v and len(v) == 0 then R.linZeroed = (R.linZeroed or 0) + 1; F.event("her bodies' linear all zeroed") end
+    for n in pairs(BODY) do if live(n) then V[n] = plus and add(V[n], v) or vec(v.X, v.Y, v.Z) end end
+  end)
   rawset(mesh, "WakeAllRigidBodies", function() for n in pairs(BODY) do asleep[n] = nil end end)
   rawset(mesh, "WakeRigidBody", function(_, b) asleep[key(b)] = nil end)
   rawset(mesh, "PutRigidBodyToSleep", function(_, b) local n = key(b); if BODY[n] then asleep[n] = true; W[n] = vec(0, 0, 0) end end)

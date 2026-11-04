@@ -113,7 +113,7 @@ return {
       split = 18,              --   cut in half top to bottom; rolled when no blade decides (bladeFollow)
       diagonal = 0,            --   cut diagonally from over a shoulder down to the other hip (see diagonal; 0 here so
                                --   a settings.lua from before it, its odds set to one kind alone, still does that one
-                               --   every death; settings.default.lua has 15)
+                               --   every death; diagonal parked in settings.default.lua)
       moreLimbs = 0.35,        --   a limb cut takes another nearest limb with this chance, and a third with it again
     },                         --   (0.35: 35 % two or more, 12 % three)
     followUpCuts = true,       -- one swing cuts every arm, leg, her body and neck it went through (multiCut), and a
@@ -409,11 +409,11 @@ return {
       enabled = true,          --   or head it landed on to meat: the part comes off and vanishes, the game's meat chunks
                                --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
       always = false,          --   every death smashes, blunt or not (to try it)
-      fullBody = false,        --   optional full-body chance on any smash
-      fullBodyChance = 0.25,   --   fraction of smashes made full-body (1: every smash)
+      fullBody = true,         --   full-body eligibility follows impact location and footprint coverage
+      fullBodyChance = 0.25,   --   maximum full-body chance, scaled by body coverage squared
       overrideTargets = false, --   choose a weighted local smash category instead of following the hit
       targetWeights = { limb = 1, head = 1, torso = 1 }, -- relative weights, all zero uses hit targeting
-      torsoHitChance = 0.25,   --   ordinary torso hits kept as torso; otherwise nearest surviving head/limb
+      torsoHitChance = 1,      --   ordinary torso hits kept as torso; otherwise nearest surviving head/limb
       chunks = 10,             --   whole arm; counts 0-64, two spawned a tick; missing child parts reduce the count
       chunksForearm = 6,       --   forearm and hand
       chunksLeg = 16,          --   whole leg
@@ -636,11 +636,11 @@ return {
     sliceFx = false,           -- the game's flesh-slice burst at the cut: it drops a static meat stub made for
                                -- monster stumps, which hangs in the air where she was cut
     bleedTime = 2.5,           -- seconds both openings keep bleeding (0 = until she recovers)
-    bleedAxis = "-z",          -- BloodLoop falls along local -Z, pointed out of each
+    bleedAxis = "z",           -- 0.5.5 blood-only effect cone, pointed out of each
                                -- opening: "z", "x", "-z", "-x" (the F3 menu re-reads it; the "bleed: opening faces" log line
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
     bleedSize = 0.6,           -- the continuous bleed effect's scale
-    bleedPulse = 0.35,         -- seconds between the separate 0.6.0-style stump spurts
+    bleedPulse = 0.35,         -- seconds between 0.5.5 blood-only effect restarts
     capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps and lids
     capMatte = {               -- caps and lids matte: the meat's textures on the game's character gore master
       enabled = false,         --   (the meat material's shine is baked in, the stumps looked wet; matte, they looked too
@@ -746,7 +746,7 @@ return {
     air = 40,                  -- cm: her pelvis higher than this over the floor is a fall: not started, or held till
                                --   she is down (started in a fall off a ledge, its steering met the landing and
                                --   stretched her chest and arms like rubber, Nexus report)
-    rate = 60,                 -- times a second she is steered at most
+    rate = 30,                 -- times a second she is steered at most
     animated = false,          -- an animated death's fall: maimed, she goes limp as she lies once it rests (a quiet
     quietWait = 0.4,           --   ragdoll: no blow, no momentum) and struggles from there, quietWait s later. Off:
                                --   the switch from the held end pose to a limp body looked wrong (playtest)
@@ -754,7 +754,7 @@ return {
     gain = 5,                  -- a joint turns at gain x the angle it is off by, deg/s, plus what the gap has summed
     hold = 8,                  --   to (hold x angle x s, at most holdMax: gravity and the floor take a steady share of
     holdMax = 200,             --   every turn, and without it a limb sagged short; 5/220/3000/0.08 barely moved her)...
-    speed = 130,               --   ...at most this (320 with accel 6000 and a 1.3 surge looked frantic, playtest)
+    speed = 85,                --   ...at most this (320 with accel 6000 and a 1.3 surge looked frantic, playtest)
     accel = 1900,              -- deg/s^2 a joint's turn may change by at most (her muscles' strength: an arm held up
                                --   against gravity needs about 1400)
     response = 0,              -- s a joint takes to get to the speed asked (0: at once, each step)
@@ -822,13 +822,13 @@ return {
     },
     reflex = {                 -- a stump's stub jerking on its own: 1-2 jerks with a quiver, more often while strong
       enabled = true,
-      speed = 55,              --   deg/s at a jerk's peak
-      quiver = 9,              --   deg/s of 10-14 Hz quiver on it
+      speed = 25,              --   deg/s at a jerk's peak
+      quiver = 3,              --   deg/s of 10-14 Hz quiver on it
     },
   },
   convulse = {                 -- convulse.lua: her body's last movements once she lies dead (ragdoll or her animated
     enabled = true,            --   fall's end pose): agonal spasms and gasps fading, a last gasp, then small twitches
-    strength = 1.0,            -- times every movement's size
+    strength = 0.5,            -- times every movement's size
     jerk = 190,                -- deg/s a spasm turns a bone at its peak (a gasp about half, a late twitch a third)
     jolt = {                   -- a gasp jerks her whole body slightly (a ragdoll death; not beheaded or split, which
       enabled = true,          --   never gasp): a short upward pulse, the chest most, the head lagging, hips and arms barely
@@ -872,7 +872,7 @@ return {
                                --   they looked like the ragdoll glitching
     armSwing = {               -- her arm swinging (also with body off, beheaded or split): lifting slowly from the
       enabled = true,          --   shoulder and falling back, the elbow a beat later, the hand turning after it; now
-      chance = 0.25,           --   and then back the other way. Share of her movements that are one (later: half)
+      chance = 0.10,           --   and then back the other way. Share of her movements that are one (later: half)
       speed = 105,             --   deg/s at the shoulder's peak (the elbow 0.5-0.8 of it; at 150 and 300 the swings showed nothing
                                --   while they were impulses, which never landed: set as velocity now)
       time = { 0.9, 1.4 },     --   s each swing takes, speeding up and slowing down smoothly
@@ -899,10 +899,10 @@ return {
     },
     neck = {                   -- her neck muscles struggling (also with body off): her head straining to lift or
       enabled = true,          --   turn, shaking with the effort, giving out and dropping back, then sharp jerks of it
-      chance = 0.2,            --   share of her face's movements that are one (later: half that, the strain weaker)
+      chance = 0.08,           --   share of her face's movements that are one (later: half that, the strain weaker)
       strain = 80,             --   deg/s at the strain's peak (a slow push, `strainTime` s)
       strainTime = { 0.9, 1.5 },
-      tremor = 30,             --   deg/s of the shaking over it, `hz` times a second, half of it crossways
+      tremor = 10,             --   deg/s of the shaking over it, `hz` times a second, half of it crossways
       hz = { 7, 11 },
       jerk = 100,              --   deg/s of each jerk after it gives out (2-4, a quarter second apart, weakening)
       animScale = 0.35,        --   all of that in an animated death: its head simulates alone off an animated neck, nothing

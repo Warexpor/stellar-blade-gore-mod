@@ -20,7 +20,7 @@ s.enemies.afterDeath = { enabled = true, time = 10 }
 s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
 ]])
 if rawget(_G, "NO_MONTAGE") then
-  f:write("\ns.enemies.afterDeath.enabled = false\nreturn s\n")
+  f:write("\ns.enemies.afterDeath.enabled = false\ns.gore.smash.enabled = false\ns.gore.oddsNear.enabled = false\nreturn s\n")
 else
   f:write("\nreturn s\n")
 end
@@ -60,12 +60,14 @@ local function enemy(name, at)
       if n == "Weapon_R" and e.play then
         local k = (F.t - e.play.t0) / (e.duration or 1.5)
         -- (from its hand out to the arc's start, the arc mid swing: across her arm, Y from -130 to +130 cm round it)
-        local a0 = vec(ARM.X, ARM.Y - 130, ARM.Z - 11)
+        -- The no-montage case crosses the intact left arm along X, avoiding the torso.
+        local a0 = rawget(_G, "NO_MONTAGE") and vec(ARM.X + 130, ARM.Y, ARM.Z - 11 + (e.height or 0)) or vec(ARM.X, ARM.Y - 130, ARM.Z - 11 + (e.height or 0))
         if k <= 0.4 then
           local h = vec(p.X - 40, p.Y, p.Z + 30)
           local u = k / 0.4
           return vec(h.X + (a0.X - h.X) * u, h.Y + (a0.Y - h.Y) * u, h.Z + (a0.Z - h.Z) * u)
         elseif k < 0.6 then
+          if rawget(_G, "NO_MONTAGE") then return vec(a0.X - 260 * (k - 0.4) / 0.2, a0.Y, a0.Z) end
           return vec(a0.X, a0.Y + 260 * (k - 0.4) / 0.2, a0.Z)
         end
       end
@@ -130,6 +132,7 @@ E.s.hp = 0
 E.die(true)
 if rawget(_G, "NO_MONTAGE") then
   F.run(0.7, pawn)
+  check(F.find("gore: cut Bip001%-R%-UpperArm %(death%)", d0) ~= nil, "the initial death leaves the left arm available")
   -- Fast translation of an otherwise stationary hand is movement, not a swing.
   near.at = vec(1200, 2000, 90)
   F.run(0.1, pawn)
@@ -138,11 +141,20 @@ if rawget(_G, "NO_MONTAGE") then
   check(not F.find("no montage; relative weapon speed", d0), "walking past with a stationary hand does not cut")
   near.at = vec(1300, 2000, 90)
   F.run(0.1, pawn)
+  near.height = 120
+  near.duration = 0.5
+  near.play = { a = anims[1], t0 = F.t }
+  local above = mark()
+  F.run(1, pawn)
+  check(not F.find("after death %(.-%): CH_M_NA_14_Blueprint_C_1's", above), "a fast swing above the body does not hit")
+  check(not F.find("gore: cut .* %(after%)", above), "a fast swing above the body does not cut")
+  near.height, near.play = 0, nil
+  F.run(0.5, pawn)
   near.duration = 0.5
   near.play = { a = anims[1], t0 = F.t }
   F.run(2, pawn)
   check(F.find("no montage; relative weapon speed", d0) ~= nil, "fast animation without a montage counts")
-  check(F.find("gore: cut .* %(after%)", d0) ~= nil, "the detected blow cuts")
+  check(F.find("gore: cut Bip001%-L%-UpperArm %(after%)", d0) ~= nil, "the detected blow cuts the intact arm")
   check(#F.errors == 0 and not F.find("tick error"), "no errors")
   print(fails == 0 and "PASS" or "FAIL")
   return

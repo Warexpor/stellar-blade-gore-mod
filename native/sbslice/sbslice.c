@@ -5504,11 +5504,36 @@ static void alive_cmd(const u64 *f, int k)
 {
     static char msg[4 + 64 * 16];
     char *o = put(msg, "ok ");
+    // The object array and chunk pointers are shared by all checks in this synchronous call.
+    // Rechecking them for every item alternates VirtualQuery between three memory regions per object.
+    // Keep the per-item readability, pointer identity and pending-kill checks intact.
+    u64 arr = exe + RVA_GUOBJECTARRAY + GUO_OBJOBJECTS;
+    int array_ok = RVA_GUOBJECTARRAY && mem_readable(arr, 0x20);
+    int count = array_ok ? *(int *)(arr + 0x14) : 0;
+    u64 chunks = array_ok ? *(u64 *)arr : 0;
+    int chunk_ids[64], nchunks = 0;
+    u64 chunk_ptrs[64];
     for (int i = 0; i + 1 < k; i += 2) {
         int index = (int)(u32)f[i + 1];
         int ask = f[i + 1] == 0xffffffff;
         if (ask) index = mem_readable(f[i], 0x10) ? *(int *)(f[i] + UOBJ_INTERNAL_INDEX) : -1;
-        *o++ = object_alive(f[i], index) ? '1' : '0';
+        int alive = 0;
+        if (array_ok && f[i] >= 0x10000 && index >= 0 && index < count) {
+            int id = index / GUO_CHUNK, j = 0;
+            for (; j < nchunks && chunk_ids[j] != id; j++) { }
+            if (j == nchunks && nchunks < 64) {
+                u64 slot = chunks + (u64)id * 8;
+                chunk_ids[j] = id;
+                chunk_ptrs[j] = mem_readable(slot, 8) ? *(u64 *)slot : 0;
+                nchunks++;
+            }
+            if (j < nchunks && chunk_ptrs[j]) {
+                u64 item = chunk_ptrs[j] + (u64)(index % GUO_CHUNK) * GUO_ITEM;
+                if (mem_readable(item, 0x10) && *(u64 *)item == f[i])
+                    alive = !(*(u32 *)(item + 8) & (EIF_UNREACHABLE | EIF_PENDINGKILL));
+            }
+        }
+        *o++ = alive ? '1' : '0';
         if (ask) { *o++ = ':'; o = put_int(o, index); *o++ = ' '; }
     }
     *o = 0;

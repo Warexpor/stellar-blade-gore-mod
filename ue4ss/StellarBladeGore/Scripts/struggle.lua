@@ -44,6 +44,7 @@ local ctx, try, valid
 local function cfg() return ctx and ctx.tune.struggle or {} end
 local function sub_cfg(k) return (ctx.tune.struggle or {})[k] or {} end
 local function log(s) ctx.log("struggle: " .. s) end
+local FN = setmetatable({}, { __index = function(t, b) local f = FName(b); t[b] = f; return f end })
 local function headless(mesh)
   local r, g = ctx.rag, ctx.gore
   return (r and r.severed and r.severed(mesh, "Bip001-Head"))
@@ -128,14 +129,14 @@ local function rag() return ctx.rag end
 local function loc(comp, b)
   local c = st and st.seen
   if c and c[b] ~= nil then return c[b] or nil end
-  local v = try(function() local x = comp:GetSocketLocation(FName(b)); return vec(x.X, x.Y, x.Z) end)
+  local v = try(function() local x = comp:GetSocketLocation(FN[b]); return vec(x.X, x.Y, x.Z) end)
   if c then c[b] = v or false end
   return v
 end
 local function spin(comp, b)
   local c = st and st.spun
   if c and c[b] ~= nil then return c[b] or nil end
-  local v = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
+  local v = try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
   if c then c[b] = v or false end
   return v
 end
@@ -145,7 +146,7 @@ end
 local function com(comp, b)
   local c, k = st and st.seen, b .. "@com"
   if c and c[k] ~= nil then return c[k] or nil end
-  local v = try(function() local x = comp:GetCenterOfMass(FName(b)); return vec(x.X, x.Y, x.Z) end)
+  local v = try(function() local x = comp:GetCenterOfMass(FN[b]); return vec(x.X, x.Y, x.Z) end)
   if c then c[k] = v or false end
   return v
 end
@@ -156,21 +157,27 @@ end
 -- much of its own turn (an upper arm 60% of each, its clavicle's share; her arms barely moved while her legs, whose
 -- parent is the pelvis, kicked, playtest), and left behind, the joint came apart
 local function cut(mesh, b) local r = rag(); return r and r.severed(mesh, b) end
+local function lower_after_waist(mesh, b)
+  if not cut(mesh, P .. "Spine1") then return false end
+  return b == P .. "Pelvis" or b == P .. "Spine" or b:match("^Bip001%-%a%-(Thigh)$") ~= nil
+    or b:match("^Bip001%-%a%-(Calf)$") ~= nil or b:match("^Bip001%-%a%-(Foot)$") ~= nil
+end
 local function push(comp, b, dv, alone)
-  local ok, err = pcall(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FName(b)) end)
+  if lower_after_waist(comp, b) then return end
+  local ok, err = pcall(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FN[b]) end)
   if not ok and not M.pushFailed then M.pushFailed = true; log("turning a body failed: " .. tostring(err)) end
   if b == P .. "Pelvis" then return end
   local at = loc(comp, b)
   if not at then return end
   local wr, r = scale(dv, math.pi / 180), rag()
   local c = com(comp, b)
-  if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FName(b)) end) end
+  if c then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(c, at)), true, FN[b]) end) end
   if alone == true then return end
   for _, x in ipairs(DOWN[b] or {}) do
     if cut(comp, x) or (r and not r.live(comp, x)) then break end
-    if alone ~= "carry" then try(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FName(x)) end) end
+    if alone ~= "carry" then try(function() comp:SetPhysicsAngularVelocityInDegrees(dv, true, FN[x]) end) end
     local cx = com(comp, x)
-    if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FName(x)) end) end
+    if cx then try(function() comp:SetPhysicsLinearVelocity(cross(wr, sub(cx, at)), true, FN[x]) end) end
   end
 end
 -- the parent's turn back for a bone's turn: what turns (the bone and the limb below it) against the rest of her, by
@@ -330,8 +337,8 @@ local function servo(mesh, b, t, k, dt, mid)
   local sl = len(set)
   if st.probeN < 24 and sl > 20 then
     st.probeN = st.probeN + 1
-    local w1 = try(function() local x = mesh:GetPhysicsAngularVelocityInDegrees(FName(b)); return vec(x.X, x.Y, x.Z) end)
-    local w2 = try(function() local x = mesh:GetPhysicsAngularVelocityInDegrees(FName(p)); return vec(x.X, x.Y, x.Z) end)
+    local w1 = try(function() local x = mesh:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
+    local w2 = try(function() local x = mesh:GetPhysicsAngularVelocityInDegrees(FN[p]); return vec(x.X, x.Y, x.Z) end)
     if w1 and w2 then st.now, st.nowN = st.now + dot(perp(sub(w1, w2), d), set) / (sl * sl), st.nowN + 1 end
   end
   st.err, st.errN = st.err + ang, st.errN + 1
@@ -342,7 +349,7 @@ end
 -- a bone's own X axis in the world: an elbow's or knee's hinge (Bip001 limbs bend about X, convulse.lua's xaxis)
 local function hinge(mesh, b)
   return try(function()
-    local q = mesh:GetSocketTransform(FName(b), 0).Rotation
+    local q = mesh:GetSocketTransform(FN[b], 0).Rotation
     local x, y, z, w = q.X, q.Y, q.Z, q.W
     return norm(vec(1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)))
   end)
@@ -441,9 +448,9 @@ local function drag(mesh, dir, k, dt)
   local want, cap = (c.speed or 35) * math.min(k, 1.2), (c.accel or 250) * k * dt
   local wb = st.plan and st.plan.waist
   for _, b in ipairs(wb and WAIST[wb] or TORSO) do
-    local v = try(function() local x = mesh:GetPhysicsLinearVelocity(FName(b)); return vec(x.X, x.Y, x.Z) end)
+    local v = try(function() local x = mesh:GetPhysicsLinearVelocity(FN[b]); return vec(x.X, x.Y, x.Z) end)
     local dv = v and clamp(want - dot(v, dir), 0, cap)
-    if dv and dv > 0 then try(function() mesh:SetPhysicsLinearVelocity(scale(dir, dv), true, FName(b)) end) end
+    if dv and dv > 0 then try(function() mesh:SetPhysicsLinearVelocity(scale(dir, dv), true, FN[b]) end) end
   end
   st.dragT = (st.dragT or 0) + dt
 end
@@ -1055,9 +1062,14 @@ end
 function M.rising() return st ~= nil and st.act ~= nil and not torso_smashed(st.mesh) and not headless(st.mesh) and ACT[st.act.name].effort == true end
 
 -- ---- the death ----
+local function split(mesh)
+  local g = ctx.gore
+  return g and ((g.split_on and g.split_on(mesh)) or (g.cuts_on and select(2, g.cuts_on(mesh)) == true))
+end
+
 function M.start(pawn, mesh)
   M.stop()
-  if torso_smashed(mesh) or headless(mesh) then return end
+  if torso_smashed(mesh) or headless(mesh) or split(mesh) then return end
   -- (main.lua's F6 struggle test: on whatever deathMoves says, its plan sit-up only when it has no cut)
   local test = ctx.struggle_test
   if not test and (cfg().enabled == false or ctx.tune.deathMoves == false) then return end
@@ -1155,7 +1167,7 @@ local function step(mesh, dt)
 end
 
 function M.tick(paused)
-  if st and (torso_smashed(st.mesh) or headless(st.mesh)) then M.stop(); return end
+  if st and (torso_smashed(st.mesh) or headless(st.mesh) or split(st.mesh)) then M.stop(); return end
   if not st or st.done then return end
   local now = os.clock()
   local dt = math.min(now - st.last, 0.1)
@@ -1209,6 +1221,15 @@ function M.tick(paused)
     st.done = true
     log(string.format("stopped after %.1f s: her ragdoll ended", st.t))
     return
+  end
+  -- A later hit can sever the waist after the struggle selected its original
+  -- actions. Discard those actions and queued pulses before they move the legs.
+  if not st.plan.waist and cut(mesh, P .. "Spine1") then
+    local plan, why = pick(mesh, false)
+    if not plan then st.done = true; log("stopped after waist cut: " .. why); return end
+    st.plan, st.act, st.pulses, st.hold, st.trace = plan, nil, {}, {}, {}
+    st.start = body_at(mesh)
+    log("waist cut during struggle: continuing on the upper body")
   end
   -- off a ledge mid-struggle (a crawl, a shove): no steering while she falls, the act cut short; on again once she
   -- has been down startMax s (its clock waits meanwhile)

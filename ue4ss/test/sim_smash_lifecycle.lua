@@ -75,7 +75,7 @@ check(#W.spheres==made and live()==0, "recovery mid-burst cancels pending batche
 T.ctx.tune.gore.smash.fullBody=true
 T.ctx.tune.gore.smash.fullBodyChance=1
 n0=#W.spheres
-G.smash(pawn,E.mesh,{loc=E.bone("Bip001-Spine2")},"death")
+G.smash(pawn,E.mesh,{loc=E.bone("Bip001-Spine2"),impactRadius=200},"death")
 for _=1,30 do frames(1); if #W.spheres>n0 then break end end
 check(#W.spheres-n0==4,"full-body burst limits the first batch to four pieces")
 G.cleanup(pawn,E.mesh)

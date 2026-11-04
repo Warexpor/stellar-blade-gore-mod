@@ -31,14 +31,23 @@ cd "$(dirname "$0")"
 CACHE=${SB_CACHE:-../../../.cache}
 OUT=${TMPDIR:-/tmp}/sbslice-test
 SEL=" $* "
+explicit=$#
+for group in "$@"; do
+  case "$group" in
+    unit|weapon|stats|rows|addr|alive|newobj|phys|split|waist|arm|head|mark|enemy|diag) ;;
+    *) echo "unknown native test group: $group" >&2; exit 2 ;;
+  esac
+done
 [[ $# -eq 0 ]] && SEL=" unit weapon stats rows addr alive newobj phys split waist arm head mark enemy "
 on() { [[ $SEL == *" $1 "* ]]; }
 # (diag: the parked diagonal cut, never in the default run)
 fail=0
 if on unit; then
   clang -O1 -g -fsanitize=address,undefined -w -o "$OUT" test_cut.c
-  ASAN_OPTIONS=detect_leaks=0 "$OUT" | tee "$OUT.log" | grep -v '^PASS$' || true
+  if ! ASAN_OPTIONS=detect_leaks=0 "$OUT" > "$OUT.log" 2>&1; then fail=1; fi
+  grep -v '^PASS$' "$OUT.log" || true
   grep -qx PASS "$OUT.log" || fail=1
+  if grep -qE '^FAIL($|[[:space:]:])' "$OUT.log"; then fail=1; fi
 fi
 # her sword split in two (weapon_split, "e") on a made-up sword
 if on weapon; then
@@ -97,12 +106,18 @@ if on phys; then
     fi
   else
     echo "phys: no build cache, parity skipped"
+    if (( explicit > 0 )); then echo "phys: requested parity check needs the build cache" >&2; fail=1; fi
   fi
 fi
 # the real-mesh runs: one line each, "label|env...|mesh[|vanilla cache]" (the cache's path may have spaces)
 jobs=()
 if [[ ! -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]]; then
   echo "real meshes: no build cache, skipped"
+  if (( explicit > 0 )); then
+    for group in split waist arm head mark diag; do
+      if on "$group"; then echo "$group: requested real-mesh tests need the build cache" >&2; fail=1; fi
+    done
+  fi
 fi
 if [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]]; then
   for m in CH_P_EVE_09 CH_P_EVE_30; do
@@ -164,6 +179,16 @@ if [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_
       fi
     done
   done
+  # Outfit seen in the 23:08 crash, with a living left-arm cut before the failure. Exercise its actual mesh rather
+  # than assuming the other outfits' bone maps and section layouts represent it.
+  if on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_59/CH_P_EVE_59.uasset ]]; then
+    jobs+=("real arm cut CH_P_EVE_59|ARM=1|CH_P_EVE_59"
+           "real arm cut CH_P_EVE_59 posed|ARM=1 POSED=1|CH_P_EVE_59"
+           "real arm cut CH_P_EVE_59 helpers driven|ARM=1 DRIVEN=1|CH_P_EVE_59")
+    for dir in 0 2 4 6; do
+      jobs+=("real arm cut CH_P_EVE_59 blade 45 degrees dir $dir|ARM=1 DRIVEN=1 ARMTILT=45 ARMTILTDIR=$dir|CH_P_EVE_59")
+    done
+  fi
   # the outfit the ragdoll-death split sheets came from (playtest 14): its copy's neck skin hung partly on the head the
   # copy lets go. Plain, posed, and with her animation-driven correctives watched (none may be a sink)
   if on split && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_10/CH_P_EVE_10.uasset ]]; then
@@ -256,6 +281,7 @@ fi
 # the waist, with the nosink list gore.lua sends for an enemy (ENEMY=1). ENEMY_VANILLA=<legacy cache> points elsewhere
 EV=${ENEMY_VANILLA:-${CACHE}/work/vanilla}
 if on enemy; then
+  enemy_start=${#jobs[@]}
   for m in CH_M_NA_16/CH_M_NA_16 CH_M_NA_17/CH_M_NA_17 CH_M_NA_17/CH_M_NA_17_1 CH_M_NA_19/CH_M_NA_19 CH_M_NA_35/CH_M_NA_35 \
            CH_M_NA_40/CH_M_NA_40 CH_M_NA_40/CH_M_NA_40_B CH_M_NA_40/CH_M_NA_40_C CH_M_NA_45/CH_M_NA_45; do
     [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] || continue
@@ -276,6 +302,10 @@ if on enemy; then
   m=CH_M_NA_17/CH_M_NA_17_1
   [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] &&
     jobs+=("enemy CH_M_NA_17_1 cut after cut|ENEMY=1 SEQ=Bip001-L-Thigh:0.86,Bip001-R-Calf:0.4,Bip001-L-UpperArm:0.9,Bip001-R-UpperArm:0.65 PKG=vanilla/SB/Content/Art/Character/Monster/$m|CH_M_NA_17_1|$(cd "$EV" && pwd)")
+  if (( ${#jobs[@]} == enemy_start )); then
+    echo "enemy: no cached enemy meshes, skipped"
+    if (( explicit > 0 )); then fail=1; fi
+  fi
 fi
 if (( ${#jobs[@]} )); then
   RES=$(mktemp -d)
@@ -286,14 +316,21 @@ if (( ${#jobs[@]} )); then
   for j in "${jobs[@]}"; do
     IFS='|' read -r label envs mesh van <<<"$j"
     printf '%s\n' "$label" > "$RES/$i.label"
-    ( env $envs ${van:+VANILLA="$van"} real/run.sh "$mesh" 2>&1 | tail -1 > "$RES/$i.res" ) &
+    (
+      if env $envs ${van:+VANILLA="$van"} real/run.sh "$mesh" > "$RES/$i.out" 2>&1; then
+        echo 0 > "$RES/$i.status"
+      else
+        echo 1 > "$RES/$i.status"
+      fi
+      tail -1 "$RES/$i.out" > "$RES/$i.res"
+    ) &
     i=$((i + 1))
     while (( $(jobs -rp | wc -l) >= ${JOBS:-$(nproc)} )); do wait -n || true; done
   done
   wait
   for ((k = 0; k < i; k++)); do
     r=$(cat "$RES/$k.res"); echo "$(cat "$RES/$k.label"): $r"
-    [[ $r == PASS ]] || fail=1
+    [[ $r == PASS && $(cat "$RES/$k.status") == 0 ]] || fail=1
   done
   rm -rf "$RES"
 fi

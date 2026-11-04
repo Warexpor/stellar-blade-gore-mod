@@ -92,6 +92,32 @@ for i=start+1,#moves do
   if b=="Bip001-Pelvis" or b=="Bip001-Spine" or b:find("Thigh",1,true) or b:find("Calf",1,true) or b:find("Foot",1,true) then noLower=false end
 end
 check(noLower,"waist-cut upper-body movements never push the disconnected lower body")
+-- Work queued before a later waist cut must not drive the lower half afterwards.
+restart()
+G.slice_bone(pawn,E.mesh,"Bip001-R-Forearm",nil,"test"); run(2)
+check(ctx.struggle.busy(),"late waist cut: struggle is already running")
+G.slice_bone(pawn,E.mesh,"Bip001-Spine1",nil,"test")
+for _=1,120 do
+  if ctx.rag.severed(E.mesh,"Bip001-Spine1") then break end
+  run(1/60)
+end
+check(ctx.rag.severed(E.mesh,"Bip001-Spine1"),"late waist cut separates the upper body")
+cv=state(ctx.convulse)
+cv.pulses[#cv.pulses+1]={comp=E.mesh,b="Bip001-L-Calf",at=F.t,dur=1}
+cv.jolts={{comp=E.mesh,b=FName("Bip001-Pelvis"),bone="Bip001-Pelvis",at=cv.t,T=1,peak=10,vx=0,vy=0}}
+cv.joltSide={0,0}
+start=#moves
+run(1/60)
+check(#cv.pulses==0 and cv.jolts==nil,"waist cut cancels queued lower-body pulses and jolts")
+run(3)
+local lateLower=false
+for i=start+1,#moves do
+  local b=moves[i].bone
+  if b=="Bip001-Pelvis" or b=="Bip001-Spine" or b:find("Thigh",1,true) or b:find("Calf",1,true) or b:find("Foot",1,true) then lateLower=true end
+end
+local ss=state(ctx.struggle)
+check(not lateLower and ss and ss.plan.waist=="Bip001-Spine1" and #ss.plan.legs==0,
+  "late waist cut replans an active struggle without driving the lower half")
 -- Smash while an act and face/pulse are already queued; neither may execute after destruction.
 restart()
 G.slice_bone(pawn,E.mesh,"Bip001-R-Forearm",nil,"test"); run(2)

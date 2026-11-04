@@ -50,7 +50,54 @@ old.__dead = true
 -- (freed: her watches queued by the old one's last poll held it, and asking it crashed the game, playtest)
 old.__freed = true
 local r0 = mark()
+-- A reload can discard the death widgets while a fade or customized-ragdoll overlay is still pending.
+local screen, seen
+seen={}
+local function scan(fn)
+  if type(fn)~="function" or seen[fn] then return end
+  seen[fn]=true
+  for i=1,math.huge do
+    local name,value=debug.getupvalue(fn,i)
+    if not name then break end
+    if name=="screen" and type(value)=="table" and value.revive then screen=value end
+    if name~="_ENV" and type(value)=="function" then scan(value) end
+  end
+end
+for _,callbacks in pairs(F.hooks) do for _,cb in ipairs(callbacks) do scan(cb) end end
+check(screen~=nil,"reload screen state found")
+if screen then
+  local reads={}
+  local function widget(name, children)
+    local w=F.obj(name,"Widget")
+    w.GetChildrenCount=function() reads[name]=(reads[name] or 0)+1; return #(children or {}) end
+    w.GetChildAt=function(_,i) return children[i+1] end
+    w.GetVisibility=function(self) return self.visibility or 0 end
+    w.SetVisibility=function(self,v) self.visibility=v end
+    return w
+  end
+  local death=widget("Dead",{})
+  local other=widget("Health",{})
+  local inner=widget("Inner",{death,other})
+  local outer=widget("Outer",{inner})
+  local root=widget("Root",{outer})
+  local keeps=screen.hud_keeps
+  screen.hud_keeps=function(w) return w.__name=="Dead" end
+  local hidden={}
+  screen.hud_hide(0,root,hidden)
+  screen.hud_keeps=keeps
+  check(#hidden==1 and hidden[1].w==other and other.visibility==1 and death.visibility==nil,
+    "HUD traversal keeps the death branch and hides its unrelated sibling")
+  check((reads.Inner or 0)<=2,"HUD traversal reuses the subtree result")
+end
+local freed=F.obj("old death screen", "UserWidget")
+freed.__freed=true
+if screen then screen.fade={w=freed,t=F.t}; screen.rv.ghost={old=freed}; screen.rv.held={w=1} end
+local errorsBefore=#F.errors
 F.run(9, pawn)
+check(not screen or (screen.fade==nil and screen.rv.ghost==nil),"new world drops old fade and revive widget references")
+local touched=false
+for i=errorsBefore+1,#F.errors do if F.errors[i]:find("old death screen",1,true) then touched=true end end
+check(not touched,"reload never reads the freed old screen")
 -- (the new level's HP bar reads full till the game sets it, after its cutscene)
 E.s.hp = 0.3
 F.run(1, pawn)

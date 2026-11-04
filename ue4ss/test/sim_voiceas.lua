@@ -4,6 +4,18 @@
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
+-- This scenario checks available voices, so do not randomly split or remove the head:
+-- those deaths intentionally stop all face and voice movements.
+local settings = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
+settings:write([[
+local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")
+s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
+s.gore.smash.enabled = false
+s.gore.oddsNear.enabled = false
+s.gore.noSplits = true
+return s
+]])
+settings:close()
 local print = F.say
 local fails = 0
 local function check(c, what)

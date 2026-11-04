@@ -173,7 +173,7 @@ check(called == 0, "laser cuts take priority over Smash Every Death")
 sw.laser_hit, G.blow = laser, blow
 G.smash = smash
 g.smash.always, g.smash.fullBody, g.smash.fullBodyChance = false, true, 1
-local full = { attacker = "Gorilla_1", loc = chest, dir = v(1, 0, 0) }
+local full = { attacker = "Gorilla_1", loc = chest, dir = v(1, 0, 0), impactRadius = 200 }
 swing.who, swing.cls, swing.weapons = "Gorilla_1", "Unknown_C", {}
 g.smash.fullBodyChance=0
 check(sw.smash_kill(pawn, E.mesh, full, "death"), "zero full-body chance still starts torso smash")
@@ -201,7 +201,7 @@ check(volleyHit.volley==2, "two distinct simultaneous projectiles form a volley"
 check(firstVolleyHit.volley==2, "a previously saved lethal hit learns about the later volley impact")
 check(G.smash(pawn,E.mesh,volleyHit,"death"), "projectile volley starts a smash with full-body override off")
 for _ = 1, 100 do F.step(1/60); G.tick(pawn); G.pump() end
-check(E.hiddenBones["Bip001-Spine1"] and E.hiddenBones["Bip001-Pelvis"], "projectile volley destroys the full body")
+check(E.hiddenBones["Bip001-Spine1"] and not E.hiddenBones["Bip001-Pelvis"], "projectile count alone cannot bypass disabled full-body or missing footprint")
 G.cleanup(pawn, E.mesh)
 F.step(0.4)
 sw.projectile_record({t=F.t,loc=chest,src="blueprint",projectile=true},"volley3")

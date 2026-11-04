@@ -1,8 +1,153 @@
 # Changelog
 
-## Unreleased
-
 ## 0.6.4
+
+- Fix the yellow suit's right-arm strap hanging dead after an F9 piece recovery: the cleanup's physics remake stopped simulated accessories with everything else and nothing restarted them. A recovery that undid a piece now schedules the same cloth reset as an equip. `piece`, `clothscan`, `photo`, `f6` and `fall` pass; strap swing after F8 needs an in-game check.
+
+- Fix tower manual ragdolls flinging her kilometers to the origin: stale body velocities are cleared at ragdoll start, and F7 stops an already-flying body before its shove. The log showed pelvis 14-28k cm/s before any push, calf 800k cm/s, mesh 3.4 km off the capsule with zero capsule drift. `sword_return`, `photo_hold`, `capsule`, `f7cloth`, `clothscan`, `cutscene_hair` and `fall` pass; tower F7s need an in-game check.
+
+- Fix the ponytail staying wrong into cutscenes: ambient environment loops (Xion unhide, hill drone, B07 bridge lights) blocked the spawn reset for whole sessions. Only real cutscenes (cinecamera or non-EnvObj sequences) block it now. `clothscan` and `cutscene_hair` pass; cutscene hair needs an in-game look.
+
+- Fix fleet-found ragdoll and recovery bugs: snapshot gripped weapons before release, keep failed weapon restores instead of dropping them, wake a split copy with her half on late cuts, release forced LODs on early F8 recovery and failed cut stages, and retry the capsule reattach. `sword_return` (hair-skip + failure-keep), `photo_hold` (zero velocities), `capsule` (socket clear), `split`, `waist`, `f6`, `photo` and `fall` pass; in-game deaths, splits and F8 timing need a check.
+
+- Fix fleet-found packaging and docs drift: uninstall removes the core and Face paks, `run.sh` header points at the default list, HUD hide timing reads 1 s, the build lists P/Face/Outfits, diagonal parked wording fixed, README test list points at the runner, AGENTS.md scopes bash to Linux, and `settings.default.lua` gains `reviveAt` and `gore.asyncLoad`. No behavior change.
+
+- Keep a sword folded into her hair on its socket through test ragdolls instead of dropping and restoring it: repeated F6/F8 and F10/F8 cycles pitched the pin-blade higher each time. Focused sword simulations pass; repeated test cycles need an in-game check.
+
+- Freeze the ragdoll every frame while photo mode is open: zero body velocities and re-sleep on each hold, keep the capsule from following the body, and re-hold every render frame. The photo log showed IsGamePaused false with the death tick stopped, head drifting 12 cm over one session, then capsule jumps, spin-up and caps left behind as stretched skin. Focused photo simulations pass; in-game settling after photo needs a retest.
+
+- Reduce repeated death-screen lifetime-check work by validating its widget alone when it is the first checked object in a frame. Keep the same polling cadence and object safety checks. Add six one-second post-death timing windows to help diagnose sustained FPS drops; real-world performance needs another playtest.
+
+- Reduce repeated cut work: reuse lifetime-checked, rooted asset wrappers across world changes, and build identical ordinary cap geometry with fewer calculations and allocations. Added slow sound-guard timing to distinguish identity checks from other cue lookup costs. The existing early-audio safety delay remains; game stutter improvements still need a playtest.
+
+- Keep the separated lower half passive when a waist cut happens during an existing struggle: discard the old actions and leg pulses, replan for the upper body, and cancel previously queued lower-body convulsion pulses and jolts. Focused simulations cover late cuts and ordinary waist cuts; real physics still needs a playtest.
+
+- Spread smash chunks over more frames when a spawn takes at least 6 ms, retaining the same chunk counts and effects. This targets the 25–33 ms cold debris steps in the latest log; cut stages remain a separate, unresolved cost and in-game timing needs verification.
+
+- Restore ordinary hit particles and the continuous wound-blood layer that were parked during performance testing. Stump spurts remain, low-HP cuts keep their spurt-only behavior, and continuous layers are queued on separate impact frames. Blood-off and cleanup checks pass; actual appearance, timing and frame cost need an in-game test.
+
+- Move bone-tree lookup and native cut-list caches into a dedicated module, preserving their world-cleanup behavior and existing cut rules. Focused cut-list, cut-stage, split, reload and smash simulations pass; in-game cut behavior and timing need verification.
+
+- Group Tachy bone-component extraction and silver UV mapping with its existing geometry module. A focused check uses the shipped core data to verify bone selection, caching and the silver setting; actual rendered appearance needs a game test.
+
+- Separate player-settings creation, layered tuning/menu overrides and reload notifications from startup orchestration. Focused checks cover file preservation, precedence, menu reset baselines and dependent-module reloads.
+
+- Separate after-death weapon/body intersection geometry from attack gating and cut dispatch; the same anatomical radii, sampling and reach are retained. Focused sweep, crossing, miss and hit-lifecycle simulations pass; real weapon coverage and frame-time changes require an in-game test.
+
+- Make native test results more reliable: reject unknown groups, fail explicitly requested mesh/parity checks when their cache is missing, and keep each parallel mesh job’s exit status. The native lifetime check and cached head-mesh checks pass.
+
+- Move the shared player/boss death-face controller into its own module. A focused simulation checks morph selection, application, cleanup and reloaded settings; player death, reload, voice and boss simulations pass. Face appearance and third-party head swaps still need in-game verification.
+
+- Stabilize the alternate-character voice simulation by selecting a death that permits post-death voice. The previous random split intentionally suppressed all movement and voice, causing an intermittent failure unrelated to voice selection. Five consecutive focused runs pass; split suppression remains separately covered.
+
+- Add a runtime architecture map covering module ownership, lifecycle boundaries and object-lifetime rules.
+
+- Separate frame diagnostics and the engine garbage-collection probe from death-screen orchestration. A focused simulation checks the death-time probe pause, replacement after collection, and restoration of both original GC options. Character-cache, reload and preload simulations pass; in-game frame timing still needs verification.
+
+- Repair the no-montage follow-up simulation: constrain the setup to leave one arm intact, then swing across that arm and assert it is cut. Walking and overhead misses remain covered. The previous test could remove the torso first and then expected an incompatible torso-crossing swing to cut it again.
+
+- Separate gore sound cue selection/throttling and voice playback state from the cut lifecycle, retaining their shared preload lists and existing settings. Focused audio, preload and recovery simulations pass; sound timing and the existing audio-thread crash investigation still need an in-game test.
+
+- Make the native cut-test runner honor process failure and failure lines even if a PASS line was printed; the native unit harness passes. Document representative simulation coverage and limits in `docs/TESTING.md`.
+
+- Include the existing ragdoll diagnostic-cost check in the default Lua suite and reject unsafe scenario names before scratch cleanup. The parked diagonal-cut test remains opt-in.
+
+- Move retained-object lifetime guards into a dedicated module, preserving their per-frame validation and per-poll character-sharing epochs. Focused character-cache, reload, new-object and async-load simulations pass; in-game lifetime and performance behavior still need verification.
+
+- Isolate split-half lid anchor selection in its own module without changing the split rules. Harden the Lua simulation runner so a failed assertion or a crash cannot be hidden by a PASS line. Split and lifecycle simulations pass; the no-montage follow-up fixture was subsequently corrected (above).
+
+- Continue structural cleanup by separating ordinary cap mesh generation and Tachy opening geometry from the gore lifecycle. Geometry and settings are unchanged; appearance still needs in-game verification.
+
+- Begin structural cleanup by moving native slice-response parsing into its own Lua module. Cut and split behavior is unchanged; in-game verification remains useful.
+
+- Reduce repeated lifetime-check overhead: each native batch checks the shared object-array header once and each chunk pointer once, while still validating each object's item, identity and destruction flags. The latest session logged batches up to 113 ms; this targets redundant checks within that group, not a proven full explanation for the spike. Revive-intro opacity sampling now runs only with `gore.probes`, retaining the actual intro, fade and sound. Focused lifetime, character-cache and revive simulations pass; frame-time improvements need an in-game test.
+- Forward Windows native test scenario arguments so focused native checks do not accidentally run the entire native suite.
+
+- Add separate timings for death-start phases, slow grab-watch checks and individual sound lookup/playback to identify the remaining stalls. Preload custom death voices and the current alternate character's voice set through the existing paced async queue; stock voices were already preloaded. The November 4 test still needs another in-game measurement: 69 ms death startup, 20–30 ms sound steps, 19–31 ms cut/open stages and character-lifetime batches were observed. The two observed deaths began before the lethal watch saw zero HP, so the watch's 109–114 ms worst ticks are not evidence of hit selection causing those deaths.
+
+- Drop old revive-screen, overlay and fade references without reading them when a new player pawn is adopted after a world reload. Previously those old widgets could remain in screen state and be touched by later inactive-screen cleanup. The November 4 crash was a game-thread null virtual call during a reload; the dump does not identify the object or prove this was its cause. A focused simulation checks a freed old widget is never read across reload.
+- Reduce death-frame overhead by reusing HUD subtree classification during a single hide walk and skipping the invisible detached-side opening parser for smashes; the surviving stump geometry and blood are unchanged. This targets the latest log's 65 ms HUD step and 10 ms smash opening/ride work, but their individual causes and actual frame-time gains require another playtest. The same session also showed a 52 ms revive step and a 49 ms character-guard batch; those remain separate.
+
+- Remove diagnostic joint-length, cape-stretch and joint-roll snapshots from normal ragdoll startup; they read dozens of sockets and rotations solely for later logs. They remain available with `gore.probes = true`, including their later stretch/roll reports. This targets the latest real death's 66 ms ragdoll setup, but that log did not isolate the snapshot cost, so the improvement needs in-game timing. The separately observed 27–33 ms head-cut and 16–21 ms death-start frames remain.
+
+- Restore the smash blood cloud: local smashes again queue the scaled blood-only burst and hit-blood layer; full-body smashes also get their grinder cloud. Existing blood, burst, splash and custom-asset settings are respected, and effects are preloaded and spread over the existing impact queue. Stump blood keeps the 0.5.5 effect. Visual appearance and runtime cost need an in-game test.
+- Prepare cape physics-parent relationships one body per alive poll, keyed by physics layout and skeletal mesh, then reuse them during ragdoll setup. A cold start completes the same hierarchy on demand. This removes repeated parent-bone reads from setup without changing cape physics. A 66 ms ragdoll setup was logged, but its individual cause was not identified; new per-stage timings will show remaining costs. Separate 18–33 ms cut stages, repeated 46–61 ms hair-reset/cinematic checks and revive-screen spikes remain for further investigation.
+
+- Restore the 0.5.5 `NS_Hit_Flesh_Slice_BloodOnly` stump effect for cuts, local smashes and split openings, replacing the short-lived mesh stream. Its original size, Z-axis orientation, 0.35 s restart interval and 2.5 s duration are retained; the effect asset and its emitters are unchanged. The asset is preloaded, each opening reuses one component, and pending restarts are served fairly one per render frame, with split-opening spawns separated as well. Busy cut/effect work can delay restarts, so visual continuity and frame cost need an in-game check.
+
+- A mesh-stream experiment was replaced by the 0.5.5 blood-only effect above.
+- Reduce cut and smash work seen in the latest log: skip a redundant full side-driver walk for head and torso cuts, avoid writing full cut-outline point arrays to the log, and reuse socket ancestry results within each smash hide. The log now separates bone hiding from attachment work on slow smashes. A 45 ms smash-hide and 20–28 ms cut stages motivated these changes; native cut work and actual gains still need measurement.
+- Soften and space out post-death movement: lower convulsion strength, neck tremor and selection frequency, rarefy headless leg twitches, and reduce struggle speed, stump-reflex strength and update rate. Existing player switches and strength settings still apply; appearance and physics stability need an in-game check.
+
+- Previously restored pulsed Niagara blood spurts at surviving cut and smash stumps and detached cut pieces; now replaced by the 0.5.5 blood-only effect (above). Split seams and low-health cuts retain their respective stump-burst behavior. The hit particle is preloaded, and blood-off still disables it. Appearance and performance need an in-game test.
+
+- Spread normal death setup, ragdoll setup and cut selection across successive frames while capturing the hit immediately. In the latest session death setup and ragdoll setup took 14 ms and 15 ms on a 47 ms tick; hit selection took 3 ms. This adds up to one render frame before cut selection and needs an in-game timing and frame-time check.
+
+- Enable full-body smash eligibility by default and replace its flat any-hit chance with footprint-weighted selection. Measured projectile collision radii and conservative weapon cross-sections weight the contacted body surface; broad, centered hits can become full-body, while narrow hits and unknown sizes stay local. Full-Body Chance remains a 25% maximum by default, multiplied by estimated body coverage squared. Projectile count alone no longer forces full-body destruction or bypasses the off switch. Projectile hits retain an impact-time pose, and known rock callbacks reuse their captured pose. Existing custom target mixes and earlier-cut protections remain. Menu help and README describe the new behavior. Focused geometry, projectile, lifecycle, effect and menu checks pass; contact estimates and runtime cost need an in-game test.
+
+- Fix huge-rock deaths selecting a thigh or forearm because a generic projectile packet bypassed the known Gorilla rock correction. Both the lethal-hit watch and death selection now apply that correction first and retain Eve's captured impact-time pose, so later ragdoll movement cannot change the intended head/upper-body target. Projectile identity and volley accounting are retained; unrelated or stale projectiles are not relabelled. Existing custom smash mix and full-body settings still apply. `sim_rock` covers both callback orders, a shifted ragdoll, the deferred lethal-hit path and real torso/full-body stages; in-game targeting needs retesting.
+- Skip an unused attachment-tree walk when a hair reset only restores collision to its already-tracked components. This removes redundant work from a stage logged at 49–51 ms after respawns/outfit changes, without changing the restoration or reset timing. The full stage cost is not attributed to that walk, and actual frame-time savings need an in-game measurement. Other startup, cut, struggle and recovery spikes remain in the latest log.
+
+- Park the mod-spawned Niagara blood loops, hit effects and smash clouds/bursts; stump spurts were subsequently restored (above). Custom particle paths and saved blood settings cannot turn them back on. Flesh caps, physical meat, cut/smash sounds, floor splats, drips/pools and skin blood are retained. This removes particle work; smooth in-game frame times still require a retest.
+- Identify explosion deaths from Eve's two explosion death shows rather than the nearest enemy's weapon. Those shows carry a dedicated ragdoll marker (702), consumed before the mod's physics setup and restored to the original 700 limit. Confirmed explosions smash her torso under the existing smash/chance/full-body settings and cancel queued blade follow-ups, including a blade judgement or deferred grab blow made before the death show arrived. No speculative splash radius or friendly-projectile proximity detection is added. Death logs now include game-side evidence for explosions that still choose a non-explosion show; corpse-only area damage without a target-aware hit callback remains unconfirmed.
+
+- Blunt swing targeting compares the impact to Eve's captured swing-time pose, rather than the potentially displaced ragdoll; projectile hits without a captured pose retain the live-bone fallback. Torso hits now stay on the torso by default instead of redirecting 75% to a limb or head; explicit torso and full-body settings still apply. A focused shifted-pose smash simulation covers the mismatch; in-game targeting needs retesting.
+- Cache repeated bone-name conversions in struggle and convulsions and the floor-trace library object while valid. These remove repeated lookups without reducing physics update rates. The latest log also contains expensive cut, smash, physics and frame hitches not explained by these lookups; actual frame-time gains remain unmeasured.
+
+- Opening sounds and killing-blow wound cues bypass the global 0.35 s apart gate, which could suppress an opening after a nearby gore sound; the per-window duplicate guard still applies. The log records playback attempts and reports apart-gate and duplicate suppression. Ready opening sounds retain next-frame priority. Actual audibility and timing need an in-game check.
+
+- After-death hits compare approximate body capsules and spheres against sampled blade segments and endpoint/midpoint sweeps; hand attacks use their swept point. Anatomical radii plus 4 cm slack are capped by configured reach, and missing sockets do not register hits. The overhead and direct-crossing simulations pass; sampling, estimated radii and unchanged imported weapon bounds require in-game validation.
+
+- Mid-fight low-health arm cuts spawn one unattached blood burst at each stump, with no attached or looping stump Niagara. The cut splat, floor drips/pools, sounds, caps, blocks and regrow remain; other cut reasons keep their normal stump effects. The developer arm test keys use the same low-health path. `sim_smash_effects` checks both bursts and the absence of attached effects; the appearance needs an in-game check.
+
+- Reuse the native SkeletalMeshComponent class during hair-reset mesh walks instead of looking it up each stage. The walked meshes and reset stages are unchanged; the impact on the logged 45–51 ms `find` ticks is unmeasured.
+
+- Cut frames resolve cut bone indices off the cached bone tree instead of one engine query per bone: detaching a kept chain (a cape) and the kept/gone bone lists of a cut use `M.chain_skip`/`M.bone_indices`, with the engine loop kept as the fallback where the tree isn't built, and the assembled nosink/nocarry/bodies/drivers list of a cut's `n` command is cached per mesh asset and cut shape. This targets the latest session's limb chains stage (19 ms of Lua before its `n` command) and the per-cut list assembly on the death's head cut; the sent commands are unchanged. `sim_cutlist` checks the tree result against the engine loop with zero engine calls on a warm tree; in-game frame times still need measurement.
+
+
+- Split-lid follow now checks every fourth tick after 30 still ticks in a row, resuming full-rate follow on any motion; the lids' follow window still counts skipped ticks, and newly bound lids resume full-rate updates immediately. This targets the latest session's 5–13 ms per-poll `gore lids` cost sustained through whole deaths (one split followed for 662 ticks at 4.4 ms a tick on average). A lid can trail resumed motion by up to three ticks (about 0.1 s). `sim_lid_cadence` checks the cadence, the kept lid and prompt resume; in-game frame times still need measurement.
+
+- Keep ragdoll spin and linear-velocity caps on every tick, including after a quiet period: intermittent checks could miss a brief physics spike completely. This restores the original safety behavior and its per-tick cost; `sim_spin_cadence` checks one-tick impulses.
+
+- Keep checking held death and revive screens every poll: a widget can appear or become visible between checks, so throttling could briefly expose it. `sim_revive_cadence` checks the full-rate hold and on-time show.
+
+- Stop struggle and all convulsions as soon as a vertical split is accepted, including movements and faces already queued; neither completed half can restart them. Ordinary waist cuts and head-loss behavior retain their existing movements. Reduce split hitches by separating lid outline generation, mesh creation, skin binding, spine/neck work, physics-body creation, body-layout checks and held-ragdoll outfit transfers across frames. Split lids reuse projected points, shared skin weights for both faces and cached spine segments, and skip mesh uploads when a half only moves rigidly. This targets the November 4 session's 23-53 ms cut stages, 34-44 ms lid stages, 48-73 ms opening stages and roughly 5 ms lid-follow updates. The extra preparation frames trade some opening latency for smaller work bursts; remaining native/render stalls and real FPS improvement need an in-game retest. Player settings and visual options are preserved.
+
+- Fix delayed cut/smash audio waiting for every queued follow-up cut and earlier blood/meat work: ready opening sounds now play on the next render frame, with no cut/effect work added to that frame. Async preloads now warm lifetime-guarded Lua asset references before use, deduplicate their paths, and check one pending asset at a time in rotation. Bone scans, asset requests/checks, cache warm-up and actor refills run on separate updates, and background preparation pauses while cuts are busy. This targets the latest session's 20–40 ms preload updates and 29–36 ms sound steps; native cut/render stalls and actual FPS improvement still need an in-game retest. Player settings and audio/visual options are preserved.
+
+- Walk the character list once per poll window instead of once per watch phase. Her watches, the enemies' part and the poll each run on a frame of their own and each walked the whole list, with its lifetime checks, before; two walks of every three were wasted on the same game state. Positions still refresh through the clock cache and every consumer still guards dying actors, so follow behavior is unchanged. `sim_charcache` checks the shared walk and the still-batched revalidation; in-game frame times need measurement.
+
+- Never restart the same sound cue twice in one poll window. Forced layers (a smash's crunch and burst landing together) bypass the apart gate, and piling simultaneous voices of one cue onto the audio thread coincided with the latest session's AudioMixerRenderThread access violation, whose last mod line played smash layers. Audibly this changes nothing: a ringing cue drops its restart for seconds either way. The 0.6.4 revert to pre-0.6.3 sound lookup and same-update layers stays; the audio-thread cause itself is not established and needs an in-game test.
+
+- Apply death-face morph weights every other poll. The weights ease on wall-clock curves over half a second or more, so a 66 ms step is invisible, while a face writes a hundred or more morph targets a poll (an 89 ms spike in the latest session). Fades and expiry follow the same time curves; this needs an in-game check.
+
+- Skip the full sort for single-nearest-character lookups (the killing-blow search). The returned entry is the same nearest one; order among equidistant candidates is unchanged in practice.
+
+- Never seed the character list on a frame where a cut is opening. The whole-object-array walk cost 15-69 ms on cut frames; spawns are still caught as they happen by the new-object watch, so only the backfill waits for the first quiet poll. `sim_charcache` checks the wait and the catch-up.
+
+- Resolve each hair bone's first simulating-spine ancestor once per mesh asset instead of walking parent chains on every cloth reset, which put tens of engine reads on a respawn's tick. Simulating state is still asked every time. `sim_clothscan` checks the reuse and the live state.
+
+- Hide the death HUD from 1 s into the death instead of 0.3 s. The widget-tree walk hid the HUD for 12-58 ms on cut-opening frames; every cut and split stage completes before then, and the screen itself fades in at about 7 s, so the visible result is the same.
+
+- Center the fallback stump sphere on its fitted opening when procedural surface creation fails. The latest session reported successful lid creation, so this does not establish the cause of its misplaced stumps.
+
+- Stop retrying settled-limb mesh creation every second when the game refuses to create the component. The limb stays on the original mesh, and a later cut can retry after the old cuts are undone; this failure path was not identified in the latest crash.
+
+- Reuse a lifetime-checked death-screen class during hook setup instead of scanning the object list for each hook. If the class goes away, it is found again before setup continues; the hook registrations are unchanged.
+
+- Reduce temporary allocations in weapon-sweep analysis, which took 64 ms on a low-health hit in the latest session. Sweep samples and hit selection are unchanged; in-game impact needs measurement.
+
+- Separate pooled cap and stub actor refills from bone scans, and skip the attachment inventory on ordinary cut-opening frames unless verbose logging or probes are enabled. The cut visuals and refill targets are unchanged; in-game impact still needs checking.
+
+- Batch character lifetime checks after long pauses even when the guards still appear listed. Previously the first check could expire the rest and repeatedly validate a growing list, a likely cause of the 347 ms character-list stall in the latest session. The crash and misplaced stumps still need investigation.
+
+- Reduce repeated quaternion inversion when preparing bending split lids and avoid per-sample helper allocations in detailed cut-surface generation. Add timing breakdowns for slow character-list updates. The reported mesh stretching and the remaining in-game stalls need further diagnosis.
+
+- Reduce work generating Tachy's detailed cut surfaces by reusing outline calculations across rings and repeated noise samples. Mesh detail and effects are unchanged; in-game frame times still need measurement.
+
+- Reduce repeated work around combat and cuts: character lifetime checks are batched when a previously tracked character returns, and rooted effects, materials and sounds reuse lifetime-guarded objects instead of repeatedly looking them up. This targets the logged character-list and effect-lookup stalls; actual frame times and the reported low-HP arm crash still need an in-game test.
+
+- Menu and other key bindings now accept Ctrl+Shift+Alt together, as well as fewer modifiers. The existing Keys tab can already change the F3 menu binding.
 
 - Prologue Tachy joins the Sandbox Bosses (Tachy (prologue NPC), CharacterTable 20020). Spawning her makes her row mortal (her Immortal_Infinite swapped for its dispel, refused untouched when the dispel isn't there), damageable while one of yours is up, dying by the common ragdoll deaths at scaled HP; everything is put back exactly afterwards. Whether her AI engages Eve is unverified and needs an in-game test: she may stand until cut like a passive boss.
 
@@ -99,8 +244,6 @@
 - Prevented a known startup crash on fresh development installs by disabling the FText signature enabled in the pinned UE4SS archive. Existing UE4SS installations are left unchanged with a warning; installation instructions explain how to disable it.
 
 - Fixed the dropped sword shrinking and staying tiny after Eve loses her right arm alive: a false or interrupted return to her hair now leaves the sword at its original size with physics restored. Needs in-game confirmation.
-
-## Unreleased
 
 ## 0.6.2
 

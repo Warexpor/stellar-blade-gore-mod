@@ -330,6 +330,14 @@ for rel, job in spec["assets"].items():
         lim = props(e).get("ImpulseLimitVelocity")
         if not lim or not lim["Value"] or float(lim["Value"]) > 1000:
             fail.append(f"{tag}: {e['ObjectName']} has no sane ImpulseLimitVelocity")
+        show_name = rel.rsplit("/", 1)[1]
+        explosion = show_name in {"EveRD_Explosion1", "EveRD_Explosion2"}
+        animated = show_name in {"P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3", "P_Eve_Dead_Nikke", "Eve_Dead_Down"}
+        expected_limit = 702.0 if explosion else 701.0 if animated else 700.0
+        if not lim or abs(float(lim.get("Value") or 0) - expected_limit) > 0.01:
+            fail.append(f"{tag}: {e['ObjectName']} expected death marker {expected_limit:g}, got {lim}")
+        if explosion and props(e).get("bOverrideHitBone", {}).get("Value") is not False:
+            fail.append(f"{tag}: explosion no longer uses its centre-of-mass impulse")
         cap = props(e).get("CapsuleComponentFollowingSocketName")
         if not cap or cap["Value"] is not None:
             fail.append(f"{tag}: {e['ObjectName']} still drags the capsule along")

@@ -36,6 +36,7 @@ if [[ ${1:-} == --uninstall ]]; then
   # only ours: UE4SS and other mods stay (--uninstall-all removes UE4SS too)
   rm -rf "$NEW" "$MODS/SBSlice" "${OLDS[@]}" && echo "removed StellarBladeGore and SBSlice from $MODS"
   [[ -f $MODS/mods.txt ]] && sed -i -E '/^\s*(SBSlice|StellarBladeGore)\s*:/d' "$MODS/mods.txt"
+  rm -fv "$GAME/SB/Content/Paks/~mods/ZZ_StellarBladeGore_P."* "$GAME/SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P."*
   exit 0
 fi
 if [[ ${1:-} == --uninstall-all ]]; then

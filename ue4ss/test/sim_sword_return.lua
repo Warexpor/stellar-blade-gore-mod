@@ -50,4 +50,65 @@ end
 gripped[1]=saved
 gripBack()
 check(weapon.scale.X==2 and weapon.scale.Y==3 and weapon.scale.Z==4, 'grip recovery restores sword scale')
+-- A sword folded into the hair (SC_HairACC) stays attached instead of dropping.
+local drop = up(A.start, 'drop_weapons')
+if drop then
+  local oldStatic = StaticFindObject
+  StaticFindObject = function() return {} end
+  local function fakeW(name, sock)
+    return {
+      GetAddress = function() return sock == "SC_HairACC" and 101 or 102 end,
+      IsVisible = function() return true end,
+      SkeletalMesh = { GetFName = function() return { ToString = function() return name end } end,
+        GetImportedBounds = function() return { Origin = { X = 0, Y = 0, Z = 0 }, BoxExtent = { X = 10, Y = 2, Z = 1 } } end },
+      GetAttachSocketName = function() return { ToString = function() return sock end } end,
+      GetAttachParent = function() return parent end,
+      K2_GetComponentLocation = function() return v(0, 0, 100) end,
+      K2_GetComponentRotation = function() return { Pitch = 0, Yaw = 0, Roll = 0 } end,
+      GetForwardVector = function() return v(1, 0, 0) end,
+      GetRightVector = function() return v(0, 1, 0) end,
+      GetUpVector = function() return v(0, 0, 1) end,
+      RelativeLocation = v(1, 2, 3), RelativeRotation = { Pitch = 1, Yaw = 2, Roll = 3 }, RelativeScale3D = v(1, 1, 1),
+      K2_AttachToComponent = function() end,
+    }
+  end
+  local hairW, handW = fakeW("SwordHair", "SC_HairACC"), fakeW("SwordHand", "Bip001-R-Hand")
+  local fakePawn = {
+    AddComponentByClass = function()
+      return {
+        K2_SetWorldLocationAndRotation = function() end, SetBoxExtent = function() end,
+        SetHiddenInGame = function() end, SetCollisionProfileName = function() end,
+        SetCollisionResponseToChannel = function() end, SetCollisionEnabled = function() end,
+        SetSimulatePhysics = function() end, SetMassOverrideInKg = function() end,
+        SetPhysicsLinearVelocity = function() end, SetPhysicsAngularVelocityInDegrees = function() end,
+        K2_GetComponentLocation = function() return v(0, 0, 90) end,
+        K2_DestroyComponent = function(self) self.dead = true end,
+      }
+    end,
+    SearchInfoList = nil,
+    MeshInfoList = { ForEach = function(_, fn) fn(nil, { get = function() return { MeshComponent = hairW, MeshSlot = 5 } end }); fn(nil, { get = function() return { MeshComponent = handW, MeshSlot = 6 } end }) end },
+  }
+  local fakeMesh = {
+    GetPhysicsLinearVelocity = function() return { X = 0, Y = 0, Z = 0 } end,
+    GetSocketLocation = function() return v(0, 0, 0) end,
+  }
+  local okDrop, resDrop = pcall(drop, fakePawn, fakeMesh, {})
+  local keptHair = true
+  for _, d in ipairs(dropped) do if d.comp and d.comp.GetAddress and d.comp:GetAddress() == 101 then keptHair = false end end
+  check(okDrop and keptHair and #dropped >= 1, 'folded sword stays in her hair, hand sword drops')
+  StaticFindObject = oldStatic
+end
+-- A failed reattach keeps the record instead of losing the sword.
+do
+  local badW = { scale = v(1, 1, 1), loc = v(0, 0, 0) }
+  function badW:K2_AttachToComponent() error("no parent") end
+  function badW:K2_SetRelativeLocationAndRotation() end
+  function badW:SetRelativeScale3D() end
+  local badSaved = { comp = badW, parent = {}, box = { K2_DestroyComponent = function() end },
+    loc = v(1, 2, 3), rot = { Pitch = 0, Yaw = 0, Roll = 0 }, scale = v(2, 3, 4) }
+  dropped[1] = badSaved
+  local n = back()
+  check(n == 0 and #dropped == 1 and dropped[1] == badSaved, 'failed restore keeps the weapon record')
+  dropped[1] = nil
+end
 print(fails==0 and 'PASS' or 'FAIL')

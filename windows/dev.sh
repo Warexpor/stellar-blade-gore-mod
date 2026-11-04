@@ -12,7 +12,7 @@ case "${1:-build}" in
   build-install)  exec bash build.sh --install ;;
   native)         exec bash native/sbslice/build.sh "$SB_CACHE/sbslice" ;;
   test-lua)       exec bash ue4ss/test/run.sh "${@:2}" ;;
-  test-native)    exec bash native/sbslice/test/run.sh ;;
+  test-native)    exec bash native/sbslice/test/run.sh "${@:2}" ;;
   package)        exec bash package.sh ;;
   check-package)  export SB_RELEASE="$SB_CACHE/package-check"; exec bash package.sh ;;
   install)        exec bash ue4ss/install.sh ;;

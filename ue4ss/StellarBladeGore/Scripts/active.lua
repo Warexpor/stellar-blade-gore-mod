@@ -99,6 +99,8 @@ function M.track(pawn)
   if not v then return end
   speeds[#speeds + 1] = v
   if #speeds > SPEED_SAMPLES then table.remove(speeds, 1) end
+  local mesh = try(function() return pawn.Mesh end)
+  if valid(mesh) and M.warm_cape then M.warm_cape(mesh) end
 end
 
 -- by physics asset address: its bodies' bones, and each accessory's anchor (anchor_of), read once. Read again for
@@ -124,6 +126,36 @@ end
 local function bodies(mesh)
   local l = layout(mesh)
   return l and l.bones or {}
+end
+-- The nearest physics-body parent depends on both the skeleton and physics asset. Prepare one body per alive
+-- poll, so cape setup need not walk dozens of parent bones in the ragdoll-start frame.
+function M.cape_parents(mesh, budget)
+  local l = layout(mesh)
+  local sm = try(function() return mesh.SkeletalMesh end)
+  local key = valid(sm) and addr(sm)
+  if not (l and key) then return nil end
+  l.capeParents = l.capeParents or {}
+  local x = l.capeParents[key]
+  if not x then
+    x = { i = 1, up = {}, has = {}, mesh = sm }
+    for _, b in ipairs(l.bones) do x.has[b] = true end
+    l.capeParents[key] = x
+  end
+  if not valid(x.mesh) then l.capeParents[key] = nil; return nil end
+  local limit = math.min(#l.bones, x.i + (budget or #l.bones) - 1)
+  while x.i <= limit do
+    local b, parent = l.bones[x.i], l.bones[x.i]
+    for _ = 1, 64 do
+      parent = try(function() return mesh:GetParentBone(FN[parent]):ToString() end)
+      if not parent or parent == "None" or x.has[parent] then break end
+    end
+    if parent and x.has[parent] then x.up[b] = parent end
+    x.i = x.i + 1
+  end
+  return x.i > #l.bones and x.up or nil
+end
+function M.warm_cape(mesh)
+  if cfg().capeHang ~= false then M.cape_parents(mesh, 1) end
 end
 
 local function mass(mesh, bone) return try(function() return mesh:GetBoneMass(FN[bone], true) end) end
@@ -419,21 +451,25 @@ end
 
 local function weapons_back()
   local n = 0
+  local keep = {}
   for _, d in ipairs(dropped) do
     local w = d.comp
+    local done = false
     if d.copy then
       if valid(w) then try(function() w:K2_DestroyComponent(w) end) end
+      done = true
     elseif valid(w) and valid(d.parent) then
       if try(function()
         w:K2_AttachToComponent(d.parent, d.socket or FName("None"), 2, 2, 2, false)
         if d.loc and d.rot then w:K2_SetRelativeLocationAndRotation(d.loc, d.rot, false, {}, true) end
         if d.scale then w:SetRelativeScale3D(d.scale) end
         return true
-      end) then n = n + 1 end
+      end) then n = n + 1; done = true end
     end
-    if valid(d.box) then try(function() d.box:K2_DestroyComponent(d.box) end) end
+    if valid(d.box) and done then try(function() d.box:K2_DestroyComponent(d.box) end) end
+    if not done then keep[#keep + 1] = d end
   end
-  dropped = {}
+  dropped = keep
   return n
 end
 
@@ -680,8 +716,17 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
   for _, w in ipairs(cand) do
     local a = try(function() return w:GetAddress() end)
     if a and not held[a] and (not only or only(w)) then
-      held[a] = true -- the same component can occur in multiple slots or in extra
-      list[#list + 1] = w
+      -- A sword folded into her hair rides SC_HairACC like her pin accessory: it stays in her hair through the
+      -- ragdoll instead of dropping to the floor. Dropping and restoring it each death accumulated a pitch error
+      -- (F6/F10 cycles faced the pin higher each time, playtest) from the saved relative snapshot.
+      local sock = try(function() return w:GetAttachSocketName():ToString() end)
+      if sock == "SC_HairACC" then
+        log(string.format("weapon kept in her hair: %s on %s, not dropped",
+          tostring(try(function() return w.SkeletalMesh:GetFName():ToString() end)), tostring(sock)))
+      else
+        held[a] = true -- the same component can occur in multiple slots or in extra
+        list[#list + 1] = w
+      end
     end
   end
   if only and #list == 0 then return "" end
@@ -808,15 +853,20 @@ local function grip_release(pawn, mesh, g)
   run.gripAt = nil
   local gp = g.grip or {}
   local out = {}
-  for a, o in pairs(gripped) do
-    if valid(o.comp) and valid(pawn) then
-      local r = drop_weapons(pawn, mesh, g, function(w) return addr(w) == a end,
-        { toss = gp.toss or 30, spin = gp.spin or 0.2, hand = o.hand })
-      if r ~= "" then out[#out + 1] = r:gsub("^, dropped ", "") end
+  local keys = {}
+  for a in pairs(gripped) do keys[#keys + 1] = a end
+  for _, a in ipairs(keys) do
+    local o = gripped[a]
+    if o then
+      if valid(o.comp) and valid(pawn) then
+        local r = drop_weapons(pawn, mesh, g, function(w) return addr(w) == a end,
+          { toss = gp.toss or 30, spin = gp.spin or 0.2, hand = o.hand })
+        if r ~= "" then out[#out + 1] = r:gsub("^, dropped ", "") end
+      end
+      -- drop_weapons moves the original attachment into dropped only after a box exists. Keep the record on failure
+      -- (including a hidden weapon), so recovery can still put it back on its original socket.
+      if not valid(o.comp) then gripped[a] = nil end
     end
-    -- drop_weapons moves the original attachment into dropped only after a box exists. Keep the record on failure
-    -- (including a hidden weapon), so recovery can still put it back on its original socket.
-    if not valid(o.comp) then gripped[a] = nil end
   end
   return table.concat(out, ", ")
 end
@@ -1231,15 +1281,8 @@ local function hang_capes(pawn, mesh, g)
   local list = bodies(mesh)
   local has, up = {}, {}
   for _, b in ipairs(list) do has[b] = true end
-  -- each body's parent body
-  for _, b in ipairs(list) do
-    local p = b
-    for _ = 1, 64 do
-      p = try(function() return mesh:GetParentBone(FName(p)):ToString() end)
-      if not p or p == "None" or has[p] then break end
-    end
-    if p and has[p] then up[b] = p end
-  end
+  -- Reuse the per-skeleton/physics layout prepared during play; a cold start still computes the same map.
+  up = M.cape_parents(mesh) or {}
   -- the arm a chain hangs off: its parent body, or the arm's twist body between (CH_P_EVE_09's capes hang off
   -- Ab-*-UpperArm-Tw1, which has a body of its own: the twist body itself was hung off the shoulder, playtest). A twist
   -- body is never a cape's root
@@ -1360,13 +1403,27 @@ end
 function M.start(pawn, mesh, kind, dir)
   local g = cfg()
   if g.enabled == false then return end
+  local profile, last = {}, os.clock()
+  local function phase(label)
+    local now = os.clock(); local ms = (now - last) * 1000; last = now
+    if ms >= 1 then profile[#profile + 1] = string.format("%s %.0f", label, ms) end
+  end
   -- a restart in the same death (an animated fall turning ragdoll for a split) keeps her broken and dropped weapons:
   -- the full stop mended the sword the blow had just broken and put it back in her hand (playtest)
   if run then M.stop(pawn, true) end
   if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
   run = { mesh = mesh, t = 0, masses = {}, still = 0, hung = {} }
-  run.joints, run.capes, run.probe = joint_lengths(mesh), cape_lengths(mesh), 1
-  run.rolls = joint_rolls(mesh, true)
+  -- Tower manual ragdolls flung her 3 km to the origin (pelvis 27k cm/s, calf 800k cm/s before any push): stale body
+  -- velocities from the previous state survived into the new ragdoll. Clear them before any impulse.
+  try(function() mesh:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
+  try(function() mesh:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
+  -- These snapshots are diagnostics only, never used by the ragdoll or cut mechanics. Reading dozens of
+  -- sockets and rotations during every real death adds work to the same setup frame as masses and drives.
+  if (ctx.tune.gore or {}).probes == true then
+    run.joints, run.capes, run.probe = joint_lengths(mesh), cape_lengths(mesh), 1
+    run.rolls = joint_rolls(mesh, true)
+    phase("joint probes")
+  end
   extra = {}
   if g.bisect and kind == "sandbox" then
     bisect_n = bisect_n + 1
@@ -1375,8 +1432,13 @@ function M.start(pawn, mesh, kind, dir)
     g = variant_cfg(g, run.variant)
   end
   local plain = run.variant == 2
-  local parts = plain and {} or { set_masses(mesh, g, run), cap_spin(mesh, g) }
-  if not plain then parts[#parts + 1] = hang_capes(pawn, mesh, g); parts[#parts + 1] = jiggle(pawn, mesh, g) end
+  local parts = {}
+  if not plain then
+    parts[#parts + 1] = set_masses(mesh, g, run); phase("masses")
+    parts[#parts + 1] = cap_spin(mesh, g); phase("spin")
+    parts[#parts + 1] = hang_capes(pawn, mesh, g); phase("capes")
+    parts[#parts + 1] = jiggle(pawn, mesh, g); phase("jiggle")
+  end
   if kind == "death" then
     parts[#parts + 1] = momentum(mesh, g)
     -- the death key pushes after ImpulseDelayTime (0.01 s), so its direction is read a couple of ticks later
@@ -1394,8 +1456,10 @@ function M.start(pawn, mesh, kind, dir)
   else
     parts[#parts + 1] = drop_weapons(pawn, mesh, g)
   end
+  phase("fall and weapon")
   speeds = {}
   log(kind .. ": " .. table.concat(parts, ""))
+  if #profile > 0 then log("start timings: " .. table.concat(profile, ", ")) end
 end
 
 -- a piece cut off her while she stands (gore, F9): no ragdoll runs, so give her bodies their human masses now; put
@@ -1656,8 +1720,10 @@ end
 
 -- how far p is over whatever is under it (a visibility trace down to 10 m, her own actor ignored): nil with nothing
 -- there (a floor that doesn't block the trace too: taken as unknown, left alone)
+local ksLib = nil
 function M.over_floor(pawn, p)
-  local ks = try(function() return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary") end)
+  if not valid(ksLib) then ksLib = try(function() return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary") end) end
+  local ks = ksLib
   if not (valid(ks) and p) then return nil end
   local hit = {}
   local ok = try(function()
@@ -2116,7 +2182,9 @@ function M.on_cut(mesh, bone, alive)
   -- a cut on her settled body (a hit after her death): woken and let settle again, or the piece took its throw asleep
   -- or stopped and barely moved (playtest: an arm off 1 s before she settled, "no push")
   if run and valid(run.mesh) and (run.asleep or run.settled) then
-    try(function() run.mesh:WakeAllRigidBodies() end)
+    local comps = { run.mesh }
+    for _, c in ipairs(extra) do comps[#comps + 1] = c end
+    for _, c in ipairs(comps) do if valid(c) then try(function() c:WakeAllRigidBodies() end) end end
     run.asleep, run.settled, run.awake, run.still = false, nil, nil, 0
     log("woken for a cut (" .. b .. ")")
   end
@@ -2136,7 +2204,7 @@ function M.stop(pawn, restart)
     local ng = next(gripped) and grip_back() or 0
     if ng > 0 then log(string.format("%d weapons back from her grip onto their sockets", ng)) end
     local nw = #dropped > 0 and weapons_back() or nil
-    if nw then log(string.format("%d weapons back on their sockets", nw)) end
+    if nw and nw > 0 then log(string.format("%d weapons back on their sockets", nw)) end
     -- a split's copy: gore destroys it as she gets up. Kept here, the next death's hand easing (an animated fall's
     -- sword cut, before any start cleared it) read the freed copy: crash in UE4SS (playtest, the death after a split)
     extra = {}
@@ -2207,7 +2275,10 @@ function M.twitch(s)
 end
 
 -- photo mode over a death she lies still in: her bodies, and a split's copy's, put back to sleep every tick it is on
--- and a second after. A split's halves, asleep, moved her head 2 cm as it opened and 6 more as it closed (playtest)
+-- and a second after. A split's halves, asleep, moved her head 2 cm as it opened and 6 more as it closed (playtest).
+-- Photo mode does not pause the engine (IsGamePaused stayed false in the photo log) while the death tick stops, so
+-- physics keeps stepping between polls: zero velocities on every hold or a woken body drifts (12 cm head drift over
+-- one photo session) and its caps/lids, frozen with the tick, are left behind as stretched skin.
 function M.hold_still()
   if not run or not run.asleep then return 0 end
   local n = 0
@@ -2215,6 +2286,7 @@ function M.hold_still()
   for _, c in ipairs(extra) do comps[#comps + 1] = c end
   for _, c in ipairs(comps) do
     if valid(c) then
+      stop_all(c)
       if run.piece or not try(function() c:PutAllRigidBodiesToSleep(); return true end) then sleep(c) end
       n = n + 1
     end
