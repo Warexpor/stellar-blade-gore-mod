@@ -127,6 +127,17 @@ function M.near_odds(mesh, h, hit)
   return w
 end
 
+-- whether a cut at the hit waits for her death instead of opening on her animated body now:
+-- a split always does (it needs her ragdoll); in an enemy's grab her head and body do too, as the finisher still
+-- poses her neck and waist (a cut opened under it read as reattached once the show moved her on). Limbs come off
+-- at once, as before
+function M.early_waits(kind, h)
+  if not (h and h.early) then return false end
+  if kind == "limb" then return false end
+  if (kind == "head" or kind == "torso") and not h.grab then return false end
+  return true
+end
+
 function M.blow(pawn, mesh, h, why)
   local n, how = blade_plane(h)
   -- a hit after her death with no plane (a bare hand's swing along the attacker's forward, no attack direction from
@@ -148,15 +159,14 @@ function M.blow(pawn, mesh, h, why)
     return M.joint(mesh, b)
   end
   local function go(at, why, kind, out, plane, blade)
-    -- a cut at the hit, before her death is reported (h.early, main.lua): a limb, the head or her body, which come off
-    -- her animated body as F9's do (and open over openTime); a split waits for the death (it needs her ragdoll), and
-    -- in an enemy's grab (h.grab) her body too: her legs stood on in its pose with nothing above them
-    if h.early then
-      if not (kind == "limb" or kind == "head" or (kind == "torso" and not h.grab)) then
-        M.held = {}
-        log(string.format("blade (early): %s %s waits for her death", kind, blade and blade.bone or ""))
-        return false
-      end
+    -- a cut at the hit, before her death is reported (h.early, main.lua): a limb comes off
+    -- her animated body as F9's do (and opens over openTime); a split waits for the death (it needs her ragdoll), and
+    -- in an enemy's grab (h.grab) her head and body wait too: the finisher still poses her neck and waist, and a cut
+    -- opened under it read as reattached once the show moved her on
+    if M.early_waits(kind, h) then
+      M.held = {}
+      log(string.format("blade (early): %s %s waits for her death", kind, blade and blade.bone or ""))
+      return false
     end
     mark("blow: plane")
     local ref = blade and blade.bone or (kind == "head" and "Bip001-Neck") or "Bip001-Spine1"

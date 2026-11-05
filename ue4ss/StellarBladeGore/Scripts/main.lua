@@ -2117,7 +2117,7 @@ function hm.lethal_watch(pawn, mesh)
   if gb then
     hm.lethal.grab = { obj = gb.obj, mont = gb.mont, cls = gb.cls, t0 = os.clock() }
     -- (no montage: the grab lasts while its hand stays on her, enemies.grab_holds). The cut comes now as below, a
-    -- limb or the head falling off her while it holds her; her ragdoll and a split wait for it to let go
+    -- limb falling off her while it holds her; her head, body and ragdoll and a split wait for it to let go
     log(string.format("lethal hit: in %s's grab (%s, %s on her for %.1f s): her death waits for it to let go, the cut now",
       gb.cls, gb.mn, gb.how, gb.last - gb.since))
   end
@@ -2130,8 +2130,8 @@ function hm.lethal_watch(pawn, mesh)
       return
     end
   end
-  -- a limb, the head or her body the blade took is cut now, on her animated body (gore.blow's h.early), and opens
-  -- over openTime; a split waits for the death, and so do the blow's further cuts (gore.release_held at the death)
+  -- a limb the blade took is cut now, on her animated body (gore.blow's h.early), and opens
+  -- over openTime; her head and body in a grab and a split wait for the death, and so do the blow's further cuts (gore.release_held at the death)
   if g.cutAtHit == false or g.sliceOnDeath == false then return end
   if math.random() > (g.sliceChance or 1.0) then hm.lethal.roll = "none"; return end
   hm.lethal.near = gore.near_odds(mesh, h, at)
@@ -2150,7 +2150,7 @@ function hm.lethal_watch(pawn, mesh)
   h = h or death_hit(pawn, mesh)
   if not (h and not h.made and (h.n or (h.dir and h.fwd))) then return end
   h.early = true
-  -- (in a grab her body's cut waits too, as a split does: off at the waist, her legs stood on in its pose)
+  -- (in a grab her head and body cuts wait too, as a split does: the finisher still poses her neck and waist)
   h.grab = hm.lethal.grab and true or nil
   local fly = h.push or h.dir
   if fly then gore.aim(fly) end
@@ -2160,7 +2160,7 @@ function hm.lethal_watch(pawn, mesh)
   elseif ok then hm.grab_keep(h)
   else log("lethal hit: early cut failed: " .. tostring(err)) end
 end
--- a killing blow in a grab whose cut waits for her death (a split, her body): kept for it, as the grab can hold her
+-- a killing blow in a grab whose cut waits for her death (a split, her head or body): kept for it, as the grab can hold her
 -- for longer than death_hit remembers a blow (its later hits would be taken instead). gore.blow carries its plane
 -- from her pose at the blow to her pose then (h.pose)
 function hm.grab_keep(h)

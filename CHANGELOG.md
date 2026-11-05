@@ -4,6 +4,8 @@
 
 In development; not released.
 
+- In an enemy's grab, her head now waits for her death like her body and a split do, instead of coming off at the hit. A beheading opened under a finisher read as reattached once the show moved her on; only limbs come off while she is held. Covered by a new `grab_cut` simulation; finisher sync still needs an in-game check.
+
 - Restore the 0.5.5 pulsed blood-only Niagara effect alone on cut and smash stumps, removing the later continuous loop. Keep the original pulse settings and both surviving openings; the visual result needs a game check.
 - Keep timed-out preload requests until the safe loading window opens, and prioritize their paced fallback. This targets the latest session's first-use sound and effect lookup stalls; native cut costs and in-game frame times still need measurement.
 - Spread ordinary smash chunks one per update and full-body bursts two per update, keeping torso bursts at two so all pieces still emerge promptly. Particle and chunk appearance and frame cost need a playtest.
