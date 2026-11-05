@@ -4,6 +4,7 @@
 local F = require("fake")
 local E = require("eve")
 local pawn = E.make(F)
+F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
 -- This scenario checks available voices, so do not randomly split or remove the head:
 -- those deaths intentionally stop all face and voice movements.
 local settings = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
@@ -35,7 +36,14 @@ for i = 1, 5 do local n = string.format("vo_eve_die_%02d_VO", i); sound("/Game/S
 F.objects["/Script/Engine.Default__GameplayStatics"] = F.obj("Default__GameplayStatics", "GameplayStatics", {
   SpawnSoundAttached = function() return F.obj("AudioComponent", "AudioComponent") end })
 
+local original_dofile, G = dofile, nil
+dofile = function(path)
+  local result = original_dofile(path)
+  if path == "ue4ss/Mods/StellarBladeGore/Scripts/gore.lua" then G = result end
+  return result
+end
 local ok, err = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua")
+dofile = original_dofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -52,6 +60,7 @@ F.run(1, pawn)
 check(F.find("she looks like tachy", at) ~= nil, "Tachy's body on her: seen as Tachy")
 check(cry(at):find("vo_Tachy_dmg_xl") ~= nil, "her cry a Tachy recording (" .. cry(at) .. ")")
 F.run(6, pawn)
+check(#G.cut_parts(E.mesh) > 0, "Tachy voice case has an actual limb cut")
 local soft = F.find("vo_Tachy_dmg_s%d_VO at", at) or F.find("vo_Tachy_breath_s%d_VO at", at)
 check(soft ~= nil and not F.find("vo_eve_cinematic", at), "her breaths and moans after it Tachy's (" .. tostring(soft) .. ")")
 next_life()

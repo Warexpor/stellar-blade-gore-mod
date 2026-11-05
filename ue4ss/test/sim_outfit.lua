@@ -111,7 +111,14 @@ end
 
 local pawn = dress(E.make(F))
 wear(VANILLA)
+local original_dofile, G = dofile, nil
+dofile = function(path)
+  local result = original_dofile(path)
+  if path == DIR .. "gore.lua" then G = result end
+  return result
+end
 local ok, err = pcall(dofile, DIR .. "main.lua")
+dofile = original_dofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -125,7 +132,7 @@ local function f6_death(tag, physics)
   check(l and l:find("physics=" .. physics, 1, true) ~= nil, tag .. ": ragdoll on " .. physics .. " (" .. tostring(l and l:match("physics=%S+")) .. ")")
   check(not F.find("=== ragdoll #%d+ end", at), tag .. ": the ragdoll still runs 3 s in")
   check(M.mesh:IsSimulatingPhysics(F.fname("Bip001-Pelvis")) == true, tag .. ": her pelvis simulates")
-  check(F.find("gore: cut Bip001%-%S+ %(death%)", at) ~= nil and not F.find("undone", at), tag .. ": the cut made and kept")
+  check(#G.cut_parts(M.mesh) > 0, tag .. ": an actual cut is made and kept")
   if fails > 0 then dump(at, { "ragdoll #", "physfix", "cut", "undone" }) end
   F.press("F8", "")
   F.run(4, pawn)

@@ -1,6 +1,99 @@
 # Changelog
 
-## 0.6.5
+## 0.7.0
+
+In development; not released.
+
+- Restore the 0.5.5 pulsed blood-only Niagara effect alone on cut and smash stumps, removing the later continuous loop. Keep the original pulse settings and both surviving openings; the visual result needs a game check.
+- Keep timed-out preload requests until the safe loading window opens, and prioritize their paced fallback. This targets the latest session's first-use sound and effect lookup stalls; native cut costs and in-game frame times still need measurement.
+- Spread ordinary smash chunks one per update and full-body bursts two per update, keeping torso bursts at two so all pieces still emerge promptly. Particle and chunk appearance and frame cost need a playtest.
+- Allow an uncut body lying on its side to attempt a rise and a face-down one to curl, and ensure its first available movement is not repeatedly replaced with lying still. The latest log showed a sideways plan ending with no acts; real physics still needs verification.
+
+- Group nearby weapon and pose-history tracking with its per-world cache reset. Focused attack and character-cache simulations pass; real weapon timing needs a playtest.
+
+- Group blade-plane hit decisions and follow-up cut selection apart from the gore scheduler, retaining live access to its queues and aim state. Focused blade and split simulations pass; real-game cut placement needs a playtest.
+
+- Group smash dispatch, piece hiding and restoration, chunks and blood effects into a lifecycle module. Focused smash and enemy cleanup simulations pass; actual visuals and engine timing need a playtest.
+
+- Group low-health arm restrictions, settling, camp recovery and regrowth into one lifecycle module. Focused simulations cover cuts, settings changes, recovery, camp reloads and piece copies; real-game behavior needs a playtest.
+
+- Separate killing weapon-sweep selection from the main loop while retaining live settings and object guards. Simulations compare the selected geometry with an independent reference and check settings reload; real weapon timing needs a playtest.
+
+- Group split preparation and both staged native cut operations, retaining the owning lifecycle’s rollback and opening. Direct checks cover prior cuts, copy failure, handoff and degenerate halves; real split behavior still needs a playtest.
+
+- Separate split spine-break selection from staged execution and add direct checks for limb attachment and missing bones. The real split physics still needs an in-game check.
+
+- Drop old split-rig references and outfit animation caches on world change, avoiding later reads of freed meshes or stale address-based animation state. Outfit controls are grouped together; simulations cover cleanup and address reuse, while real reloads need verification.
+
+- Separate split-plane, body-side and blade-angle geometry from staged cut execution. Focused geometry and split simulations pass; real cut positions and appearance still need in-game verification.
+
+- Group spawn and outfit cloth reset, collision restoration and hair simulation in one module. Focused interruption and recovery simulations pass; real hair and outfit behavior still need an in-game check.
+
+- Strengthen low-health arm and fall simulations to check cut records through recovery, outfit changes and settings reload; these remain fake-game checks.
+
+- Avoid duplicate successful joint reads when weapon-sweep selection falls back to the current pose. Each sweep samples afresh and failed reads can retry; simulated geometry matches the reference, with real-game timing still to verify.
+
+- Avoid repeated successful socket reads for shared limb joints within one post-death hit-geometry calculation. The next calculation still samples a fresh pose and failed reads can retry; in-game timing and hit appearance need verification.
+
+- Separate follow-up weapon-hit selection and post-death projectile dispatch from the main death loop, keeping the shared reset state and live dependencies. Focused simulations pass; real attack timing and hit geometry need an in-game check.
+
+- Separate projectile impact evidence, geometry and rock correction from the main hit loop; post-death queue ownership stays with the death lifecycle. Fake-game projectile scenarios pass; actual hook timing and hit location need in-game verification.
+
+- Separate blunt-versus-sharp hit classification and smash dispatch from the death loop, keeping live settings and swing state. The classifier and projectile simulations pass; real attacks still need in-game verification.
+
+- Preserve copy updates queued during synchronization and stop remaining batches when recovery removes the copies. Focused simulations cover re-entrant updates, recovery, list replacement and retry after errors; real-game callback timing still needs verification.
+
+- Fix synchronization and recovery of more than 16 external mesh copies by batching native commands. Copy discovery and synchronization now live in a dedicated module; compatibility with real mods still needs an in-game check.
+
+- Separate living-hit decal placement, healing and cleanup from the gore lifecycle. A focused simulation covers placement and removal; the unfinished feature remains disabled by default and needs in-game verification.
+
+- Keep pool, smash-profile and regrowth list reads current across engine callbacks that can trigger recovery. Focused re-entry checks cover tracker creation and pool growth; real engine behavior still needs a playtest.
+
+- Separate smash target selection, impact coverage and remaining-flesh calculations from smash effects and lifecycle, retaining the existing choice and geometry rules. Real hit selection and appearance still need an in-game check.
+
+- Run the existing Lua syntax and unexpected-global checks before simulations as well as installation. A focused preflight test checks valid scripts, missing globals and syntax errors; when no compiler is available the check reports that it was skipped.
+
+- Group background bone preparation and paced asset preloading into a dedicated watch module. Existing scan cadence and sound delay remain; the preload test now also detects exceptions hidden by the main-loop guard. Game loading and frame timing still need verification.
+
+- Separate the staged-cut and impact-work frame scheduler, retaining queue cancellation, priority and timing. It refreshes the queue view after callbacks that can change it; game timing and frame cost need verification.
+
+- Group blood-pool trackers, decals, spawning and cleanup into a dedicated lifecycle module. It reads current player/enemy lists after cleanup replaces them and retains ownership and work budgets; game appearance, cleanup and frame cost need verification.
+
+- Separate floor tracing and bounded pool geometry checks from blood-pool scheduling and ownership. Existing trace limits and geometry remain; in-game pool appearance and frame cost need verification.
+
+- Group the Lua native handshake, command dispatch and seam hold into a bridge module. It retains copy invalidation and existing early exits, with focused bridge checks; native interaction and game performance still need an in-game check.
+
+- Group regrowth copy creation, dissolve materials, sink handoff and cleanup in one module, using current cut/copy state across recovery. Regrowth appearance and real object lifetime still need an in-game check.
+
+- Separate gore ownership tagging and guarded enemy-object access. The ownership code reads current lists after cleanup replaces them, and a regression simulation checks cleanup and callback failure. Real enemy lifetimes still need an in-game check.
+
+- Separate the player skin blood ramp and recovery state from the cut lifecycle. The ramp, restoration, world-reset handoff and stains compatibility are covered by focused simulations; appearance still needs an in-game check.
+
+- Group guarded asset lookup and world-reset cache handling separately from the gore lifecycle; rooted package guards still survive world changes and are revalidated before use. In-game loading and lifetime behavior need verification.
+
+- Fix enemy smash-chunk blood trackers surviving enemy cleanup or being removed with the player: front-inserted trackers now receive their owner when created. The regression simulation checks enemy cleanup and player recovery independently; in-game enemy effects need verification.
+
+- Separate native asset rooting and asynchronous preload requests from the gore lifecycle, retaining the scheduler, rooted-object state and delayed sound loading. Game-side loading and stutter behavior still need verification.
+
+- Audit the simulation inventory and strengthen no-split checks to assert actual cuts and cleanup instead of relying on log text. The random-death test previously passed despite every native cut failing; its fixture now supplies a successful fake response. Fall, low-health arm and animated-death tests now also check simulated cut records or constraint calls in their main cases. The follow-up-hit fixtures also enforce their intended limb-only setup and verify resulting cut records; F6, outfit and staged-cut checks now inspect cut state directly, recovery during a pending cut is covered, and the alternate-character voice fixture now runs with a successful simulated cut. Other log-heavy assertions remain identified for review.
+
+- Group the photo-mode collision shield and active watch, retaining ragdoll holds, close handling and weapon-trail reset. Game-side photo transitions and physics need verification.
+
+- Group photo-mode visibility tracking and near-clip restoration together, retaining the existing cleanup state and hidden-piece rules. In-game visibility and clip-plane behavior need a check.
+
+- Group photo-mode pause detection, mesh freezing, widget tracking and detached-head face updates into one module. The existing recovery and world-reset state is retained; photo posing, hair and recovery need an in-game check.
+
+- Separate photo input and death-hold controls, keeping the existing key bindings, live camera/ragdoll state and hold-release behavior. Photo-mode controls still need an in-game check.
+
+- Separate the death/revive screen controller, periodic probe, hooks and intro transitions from the main loop, retaining timing and shared cleanup state. Screen timing and behavior still need an in-game check.
+
+- Separate photo-mode collision snapshots and restoration from the main loop while retaining the shared recovery and world-cleanup state. Collision behavior still needs an in-game check.
+
+- Separate death and revive widget discovery and new-object watches from the main loop, keeping the existing scan limits and guarded widget references. Actual widget lifetime and death-screen behavior need an in-game check.
+
+- Separate the held death camera and its state from main-loop orchestration. Camera behavior, photo-mode interactions, release and world-reset handling are retained; the camera still needs an in-game check.
+
+- Separate death HUD visibility and restoration from the main death-screen coordinator, preserving its timing and widget lifetime guards. The HUD appearance and restoration still need an in-game check.
 
 - Name the culprit when another death mod rewrites her death shows: the Player row's shows are re-checked after a death with no ragdoll and no scripted cause, and a re-run on the same table object that finds a show no longer ours logs `another mod rewrote her death shows after us (...)` with the fields. Turn off other death-sequence mods (see Compatibility), or her deaths stay theirs. `tables_fight` passes; a real clash with a death collection still needs an in-game check.
 

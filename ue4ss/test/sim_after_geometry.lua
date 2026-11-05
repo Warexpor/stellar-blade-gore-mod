@@ -27,4 +27,22 @@ local steps={ {v(-20,-5,10),v(20,-5,10)}, {v(-20,0,10),v(20,0,10)}, {v(-20,5,10)
 local _,swept,which,allowed=geometry(mesh,{steps=steps},25)
 check(which=="Bip001-L-UpperArm" and swept<1e-6 and swept<=allowed,
   "sampled blade sweep detects a crossing between endpoints")
+-- Adjacent limb segments share a joint. Each successful socket is read once per geometry pass,
+-- but a later pass must observe movement and a failed read remains eligible for retry.
+local reads, moving, failOnce = {}, { A=v(0,0,0), B=v(0,0,20), C=v(0,0,40) }, false
+local sharedMesh={GetSocketLocation=function(_,name)
+  reads[name]=(reads[name] or 0)+1
+  if name=='B' and failOnce then failOnce=false; error('temporary missing socket') end
+  return assert(moving[name])
+end}
+local shared=dofile("ue4ss/Mods/StellarBladeGore/Scripts/after_hit_geometry.lua")(
+  safe,function(x) return x end,{{'A',nil,'B'},{'B',nil,'C'}},sub,dot,dist,seg_dist)
+local _, first=shared(sharedMesh,{p=v(-10,0,10),q=v(10,0,10)},40)
+check(first<1e-6 and reads.B==1, 'shared joint is sampled once per geometry pass')
+moving.B=v(0,30,20); reads={}
+local _, second=shared(sharedMesh,{p=v(-10,0,10),q=v(10,0,10)},40)
+check(second>1 and reads.B==1, 'next pass reads the updated joint position')
+reads={}; failOnce=true
+local _, retried=shared(sharedMesh,{p=v(-10,30,30),q=v(10,30,30)},40)
+check(reads.B==2 and retried ~= nil, 'a failed shared socket read is retried later in the pass')
 print(fails==0 and "PASS" or "FAIL")

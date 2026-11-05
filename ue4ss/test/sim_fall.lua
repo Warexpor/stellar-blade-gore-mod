@@ -17,7 +17,14 @@ s.gore.smash.enabled = false -- the landing-hit control asserts a cut, not the s
 return s]])
 f:close()
 F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
+local original_dofile, G = dofile, nil
+dofile = function(path)
+  local result = original_dofile(path)
+  if path == "ue4ss/Mods/StellarBladeGore/Scripts/gore.lua" then G = result end
+  return result
+end
 local ok, err = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua")
+dofile = original_dofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 -- the mod starts 10 s after her start, then needs a moment (sbslice's handshake, its tables)
@@ -67,7 +74,7 @@ check(E.s.sim, "her bodies simulate")
 check(F.find("ragdoll state at start", at) ~= nil, "the mod's death started")
 F.run(3, pawn)
 check(F.find("death: fall damage %(%d+ cm drop, taken over%): no cut", at) ~= nil, "fall damage: no cut")
-check(not F.find("gore: cut ", at) and not F.find("gore: split", at), "nothing cut off her (playtest: both legs)")
+check(G.cuts_on(E.mesh) == 0 and not G.split_on(E.mesh), "nothing cut off her (playtest: both legs)")
 check(screen_hidden(), "the death screen held hidden 3 s in")
 F.run(7.5, pawn)
 check(not screen_hidden(), "the death screen shown at 10 s")
@@ -84,7 +91,7 @@ E.fall(1600, 1.8, 0, true)
 F.run(1, pawn)
 check(F.find("ragdoll state at start", at) ~= nil, "16 m fall, its show's ragdoll working: the mod's death")
 check(not F.find("taken over", at), "not taken over")
-check(F.find("death: fall damage %(%d+ cm drop%): no cut", at) ~= nil and not F.find("gore: cut ", at), "no cut either")
+check(F.find("death: fall damage %(%d+ cm drop%): no cut", at) ~= nil and G.cuts_on(E.mesh) == 0 and not G.split_on(E.mesh), "no cut either")
 check(screen_hidden(), "the death screen held hidden")
 next_life()
 
@@ -143,7 +150,7 @@ F.run(0.2, pawn)
 E.die(true)
 F.run(2, pawn)
 check(not F.find("death: fall damage", at), "a blow as she lands: not taken for fall damage")
-check(F.find("gore: cut ", at) ~= nil or F.find("gore: split", at) ~= nil, "its death cuts")
+check(G.cuts_on(E.mesh) > 0, "its death produces a cut")
 if fails > 0 then dump(at, "death") end
 next_life()
 
@@ -165,7 +172,7 @@ check(F.find("death: taken over %(no ragdoll from its show: no drop, .*playing P
   "an enemy's kill with no ragdoll: taken over")
 F.run(2, pawn)
 check(not F.find("death: fall damage", at), "not taken for fall damage")
-check(F.find("death: last hit .*rolled", at) ~= nil or F.find("death: split rolled", at) ~= nil, "its death rolled as any (cut)")
+check(G.cuts_on(E.mesh) > 0, "its death produces an actual cut")
 check(screen_hidden(), "the death screen held hidden")
 if fails > 0 then dump(at, "death") end
 next_life()

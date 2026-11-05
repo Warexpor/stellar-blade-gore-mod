@@ -18,9 +18,11 @@ s.dev = true
 s.enemies.afterDeath = { enabled = true, time = 10 }
 -- (her death takes a limb, not her head or body: the hits after it then cut more)
 s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
+s.gore.smash.enabled = false
+s.gore.oddsNear.enabled = false
 ]])
 if rawget(_G, "NO_MONTAGE") then
-  f:write("\ns.enemies.afterDeath.enabled = false\ns.gore.smash.enabled = false\ns.gore.oddsNear.enabled = false\nreturn s\n")
+  f:write("\ns.enemies.afterDeath.enabled = false\nreturn s\n")
 else
   f:write("\nreturn s\n")
 end
@@ -107,7 +109,14 @@ F.classes.SBBTTask_SbMoveToHome = { det[2] }
 F.classes.SBBTDecorator_SbIsAlive = alive
 F.classes.SBBTTask_SbUseSkill = skills
 
+local original_dofile, G = dofile, nil
+dofile = function(path)
+  local result = original_dofile(path)
+  if path == DIR .. "gore.lua" then G = result end
+  return result
+end
 local ok, err = pcall(dofile, DIR .. "main.lua")
+dofile = original_dofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -118,6 +127,10 @@ local function check(c, what)
   if not c then fails = fails + 1 end
 end
 local function mark() return #F.log_lines() + 1 end
+local function has_part(bone)
+  for _, part in ipairs(G.cut_parts(E.mesh)) do if part == bone then return true end end
+  return false
+end
 local function dump(from, pat)
   for i, x in ipairs(F.log_lines()) do if i >= from and (not pat or x:find(pat)) then print("  | " .. x:sub(1, 240)) end end
 end
@@ -132,7 +145,7 @@ E.s.hp = 0
 E.die(true)
 if rawget(_G, "NO_MONTAGE") then
   F.run(0.7, pawn)
-  check(F.find("gore: cut Bip001%-R%-UpperArm %(death%)", d0) ~= nil, "the initial death leaves the left arm available")
+  check(has_part("Bip001-R-UpperArm") and not has_part("Bip001-L-UpperArm"), "the initial death cuts the right arm and leaves the left available")
   -- Fast translation of an otherwise stationary hand is movement, not a swing.
   near.at = vec(1200, 2000, 90)
   F.run(0.1, pawn)
@@ -147,14 +160,14 @@ if rawget(_G, "NO_MONTAGE") then
   local above = mark()
   F.run(1, pawn)
   check(not F.find("after death %(.-%): CH_M_NA_14_Blueprint_C_1's", above), "a fast swing above the body does not hit")
-  check(not F.find("gore: cut .* %(after%)", above), "a fast swing above the body does not cut")
+  check(not has_part("Bip001-L-UpperArm"), "a fast swing above the body leaves the intact arm uncut")
   near.height, near.play = 0, nil
   F.run(0.5, pawn)
   near.duration = 0.5
   near.play = { a = anims[1], t0 = F.t }
   F.run(2, pawn)
   check(F.find("no montage; relative weapon speed", d0) ~= nil, "fast animation without a montage counts")
-  check(F.find("gore: cut Bip001%-L%-UpperArm %(after%)", d0) ~= nil, "the detected blow cuts the intact arm")
+  check(has_part("Bip001-L-UpperArm"), "the detected blow cuts the intact arm")
   check(#F.errors == 0 and not F.find("tick error"), "no errors")
   print(fails == 0 and "PASS" or "FAIL")
   return
@@ -170,7 +183,8 @@ for _, p in ipairs(near.plays) do check(not p:find("Idle") and not p:find("Evasi
 check(F.find("swings .* at her body 300 cm off, lunging 180 cm in", d0) ~= nil, "it lunged in from 3 m")
 check(F.find("after death %(.-%): CH_M_NA_14_Blueprint_C_1's Weapon_R .* passed %d+ cm from her Bip001%-[LR]%-UpperArm", d0) ~= nil,
   "its blade across her arms: a hit after death")
-check(F.find("gore: cut Bip001%-[LR]%-UpperArm %(after%)", d0) ~= nil, "  which cut an arm off")
+check(F.find("gore: cut Bip001%-[LR]%-UpperArm %(after%)", d0) ~= nil and #G.cut_parts(E.mesh) >= 2,
+  "  which leaves an additional actual cut")
 -- the other one (further off) swings now: its blade through her too
 F.run(3, pawn)
 check(#far.plays > 0, "the second one swings too (" .. table.concat(far.plays, ", ") .. ")")

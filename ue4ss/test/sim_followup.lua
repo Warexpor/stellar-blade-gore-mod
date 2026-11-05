@@ -61,6 +61,10 @@ else
   check(cuts == 1, string.format("off: one cut (%d)", cuts))
   check(F.find("alone %(followUpCuts off%)") or F.find("more left whole: followUpCuts off"), "off: her body alone, the rest whole")
 end
+local count = gore.cuts_on(E.mesh)
+check(ON and count >= 2 or not ON and count == 1, string.format("recorded cuts agree with follow-up setting (%d)", count))
+gore.cleanup(pawn, E.mesh)
+check(gore.cuts_on(E.mesh) == 0, "recovery clears the recorded follow-up cuts")
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

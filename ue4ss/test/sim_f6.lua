@@ -20,7 +20,14 @@ F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 rewe
 F.sbslice.f = "ok photo shield 1"
 R.install(F, E)
 F.world = R.step
+local original_dofile, G = dofile, nil
+dofile = function(path)
+  local result = original_dofile(path)
+  if path == DIR .. "gore.lua" then G = result end
+  return result
+end
 local ok, err = pcall(dofile, DIR .. "main.lua")
+dofile = original_dofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -49,7 +56,13 @@ for i, w in ipairs(WANT) do
   check(F.press("F6", ""), "F6 bound")
   F.run(6, pawn)
   check(F.find("F6: struggle test " .. i .. " of 7: .*" .. w[1], at) ~= nil, i .. ": F6 picked " .. w[1])
-  for _, b in ipairs(w[3]) do check(F.find("gore: cut " .. b .. " %(death%)", at) ~= nil, i .. ": cut " .. b:gsub("%%", "")) end
+  local parts, found = G.cut_parts(E.mesh), {}
+  for _, b in ipairs(parts) do found[b] = true end
+  for _, b in ipairs(w[3]) do
+    local name = b:gsub("%%", "")
+    check(found[name], i .. ": cut " .. name)
+  end
+  check(#parts == #w[3], i .. ": only the expected cuts exist")
   check(F.find(w[2], at) ~= nil, i .. ": the struggle began: " .. w[2]:gsub("%%", ""))
   check(F.find("F7: pushed", at) ~= nil, i .. ": F7's shove on it")
   if fails > 0 then dump(at, "struggle"); dump(at, "F6"); dump(at, "skipped"); break end

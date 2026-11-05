@@ -70,7 +70,7 @@ check(F.find("Test: Animated Death: her standing death %(P_Eve_Dead%): her death
 check(F.find("death: animated fall, physics off", at) ~= nil, "1: an animated death, active.animated off or not")
 check(F.find("animated death: fall own", at) ~= nil, "1: her own fall: the show's animation, none of the knockdown falls")
 F.run(20, pawn)
-check(not F.find("gore: cut ", at) and not F.find("gore: split", at), "1: no cut")
+check(gore.cuts_on(E.mesh) == 0 and not gore.split_on(E.mesh), "1: no cut")
 check(not F.find("recovering after", at) and not F.find("recover %(", at), "1: she lies there 20 s on")
 local r = mark()
 F.press("F8", "")
@@ -94,7 +94,7 @@ F.run(3, pawn)
 at = mark()
 check(gore.slice_bone(pawn, E.mesh, "Bip001-Spine1", nil, "test"), "early waist cut starts")
 F.run(0.6, pawn)
-check(F.find("gore: Bip001%-Spine1 off %(test%)", at) ~= nil, "early waist cut opens before death")
+check(gore.cut_parts(E.mesh)[1] == "Bip001-Spine1", "early waist cut opens before death")
 broken = {}
 remake = true
 E.s.hp = 0; E.die(true)
@@ -113,7 +113,9 @@ F.run(0.6, pawn)
 broken = {}
 E.s.hp = 0; E.die(true)
 F.run(0.5, pawn)
-check(not F.find("re%-broke cuts after physics asset setup", at), "unchanged physics does not re-break existing cuts")
+local unnecessary = false
+for _, b in ipairs(broken) do if b == "Bip001-Spine1" then unnecessary = true end end
+check(not unnecessary, "unchanged physics does not re-break existing cuts")
 F.press("F8", ""); F.run(3, pawn)
 
 -- 2: the next press, a death again (she was up)

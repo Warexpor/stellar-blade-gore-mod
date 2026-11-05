@@ -83,7 +83,7 @@ StaticFindObject=oldFind
 T.ctx.keep,T.ctx.held=oldKeep,oldHeld
 G.guardedAssets[matPath]=nil
 -- A pool waiting for checks must not store seconds of growth and jump when they finish.
-local trackers = upvalue(G.pool_grow, "trackers")
+local trackers = select(2, upvalue(G.pool_grow, "get_lists")())
 local decal=F.obj("GrowthTest", "DecalComponent", {})
 decal.SetWorldScale3D=function(self, size) self.size=size end
 local waiting={rmax=100,pool={ok=4,r=4,age=0,d=decal}}
@@ -215,8 +215,17 @@ G.stage_caps=function(q, side)
   return originalCaps(q, side)
 end
 G.wound(pawn,E.mesh,at,"crunch")
+local chunk0, chunkFrames = G.smashed.chunk, {}
+G.smashed.chunk = function(...)
+  chunkFrames[F.frame] = (chunkFrames[F.frame] or 0) + 1
+  return chunk0(...)
+end
 G.smash(pawn,E.mesh,{loc=at},"death")
 run(1)
+G.smashed.chunk = chunk0
+local maxChunks = 0
+for _, count in pairs(chunkFrames) do maxChunks = math.max(maxChunks, count) end
+check(maxChunks == 1, "local smash spawns at most one chunk per frame")
 G.stage_caps=originalCaps
 check(smashOutline and smashOutline.piece==nil,"smash skips parsing its hidden piece outline")
 check(#sounds>=beforeSmashSounds+3,"blunt crunch and wet smash layers both played despite the sound gap")
@@ -254,15 +263,13 @@ for i=beforeSmashEffects+1,#effects do
   if fx.path==G.SMASH_BLOOD and fx.bone then flowEffect=fx end
   if fx.path:find("NS_A_BloodLoop",1,true) and fx.bone then loopEffect=fx end
 end
-check(loopEffect and loopEffect.scale and flowEffect and loopEffect.born~=flowEffect.born,
-  "continuous wound layer and stump spurt spawn on separate frames")
+check(not loopEffect, "stump uses the 0.5.5 pulse without an extra continuous layer")
 check(flowEffect and flowEffect.path==G.SMASH_BLOOD and flowEffect.bone and flowEffect.scale,
   "stump effect is attached and uses the requested blood asset and scale")
 check(flowEffect and (flowEffect.resets or 0)>0,"stump effect restarts while bleeding")
 check(flowEffect and math.abs(flowEffect.scale.X-0.6)<0.001,"smash retains the original 0.5.5 blood scale")
 run(3)
 check(flowEffect and flowEffect.stopped~=nil,"stump effect stops after the configured bleed duration")
-check(loopEffect and loopEffect.stopped~=nil,"continuous wound layer stops after the configured bleed duration")
 
 local armFlow = G.bleed_scale({ e = { X = 4, Y = 3 } }, 0.6)
 local waistFlow = G.bleed_scale({ e = { X = 11, Y = 8 } }, 0.6)
@@ -305,7 +312,7 @@ local fullStart, chunkStart=#effects,#T.world.spheres
 local oldSplat, fullSplats=G.splat,0
 G.splat=function(...) fullSplats=fullSplats+1; return oldSplat(...) end
 local preChunks=0
-for _,k in ipairs(upvalue(G.pool_grow,"trackers")) do if k.bone=="smash chunk" then preChunks=preChunks+1 end end
+for _,k in ipairs(select(2, upvalue(G.pool_grow,"get_lists")())) do if k.bone=="smash chunk" then preChunks=preChunks+1 end end
 check(G.smash(pawn,E.mesh,{loc=E.bone("Bip001-Spine2"),impactRadius=200},"death"),"full-body smash starts")
 G.on_hit(pawn,E.mesh,at)
 run(0.3)
@@ -313,7 +320,7 @@ check(fullSplats==0,"full-body hit and opening do not create a floating-body spl
 check(#effects>fullStart,"full-body smash produces blood effects")
 run(1.5)
 local chunkTracks,scaled=0,false
-trackers=upvalue(G.pool_grow,"trackers")
+trackers=select(2, upvalue(G.pool_grow,"get_lists")())
 local pscale=T.ctx.tune.gore.poolScale or 1
 for _,k in ipairs(trackers) do
   if k.bone=="smash chunk" then

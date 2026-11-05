@@ -139,8 +139,33 @@ local scans, overlap = {}, 0
 for i = first + 1, #F.cmds do if F.cmds[i].s:sub(1, 1) == "w" then scans[F.cmds[i].frame] = true end end
 for _, frame in ipairs(frames) do if scans[frame] then overlap = overlap + 1 end end
 check(#frames > 0 and overlap == 0, string.format("pool refills run apart from bone scans (%d refills, %d shared frames)", #frames, overlap))
+-- Run enough watches to hit the scan branch directly: the main loop's try wrapper otherwise hides an exception.
+local watchError
+for _ = 1, 12 do
+  local worked, err = pcall(G.watch, pawn.Mesh, function() end)
+  if not worked then watchError = err; break end
+end
+check(not watchError, "bone watch completes without a hidden exception" .. (watchError and (": " .. tostring(watchError)) or ""))
 if fails > 0 then dump("async\\|cut assets\\|could not") end
 
+-- A timed-out asset must survive a closed fallback window and take priority once loading is safe.
+do
+  local w, path = G.watching, "/Game/Test/LateAsset.LateAsset"
+  w.preload, w.next, w.sounds = { "/Game/Test/NewAsset.NewAsset" }, 1, 2
+  w.late, w.at, w.n, w.every, w.fillNext = { path }, F.t + 2, 0, 100000, nil
+  G.watch(pawn.Mesh, function() end)
+  check(w.late[1] == path, "late asset is retained during the load pacing gap")
+  F.t = F.t + 3
+  local mayLoad = initCtx.may_load
+  initCtx.may_load = function() return false end
+  G.watch(pawn.Mesh, function() end)
+  check(w.late[1] == path, "late asset is retained while level loading blocks asset work")
+  initCtx.may_load = mayLoad
+  local before = #syncLoads
+  G.watch(pawn.Mesh, function() end)
+  check(#syncLoads == before + 1 and syncLoads[#syncLoads].path == path and #w.late == 0,
+    "late asset loads before new requests once the window opens")
+end
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

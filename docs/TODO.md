@@ -1,5 +1,12 @@
 # To do
 
+## 0.7.0: next in-game checks
+
+- Retest death cuts and smashes for stutter. The latest changes retain late asset-preload retries and spread smash chunks; native cut work and cold asset spawns may still hitch. Compare new log timings with the November 5 playtest.
+- Check uncut bodies lying on either side or face down for visible struggle, and verify recovery. The selection fix passes simulation but its real physics is unverified.
+- Check that cut and smash stumps show the 0.5.5 pulsing blood effect, including both sides of ordinary cuts, and that it stops on time and clears on recovery.
+- The refactored Lua passes the default simulations, but actual split appearance, physics, and compatibility with external mesh-copy mods still require playtesting.
+
 ## Reports without logs (2026-11-02)
 
 - Startup crashes: the locally reproduced UE4SS FText signature crash is documented in Install. Native watcher failure no longer silently selects the known unsafe general UE4SS callback path, but neither proves the cause of the reports. The immediate photo-mode pawn callback remains a UE4SS callback. Test both UE4SS builds and collect UE4SS.log, stellarbladegore.log and any crash dump.

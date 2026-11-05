@@ -44,16 +44,21 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
     -- Body segments in world space: full limb segments where SWING_AT names both ends, spheres elsewhere.
     -- A swing must cross one of these within its anatomical radius (+4 cm slack, capped by the configured
     -- reach), not merely pass near a joint point. Missing sockets are skipped: no geometry, no hit.
-    local segs = {}
-    local head = try(function() return vof(mesh:GetSocketLocation(FName("Bip001-Head"))) end)
+    local segs, sockets = {}, {}
+    local function socket(name)
+      if sockets[name] then return sockets[name] end
+      local position = try(function() return vof(mesh:GetSocketLocation(FName(name))) end)
+      if position then sockets[name] = position end
+      return position
+    end
+    local head = socket("Bip001-Head")
     if head then segs[#segs + 1] = { a = head, b = nil, bone = "Bip001-Head", r = after_radius("Bip001-Head") } end
     for _, e in ipairs(SWING_AT) do
       if e[3] then
-        local a, b = try(function() return vof(mesh:GetSocketLocation(FName(e[1]))) end),
-          try(function() return vof(mesh:GetSocketLocation(FName(e[3]))) end)
+        local a, b = socket(e[1]), socket(e[3])
         if a and b then segs[#segs + 1] = { a = a, b = b, bone = e[1], r = after_radius(e[1]) } end
       else
-        local a = try(function() return vof(mesh:GetSocketLocation(FName(e[1]))) end)
+        local a = socket(e[1])
         if a then segs[#segs + 1] = { a = a, b = nil, bone = e[1], r = after_radius(e[1]) } end
       end
     end

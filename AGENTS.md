@@ -12,3 +12,7 @@ Use `.\windows.ps1` for Windows builds, tests, packaging, and installation; see 
 
 - When talking to the user directly: human language always, warm and plain. No robot lists unless asked.
 - Still verify like an engineer: base claims on logs and code (`file:line`), run the sims, install to game, confirm MATCH, keep `settings.lua` as-is. Just tell it like a human.
+
+## Testing scope
+
+- Never run the full test suite on a minor change: run only the focused sims for what changed. The full suite runs only when the change touches shared harnesses or module boundaries, or the user asks for it.

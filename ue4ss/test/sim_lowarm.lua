@@ -21,11 +21,12 @@ f:close()
 F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
 F.sbslice.f = "ok photo shield 1"
 -- (main.lua's context, caught from gore.lua's init: the menu's reload of the settings, case 11)
-local ctx
+local ctx, G
 local dofile0 = dofile
 dofile = function(p, ...)
   local r = dofile0(p, ...)
   if type(p) == "string" and p:find("gore%.lua$") and type(r) == "table" then
+    G = r
     local init = r.init
     r.init = function(c, ...) ctx = c; return init(c, ...) end
   end
@@ -69,12 +70,13 @@ local function back()
   F.run(14, pawn)
   E.respawn()
   F.run(8, pawn)
+  check(G.cuts_on(E.mesh) == 0 and not G.split_on(E.mesh), "recovery removes the previous life's cut records")
 end
 
 -- 1: a hit on her left forearm: the left arm
 local at = mark()
 hit("Bip001-L-Forearm", 20, 0.2)
-check(F.find("her left arm cut off", at) ~= nil, "1: a hit on her left forearm takes the left arm")
+check(G.cut_parts(mesh)[1] == "Bip001-L-UpperArm", "1: a hit on her left forearm cuts the left arm")
 check(F.find("landed on Bip001%-L%-Forearm", at) ~= nil, "1: told by the hit bone")
 -- (her body takes decals while she plays with the arm off: the floor blood's shield kept the Purification Scanner's
 -- grid, a decal, off all of her but the face mesh, reported)
@@ -85,7 +87,7 @@ back()
 -- 2: a hit on her chest 14 cm to her right (her right: -Y): the right arm
 at = mark()
 hit("Bip001-Spine2", -14, 0.2)
-check(F.find("her right arm cut off", at) ~= nil, "2: a hit on her chest to her right takes the right arm")
+check(G.cut_parts(mesh)[1] == "Bip001-R-UpperArm", "2: a hit on her chest to her right cuts the right arm")
 check(F.find("landed 14 cm to her right", at) ~= nil, "2: told by where it landed")
 if fails > 0 then dump(at, "low HP") end
 back()
@@ -93,7 +95,8 @@ back()
 -- 3: no hit seen on her mesh (a ranged hit the reaction missed): one at random
 at = mark()
 hit(nil, 0, 0.2)
-check(F.find("arm cut off", at) ~= nil, "3: no hit seen: an arm still comes off")
+local randomArm = G.cut_parts(mesh)[1]
+check(randomArm == "Bip001-L-UpperArm" or randomArm == "Bip001-R-UpperArm", "3: no hit seen: an arm still comes off")
 check(F.find("no side to the blow", at) ~= nil, "3: at random")
 if fails > 0 then dump(at, "low HP") end
 back()
@@ -113,7 +116,7 @@ at = mark()
 E.collLog = {}
 hit("Bip001-L-Forearm", 20, 0.2)
 F.run(6, pawn)
-check(F.find("her left arm cut off", at) ~= nil, "10: the arm off")
+check(G.cut_parts(mesh)[1] == "Bip001-L-UpperArm", "10: the left arm is actually cut before the ponytail reset")
 check(F.find("her ponytail reset %(NotifyBP_ReInitActor%): 1 mesh%(es%), 0 of them query only", at) ~= nil, "10: the ponytail reset ran after it, her mesh left out")
 local q = false
 for _, v in ipairs(E.collLog) do if v == 1 then q = true end end
@@ -136,7 +139,7 @@ F.objects["/Script/Engine.Default__GameplayStatics"] = F.obj("Default__GameplayS
 STANCE, LEVEL = "P_Eve_BlockSword", "AltesLab_P"
 at = mark()
 hit("Bip001-Spine2", -14, 0.2)
-check(F.find("her right arm cut off", at) ~= nil, "4: the right arm")
+check(G.cut_parts(mesh)[1] == "Bip001-R-UpperArm", "4: the right arm is actually cut")
 check(F.find("no sword already %(the game's own block, AltesLab_P%): left to the game", at) ~= nil, "4: the game's block seen")
 back()
 check(F.find("the sword left to the game", at) ~= nil, "4: her death leaves the game's block on")
@@ -192,7 +195,7 @@ if fails > 0 then dump(at, "low HP") end
 STANCE, LEVEL = "P_Eve_Idle", "E03_WasteLand_P"
 at = mark()
 hit("Bip001-L-Forearm", 20, 0.2)
-check(F.find("her left arm cut off", at) ~= nil, "7: the left arm")
+check(G.cut_parts(mesh)[1] == "Bip001-L-UpperArm", "7: the left arm is actually cut")
 local function count(pat)
   local n = 0
   for i, l in ipairs(F.log_lines()) do if i >= at and l:find(pat) then n = n + 1 end end
@@ -212,7 +215,7 @@ F.run(70, pawn)
 newPct = 0.2
 F.run(3, pawn)
 check(F.find("a new HP bar went from full to 0.200", at) ~= nil, "7: the new bar's setting seen")
-check(count("arm cut off") == cuts, "7: no arm cut again")
+check(count("arm cut off") == cuts and G.cuts_on(mesh) == 0, "7: no arm cut again")
 if fails > 0 then dump(at, "HP") end
 
 -- 8: the arm off, then an outfit put on her over it (Nexus 672, ESE: her shield broken, her suit gone to the inner
@@ -232,12 +235,12 @@ rawset(mesh, "PhysicalHitForceTargetBone", F.fname("Bip001-L-Forearm"))
 F.run(0.1, pawn)
 newPct = 0.2
 F.run(2, pawn)
-check(F.find("her left arm cut off", at) ~= nil, "8: the left arm")
+check(G.cut_parts(mesh)[1] == "Bip001-L-UpperArm", "8: the left arm is actually cut")
 local at8 = mark()
 rawset(mesh, "SkeletalMesh", F.obj("CH_P_EVE_InnerSuit", "SkeletalMesh"))
 F.run(3, pawn)
 check(F.find("outfit changed over her cuts %(Bip001%-L%-UpperArm%)", at8) ~= nil, "8: the new outfit seen under the cut")
-check(F.find("cut Bip001%-L%-UpperArm %(outfit changed%)", at8) ~= nil, "8: the arm cut again on it")
+check(F.find("cut Bip001%-L%-UpperArm %(outfit changed%)", at8) ~= nil and G.cut_parts(mesh)[1] == "Bip001-L-UpperArm", "8: the arm cut again on it")
 check(F.find("the arm came back", at8) == nil and F.find("sword back", at8) == nil, "8: the arm still off for the game")
 F.run(3, pawn)
 check(count("outfit changed over her cuts") == 1, "8: cut again once")
@@ -252,7 +255,8 @@ E.s.hp = 0
 E.die(true)
 F.run(4, pawn)
 local deathCut = F.find("cut Bip001%-%S+ %(death%)", at)
-check(deathCut ~= nil, "9: cut at her death")
+local deathParts = G.cut_parts(mesh)
+check(deathCut ~= nil and #deathParts > 0, "9: an actual cut is recorded at her death")
 local at9 = mark()
 rawset(mesh, "SkeletalMesh", F.obj("CH_P_EVE_InnerSuit_2", "SkeletalMesh"))
 F.run(3, pawn)
@@ -265,6 +269,10 @@ else
   check(F.find("cut again on the new one %(dead", at9) ~= nil, "9: the new outfit seen under the death's cut")
   check(F.find("cut Bip001%-%S+ %(after%)", at9) ~= nil, "9: cut again after her death")
 end
+local afterOutfit = G.cut_parts(mesh)
+local stillCut = false
+for _, part in ipairs(afterOutfit) do if part == deathParts[1] then stillCut = true end end
+check(stillCut, "9: the original severed part remains recorded on the new outfit")
 check(F.find("undid cut", at9) == nil, "9: nothing undone")
 if fails > 0 then dump(at, "cut") end
 F.run(10, pawn)
@@ -288,14 +296,14 @@ if ctx and ctx.reload_tune then
   at = mark()
   newPct = 0.2
   hit("Bip001-R-Forearm", -20, 0.2)
-  check(F.find("arm cut off", at) == nil, "11: off mid session: a hit under the mark takes no arm")
+  check(F.find("arm cut off", at) == nil and G.cuts_on(mesh) == 0, "11: off mid session: a hit under the mark takes no arm")
   E.s.hp, newPct = 1, 1
   F.run(2, pawn)
   menu(true)
   at = mark()
   newPct = 0.2
   hit("Bip001-R-Forearm", -20, 0.2)
-  check(F.find("her right arm cut off", at) ~= nil, "11: on again: the arm comes off")
+  check(G.cut_parts(mesh)[1] == "Bip001-R-UpperArm", "11: on again: the right arm actually comes off")
   check(F.find("no sword", at) ~= nil, "11: no sword with it off")
   at = mark()
   menu(false)

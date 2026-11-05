@@ -80,7 +80,8 @@ local from=#F.log_lines()+1
 G.smash(pawn,E.mesh,{loc=v(1000,2009,70)},"death")
 frames(8)
 G.smash(pawn,E.mesh,{loc=v(1000,1981,126)},"death")
-frames(120)
+-- The large limb burst is spread over more updates before its delayed diagnostic.
+frames(200)
 local lines={}
 for i,l in ipairs(F.log_lines()) do
   if i>=from and l:find("chunks 2 s on:") then

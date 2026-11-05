@@ -96,6 +96,46 @@ do
   if not actual or actual.part~=expected.bone or math.abs(actual.part_d-expected.dist)>1e-8
     or length(sub(actual.at,expected.point))>1e-8 then print("FAIL two-blade sweep differs"); passed=false end
 end
+-- A missing recorded pose falls back to live sockets. Shared joints should be sampled once
+-- per sweep, produce the same result as the independent reference, and refresh on the next sweep.
+do
+  local base, fallback, live = cases[1], {}, {}
+  local initial = base.hist[1].pose
+  for name, p in pairs(initial) do live[name] = p.t end
+  for i, step in ipairs(base.hist) do fallback[i] = {t=step.t,w=step.w} end
+  local counts, failOnce = {}, false
+  local mesh = {GetSocketLocation=function(_,name)
+    name=name:ToString(); counts[name]=(counts[name] or 0)+1
+    if name=='Bip001-L-Forearm' and failOnce then failOnce=false; error('temporary missing socket') end
+    return assert(live[name])
+  end}
+  local s={hist=fallback,k=guard,actor=actor,who='test',weapons=base.weapons}
+  local actual=sw.of(s,mesh)
+  local expected=reference(base.hist,os.clock())
+  if not actual or actual.part~=expected.bone or math.abs(actual.part_d-expected.dist)>1e-8
+    or length(sub(actual.at,expected.point))>1e-8 then print('FAIL live-pose sweep differs from reference'); passed=false end
+  for name, n in pairs(counts) do if n~=1 then print('FAIL repeated socket read '..name..': '..n); passed=false end end
+  local total=0; for _ in pairs(counts) do total=total+1 end
+  if total==0 then print('FAIL no live sockets were sampled'); passed=false end
+  live['Bip001-L-Forearm']=v(500,500,500)
+  local movedPose, movedHist = {}, {}
+  for name, p in pairs(live) do movedPose[name]={t=p} end
+  for i, step in ipairs(base.hist) do movedHist[i]={t=step.t,w=step.w,pose=movedPose} end
+  counts={}; actual=sw.of(s,mesh); expected=reference(movedHist,os.clock())
+  if not actual or actual.part~=expected.bone or math.abs(actual.part_d-expected.dist)>1e-8
+    or length(sub(actual.at,expected.point))>1e-8 then print('FAIL next sweep used a stale pose'); passed=false end
+  counts={}; failOnce=true; sw.of(s,mesh)
+  if counts['Bip001-L-Forearm']~=2 then print('FAIL temporary socket failure was not retried'); passed=false end
+end
+-- Reload replaces the settings table; selection must consult the new table on each call.
+do
+  local old = ctx.tune.gore.swingMinSpeed
+  ctx.tune.gore.swingMinSpeed = 1e9
+  if sw.of(cases[1], pawn.Mesh) then print('FAIL sweep ignored current settings'); passed=false end
+  ctx.tune.gore.swingMinSpeed = old
+  ctx.reload_tune()
+  if not sw.of(cases[1], pawn.Mesh) then print('FAIL sweep retained settings across reload'); passed=false end
+end
 local t=timer()
 for _,s in ipairs(cases) do reference(s.hist,os.clock()) end
 local old=timer()-t

@@ -24,7 +24,14 @@ F.sbslice.k = "ok collapsed 2"
 F.sbslice.f = "ok photo shield 1"
 R.install(F, E)
 F.world = R.step
+local original_dofile, G = dofile, nil
+dofile = function(path)
+  local result = original_dofile(path)
+  if path == DIR .. "gore.lua" then G = result end
+  return result
+end
 local ok, err = pcall(dofile, DIR .. "main.lua")
+dofile = original_dofile
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -54,7 +61,8 @@ if BUDGET == 0 then
 else
   check(gap >= 1 and gap <= 2, string.format("opened %d frame(s) after the cut, the cut in a frame of its own", gap))
 end
-check(F.find("Bip001%-%a%-UpperArm off %(low HP%)") ~= nil, "the arm came off")
+local parts = G.cut_parts(E.mesh)
+check(#parts == 1 and (parts[1] == "Bip001-L-UpperArm" or parts[1] == "Bip001-R-UpperArm"), "the arm came off")
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")

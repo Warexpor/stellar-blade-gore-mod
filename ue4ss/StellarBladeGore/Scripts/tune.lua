@@ -639,7 +639,7 @@ return {
     bleedAxis = "z",           -- 0.5.5 blood-only effect cone, pointed out of each
                                -- opening: "z", "x", "-z", "-x" (the F3 menu re-reads it; the "bleed: opening faces" log line
                                -- shows where the effect's Z and X really point: pick the one matching the opening)
-    bleedSize = 0.6,           -- the continuous bleed effect's scale
+    bleedSize = 0.6,           -- the 0.5.5 pulsing stump effect's scale
     bleedPulse = 0.35,         -- seconds between 0.5.5 blood-only effect restarts
     capMaterial = "/Game/Art/FX/MA/Enviroment/MI_A_Meat_01_1.MI_A_Meat_01_1", -- the flesh on caps and lids
     capMatte = {               -- caps and lids matte: the meat's textures on the game's character gore master

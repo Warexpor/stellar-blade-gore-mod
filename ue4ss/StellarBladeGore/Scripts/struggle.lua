@@ -24,7 +24,7 @@
 --   * curl: doubling over on her side, her arms hugging her belly, one knee coming partway up and the other hardly,
 --     shaking (it was a tight tuck, knees to her chest and arms round her head, held: comic, not dying).
 --   * lie: a moment lying still, only breathing.
--- A death with no limb cut (rise.alone of them) only tries to sit up or prop up, between convulse.lua's arm swings.
+-- A death with no limb cut (rise.alone of them) tries to sit up or prop up, or curls if face down, between convulse.lua's arm swings.
 -- A waist cut: her upper body, a piece of its own from the cut bone up, fights on with its arms (clutching the wound,
 -- a hand going out to it, turning over, crawling, doubling over); no sitting up or pushing, which need her hips.
 -- Nothing on a beheading, a split, or an animated death (her fall's end pose) unless animated is on.
@@ -945,9 +945,13 @@ local function choose(f, v)
   local opts = {}
   local function opt(name, ok, weight) if ok and (weight or 0) > 0 then opts[#opts + 1] = { name, weight } end end
   if s.alone then
-    opt("rise", back and tries, w.rise or 1)
-    opt("prop", back and tries and arms, w.prop or 1)
-    opt("lie", true, 1.5)
+    -- A sideways body can still attempt to rise; a face-down body can curl instead.
+    -- Do not spend the entire first attempt selecting "lie" before any action has begun.
+    local canRise = math.abs(r) < 120
+    opt("rise", canRise and tries, w.rise or 1)
+    opt("prop", canRise and tries and arms, w.prop or 1)
+    opt("curl", not canRise and (arms or legs), w.curl or 0.8)
+    opt("lie", #opts == 0 or #st.acts > 0, 1.5)
   else
     opt("clutch", arms and s.wound, w.clutch or 3)
     opt("reach", arms and (st.reached or 0) < 2, w.reach or 1.5)

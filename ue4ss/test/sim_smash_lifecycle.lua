@@ -25,6 +25,22 @@ local earring = F.obj("Earring", "StaticMeshComponent", {
 })
 E.mesh.GetSocketBoneName = function(_, b) return b end
 E.mesh.AttachChildren = { ForEach = function(_, cb) cb(1, { get = function() return earring end }) end }
+-- Recovery during an unfinished staged cut must discard all remaining cut work.
+E.s.sim = true
+check(G.slice_bone(pawn, E.mesh, "Bip001-L-UpperArm", nil, "test"), "staged cut accepted")
+G.pump()
+check(G.busy(), "cut remains in progress before recovery")
+G.cleanup(pawn, E.mesh)
+local afterRecovery = #F.cmds
+frames(30)
+local resumed = false
+for i = afterRecovery + 1, #F.cmds do
+  local op = F.cmds[i].s:sub(1, 1)
+  if op == "c" or op == "k" then resumed = true end
+end
+check(not G.busy() and #G.cut_parts(E.mesh) == 0 and not resumed,
+  "recovery cancels an unfinished cut without reopening it")
+E.s.sim = false
 -- Every default supported part through the actual death broadcast and respawn, not just calls into gore.lua.
 local counts = { limb = 0, head = 0, torso = 0 }
 math.randomseed(76412)
@@ -77,7 +93,7 @@ T.ctx.tune.gore.smash.fullBodyChance=1
 n0=#W.spheres
 G.smash(pawn,E.mesh,{loc=E.bone("Bip001-Spine2"),impactRadius=200},"death")
 for _=1,30 do frames(1); if #W.spheres>n0 then break end end
-check(#W.spheres-n0==4,"full-body burst limits the first batch to four pieces")
+check(#W.spheres-n0==2,"full-body burst limits the first batch to two pieces")
 G.cleanup(pawn,E.mesh)
 made=#W.spheres
 frames(90)
