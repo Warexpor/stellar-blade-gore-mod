@@ -128,6 +128,12 @@ return {
   cameraTrack = 2.5,           --   (cameraBody off) how closely it slides after her body, on the level, till you fly it (0: it stays put)
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
+  deathSlowmo = {
+    enabled = false,          -- slow motion on her death: the game runs slower for a few seconds so the damage
+                              --   reads, then time goes back well before the death screen (Esc's fast forward wins)
+    speed = 0.3,              --   game speed while it lasts
+    duration = 2.5,           --   real seconds it lasts
+  },
   active = {
     animated = true,           -- light deaths play her own fall animation and only the cut pieces fall by physics
                                -- (heavy hits, explosions, falls, waist cuts and splits are ragdolls anyway, and every

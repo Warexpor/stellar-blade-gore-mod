@@ -578,6 +578,14 @@ local function time_speed(pawn, k)
   local gs = goreCtx.statics()
   return valid(gs) and valid(pawn) and try(function() gs:SetGlobalTimeDilation(pawn, k); return true end) == true
 end
+-- Slow-motion death effect (tune.deathSlowmo): the game runs slower for a few
+-- seconds when she dies so the damage reads, then time goes back to normal well
+-- before the death screen. Esc's fast forward wins over it either way.
+local slowmo = dofile("ue4ss/Mods/StellarBladeGore/Scripts/death_slowmo.lua")(
+  function() return tune end, os.clock, log)
+local function slow_stop(why)
+  slowmo.stop(why, function() time_speed(find_eve(), 1) end)
+end
 -- the death screen's widget, found once and kept (a scan of every object: 17 ms, twice a second, was a stutter of
 -- its own, playtest), looked for at most every 2 s in a death while it isn't found. Never its class default
 -- (FindFirstOf gave that, kept for good: no death screen was ever seen), and it lives inside the main HUD, so it is
@@ -598,6 +606,7 @@ local function skip_start(pawn)
   -- a real death only: the test ragdolls (F7, saved.collision) have no death screen
   if tune.deathSkip == false or skip or not active or saved.collision or not valid(pawn) then return end
   if death_screen() then log("death: Esc, the death screen is up already"); return end
+  slow_stop("Esc fast forward")
   local k = tune.deathSkipSpeed or 6
   if not time_speed(pawn, k) then log("death: Esc, the game's speed can't be set"); return end
   skip = { t0 = os.clock(), k = k, pawn = pawn }
@@ -610,6 +619,20 @@ local function skip_tick()
   ahead = ahead + (skip.k - 1) * POLL_MS / 1000
   if death_screen() then skip_stop("the death screen is up")
   elseif polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10) then skip_stop("no death screen seen") end
+end
+local function slow_start(pawn)
+  -- real deaths only: the test ragdolls have no death to highlight
+  if slowmo.running() or skip or not active or saved.manual or not valid(pawn) then return end
+  local k = slowmo.start()
+  if not k then return end
+  if not time_speed(pawn, k) then slowmo.stop("the game's speed can't be set"); return end
+  log(string.format("death: slow motion x%.2f for %.1f s", k, tonumber((tune.deathSlowmo or {}).duration) or 2.5))
+end
+-- every tick of the ragdoll: the game's time it ran behind, and time back once the window is over
+local function slow_tick()
+  if not slowmo.running() then return end
+  ahead = ahead + (slowmo.speed() - 1) * POLL_MS / 1000
+  if slowmo.done() then slow_stop("its time is up") end
 end
 
 -- what covers the view while the death screen is up (it came up all black, the game behind it not showing:
@@ -1041,6 +1064,7 @@ local function on_end(pawn, mesh)
   screen.photoOn, screen.photoColl = false, nil
   camera.release(pawn)
   skip_stop("she got up")
+  slow_stop("she got up")
   dface.stop()
   if goreCtx.convulse then try(function() goreCtx.convulse.stop() end) end
   if goreCtx.struggle then try(function() goreCtx.struggle.stop() end) end
@@ -3376,6 +3400,8 @@ local function tick()
       log(string.format("Test: Animated Death: %s's ragdoll key %.1f s in, no cut", test.what, os.clock() - test.t))
     end
     tp.mark("death start")
+    -- slow motion highlights the damage from here; the test ragdolls sit out (slow_start checks)
+    slow_start(pawn)
     -- (the game let her death go before the watch saw the grab end: the killing cut made in it counts from here)
     if hm.lethal and hm.lethal.grab then
       log(string.format("lethal hit: %s's grab over after %.1f s (her death came)", hm.lethal.grab.cls,
@@ -3507,7 +3533,7 @@ local function tick()
     if l and r then rel.loc, rel.rot = copy3(l, XYZ), copy3(r, PYR) end
   end
 
-  if active then skip_tick() end
+  if active then skip_tick(); slow_tick() end
   -- her HP bar back up for 0.5 s while the death still runs: the game brought her back past every sign the mod
   -- watches (a load, a respawn with no ReInitActor). Left alone she got up still cut, her movement off (walking in
   -- circles, Nexus report): got up here as for a respawn
@@ -3618,6 +3644,7 @@ local function forget_world(pawn)
   screen.introLook, screen.fade, screen.rv = nil, nil, {}
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
   goreCtx.quietUntil = math.max(goreCtx.quietUntil, os.clock() + 5)
+  slow_stop("the level reloaded")
   skip, ahead = nil, 0
   -- the old face may be gone: dropped without touching it
   dface.on, dface.known, faceCheck = nil, {}, nil

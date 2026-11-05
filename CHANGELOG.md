@@ -4,6 +4,8 @@
 
 In development; not released.
 
+- Slow motion on her death (off by default, F3 and `deathSlowmo` in `settings.default.lua`): the game runs slower for a few seconds when she dies so the damage reads, then time goes back well before the death screen; Esc's fast forward still wins. Covered by a new `death_slowmo` simulation; game feel still needs a playtest.
+
 - In an enemy's grab, her head now waits for her death like her body and a split do, instead of coming off at the hit. A beheading opened under a finisher read as reattached once the show moved her on; only limbs come off while she is held. Covered by a new `grab_cut` simulation; finisher sync still needs an in-game check.
 
 - Restore the 0.5.5 pulsed blood-only Niagara effect alone on cut and smash stumps, removing the later continuous loop. Keep the original pulse settings and both surviving openings; the visual result needs a game check.

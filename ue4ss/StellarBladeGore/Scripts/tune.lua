@@ -95,6 +95,11 @@ return {
   deathSkip = true,            -- Esc on her death fast forwards the game to its death screen instead of the wait
                                -- (parked for now: its key is commented out in main.lua)
   deathSkipSpeed = 6,          --   this many times as fast till the screen shows
+  deathSlowmo = {             -- slow motion on her death: the game runs slower for a few seconds so the damage
+    enabled = false,          --   reads, then time goes back well before the death screen (Esc's fast forward wins)
+    speed = 0.3,              --   game speed while it lasts (0.3: less than a third as fast)
+    duration = 2.5,           --   real seconds it lasts
+  },
   cameraFollow = false,        -- during a ragdoll her capsule (and the camera on it) drifts after her body, loosely
                                -- (off: it fought how the death plays out, and the game died a second after it moved
                                -- the capsule of a really dead Eve, thirteenth playtest)
