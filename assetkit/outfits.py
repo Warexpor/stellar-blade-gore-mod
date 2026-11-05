@@ -12,6 +12,7 @@ bodies (of different groups, or not grouped at all) that are closer than rest_ma
 would be shoved apart by the solver every frame (the flinging), so they stay non-colliding. Bodies no constraint
 holds ("joints", see orphan_joints) get a locked joint to the body above them.
 """
+import base64
 import fnmatch
 import json
 import math
@@ -39,6 +40,18 @@ def selected(job, rel):
 def cmd_meshes(spec, table, mods=None):
     job = job_of(spec)
     text = open(table).read()
+    # A DataTable whose rows the dumper could not structure (seen after the Bayonetta update changed the row
+    # serialization) comes back as a base64 blob in the export's Data: decode it so its mesh references still scan.
+    try:
+        d = json.loads(text)
+        for e in d.get("Exports", []):
+            if isinstance(e.get("Data"), str):
+                try:
+                    text += " " + base64.b64decode(e["Data"]).decode("utf-8", "replace")
+                except Exception:
+                    pass
+    except Exception:
+        pass
     shipped = {l.split()[1] for l in open(mods) if len(l.split()) == 2} if mods else set()
     found = set()
     for m in re.finditer(r"/Game/([^\"'.]+)\.[A-Za-z0-9_]+", text):
