@@ -4,6 +4,8 @@
 
 In development; not released.
 
+- Rebuilt the paks against the Bayonetta update (Steam build 26123051): the outfit scanner reads base64 DataTable dumps again, and all four Bayonetta outfits ship with fixed ragdoll physics; patch and verify pass clean. In-game cut and sbslice ready line still need a check on the new exe.
+
 - Slow motion on her death (off by default, F3 and `deathSlowmo` in `settings.default.lua`): the game runs slower for a few seconds when she dies so the damage reads, then time goes back well before the death screen; Esc's fast forward still wins. Covered by a new `death_slowmo` simulation; game feel still needs a playtest.
 
 - In an enemy's grab, her head now waits for her death like her body and a split do, instead of coming off at the hit. A beheading opened under a finisher read as reattached once the show moved her on; only limbs come off while she is held. Covered by a new `grab_cut` simulation; finisher sync still needs an in-game check.
