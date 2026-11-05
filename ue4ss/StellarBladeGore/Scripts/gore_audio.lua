@@ -75,6 +75,12 @@ local function sfx(kind, pawn, at, force, vol, aside)
       log(string.format("sound %s: %s already started this window", kind, path:match("([^/.]+)%.[^.]+$") or path))
       return
     end
+    -- slow motion while she dies drags our sounds down with the world (never up); the game's own stay as they are
+    local ts = 1
+    local c = get_ctx and get_ctx()
+    local f = c and c.time_scale
+    local k = f and f()
+    if type(k) == "number" and k > 0 and k < 1 then ts = math.max(k, 0.05) end
     local startedAt = os.clock()
     local snd = load_obj(path)
     local loadedAt = os.clock()
@@ -83,7 +89,7 @@ local function sfx(kind, pawn, at, force, vol, aside)
       -- same sound playing again (leg cuts came out silent, fifteenth playtest)
       local ok, err = pcall(function()
         gs:PlaySoundAtLocation(pawn, snd, vec(at.X, at.Y, at.Z), { Pitch = 0, Yaw = 0, Roll = 0 }, (g.soundVolume or 1.0) * (vol or 1),
-          0.92 + math.random() * 0.16, 0.0, nil, nil, nil)
+          (0.92 + math.random() * 0.16) * ts, 0.0, nil, nil, nil)
       end)
       local endedAt = os.clock()
       if (endedAt - startedAt) * 1000 >= 10 then

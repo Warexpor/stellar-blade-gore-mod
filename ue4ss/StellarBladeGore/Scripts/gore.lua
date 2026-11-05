@@ -244,7 +244,8 @@ M.sfx = sfx
 
 -- Voice state is shared with cut cleanup and the preload queue.
 local vox = dofile("ue4ss/Mods/StellarBladeGore/Scripts/gore_voice.lua")(M, cfg, load_obj,
-  function(...) return try(...) end, function(o) return valid(o) end, log, vec, function() return cuts end)
+  function(...) return try(...) end, function(o) return valid(o) end, log, vec, function() return cuts end,
+  function() return ctx end)
 
 -- Eve's blood effects (the bleed, her hit blood: MA_A_DefaultBlood_01, MA_A_GpuBlood_01) take their colour from
 -- MPC_BloodParameters (DefaultBlood 0.15, 0, 0; DefaultBlood2 0.23, 0.05, 0; EmissiveBloodMinValue 0.15, read out of

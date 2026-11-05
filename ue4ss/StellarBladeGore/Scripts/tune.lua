@@ -97,8 +97,8 @@ return {
   deathSkipSpeed = 6,          --   this many times as fast till the screen shows
   deathSlowmo = {             -- slow motion on her death: the game runs slower for a few seconds so the damage
     enabled = false,          --   reads, then time goes back well before the death screen (Esc's fast forward wins)
-    speed = 0.3,              --   game speed while it lasts (0.3: less than a third as fast)
-    duration = 2.5,           --   real seconds it lasts
+    speed = 0.15,             --   game speed while it lasts, any fraction of full speed
+    duration = 5,             --   real seconds it lasts, no upper limit
   },
   cameraFollow = false,        -- during a ragdoll her capsule (and the camera on it) drifts after her body, loosely
                                -- (off: it fought how the death plays out, and the game died a second after it moved

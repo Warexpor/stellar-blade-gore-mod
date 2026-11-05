@@ -131,8 +131,8 @@ return {
   deathSlowmo = {
     enabled = false,          -- slow motion on her death: the game runs slower for a few seconds so the damage
                               --   reads, then time goes back well before the death screen (Esc's fast forward wins)
-    speed = 0.3,              --   game speed while it lasts
-    duration = 2.5,           --   real seconds it lasts
+    speed = 0.15,             --   game speed while it lasts, any fraction of full speed
+    duration = 5,             --   real seconds it lasts, no upper limit
   },
   active = {
     animated = true,           -- light deaths play her own fall animation and only the cut pieces fall by physics

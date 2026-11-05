@@ -310,6 +310,7 @@ if (( ${#MESH_ASSETS[@]} )); then
   echo "ok  cpuaccess $(grep -c '^ok' "$W/checkcpu.log") meshes, LOD$MESH_LODS CPU access and nothing else"
 fi
 ls -l "$DIST"
+log "done: $(ls "$DIST" | wc -l) files in dist, every patched asset verified ok"
 
 if [[ ${1:-} == --install ]]; then
   mkdir -p "$MODS"

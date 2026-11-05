@@ -11,13 +11,13 @@ return function(get_tune, clock, log)
     if M.k ~= nil then return nil end
     local c = cfg()
     if c.enabled ~= true then return nil end
-    local k = tonumber(c.speed) or 0.3
-    if not (k > 0.05 and k < 0.99) then
+    local k = tonumber(c.speed) or 0.15
+    if not (k > 0 and k < 1) then
       log(string.format("death: slow motion off: speed %.2f out of range", k))
       return nil
     end
-    local dur = tonumber(c.duration) or 2.5
-    if not (dur >= 0.5 and dur <= 8) then
+    local dur = tonumber(c.duration) or 5
+    if not (dur > 0) then
       log(string.format("death: slow motion off: duration %.1f s out of range", dur))
       return nil
     end

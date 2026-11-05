@@ -573,7 +573,7 @@ local camera = dofile("ue4ss/Mods/StellarBladeGore/Scripts/death_camera.lua")(sc
 -- Esc on a death (tune.deathSkip): the game runs tune.deathSkipSpeed times as fast till its death screen
 -- (WB_MainHUD_Dead) shows, instead of the wait. The mod's own clock for getting her up (recoverAfter) counts the
 -- game's time meanwhile (ahead: game seconds over real ones), so she still gets up under the screen
-local skip, ahead = nil, 0 -- skip: { t0, k, pawn }
+local skip, ahead, aheadTick = nil, 0, 0 -- skip: { t0, k, pawn }; aheadTick: this poll's game-time delta
 local function time_speed(pawn, k)
   local gs = goreCtx.statics()
   return valid(gs) and valid(pawn) and try(function() gs:SetGlobalTimeDilation(pawn, k); return true end) == true
@@ -584,7 +584,9 @@ end
 local slowmo = dofile("ue4ss/Mods/StellarBladeGore/Scripts/death_slowmo.lua")(
   function() return tune end, os.clock, log)
 local function slow_stop(why)
-  slowmo.stop(why, function() time_speed(find_eve(), 1) end)
+  if slowmo.stop(why, function() time_speed(find_eve(), 1) end) and gore and gore.voice_slow then
+    try(function() gore.voice_slow(1) end)
+  end
 end
 -- the death screen's widget, found once and kept (a scan of every object: 17 ms, twice a second, was a stutter of
 -- its own, playtest), looked for at most every 2 s in a death while it isn't found. Never its class default
@@ -617,6 +619,7 @@ end
 local function skip_tick()
   if not skip then return end
   ahead = ahead + (skip.k - 1) * POLL_MS / 1000
+  aheadTick = aheadTick + (skip.k - 1) * POLL_MS / 1000
   if death_screen() then skip_stop("the death screen is up")
   elseif polls * POLL_MS / 1000 + ahead >= (tune.recoverAfter or 10) then skip_stop("no death screen seen") end
 end
@@ -626,14 +629,18 @@ local function slow_start(pawn)
   local k = slowmo.start()
   if not k then return end
   if not time_speed(pawn, k) then slowmo.stop("the game's speed can't be set"); return end
-  log(string.format("death: slow motion x%.2f for %.1f s", k, tonumber((tune.deathSlowmo or {}).duration) or 2.5))
+  if gore and gore.voice_slow then try(function() gore.voice_slow(k) end) end
+  log(string.format("death: slow motion x%.2f for %.1f s", k, tonumber((tune.deathSlowmo or {}).duration) or 5))
 end
 -- every tick of the ragdoll: the game's time it ran behind, and time back once the window is over
 local function slow_tick()
   if not slowmo.running() then return end
   ahead = ahead + (slowmo.speed() - 1) * POLL_MS / 1000
+  aheadTick = aheadTick + (slowmo.speed() - 1) * POLL_MS / 1000
   if slowmo.done() then slow_stop("its time is up") end
 end
+-- what the game's clock runs at now (1 normally): the mod's own sounds pitch down with it, never up
+goreCtx.time_scale = function() return slowmo.running() and slowmo.speed() or 1 end
 
 -- what covers the view while the death screen is up (it came up all black, the game behind it not showing:
 -- playtest): its "black" and "FadeOut" images, its background blur, the camera's fade. Every 0.5 s, logged when it
@@ -746,7 +753,7 @@ local function on_start(pawn, mesh)
   camera.hold(pawn)
   phase("camera and state")
   deaths = deaths + 1
-  active, polls, ahead = true, 0, 0
+  active, polls, ahead, aheadTick = true, 0, 0, 0
   screen.deathAt = os.clock()
   saved = { meshPB = try(function() return mesh:GetCollisionResponseToChannel(CH.PhysicsBody) end) }
   -- "auto": the data mod fixes the collision table of every outfit's physics asset (mod/ragdoll_spec.json,
@@ -3225,6 +3232,7 @@ end
 local function tick()
   for i = #tp, 1, -1 do tp[i] = nil end
   tp.t = os.clock()
+  aheadTick = 0
   local pawn = find_eve()
   if not pawn then return end
   -- a pawn from a level that is still streaming in (or being torn down): leave it alone
@@ -3577,10 +3585,10 @@ local function tick()
 
   -- a piece cut off her while she is alive (F9) settles on its own clock
   tp.mark("recover")
-  if not active and rag then rag.tick(POLL_MS / 1000) end
+  if not active and rag then rag.tick(POLL_MS / 1000 + aheadTick) end
   if active then
     no_snapshot(pawn)
-    if rag then rag.tick(POLL_MS / 1000, tp.mark) end
+    if rag then rag.tick(POLL_MS / 1000 + aheadTick, tp.mark) end
     screen.wedding_blend(mesh)
     if polls == 45 then log("ragdoll state at 1.5 s: " .. ragdoll_state(pawn)) end
     if saved.manual and (polls == 6 or polls == 30 or polls == 90) then
@@ -3645,7 +3653,7 @@ local function forget_world(pawn)
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
   goreCtx.quietUntil = math.max(goreCtx.quietUntil, os.clock() + 5)
   slow_stop("the level reloaded")
-  skip, ahead = nil, 0
+  skip, ahead, aheadTick = nil, 0, 0
   -- the old face may be gone: dropped without touching it
   dface.on, dface.known, faceCheck = nil, {}, nil
   -- (a regrow's copy went with the old level. Its matrices are written into her mesh asset, which the new Eve wears:
