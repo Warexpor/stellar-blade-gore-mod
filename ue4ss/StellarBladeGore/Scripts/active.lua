@@ -694,6 +694,13 @@ local function ease_stop()
   if next(eased) and ctx.gore and ctx.gore.fire then ctx.gore.fire("F") end
   eased = {}
 end
+-- a horizontal throw along a direction at a speed, or nil (no direction, no speed)
+function M.throw_along(dir, speed)
+  if not dir or not (speed and speed > 0) then return nil end
+  local h = math.sqrt(dir.X * dir.X + dir.Y * dir.Y)
+  if h <= 1e-3 then return nil end
+  return vec(dir.X / h * speed, dir.Y / h * speed, 0)
+end
 local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
   if g.dropWeapon == false then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.BoxComponent") end)
@@ -777,12 +784,14 @@ local function drop_weapons(pawn, mesh, g, only, soft, extra, bound, push)
         box:SetSimulatePhysics(true)
         box:SetMassOverrideInKg(FName("None"), g.weaponKg or 1.5, true)
         w:K2_AttachToComponent(box, FName("None"), 1, 1, 1, false)
-        -- (soft: slipping out of her loosening grip, with her hand's own speed: barely tossed or turned)
+        -- (soft: slipping out of her loosening grip, with her hand's own speed: barely tossed or turned;
+        -- in a death with the blow's direction known it flies with it instead of dropping by her side)
         local toss = soft and soft.toss or g.weaponToss or 150
         local spin = soft and soft.spin or 1
         local a = math.random() * math.pi * 2
         local pv = push and push(w) or vec(0, 0, 0)
-        box:SetPhysicsLinearVelocity(vec(hv.X + math.cos(a) * toss + pv.X, hv.Y + math.sin(a) * toss + pv.Y,
+        local th = (run and run.throwDir) and M.throw_along(run.throwDir, tonumber(g.weaponThrow) or 0)
+        box:SetPhysicsLinearVelocity(vec(hv.X + math.cos(a) * toss + pv.X + (th and th.X or 0), hv.Y + math.sin(a) * toss + pv.Y + (th and th.Y or 0),
           hv.Z + toss * 0.6 + pv.Z), false, FName("None"))
         box:SetPhysicsAngularVelocityInDegrees(vec((math.random() - 0.5) * 720 * spin, (math.random() - 0.5) * 720 * spin,
           (math.random() - 0.5) * 360 * spin), false, FName("None"))
@@ -1413,6 +1422,8 @@ function M.start(pawn, mesh, kind, dir)
   if run then M.stop(pawn, true) end
   if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
   run = { mesh = mesh, t = 0, masses = {}, still = 0, hung = {} }
+  -- the killing blow's direction, when it has one (a death, not a sandbox): a dropped sword flies with it
+  if dir and kind ~= "sandbox" then run.throwDir = dir end
   -- Tower manual ragdolls flung her 3 km to the origin (pelvis 27k cm/s, calf 800k cm/s before any push): stale body
   -- velocities from the previous state survived into the new ragdoll. Clear them before any impulse.
   try(function() mesh:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
@@ -2220,6 +2231,14 @@ function M.stop(pawn, restart)
   if valid(mesh) then
     for bone, m in pairs(run.masses) do if try(function() mesh:SetMassOverrideInKg(FN[bone], m, true); return true end) then n = n + 1 end end
     cap_spin(mesh, cfg(), SPIN_DEFAULT)
+  end
+  -- a half that takes off after settling leaves no trace in the settle line: note fast bodies as the run ends
+  -- (a split half's flight past the log's last line, playtest), so the next log catches where it went
+  for i, c in ipairs({ mesh, table.unpack(extra) }) do
+    if valid(c) then
+      local s, b = speed(c)
+      if s and s > 2000 then log(string.format("stopping with %s at %.0f cm/s on %s", tostring(b), s, i == 1 and "her" or "the split copy")) end
+    end
   end
   run = nil
   freed = {}

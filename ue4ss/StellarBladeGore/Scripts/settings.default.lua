@@ -129,10 +129,13 @@ return {
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
   deathSlowmo = {
-    enabled = false,          -- slow motion on her death: the game runs slower for a few seconds so the damage
+    enabled = true,           -- slow motion on her death: the game runs slower for a few seconds so the damage
                               --   reads, then time goes back well before the death screen (Esc's fast forward wins)
     speed = 0.15,             --   game speed while it lasts, any fraction of full speed
     duration = 5,             --   real seconds it lasts, no upper limit
+  },
+  manualSlowmo = {
+    enabled = false,          -- the Slow Motion key (Y): the death slow motion's speed on demand, till the key again
   },
   active = {
     animated = true,           -- light deaths play her own fall animation and only the cut pieces fall by physics
@@ -150,12 +153,12 @@ return {
       enabled = true,          -- her sword breaks: cut in two where the killing blade crosses it, and always by a
     },                         -- killing blow through her guard (false: it always falls whole)
   },
-  deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 10 s into
+  deathScreen = "delay",       -- when the death screen comes up: "game" at once, as the game does; "delay" 8 s into
                                -- the death; "key" only when you press Shift+F4. Shift+F4 also shows it early, and
                                -- hides it again once it is up (she stays down till you press it again)
-  reviveAt = 10,               -- the death screen (and the revive item's) held hidden this many seconds into the death
-  fewerGC = false,            -- fewer garbage collection hitches: no forced pass each time the game unloads part of
-                              -- the map (its regular pass a minute still runs); off by default: the game's own behaviour
+  reviveAt = 8,                -- the death screen (and the revive item's) held hidden this many seconds into the death
+  fewerGC = true,             -- fewer garbage collection hitches: no forced pass each time the game unloads part of
+                              -- the map (its regular pass a minute still runs); on by default, off: the game's own behaviour
   customizedRagdoll = false,  -- with Customized Ragdoll (Nexus 3884) installed: its death camera, and the death screen
                               -- up at once but invisible, F / R still working (Shift+F4 shows it); this mod's ragdoll,
                               -- cuts and struggle as ever

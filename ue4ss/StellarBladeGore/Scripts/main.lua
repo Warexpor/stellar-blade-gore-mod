@@ -583,10 +583,26 @@ end
 -- before the death screen. Esc's fast forward wins over it either way.
 local slowmo = dofile("ue4ss/Mods/StellarBladeGore/Scripts/death_slowmo.lua")(
   function() return tune end, os.clock, log)
+-- Manual slow motion (tune.manualSlowmo, the Slow Motion key): the same speed on demand, till the key again
+local manslow = dofile("ue4ss/Mods/StellarBladeGore/Scripts/manual_slowmo.lua")(
+  function() return tune end, log)
+-- Motion blur off while the game runs slow (dilation smears the velocity buffer), back after
+local ppblur = dofile("ue4ss/Mods/StellarBladeGore/Scripts/slowmo_pp.lua")(
+  function() return goreCtx.statics() end, function(f) return try(f) end, function(o) return valid(o) end, log)
+local function blur_sync()
+  ppblur.want(find_eve(), slowmo.running() or manslow.running())
+end
+-- what the game's clock should run at now: the death window's speed, else the manual one, else full speed
+local function restore_speed(pawn)
+  local k = slowmo.running() and slowmo.speed() or (manslow.running() and manslow.speed() or 1)
+  time_speed(pawn or find_eve(), k)
+end
 local function slow_stop(why)
-  if slowmo.stop(why, function() time_speed(find_eve(), 1) end) and gore and gore.voice_slow then
-    try(function() gore.voice_slow(1) end)
+  if slowmo.stop(why, function() restore_speed() end) and gore and gore.voice_slow then
+    local k = manslow.running() and manslow.speed() or 1
+    try(function() gore.voice_slow(k) end)
   end
+  blur_sync()
 end
 -- the death screen's widget, found once and kept (a scan of every object: 17 ms, twice a second, was a stutter of
 -- its own, playtest), looked for at most every 2 s in a death while it isn't found. Never its class default
@@ -601,7 +617,8 @@ local function skip_stop(why)
   local sk = skip
   skip = nil
   if not sk then return end
-  time_speed(valid(sk.pawn) and sk.pawn or find_eve(), 1)
+  restore_speed(valid(sk.pawn) and sk.pawn or nil)
+  blur_sync()
   log(string.format("death: fast forward off after %.1f s (%s)", os.clock() - sk.t0, why))
 end
 local function skip_start(pawn)
@@ -630,6 +647,7 @@ local function slow_start(pawn)
   if not k then return end
   if not time_speed(pawn, k) then slowmo.stop("the game's speed can't be set"); return end
   if gore and gore.voice_slow then try(function() gore.voice_slow(k) end) end
+  blur_sync()
   log(string.format("death: slow motion x%.2f for %.1f s", k, tonumber((tune.deathSlowmo or {}).duration) or 5))
 end
 -- every tick of the ragdoll: the game's time it ran behind, and time back once the window is over
@@ -640,7 +658,7 @@ local function slow_tick()
   if slowmo.done() then slow_stop("its time is up") end
 end
 -- what the game's clock runs at now (1 normally): the mod's own sounds pitch down with it, never up
-goreCtx.time_scale = function() return slowmo.running() and slowmo.speed() or 1 end
+goreCtx.time_scale = function() return slowmo.running() and slowmo.speed() or (manslow.running() and manslow.speed() or 1) end
 
 -- what covers the view while the death screen is up (it came up all black, the game behind it not showing:
 -- playtest): its "black" and "FadeOut" images, its background blur, the camera's fade. Every 0.5 s, logged when it
@@ -1619,7 +1637,8 @@ local track_swing, clear_swing_bones = dofile("ue4ss/Mods/StellarBladeGore/Scrip
   function() return active end, function() return gore end, SWING_NAMES, try, valid, vof, len, name, log)
 -- the swing that killed her, if the weapon moved fast enough: { dir, n, at (the weapon there), speed, bone, fwd }
 sw.of = dofile("ue4ss/Mods/StellarBladeGore/Scripts/swing_selection.lua")(
-  function() return tune end, function(k) return goreCtx.held(k) end, try, vof, SWING_AT, sub, dot, dist, len, unit, cross, log)
+  function() return tune end, function(k) return goreCtx.held(k) end, try, vof, SWING_AT, sub, dot, dist, len, unit, cross, log,
+  function() return goreCtx.time_scale and goreCtx.time_scale() or 1 end)
 
 -- the killing swing among the enemies followed: the blade that swept nearest her (its weapon meshes), else the
 -- fastest weapon bone. It becomes `swing` (who, its trail, the poses noted with it) for the death
@@ -2725,6 +2744,25 @@ key_on("hold", function()
   if not active or saved.manual then log(screen.key_name("hold") .. ": no death"); return end
   screen.hold(screen.key_name("hold"))
 end)
+-- Y (tune.manualSlowmo): the death slow motion's speed on demand, till the key again. A death's own slow
+-- motion or fast forward owns the clock while it runs; the manual flag still flips underneath and takes over
+-- after (or is already running under them, at the same speed)
+key_on("slowmo", function()
+  local pawn = find_eve()
+  if not valid(pawn) then log("slow motion: no Eve"); return end
+  local k = manslow.toggle()
+  if not k then log("slow motion: Manual Slow Motion is off"); return end
+  if slowmo.running() or skip then
+    log(string.format("manual slow motion %s (the death's own slow motion runs first)",
+      manslow.running() and "on" or "off"))
+    return
+  end
+  if not time_speed(pawn, k) then manslow.reset(); log("slow motion: the game's speed can't be set"); return end
+  if gore and gore.voice_slow then try(function() gore.voice_slow(k) end) end
+  blur_sync()
+  if k == 1 then log("manual slow motion off")
+  else log(string.format("manual slow motion x%.2f (%s again for full speed)", k, screen.key_name("slowmo"))) end
+end)
 -- Esc on her death: fast forward to the death screen (tune.deathSkip; parked for now, untested)
 -- (a key "skip": if active then skip_start(find_eve()) end)
 -- Ultra Violence (Nexus 3942) has F9 (its menu), F10 and F11 too: its cut/split conflicts default to Alt.
@@ -3233,6 +3271,17 @@ local function tick()
   for i = #tp, 1, -1 do tp[i] = nil end
   tp.t = os.clock()
   aheadTick = 0
+  -- manual slow motion runs the game's clock behind the real one everywhere, not just in a death
+  if manslow.running() and not slowmo.running() and not skip then
+    local k = manslow.speed()
+    if k then aheadTick = aheadTick + (k - 1) * POLL_MS / 1000 end
+  end
+  -- her hair's simulated bodies asleep under dilation freeze mid-sway and read as floating: kept awake
+  -- while the manual slow motion runs (deaths settle to sleep on their own)
+  if manslow.running() and not active then
+    local hm = try(function() return find_eve().Mesh end)
+    if valid(hm) then try(function() hm:WakeAllRigidBodies() end) end
+  end
   local pawn = find_eve()
   if not pawn then return end
   -- a pawn from a level that is still streaming in (or being torn down): leave it alone
@@ -3250,6 +3299,8 @@ local function tick()
   end
   screen.cloth_tick(pawn)
   if gore and screen.photo_guard(pawn, mesh) then return end
+  -- (the tick's first part, marked on its own: a new level's first ticks spent 50-90 ms before the probe)
+  tp.mark("cloth, photo")
   local function simulating() return try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) == true end
   local sim = simulating()
 
@@ -3257,8 +3308,12 @@ local function tick()
   try(function() screen.probe(pawn) end)
   tp.mark("death screen")
   if goreCtx.tables then goreCtx.tables.tick() end
+  -- (marked on their own: three unmarked calls sat in the next segment, hiding a 600 ms tick's cost)
+  tp.mark("tables")
   if goreCtx.gui then goreCtx.gui.tick(pawn) end
+  tp.mark("menu")
   screen.held.tick()
+  tp.mark("held")
   -- (the enemies' part runs half a poll later, on a frame of its own: game_tick)
   if goreCtx.enemies then screen.enemiesDue = { pawn = pawn, mesh = mesh } end
   if gore then
@@ -3653,6 +3708,8 @@ local function forget_world(pawn)
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
   goreCtx.quietUntil = math.max(goreCtx.quietUntil, os.clock() + 5)
   slow_stop("the level reloaded")
+  manslow.reset()
+  ppblur.forget()
   skip, ahead, aheadTick = nil, 0, 0
   -- the old face may be gone: dropped without touching it
   dface.on, dface.known, faceCheck = nil, {}, nil

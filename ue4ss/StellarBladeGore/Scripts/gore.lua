@@ -418,10 +418,11 @@ local function rank_bones(mesh, hit, kind)
 end
 
 -- The native response format is isolated from the cut and split lifecycle.
-local num, triple, opening
+local num, triple, opening, widest
 do
   local response = dofile("ue4ss/Mods/StellarBladeGore/Scripts/slice_response.lua")
-  num, triple, opening = response.num, response.triple, response.opening
+  num, triple, opening, widest = response.num, response.triple, response.opening, response.widest
+  widest = response.widest
 end
 
 local function dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
@@ -2027,6 +2028,13 @@ local function stage_cut(q)
     return most
   end
   if fb and not (q.ob and round(q.c.result) >= 14 and wide(q.ob) > wide(fb)) then q.ob, q.obFace = fb, true end
+  -- a cap or lid dozens of cm across is a drawn-out spike, not an opening: logged so the session log
+  -- shows it (a thigh after-cut on a leg whose calf was already off built a 228 cm lid). The geometry
+  -- itself is the DLL's; nothing is changed here
+  local wideCut = widest and (widest(q.c.result) or widest(q.c.face_result or ""))
+  if wideCut and wideCut > 40 then
+    log(string.format("cut stretch: %s (%s) is %.0f cm across", q.bone, q.why or "?", wideCut))
+  end
   -- the caps and stubs ride the bone each opening's rim rides (the DLL's bb / lb): a thigh's stump follows the hip's
   -- twist helpers, not the pelvis, and a stub on the pelvis slid off to the stump's edge as she moved
   local function ride(key, fallback)
@@ -2188,7 +2196,7 @@ end
 -- The 0.5.5 blood-only effect follows each opening and is restarted on its original cadence.
 -- Spawn and restart work is spread across frames; the Niagara system itself is unchanged.
 local function bleed_from(q, cap_actor, o, bone, left, out)
-  if not valid(q.mesh) or cfg().blood == false then return end
+  if not valid(q.mesh) or cfg().blood == false or cfg().noBursts == true then return end
   local dir = out or (o and o.z)
   local rot = dir and emit_rot(dir)
     or try(function() local r = q.mesh:GetSocketRotation(FName(bone)); return { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll } end)
@@ -3581,7 +3589,7 @@ local function stage_split_open(q)
   local function bleed()
     if g.blood == false or not valid(q.mesh) then return end
     M.bodyBlood.up(q.pawn)
-    niagara(FX.hit, q.pawn, nil, q.hit or at, false)
+    if g.noBursts ~= true then niagara(FX.hit, q.pawn, nil, q.hit or at, false) end
     M.splat(q.pawn, at)
     -- bleeding along the seam: from the chest and neck lids of each half
     local left = math.floor((g.bleedTime or 2.5) / TICK_S + 0.5)

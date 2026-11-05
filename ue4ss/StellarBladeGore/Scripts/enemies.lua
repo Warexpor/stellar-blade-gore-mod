@@ -869,6 +869,196 @@ local function down_tick()
   end
 end
 
+-- Forced grab attacks (tune.enemies.forceGrabs): every enemy whose decision tree names a grab skill attacks
+-- with grabs. The tree itself is left alone (its ranges, dice rolls, cooldowns and phases still pick the
+-- branch): what each attack branch plays is renamed to the tree's own grab, so whatever it picks comes out a
+-- grab-QTE move. Read from the game's trees (Raven's BetaGrab, the Sawshark's DoubleGrab, the Crawler's
+-- ComboGrab...): a tree with no grab skill in it stays as the game has it (the Elder's grab lives in the
+-- fight's script, not its tree). A branch that already grabs, and the dodges, get-ups and starts (aft's
+-- skipped/attacky words), keep theirs. Put back as the game has them when it is turned off, and the saved
+-- originals join aft.skills so Hits After Death still finds the attacks.
+local force = { on = false, nodes = {}, by_tree = {}, pending = {}, hooked = false, scanned = false, method = nil }
+local FORCE_NON_GRAB = { "success", "fail", "counter", "chain", "catch", "linkbreak", "preview" }
+-- a grab skill's name (in the tree, as in the Animation folder next to its mesh)
+function M.force_is_grab(nm) return tostring(nm):find("Grab", 1, true) ~= nil end
+-- one worth playing for every attack: a grab, not a counter, a chain's link, a catch or a success/fail show
+function M.force_plain_grab(nm)
+  if not M.force_is_grab(nm) then return false end
+  local l = tostring(nm):lower()
+  for _, w in ipairs(FORCE_NON_GRAB) do if l:find(w, 1, true) then return false end end
+  return true
+end
+-- the tree's grab to play: its plainest grab (the first), else any grab, else none
+function M.force_pick(set)
+  local any = nil
+  for nm in pairs(set) do
+    if M.force_plain_grab(nm) then return nm end
+    if not any and M.force_is_grab(nm) then any = nm end
+  end
+  return any
+end
+-- a branch worth renaming: a close attack or a lunging one, none of its skills a grab already. Leaps,
+-- dashes, charges, spins and ground slams close in on their own or are thrown point blank, so they come out
+-- grabs too; dodges, get-ups, guards, turns and falls back, buffs, phases and true ranged attacks (shots and
+-- beams) keep theirs, and the fight keeps its shape at a distance
+local FORCE_RANGED = { "Shot", "Range", "Beam", "Missile", "Projectile", "Wave" }
+function M.force_attack_node(skills)
+  if #skills == 0 then return false end
+  local attacky = false
+  for _, nm in ipairs(skills) do
+    if M.force_is_grab(nm) then return false end
+    for _, w in ipairs(FORCE_RANGED) do if nm:find(w, 1, true) then return false end end
+    if not attacky and M.attacky(nm) then attacky = true end
+  end
+  return attacky
+end
+-- the skill names the saved originals still hold (for aft.skills)
+function M.force_orig_skills()
+  local out = {}
+  for _, f in pairs(force.nodes) do for _, nm in ipairs(f.orig) do out[nm] = true end end
+  return out
+end
+-- the skill names a UseSkill node plays now, or nil
+local function force_read(t)
+  local out = nil
+  try(function()
+    out = {}
+    t.SkillName:ForEach(function(_, e) out[#out + 1] = e:get():ToString() end)
+  end)
+  return out and #out > 0 and out or nil
+end
+-- a node's whole skill list played as one grab. Whole-list assignment first (a node with two attacks must
+-- not keep the second), element-wise for a lone skill when that is all the build takes. Verified by reading
+-- back; the first method that holds on this build is logged once
+local function force_write(t, list)
+  if #list == 0 then return false end
+  local ok = try(function() t.SkillName = list; return true end) and (function()
+    local back = force_read(t)
+    return back and #back == #list and back[1] == list[1]
+  end)()
+  local how = ok and "table" or nil
+  if not ok and #list == 1 then
+    ok = try(function()
+      local n = 0
+      t.SkillName:ForEach(function(_, e) n = n + 1; if n == 1 then e:set(list[1]) end end)
+      return n == 1
+    end) and (function()
+      local back = force_read(t)
+      return back and #back == 1 and back[1] == list[1]
+    end)()
+    how = ok and "elem" or nil
+  end
+  if ok and not force.method then
+    force.method = how
+    log(string.format("forcegrabs: skill lists rename by %s on this build",
+      how == "table" and "whole-list assignment" or "element writes"))
+  end
+  return ok or false
+end
+-- a UseSkill node's tree, from its full name ("...M_Raven_AI.M_Raven_AI:SBBTTask_SbUseSkill_3"). A node
+-- the game made up on the fly has no tree in its name (its outer is the pawn): those group by that outer, so
+-- their pick still comes from their own enemy's skills
+local function force_tree(t)
+  local full = try(function() return t:GetFullName() end) or ""
+  local tree = full:match("([%w_]+%.[%w_]+):SBBTTask") or full:match("([%w_]+):SBBTTask")
+  if not tree then
+    tree = "?"
+    if not force.unknownLogged then
+      force.unknownLogged = true
+      log(string.format("forcegrabs: a skill node with no tree in its name: %s", full ~= "" and full or "no full name"))
+    end
+  end
+  return tree
+end
+-- note a UseSkill node, swapping it when its tree's grab is known
+local function force_note(a, k, t)
+  local skills = force_read(t)
+  if not skills then return end
+  local tree = force_tree(t)
+  local bt = force.by_tree[tree]
+  if not bt then bt = { skills = {}, pick = nil, nodes = {}, logged = false }; force.by_tree[tree] = bt end
+  for _, nm in ipairs(skills) do bt.skills[nm] = true end
+  if not bt.pick then
+    bt.pick = M.force_pick(bt.skills)
+    -- the tree's grab only just found: its earlier attack nodes queued again
+    if bt.pick then for addr in pairs(bt.nodes) do
+      if force.nodes[addr] and not force.nodes[addr].swapped then force.pending[#force.pending + 1] = { a = addr, t = os.clock() } end
+    end end
+  end
+  local f = force.nodes[a]
+  if not f then
+    f = { k = k, tree = tree, orig = skills, swapped = false, failed = false }
+    force.nodes[a], bt.nodes[a] = f, true
+  end
+  if bt.pick and not f.swapped and not f.failed and M.force_attack_node(f.orig) then
+    if force_write(t, { bt.pick }) then
+      f.swapped = true
+      if not bt.logged then
+        bt.logged = true
+        log(string.format("forcegrabs: %s: its attacks play %s now", tree, bt.pick))
+      end
+    else
+      f.failed = true
+      log(string.format("forcegrabs: %s: %s not renamed (this build takes neither skill list write)", tree,
+        table.concat(f.orig, ", ")))
+    end
+  end
+end
+-- everything renamed put back as the game has it (only what the game still holds)
+local function force_restore()
+  local back = 0
+  for a, f in pairs(force.nodes) do
+    if f.swapped and ctx.held(f.k) then
+      if force_write(f.k.obj, f.orig) then back = back + 1 end
+      f.swapped = false
+    end
+  end
+  if back > 0 then log(string.format("forcegrabs: %d attack branches put back as the game has them", back)) end
+  force.nodes, force.by_tree, force.method = {}, {}, nil
+end
+function M.force_tick()
+  local on = cfg().forceGrabs == true
+  if on ~= force.on then
+    if force.on then force_restore() end
+    force.on, force.scanned, force.pending = on, false, {}
+    if on then log("forcegrabs: on: enemies with a grab skill attack with it") end
+  end
+  if not on then return end
+  if not force.hooked then
+    force.hooked = true
+    ctx.newobj.watch("/Script/SB.SBBTTask_SbUseSkill", function(o)
+      if force.on then force.pending[#force.pending + 1] = { k = ctx.keep(o), t = os.clock() + 1 } end
+    end)
+  end
+  if not force.scanned then
+    force.scanned = true
+    local t0, n = os.clock(), 0
+    for _, t in ipairs(try(function() return FindAllOf("SBBTTask_SbUseSkill") end) or {}) do
+      local k = ctx.keep(t)
+      if k then force.pending[#force.pending + 1] = { k = k, t = os.clock() }; n = n + 1 end
+    end
+    log(string.format("forcegrabs: %d attack nodes to look at, found in %.0f ms", n, (os.clock() - t0) * 1000))
+    return
+  end
+  local t0, n = os.clock(), 0
+  while #force.pending > 0 and n < 8 and os.clock() - t0 < 0.004 do
+    local x = table.remove(force.pending, 1)
+    n = n + 1
+    if x.a then
+      local f = force.nodes[x.a]
+      if f and ctx.held(f.k) and not f.swapped and not f.failed then force_note(x.a, f.k, f.k.obj) end
+    elseif x.k and x.t and x.t <= os.clock() then
+      if ctx.alive_ask({ x.k }) and x.k.alive and valid(x.k.obj) then
+        local a = addr(x.k.obj)
+        if a and not force.nodes[a] then force_note(a, x.k, x.k.obj) end
+      end
+    elseif x.k then
+      force.pending[#force.pending + 1] = x
+      break
+    end
+  end
+end
+
 -- the death's push (pushScale, push, pushUp): the game's own throw (its death show's ragdoll key, 0.01 s in) scaled
 -- once it is in, and a push of our own along the blow on top, every body of it at once (velocity, not force: the
 -- same on any kind's mass). The blow: where its mesh was last hit from, else away from her
@@ -982,6 +1172,7 @@ local function attacky(nm)
   for _, w in ipairs(ATTACK_WORDS) do if nm:find(w, 1, true) then return true end end
   return false
 end
+M.attacky = attacky -- forced grabs reuse the attack words for what a branch plays
 -- an object's path (/Game/...): its full name less the class. UE4SS's objects have no GetPathName (it answered
 -- nothing, so every enemy's mesh read "in no monster folder" and no attack of theirs was ever found, playtest)
 local function path_of(o)
@@ -1162,6 +1353,8 @@ local function after_scan(why, classes)
   for _, t in ipairs(try(function() return FindAllOf("SBBTTask_SbUseSkill") end) or {}) do
     try(function() t.SkillName:ForEach(function(_, e) aft.skills[e:get():ToString()] = true end) end)
   end
+  -- (forced grabs renamed the branches: the originals still count as attacks)
+  for nm in pairs(M.force_orig_skills()) do aft.skills[nm] = true end
   aft.anims = {}
   local nl = aft.scan_anims()
   local all = {}
@@ -1326,6 +1519,8 @@ function M.tick(pawn, mesh, tm)
   n = n + 1
   down_tick()
   tm("enemies attack-down")
+  M.force_tick()
+  tm("enemies force grabs")
   M.after_tick(pawn)
   tm("enemies after death")
   if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end

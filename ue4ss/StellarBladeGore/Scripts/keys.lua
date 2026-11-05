@@ -36,6 +36,7 @@ M.ACTIONS = {
   { id = "menu", label = "Settings Menu", def = "F3", help = "Opens and closes this menu." },
   { id = "hold", label = "Hold the Death", def = "Shift+F4", help = "In a death: brings the death screen up early, or hides it and keeps her down till pressed again." },
   { id = "photo", label = "Photo Mode in a Death", def = "P", help = "In a death: opens the game's photo mode on her body. The death waits while it is open." },
+  { id = "slowmo", label = "Slow Motion On/Off (Experimental)", def = "Y", help = "Slows the game to Slow Motion Speed (Manual Slow Motion on), or back to full speed. Stays till the key again; a death's own slow motion or fast forward runs first while it lasts." },
   { id = "slice", label = "Test: Cut", def = "F9", uv = true, dev = true, help = "Developer Keys: cuts a limb, the head or the torso off her where she stands." },
   { id = "split", label = "Test: Split", def = "F11", uv = true, dev = true, help = "Developer Keys: ragdolls her and splits her in half along the camera's view." },
   { id = "smash", label = "Test: Blunt Smash", def = "F10", dev = true, help = "Developer Keys: ragdolls her and smashes a random remaining part, using the limb/head/torso death odds. Test: Get Up restores her. Does not require Blunt Smash or Smash Every Death on." },

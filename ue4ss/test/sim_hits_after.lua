@@ -28,5 +28,10 @@ shot(); tick({},{}); check(calls==11 and #ah.projectiles==1, 'replacement settin
 local prev=v(0,0,0); swing={bones={'hand'},hist={{t=11.8,p={prev}},{t=12,p={v(100,0,0)}}}}
 local step=sw.after_step(swing,{})
 check(step and step.name=='hand' and math.abs(step.v-500)<0.001, 'weapon step resolves motion from current swing history')
+local slow={time_scale=function() return 0.25 end,held=function() return true end}
+local tick_slow=create(sw,ah,slow,function() return tune end,function() return gore end,
+  function() return swing end,try,function(vv) return vv end,len,dist,sub,dot,cross,unit,function() end)
+local step2=tick_slow and sw.after_step(swing,{})
+check(step2 and math.abs(step2.v-2000)<0.001, 'under quarter-speed slow motion the same motion reads four times as fast')
 os.clock=clock
 print(fails==0 and 'PASS' or 'FAIL')

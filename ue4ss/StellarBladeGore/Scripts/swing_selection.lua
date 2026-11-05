@@ -1,5 +1,6 @@
 -- Select the weapon sweep that best explains a hit. Settings and object guards remain live.
-return function(settings, held, try, vof, SWING_AT, sub, dot, dist, len, unit, cross, log)
+return function(settings, held, try, vof, SWING_AT, sub, dot, dist, len, unit, cross, log, get_scale)
+local function scale() local s = get_scale and get_scale() or 1; return (s and s > 0) and s or 1 end
 return function(swing, mesh)
   local g = settings().gore or {}
   local h = swing.hist
@@ -42,9 +43,9 @@ return function(swing, mesh)
   end
   local bw, second, fastest, steps, closest = nil, nil, nil, 0, nil
   local perw = {} -- each weapon's best step (a second blade of the swing: a cross slash with two)
-  local minv, pull, full, now = g.swingMinSpeed or 300, g.swingSpeedPull or 30, g.swingSpeedFull or 9000, os.clock()
+  local minv, pull, full, now, gts = g.swingMinSpeed or 300, g.swingSpeedPull or 30, g.swingSpeedFull or 9000, os.clock(), scale()
   for i = 2, #h do
-    local dt = h[i].t - h[i - 1].t
+    local dt = (h[i].t - h[i - 1].t) * gts
     if dt > 1e-3 and h[i].w and h[i - 1].w then
       for k, e in pairs(h[i].w) do
         local o = h[i - 1].w[k]
@@ -81,7 +82,7 @@ return function(swing, mesh)
               -- (an older step costs more: a slow 2662 cm/s brush past her calf 0.27 s before the death beat the
               -- 9825 cm/s slash across her body after it and took one leg, playtest)
               local sc = nd - pull * math.min(1, v / full) + (away and (g.swingAwayCost or 60) or 0)
-                + (g.swingAgeCost or 60) * (now - h[i].t)
+                + (g.swingAgeCost or 60) * (now - h[i].t) * gts
               if not closest or nd < closest then closest = nd end
               local c = { speed = v, i = i, k = k, sc = sc, d = nd, at = near, part = part, away = away }
               if not perw[k] or sc < perw[k].sc then perw[k] = c end
@@ -135,7 +136,7 @@ return function(swing, mesh)
       local two
       for k, x in pairs(perw) do
         if k ~= bw.k and x.d and x.d <= (g.swingMiss or 45) and x.part and limb(x.part) ~= limb(bw.part)
-          and x.speed >= math.max(minv, 0.5 * bw.speed) and math.abs(h[x.i].t - h[bw.i].t) <= 0.15
+          and x.speed >= math.max(minv, 0.5 * bw.speed) and math.abs(h[x.i].t - h[bw.i].t) * gts <= 0.15
           and (not two or x.sc < two.sc) then two = x end
       end
       local second
@@ -158,7 +159,7 @@ return function(swing, mesh)
   if not swing.bones or #swing.bones == 0 then return nil end
   local best
   for i = 2, #h do
-    local dt = h[i].t - h[i - 1].t
+    local dt = (h[i].t - h[i - 1].t) * gts
     if dt > 1e-3 then
       for b = 1, #swing.bones do
         local p, q = h[i - 1].p[b], h[i].p[b]

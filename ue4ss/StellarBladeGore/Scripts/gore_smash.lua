@@ -127,6 +127,7 @@ end
 -- One scaled burst per part: its spatial size follows remaining flesh, including prior missing children.
 function M.smashed.blood(pawn, at, profile)
   local s = cfg().smash or {}
+  if cfg().noBursts == true then return end
   local amount = (profile.blood or 0) * M.smashed.number(s.burstScale, 1, 0, 2)
   if amount <= 0 then return end
   local size = math.min(0.825, 0.825 * math.sqrt(amount / 36))

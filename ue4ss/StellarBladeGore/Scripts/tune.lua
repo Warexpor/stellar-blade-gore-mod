@@ -42,8 +42,8 @@ return {
   deathScreen = "delay",       -- when the death screen comes up: "game" as the game puts it (at once), "delay" reviveAt
                                -- seconds into the death, "key" only on Shift+F4 (or holdPad). Shift+F4 shows it early,
                                -- and hides it again (the death held) once it is up
-  fewerGC = false,             -- fewer garbage collection passes: the engine's pass forced as each streamed level goes
-                               -- out (and its incremental ones while one waits) off, the 61 s timed pass kept; false (the default)
+  fewerGC = true,              -- fewer garbage collection passes: the engine's pass forced as each streamed level goes
+                               -- out (and its incremental ones while one waits) off, the 61 s timed pass kept; false
                                -- the game's own values back
   customizedRagdoll = false,   -- Customized Ragdoll (Nexus 3884) support (customrag.lua): its death camera instead of
                                -- cameraStill's, the death screen up as the game puts it but see-through, its keys
@@ -56,7 +56,7 @@ return {
                                -- early freeze lost. "ue4ss": NotifyOnNewObject for all, as up to 0.5.0 (UE4SS 3.1.0-6 only)
   keepFresh = 2,               -- s: a character or widget seen as it spawned is checked alive (sbslice "G") this soon, or
                                -- never held (characters are found again with FindAllOf)
-  reviveAt = 10,               -- the death screen (and the revive item's) is held hidden this many seconds into the death
+  reviveAt = 8,                -- the death screen (and the revive item's) is held hidden this many seconds into the death
   deathPhoto = true,           -- while a death is held (Shift+F4) the game's photo mode opens (P, or D-pad left + R1),
                                -- which the game turns down while she is dead
   capsuleStill = true,         -- her capsule, which the camera rides, stays where she died: SB's ragdoll dragged it
@@ -96,9 +96,12 @@ return {
                                -- (parked for now: its key is commented out in main.lua)
   deathSkipSpeed = 6,          --   this many times as fast till the screen shows
   deathSlowmo = {             -- slow motion on her death: the game runs slower for a few seconds so the damage
-    enabled = false,          --   reads, then time goes back well before the death screen (Esc's fast forward wins)
+    enabled = true,           --   reads, then time goes back well before the death screen (Esc's fast forward wins)
     speed = 0.15,             --   game speed while it lasts, any fraction of full speed
-    duration = 5,             --   real seconds it lasts, no upper limit
+    duration = 4,             --   real seconds it lasts, no upper limit
+  },
+  manualSlowmo = {            -- the Slow Motion key (Y): the death slow motion's speed on demand, till the key again
+    enabled = false,          --   (off: the key does nothing)
   },
   cameraFollow = false,        -- during a ragdoll her capsule (and the camera on it) drifts after her body, loosely
                                -- (off: it fought how the death plays out, and the game died a second after it moved
@@ -447,6 +450,10 @@ return {
         "behemoth" },
       blunt = { "hammer", "club", "mace", "fist", "punch", "gorilla", "juggernaut", "brute", "exosuit",
         "hunchback", "statue", "bodybag", "lump", "roadblock", "hedgeboar" },
+      species = {               -- clawed enemies with no weapon meshes, judged by this name (a bare hand is blunt,
+        ["CH_M_NA_13"] = "sawshark", --   but their swipes cut): class fragment -> name, matched by the sharp/blunt
+                                --   words above (the stalker: its swipes cut, never smash)
+      },
     },
     afterHits = {              -- enemy weapon swings cut her again; reported projectile hits can smash her again
       enabled = true,          --   projectile smashes also require smash.enabled; both share the hit limit
@@ -638,6 +645,8 @@ return {
     spineBoneOut = 1.2,        --   how far it sticks out, times her bone's own height (a third of its width)
     spineBoneWaist = 1.6,      --   a waist cut's spine bone that much wider, no taller (thin there, playtest)
     blood = true,              -- hit/cut/bleed effects
+    noBursts = false,          -- true: no spurting blood out of fresh stumps (cuts, splits, smashes stay dry);
+                              --   floor splats, drips and pools stay as they are (false: bursts on)
     sliceFx = false,           -- the game's flesh-slice burst at the cut: it drops a static meat stub made for
                                -- monster stumps, which hangs in the air where she was cut
     bleedTime = 2.5,           -- seconds both openings keep bleeding (0 = until she recovers)
@@ -973,6 +982,7 @@ return {
     dropWeapon = true,         -- her sword falls out of her hand (it hung in the air where she died)
     weaponKg = 1.5,            --   its weight
     weaponToss = 150,          --   cm/s it is thrown off on top of her hand's speed
+    weaponThrow = 400,         --   cm/s along the killing blow on top of that in a death (0: as now, it drops by her side)
     weaponCut = {              --   the killing blade through her sword (a blow she blocked) cuts it in two, each half
       enabled = true,          --   falling on its own
       reach = 80,              --   cm from the hit the blade's plane may cross it (40 missed one 52 cm off, by her thigh)
@@ -1067,6 +1077,8 @@ return {
   enemies = {                  -- gore on generic humanoid enemies, and the enemy spawner (enemies.lua; dev only)
     enabled = true,            -- false: no gore on them (the spawner still works)
     attackDown = true,         -- they attack her while she is knocked down (the game holds them till she is up)
+    forceGrabs = false,        -- they always attack with their grab-QTE moves: an attack branch plays its tree's own
+                                --   grab instead of its attack (a tree with no grab skill stays as the game has it)
     afterDeath = {             -- after her death the enemies around her keep at her as if she lived (the game drops her)
       enabled = false,
       time = 10,               --   seconds they keep at her

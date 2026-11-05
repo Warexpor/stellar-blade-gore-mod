@@ -18,4 +18,8 @@ gore={smash=function() calls=calls+1; return false end}
 check(sw.smash_kill({}, {}, {attacker='enemy'}, 'death')==false and calls==2, 'smash dispatch reads the replacement gore service')
 tune={gore={enabled=false,smash={enabled=true,blunt={'sword'}}}}
 check(not sw.smash_kill({}, {}, {attacker='enemy'}, 'death') and calls==2, 'replacement disabled settings block dispatch')
+tune={gore={enabled=true,smash={enabled=true,sharp={'saw'},blunt={},species={['CH_M_NA_13']='sawshark'}}}}
+swing={who='CH_M_NA_13_Blueprint_C_1',weapons={}}
+check(sw.blunt_of({attacker='CH_M_NA_13_Blueprint_C_1',wbone='Bip001-R-Hand'})==false, 'a clawed species swipes cut, never smashed')
+check(sw.blunt_of({attacker='CH_M_NA_16_Blueprint_C_1',wbone='Bip001-R-Hand'})==true, 'other bare hands still smash')
 print(fails==0 and 'PASS' or 'FAIL')

@@ -1,11 +1,18 @@
 -- Follow-up attacks and projectile dispatch after death.
 return function(sw, ah, goreCtx, get_tune, get_gore, get_swing, try, vof, len, dist, sub, dot, cross, unit, log)
+-- the game's seconds per real one for motion: trail speeds divide by real time, so under slow motion they
+-- read slow and every follow-up is let go as too slow. Scale by the clock as it runs
+local function game_scale()
+  local s = 1
+  try(function() s = goreCtx.time_scale and goreCtx.time_scale() or 1 end)
+  return (s and s > 0) and s or 1
+end
 -- the fastest step one followed enemy's weapon just made (its blade meshes before its bones), nil with no fresh step
 function sw.after_step(S, g)
   local hist = S.hist
   if not (S.bones or S.weapons) or #hist < 2 or os.clock() - hist[#hist].t > 0.2 then return nil end
   local a, b = hist[#hist - 1], hist[#hist]
-  local dt = b.t - a.t
+  local dt = (b.t - a.t) * game_scale()
   if dt < 1e-3 then return nil end
   local best
   for i = 1, #(S.bones or {}) do
@@ -110,7 +117,8 @@ local function hits_after(pawn, mesh)
   -- relative to the actor for those, so walking past her with a stationary weapon still cannot cut.
   local prev, cur = hist[#hist - 1], hist[#hist]
   local travel = prev.origin and cur.origin and sub(cur.origin, prev.origin)
-  local relative = travel and len(sub(sub(best.q, best.p), travel)) / (cur.t - prev.t)
+  local gdt = math.max((cur.t - prev.t) * game_scale(), 1e-3)
+  local relative = travel and len(sub(sub(best.q, best.p), travel)) / gdt
   if not atk and not mn and relative and relative >= (c.noMontageSpeed or 1500) then
     atk = "fast swing without montage"
   end

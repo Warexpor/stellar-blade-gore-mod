@@ -18,6 +18,11 @@ function sw.blunt_alias(text)
       if bp and (low == bp or low:sub(1, #bp + 1) == bp .. "_") then return k.alias end
     end
   end
+  -- clawed enemies with no weapon meshes (tune.gore.smash.species): judged by the name it gives their class
+  for frag, name in pairs(((tune.gore or {}).smash or {}).species or {}) do
+    local f = tostring(frag):lower()
+    if f ~= "" and (low == f or low:sub(1, #f + 1) == f .. "_") then return tostring(name) end
+  end
 end
 function sw.blunt_of(h, real)
   local tune, swing = get_tune(), get_swing()

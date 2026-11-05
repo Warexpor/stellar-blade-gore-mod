@@ -127,6 +127,11 @@ local function track_swing(pawn, mesh)
   local gore = get_gore()
   if not get_active() and gore and g.blowPose ~= false and #sw.list > 0 then pose = gore.pose(mesh) end
   local keep = g.swingWindow or 0.6
+  -- the window is game seconds: under slow motion it spans more real ones, capped so a deep slow-mo doesn't
+  -- make the death's swing analysis walk thousands of samples
+  local scale = 1
+  try(function() scale = goreCtx.time_scale and goreCtx.time_scale() or 1 end)
+  if not (scale and scale > 0) then scale = 1 end
   for i = #sw.list, 1, -1 do
     local S = sw.list[i]
     if not goreCtx.held(S.k) or try(function() return S.actor.bActorIsBeingDestroyed end) ~= false then
@@ -143,7 +148,8 @@ local function track_swing(pawn, mesh)
       end
       local h = S.hist
       h[#h + 1] = s
-      while #h > 0 and now - h[1].t > keep do table.remove(h, 1) end
+      while #h > 0 and (now - h[1].t) * scale > keep do table.remove(h, 1) end
+      while #h > 240 do table.remove(h, 1) end
     end
   end
   local ms = (os.clock() - t0) * 1000

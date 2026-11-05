@@ -22,7 +22,12 @@ function screen.time_stopped(pawn, gs)
   if not (t and w) then return false end
   local real = now - w.real
   if real <= 0 or real > 0.25 then return screen.stopped == true end
-  screen.stopped = (t - w.game) < real * 0.05
+  -- the game's clock runs behind real time on purpose under slow motion: compare against the expected speed,
+  -- full speed as before when nothing is slowed (a true pause advances nothing either way)
+  local scale = 1
+  try(function() scale = goreCtx.time_scale and goreCtx.time_scale() or 1 end)
+  if not (scale and scale > 0) then scale = 1 end
+  screen.stopped = (t - w.game) < real * 0.05 * scale
   return screen.stopped
 end
 -- her mesh (and hair) stop ticking / tick again. Her hair's meshes run their own animation (and SBHair its own sim)

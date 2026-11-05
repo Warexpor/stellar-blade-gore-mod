@@ -4,9 +4,27 @@
 
 In development; not released.
 
+- Release-prep defaults and labels: Blunt Smash is no longer marked experimental; the death slow motion lasts 4 s instead of 5; the delayed death screen comes up at 8 s instead of 10 (`reviveAt`).
+
+- Release-prep performance pass from the November 5 session log (11 deaths, CH_M_NA_43/31/39): death ticks averaged 3-8 ms of mod work with spikes to 20-70 ms, and frame hitches to 1346 ms, most with the mod's last tick at 1 ms (the game's own streaming and garbage collection). Changes: Fewer GC Hitches now defaults on (the engine's forced pass on every streamed-level unload and its incremental passes while one waits are off; the 61 s timed pass still runs) — existing settings keep their stored value, toggle it on under F3; the death screen's class scan moves from 1 s to 3 s into the death (a ~30 ms whole-object-array walk out of the cut window; immediate when held by Shift+F4). Diagnostic only: per-tick timing now marks tables/menu/held separately and splits the tick's first part ("cloth, photo") from the probe, so the next log exposes the currently unmarked 600 ms-class spikes. Not changed (needs a playtest, not a guess): spin/linear cap cadence stays full-rate, trail sampling and attack checks stay per-tick, seeds still run whole-array walks on level loads. Covered by focused `revival_screen`, `revive_cadence`, `reload`, `menu_layout`, `settings_manager` and `cut_stretch` runs; in-game frame times still need measurement.
+
+- Stretched-skin watch: a cut whose cap or lid spans more than 40 cm now logs `cut stretch: <bone> (<why>) is N cm across`. The session showed two (a 228 cm lid and a 45 cm cap on thigh after-cuts where the calf was already off elsewhere); ordinary cuts peak near 18 cm. The geometry itself is unchanged (native); covered by a new `cut_stretch` simulation.
+
 - Rebuilt the paks against the Bayonetta update (Steam build 26123051): the outfit scanner reads base64 DataTable dumps again, and all four Bayonetta outfits ship with fixed ragdoll physics; patch and verify pass clean. In-game cut and sbslice ready line still need a check on the new exe.
 
-- Slow motion on her death (off by default, F3 and `deathSlowmo` in `settings.default.lua`): the game runs slower for as long as it is set to, then time goes back well before the death screen; Esc's fast forward still wins. Our sounds pitch down with it (the game's own stay as they are), and the ragdoll runs on game time so slow deaths don't fling parts. Covered by a new `death_slowmo` simulation; game feel still needs a playtest.
+- Slow motion on her death (on by default, F3 and `deathSlowmo` in `settings.default.lua`): the game runs slower for as long as it is set to, then time goes back well before the death screen; Esc's fast forward still wins. Our sounds pitch down with it (the game's own stay as they are), and the ragdoll runs on game time so slow deaths don't fling parts. Covered by a new `death_slowmo` simulation; game feel still needs a playtest.
+
+- `gore.noBursts` (F3 No Blood Bursts, off by default): fresh stumps stay dry, no spurting blood out of cuts, splits or smashes; floor splats, drips and pools stay as they are.
+
+- `manualSlowmo` (F3 Manual Slow Motion, off by default, experimental for now): the Slow Motion key (Y, rebindable under Keys) runs the game at Slow Motion Speed till the key again. A death's own slow motion or fast forward runs first while it lasts. Our sounds pitch down with it and the ragdoll clock follows. Covered by a new `manual_slowmo` simulation; game feel still needs a playtest.
+
+- Slow motion now reads every swing in game time instead of real time: at 0.05x a 5000 cm/s swing used to clock in at 250, so follow-up hits were let go as too slow and nothing after the killing blow ever cut. Covered in `swing_slowmo` and extended `hits_after`; the pause detector compares against the expected slow speed too (at 0.05x and below it read slow motion as a paused game and froze/unfroze her mesh every frame), covered in `pause_detect`. Her camera's blur override and boom de-lag ride along while slow, covered in extended `slowmo_pp`.
+
+- `enemies.forceGrabs` (F3 Always Grab Attacks, off by default, experimental for now): only enemies with a grab-QTE attack of their own are affected — those always attack with it. A close attack or a lunging one plays its tree's own grab instead of its attack, so every attack up close comes out a grab-QTE move; dodges, get-ups, guards, ranged shots and beams keep theirs, and trees with no grab skill stay as they are. Covered by a new `force_grabs` simulation; whether the renamed branches play out fully in game still needs a playtest.
+
+- Clawed enemies with no weapon meshes can be judged by name (`smash.species`, e.g. the stalker's `CH_M_NA_13` as `sawshark`): their swipes cut instead of smashing like a bare hand would. Covered in `hit_classification`.
+
+- Her sword flies with a death now (`active.weaponThrow`, 400 cm/s along the killing blow on top of her hand's speed; 0 drops it by her side as before). Covered by a new `sword_throw` simulation; where it lands still needs a playtest.
 
 - In an enemy's grab, her head now waits for her death like her body and a split do, instead of coming off at the hit. A beheading opened under a finisher read as reattached once the show moved her on; only limbs come off while she is held. Covered by a new `grab_cut` simulation; finisher sync still needs an in-game check.
 

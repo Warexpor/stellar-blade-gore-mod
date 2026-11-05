@@ -114,9 +114,11 @@ function screen.revive(t)
   end
   local on = false
   for _, f in ipairs({ "w", "rv" }) do
-    -- (the death screen looked for by class from 1 s in when not caught as it was made: the fall's first second is
-    -- busy. The revive item's is made in the death, always caught)
-    local w = dead_hud.get(f, f == "w" and t >= 1)
+    -- (the death screen looked for by class from 3 s in when not caught as it was made: the fall's first
+    -- seconds are busy with the cuts, and a scan walks the whole object array (~30 ms). The screen fades in at
+    -- about 7 s, so holding it from 3 s still catches it before it shows (at once when held by Shift+F4).
+    -- The revive item's is made in the death, always caught)
+    local w = dead_hud.get(f, f == "w" and (t >= 3 or screen.frozen))
     if w then
       local vis = try(function() return w:GetVisibility() end) or 1 -- 1 collapsed, 2 hidden
       local up = vis ~= 1 and vis ~= 2 and try(function() return w:IsVisible() end) ~= false
