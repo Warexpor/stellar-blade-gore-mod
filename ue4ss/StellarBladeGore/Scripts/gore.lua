@@ -1707,7 +1707,7 @@ end
 -- them; here the seam is the chain's own top); the limb's bones may not be the body side's sink, the limb is gone
 -- (an earlier cut's biceps sink pulled the cape's seam off with the arm). Kept on the body instead, the arm's 80 cm
 -- cape hung straight down from the shoulder (sixteenth playtest)
-local function detach_cut(mesh, top, limb)
+local function detach_cut(mesh, top, limb, kept)
   local index = try(function() return mesh:GetBoneIndex(FName(top)) end)
   local parent = parent_bone(mesh, top)
   local a, b = parent and bone_loc(mesh, parent), bone_loc(mesh, top)
@@ -1717,7 +1717,12 @@ local function detach_cut(mesh, top, limb)
   local nc = nocarry_list(mesh)
   local r = command(string.format("n%x,%s,ffff%s", mesh:GetAddress(), table.concat(list, ","), nc ~= "" and ("," .. nc) or ""))
   if r:sub(1, 2) ~= "ok" then return "err nosink " .. r end
-  command(string.format("g%x", mesh:GetAddress()))
+  local gone = try(function() return mesh:GetBoneIndex(FName(limb)) end)
+  if not gone or gone <= 0 then return "err no prior limb " .. limb end
+  local f = { string.format("g%x,%x,0", mesh:GetAddress(), gone) }
+  for _, i in ipairs(M.bone_indices(mesh, kept or { top })) do f[#f + 1] = string.format("%x", i) end
+  local gr = command(table.concat(f, ","))
+  if gr:sub(1, 2) ~= "ok" then return "err prior limb " .. gr end
   return command(string.format("c%x,0,%x,%x,0", mesh:GetAddress(), index, MODE.cut), a, n)
 end
 
@@ -1955,7 +1960,7 @@ end
 function M.stage_chains(q)
   local c = table.remove(q.c.chains, 1)
   if not c then return end
-  local dr = detach_cut(q.mesh, c, q.bone)
+  local dr = detach_cut(q.mesh, c, q.bone, q.c.kept)
   log(string.format("cut %s off %s: %s", c, q.bone, dr))
   if ok_cut(dr) then q.c.detached[#q.c.detached + 1] = c end
 end
@@ -2484,6 +2489,9 @@ local function stage_open(q)
     -- a leg is the big piece: dropping off it gets more (legThrow), or it dropped at her feet
     local leg = q.bone:find("Thigh") or q.bone:find("Calf")
     if leg and not q.fly then throw = throw * (g.legThrow or 1.4) end
+    -- an accessory-only piece (a cape chain, a strap: no Bip001 bone of its own) drops where it is cut instead
+    -- of flying: a thrown light chain whipped about into stretched twigs (playtest). Limbs, head and torso fly on.
+    if not q.bone:find("^Bip001%-") then throw = 0 end
     if throw > 0 then
       local v = q.fly and norm(add(add(q.fly, scale(q.c.n, 0.35)), vec((math.random() - 0.5) * 0.3, (math.random() - 0.5) * 0.3, 0.45)))
         or norm(add(q.c.n, vec((math.random() - 0.5) * 0.6, (math.random() - 0.5) * 0.6, 0.4)))
@@ -2535,7 +2543,10 @@ local function stage_open(q)
       local function float()
         if not valid(mesh) then return end
         local now = os.clock()
-        local up = 980 * (1 - pg) * math.min(now - last, 0.1)
+        -- in game seconds, not real ones: slow motion dilates the game clock but not this queue, and at
+        -- x0.15 an unscaled float held pieces up 6-7x too long, flinging cut parts (playtest suspicion)
+        local scale = ctx.time_scale and ctx.time_scale() or 1
+        local up = 980 * (1 - pg) * math.min(now - last, 0.1) * scale
         last = now
         try(function() mesh:AddImpulseToAllBodiesBelow(vec(0, 0, up), root, true, true) end)
         -- every third tick (the time since the last one's worth): every tick, it showed as 11 ms of each tick for its
@@ -3426,6 +3437,23 @@ end
 -- an animated split's last frames; else they keep what her ragdoll had)
 -- the copy's physics bodies, kinematic in her pose till split_physics: a tick before the opening (made in the
 -- opening's own tick, with the rest of it, that frame was 55-70 ms, playtest 41)
+-- the halves' opening speeds from her last two animated frames: a socket read mid-cut can jump metres in a
+-- frame (a split's Spine1 read 93 m/s, its pelvis 210 m/s, and the halves left the map, playtest). No animated bone
+-- moves faster than splitVelMax: anything above it is a sampling glitch, capped, never applied raw.
+local function split_vel(seen, now, dt, vmax)
+  local vel, capped = {}, 0
+  if seen and dt and dt > 0 then
+    for b, l in pairs(now) do
+      local o = seen[b]
+      if o and l then
+        local d = scale(sub(vec(l.X, l.Y, l.Z), vec(o.X, o.Y, o.Z)), 1 / dt)
+        if len(d) > vmax then d = scale(d, vmax / len(d)); capped = capped + 1 end
+        vel[b] = d
+      end
+    end
+  end
+  return vel, capped
+end
 function M.split_bodies(q)
   if q.bodied then return end
   q.bodied = true
@@ -3709,18 +3737,15 @@ split_stage = function(q)
     -- her fall plays on with both halves: each body's speed from the last two frames, then they fall apart
     -- (in real time: the stages run a frame each)
     local clk = os.clock()
-    local dt = q.tl and math.max(clk - q.tl, 1e-3) or TICK_S
+    local dt = q.tl and math.max(clk - q.tl, TICK_S) or TICK_S
     q.tl = clk
     q.t = q.t + dt
     local now = {}
     for _, b in ipairs(q.bodies or {}) do now[b] = bone_loc(q.mesh, b) end
-    local vel = nil
+    local vel, capped = nil, 0
     if q.seen then
-      vel = {}
-      for b, l in pairs(now) do
-        local o = q.seen[b]
-        if o then vel[b] = scale(sub(vec(l.X, l.Y, l.Z), vec(o.X, o.Y, o.Z)), 1 / dt) end
-      end
+      vel, capped = split_vel(q.seen, now, dt, cfg().splitVelMax or 2000)
+      if capped > 0 then log(string.format("split: %d animated velocities over %d cm/s, capped (sampling glitch)", capped, cfg().splitVelMax or 2000)) end
     end
     q.seen = now
     -- (her ragdoll a frame before the halves come apart, the copy still on her pose for it; the copy's bodies and
@@ -3871,6 +3896,15 @@ function M.slice_bones(pawn, mesh, bones, why)
   return n
 end
 function M.has_cut(mesh, bone) return already_cut(mesh, bone) end
+-- whether every cuttable part of her is gone (each PARTS root cut or smashed away; smashed parts count through
+-- already_cut's smashed-child and full-smash rules, a hand or foot always leaving with its segment's piece). Enemies
+-- stop attacking a body with nothing left to hit.
+function M.nothing_left(mesh)
+  for b in pairs(PARTS) do
+    if not already_cut(mesh, b) then return false end
+  end
+  return true
+end
 -- the parts cut off her whose mesh wears another asset now: an outfit put on her over the cut (Nexus 672, ESE: her
 -- shield broken, her suit torn or gone to the inner suit) is a new asset on the same component, its weights uncut, and
 -- the arm cut off her was back on her (reported). forget: their records dropped, the old asset's sinks put back

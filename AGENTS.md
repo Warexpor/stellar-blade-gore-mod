@@ -10,8 +10,8 @@ Use `.\windows.ps1` for Windows builds, tests, packaging, and installation; see 
 
 ## Communication style
 
-- When talking to the user directly: human language always, warm and plain. No robot lists unless asked.
-- Still verify like an engineer: base claims on logs and code (`file:line`), run the sims, install to game, confirm MATCH, keep `settings.lua` as-is. Just tell it like a human.
+- When talking to the user directly: human language always, plain and to the point. No robot lists unless asked. Professional, not gushing: no hype, no cheerleading, no performative excitement. Keep responses short: only the crucial info, no padding.
+- Still verify like an engineer: base claims on logs and code (`file:line`), run the sims, install to game, confirm MATCH, keep `settings.lua` as-is.
 
 ## Testing scope
 

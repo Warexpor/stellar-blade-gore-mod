@@ -1,5 +1,5 @@
 -- Real split dispatch on the fake engine: stop pending/active death movements, stage cap work, and clean up.
-local T = require("smash_world").boot('s.deathMoves=true\ns.gore.blood=false\ns.active.animated=false\ns.gore.caps=true\ns.gore.splitPush=0\ns.gore.splitTip=0')
+local T = require("smash_world").boot('s.deathMoves=true\ns.gore.blood=false\ns.active.animated=false\ns.gore.caps=true\ns.gore.splitPush=0\ns.gore.splitTip=0\ns.gore.noSplits=false')
 local F,E,G,ctx,pawn = T.F,T.E,T.G,T.ctx,T.pawn
 local actualAnimated=ctx.animated
 local R=require("rag")

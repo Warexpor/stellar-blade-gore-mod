@@ -292,6 +292,39 @@
     "Art/Character/Monster/CH_M_NA_45/CH_M_NA_45": {
       "mode": "extract"
     },
+    "Art/Character/Monster/CH_M_NA_15/CH_M_NA_15": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_03/CH_M_NA_03": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_05/CH_M_NA_05": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_05/CH_M_NA_05_Var01": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_13/CH_M_NA_13": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_31/CH_M_NA_31": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_39/CH_M_NA_39": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_43/CH_M_NA_43": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_44/CH_M_NA_44": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_44/CH_M_NA_44_B": {
+      "mode": "extract"
+    },
+    "Art/Character/Monster/CH_M_NA_51/CH_M_NA_51": {
+      "mode": "extract"
+    },
     "Art/Character/NPC/CH_NPC_AirborneSquad/CH_NPC_AirborneSquad_Body": {
       "_comment": "The Airborne Squad angels (tune.enemies.kinds N_AirborneSquad) wear CH_P_EVE_01_Body and CH_P_EVE_Face_003; their own body mesh (ST_AirborneSquad_MeshState may swap it in) and that face, extracted only, as above",
       "mode": "extract"

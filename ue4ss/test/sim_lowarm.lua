@@ -101,8 +101,7 @@ check(F.find("no side to the blow", at) ~= nil, "3: at random")
 if fails > 0 then dump(at, "low HP") end
 back()
 
--- 10: an arm off as the ponytail reset (her respawn's, 4 s on) comes: her mesh never goes query only (it stopped the
--- arm simulating: it went back onto her shoulder, playtest)
+-- 10: an arm off when the ponytail reset comes: defer the reset and keep her mesh collision unchanged.
 -- (her meshes found down her root's attach children, as the reset walks them)
 local root = F.obj("Root10", "CapsuleComponent", { AttachChildren = { ForEach = function(_, fn) fn(1, { get = function() return mesh end }) end } })
 rawset(pawn, "RootComponent", root)
@@ -117,7 +116,7 @@ E.collLog = {}
 hit("Bip001-L-Forearm", 20, 0.2)
 F.run(6, pawn)
 check(G.cut_parts(mesh)[1] == "Bip001-L-UpperArm", "10: the left arm is actually cut before the ponytail reset")
-check(F.find("her ponytail reset %(NotifyBP_ReInitActor%): 1 mesh%(es%), 0 of them query only", at) ~= nil, "10: the ponytail reset ran after it, her mesh left out")
+check(F.find("her ponytail reset %(NotifyBP_ReInitActor%)", at) == nil, "10: the ponytail reset waits while the arm is off")
 local q = false
 for _, v in ipairs(E.collLog) do if v == 1 then q = true end end
 check(not q and (E.coll or 3) == 3, "10: her mesh kept its collision with the arm off")

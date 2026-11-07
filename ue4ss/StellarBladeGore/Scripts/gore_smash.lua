@@ -19,7 +19,10 @@ function M.smash(pawn, mesh, h, why)
     and not already_cut(mesh, "Bip001-Spine1")
   local coverage = canFull and M.smashed.coverage(mesh, h) or 0
   canFull = canFull and coverage > 0
-  local chance = M.smashed.number(s.fullBodyChance, 0.25, 0, 1) * coverage^2
+  local base = M.smashed.number(s.fullBodyChance, 0.5, 0, 1)
+  -- a simultaneous volley hits harder: each extra impact past the first adds 0.1, up to +0.3 (an explicit 0 stays never)
+  if volley and base > 0 then base = math.min(1, base + math.min(0.3, 0.1 * ((h.volley or 2) - 1))) end
+  local chance = base * coverage^2
   if h and h.smashFullRoll == nil then h.smashFullRoll = canFull and (chance >= 1 or (chance > 0 and math.random() < chance)) or false end
   local full = canFull and (h and h.smashFullRoll or (not h and (chance >= 1 or (chance > 0 and math.random() < chance))))
   local pose = h and h.pose
@@ -42,6 +45,14 @@ function M.smash(pawn, mesh, h, why)
     return false, "later"
   end
   full = full and kind == "torso"
+  -- Remainder: the upper body already smashed, a blunt hit to a leg explodes what is left (pelvis and legs).
+  -- No footprint needed: melee after-death hits carry none, and only the lower body remains.
+  local remainder = not full and bone and kind == "limb" and (bone:find("Thigh") or bone:find("Calf"))
+    and already_cut(mesh, "Bip001-Spine1") and s.fullBody ~= false
+  if remainder then
+    full = true
+    log("smash: lower-body remainder: exploding what is left (" .. bone .. ")")
+  end
   if volley then log(string.format("smash: %d distinct projectile reports; footprint still decides", h.volley)) end
   log(string.format("smash: impact radius %.1f cm (%s), body coverage %.0f%%, full-body chance %.1f%%: %s",
     impactRadius, h and h.impactSizeSource or "unknown", coverage * 100, canFull and chance * 100 or 0, full and "full body" or "local"))

@@ -651,11 +651,24 @@ local function slow_start(pawn)
   log(string.format("death: slow motion x%.2f for %.1f s", k, tonumber((tune.deathSlowmo or {}).duration) or 5))
 end
 -- every tick of the ragdoll: the game's time it ran behind, and time back once the window is over
-local function slow_tick()
+-- (eased back to full speed over easeOut, not snapped: the speed, the voices and the blur follow it down)
+local function slow_tick(pawn)
   if not slowmo.running() then return end
-  ahead = ahead + (slowmo.speed() - 1) * POLL_MS / 1000
-  aheadTick = aheadTick + (slowmo.speed() - 1) * POLL_MS / 1000
-  if slowmo.done() then slow_stop("its time is up") end
+  local k = slowmo.speed()
+  if not k then slow_stop("its time is up"); return end
+  ahead = ahead + (k - 1) * POLL_MS / 1000
+  aheadTick = aheadTick + (k - 1) * POLL_MS / 1000
+  if slowmo.easing() then
+    if slowmo.done() then slow_stop("its time is up"); return end
+    if not slowmo.eased then
+      slowmo.eased = true
+      log(string.format("death: slow motion easing back over %.1f s", slowmo.easeOut()))
+    end
+    time_speed(pawn or find_eve(), k)
+    if gore and gore.voice_slow then try(function() gore.voice_slow(k) end) end
+  elseif slowmo.done() then
+    slow_stop("its time is up")
+  end
 end
 -- what the game's clock runs at now (1 normally): the mod's own sounds pitch down with it, never up
 goreCtx.time_scale = function() return slowmo.running() and slowmo.speed() or (manslow.running() and manslow.speed() or 1) end
@@ -765,6 +778,7 @@ local function on_start(pawn, mesh)
   if goreCtx.struggle then try(function() goreCtx.struggle.start(pawn, mesh) end) end
   ah.n, ah.armedBy, ah.t0, ah.blunt, ah.brushes, ah.misses, ah.gated, ah.lastBy, ah.missBy = 0, {}, os.clock(), nil, 0, 0, nil, {}, {}
   ah.projectiles, ah.projectileRecent, ah.projectileAt = {}, {}, nil
+  ah.toldSoon, ah.noGeo, ah.farDrops, ah.quietBlow, ah.noTrail = nil, 0, 0, 0, 0
   no_snapshot(pawn)
   hold = nil
   hold_capsule(pawn)
@@ -1359,7 +1373,7 @@ local function add_char(o)
   local ad = try(function() return o:GetAddress() end)
   local cls = ad and try(function() return o:GetClass():GetFName():ToString() end)
   local k = cls and goreCtx.keep(o)
-  if k then chars[ad] = { obj = o, addr = ad, cls = cls, k = k } end
+  if k then chars[ad] = { obj = o, addr = ad, cls = cls, k = k }; goreCtx.charsDirty = true end
 end
 screen.late[#screen.late + 1] = function()
   goreCtx.newobj.watch("/Script/SB.SBCharacter", add_char)
@@ -1377,16 +1391,22 @@ goreCtx.lasers = {}
 -- (goreCtx.charsPoll / charsList, not locals: this chunk is at Lua's 200)
 local function live_chars()
   -- One walk per poll window: her watches, the enemies' part and the poll each run on a frame of their own, and
-  -- each walked the whole list before (two walks of every three wasted: same game state, 33 ms apart at most).
+  -- each walked the list before (two walks of every three wasted: same game state, 33 ms apart at most).
   -- Positions still refresh through char_at's own clock cache, and every consumer guards dying and vanishing actors.
-  if goreCtx.charsPoll == goreCtx.poll and goreCtx.charsList then return goreCtx.charsList end
-  local started = os.clock()
+  -- Past charsRefresh the list (and its engine validation, 100-700 ms in a hub) is rebuilt; a fresh spawn waits
+  -- for the next refresh, or the reseed it forces.
+  local now = os.clock()
+  if goreCtx.reseed and now - (goreCtx.seededAt or -99) > 5 then charsSeeded, goreCtx.reseed = false, nil end
+  -- (not watched as they spawn: the new ones found by a seed every 10 s)
+  if goreCtx.newobj.mode() == "off" and now - (goreCtx.seededAt or -99) > 10 then charsSeeded = false end
+  local seedDue = not charsSeeded
+  local refresh = (tune.gore or {}).charsRefresh or 0.5
+  if goreCtx.charsList and not seedDue and now - (goreCtx.charsAt or -99) < refresh
+    and not goreCtx.reseed and not goreCtx.charsDirty then return goreCtx.charsList end
+  local started = now
   -- (none till sbslice is up: held() can't tell yet, and a character it said no to would be dropped for good)
   local g = goreCtx.gore
   if not (g and g.native_ready and g.native_ready()) then return {} end
-  if goreCtx.reseed and os.clock() - (goreCtx.seededAt or -99) > 5 then charsSeeded, goreCtx.reseed = false, nil end
-  -- (not watched as they spawn: the new ones found by a seed every 10 s)
-  if goreCtx.newobj.mode() == "off" and os.clock() - (goreCtx.seededAt or -99) > 10 then charsSeeded = false end
   -- A seed walks the whole object array (15-69 ms on a poll frame, playtest): never on a frame where a cut is
   -- opening. Spawns are still caught as they happen by the new-object watch, so only the backfill waits; the flag
   -- stays down and the seed runs on the first quiet poll.
@@ -1399,6 +1419,8 @@ local function live_chars()
     -- (the whole object array walked: 20-50 ms "following 0 enemies" after outfit changes and level loads, playtest)
     local ms = (os.clock() - t0) * 1000
     if ms >= 10 then log(string.format("characters looked up again (%d): %.0f ms", #all, ms)) end
+  elseif not charsSeeded then
+    goreCtx.reseed = true -- the backfill still owed: retry past the throttle till a quiet poll seeds it
   end
   -- (the laser traps seeded on a frame of their own, a second after the characters: in theirs it was 73 ms, playtest.
   -- Once a session when the watch hands them out as they are made, else once a level)
@@ -1451,7 +1473,8 @@ local function live_chars()
       (validationAt - started) * 1000, (walkAt - validationAt) * 1000, #fresh,
       (doneAt - walkAt) * 1000, #out, #goreCtx.heldList))
   end
-  goreCtx.charsPoll, goreCtx.charsList = goreCtx.poll, out
+  goreCtx.charsPoll, goreCtx.charsList, goreCtx.charsAt = goreCtx.poll, out, os.clock()
+  goreCtx.charsDirty = nil
   return out
 end
 goreCtx.live_chars = live_chars
@@ -1600,7 +1623,7 @@ function sw.projectile_record(h, key)
   sw.projectileLast = h
   local g, c = tune.gore or {}, (tune.gore or {}).afterHits or {}
   if (key and duplicate) or not active or ah.blunt or g.enabled == false or c.enabled == false or (g.smash or {}).enabled ~= true
-    or not ah.t0 or h.t < ah.t0 or ah.n >= (c.max or 6) then return end
+    or not ah.t0 or h.t < ah.t0 or (c.max and ah.n >= c.max) then return end
   local recent = ah.projectileRecent or {}
   for i = #recent, 1, -1 do
     local r = recent[i]
@@ -1758,16 +1781,18 @@ local function death_hit(pawn, mesh)
     end
   end
   if not push then return h end
+  local mp = m and m.push
+  local above = (mp and len(mp) > 1e-3 and mp.Z / len(mp) < -(g.splitDown or 0.6) and "her mesh's hit points down")
+    or (a and a.vz and a.vz < -(g.stompSpeed or 250) and string.format("%s coming down at %.0f cm/s", a.name, -a.vz))
   local fl = len({ X = push.X, Y = push.Y, Z = 0 })
-  if fl < 1e-3 then return h end
-  local fwd = { X = push.X / fl, Y = push.Y / fl, Z = 0 }
+  -- A purely vertical physical hit has no horizontal push, but still supplies a real stomp. The horizontal
+  -- axis only orients the guessed blade; it must not discard the measured downward hit and its smash.
+  if fl < 1e-3 and not above then return h end
+  local fwd = fl >= 1e-3 and { X = push.X / fl, Y = push.Y / fl, Z = 0 } or { X = 1, Y = 0, Z = 0 }
   local side = math.random() < 0.5 and -1 or 1
   local ang = math.rad(({ 0, 20, 45, 45, 70, 90 })[math.random(6)])
   -- came down on her (her mesh's hit pointing down, or the attacker dropping onto her: a stomp): straight down, never
   -- a level cut (playtest)
-  local mp = m and m.push
-  local above = (mp and len(mp) > 1e-3 and mp.Z / len(mp) < -(g.splitDown or 0.6) and "her mesh's hit points down")
-    or (a and a.vz and a.vz < -(g.stompSpeed or 250) and string.format("%s coming down at %.0f cm/s", a.name, -a.vz))
   if above then ang = math.rad(90) end
   local dir = { X = -fwd.Y * side * math.cos(ang), Y = fwd.X * side * math.cos(ang), Z = -math.sin(ang) }
   local loc = m and m.loc
@@ -1781,7 +1806,8 @@ local function death_hit(pawn, mesh)
   local pose, pose_ago
   if m then pose, pose_ago = pose_at(m.t) end
   return { t = os.clock(), loc = loc, dir = dir, fwd = fwd, push = push, attack_dir = 0, src = from, made = true,
-    group = h and h.group, show = h and h.show, bone = bone, attacker = a and a.name, pose = pose, pose_ago = pose_ago }
+    stomp = above and true or nil, group = h and h.group, show = h and h.show, bone = bone,
+    attacker = a and a.name, attackerClass = a and a.cls, pose = pose, pose_ago = pose_ago }
 end
 
 -- Attack classification reads the current settings, tracked swing and gore module.
@@ -2559,7 +2585,7 @@ local function gore_cut(pawn, mesh, h, hit)
   if g.bluntRagdoll == true then
     local lb = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.blunt
     local b, how = lb, "judged at the lethal hit"
-    if not lb and h and not h.made then b, how = sw.blunt_of(h, true) end
+    if not lb and h and (not h.made or h.stomp) then b, how = sw.blunt_of(h, true) end
     if b then
       log("death: the blow is blunt (" .. how .. "): no cut, a plain ragdoll (bluntRagdoll)")
       ah.blunt = true
@@ -3596,7 +3622,7 @@ local function tick()
     if l and r then rel.loc, rel.rot = copy3(l, XYZ), copy3(r, PYR) end
   end
 
-  if active then skip_tick(); slow_tick() end
+  if active then skip_tick(); slow_tick(pawn) end
   -- her HP bar back up for 0.5 s while the death still runs: the game brought her back past every sign the mod
   -- watches (a load, a respawn with no ReInitActor). Left alone she got up still cut, her movement off (walking in
   -- circles, Nexus report): got up here as for a respawn
@@ -3654,7 +3680,7 @@ local function tick()
       try(function() dface.start(pawn, mesh, "death") end)
     end
     if polls == 6 or polls == 30 or polls == 90 then try(function() face_probe(pawn, mesh, polls / 30) end) end
-    if polls == 30 and gore and not saved.collision then gore.on_settled(pawn, mesh) end
+    if polls == 15 and gore and not saved.collision then gore.on_settled(pawn, mesh) end
     if polls % TRACE_EVERY == 0 and polls < TRACE_POLLS then trace(pawn, mesh) end
     polls = polls + 1
   end

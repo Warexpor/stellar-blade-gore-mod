@@ -216,7 +216,7 @@ local function pools_tick()
         local off = len(vec(p.X - k.pool.at.X, p.Y - k.pool.at.Y, 0))
         if off > math.max(k.pool.r * 0.6, 15) then k.pool = nil end
       end
-      if not k.pool and k.still >= 0.2 and budget > 0 and M.decal_room(maxDecals) then
+      if not k.pool and k.still >= 0.1 and budget > 0 and M.decal_room(maxDecals) then
         -- it came to rest: a pool starts under it
         budget = budget - 1
         k.pool = floor_decal(k.pawn, p, 4, POOL_DECALS)

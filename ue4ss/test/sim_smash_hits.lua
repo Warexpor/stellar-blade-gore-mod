@@ -40,6 +40,9 @@ classify("sharp enemy class", false, { cls = "CH_Raven_C" })
 classify("actual Skull Hammer Blueprint", true, { who = "CH_M_NA_16_Blueprint_C_7", weapons = { "CH_M_NA_16_Weapon" } })
 classify("actual Skull Sword Blueprint", false, { who = "CH_M_NA_17_Blueprint_C_3", weapons = { "CH_M_NA_17_Weapon" } })
 classify("actual Statue Blueprint", true, { who = "CH_M_NA_40_Type_B_Blueprint_C_2" })
+classify("sickle boss downward swipe cuts", false, { who = "CH_M_NA_42_Blueprint_C_1", bone = "Bip001-R-Hand", dir = v(0, 0, -1) })
+classify("marionette hair whip cuts", false, { who = "CH_M_NA_26_Blueprint_C_1", bone = "LeftHandHair1" })
+classify("marionette off-hand hair cuts", false, { who = "CH_M_NA_26_Blueprint_C_1", bone = "LeftHandHair4" })
 check(sw.blunt_alias("CH_M_NA_160_Blueprint_C_1") == nil, "Blueprint mapping respects numeric name boundaries")
 classify("off", false, { enabled = false, weapons = { "Hammer" } })
 classify("ragdoll can classify with smash off", true, { enabled = false, ragdoll = true, weapons = { "Hammer" } })
@@ -334,10 +337,10 @@ check(delivered==2,"Hits After Death off prevents projectile smashes")
 g.afterHits.enabled=true; g.smash.enabled=false
 sw.projectile_record({t=F.t,loc=head,src="projectile collision"},"off")
 check(#ah.projectiles==0,"Blunt Smash off does not queue projectile smashes")
-g.smash.enabled=true; ah.n=g.afterHits.max
+g.smash.enabled=true; g.afterHits.max=2; ah.n=2
 sw.projectile_record({t=F.t,loc=head,src="projectile collision"},"limit")
-check(#ah.projectiles==0,"the shared per-death hit limit prevents projectile queuing")
-ah.n=0; ah.projectileRecent={}; blocked=true
+check(#ah.projectiles==0,"a configured per-death hit limit prevents projectile queuing")
+g.afterHits.max=nil; ah.n=0; ah.projectileRecent={}; blocked=true
 for i=1,8 do sw.projectile_record({t=F.t,loc=head,src="projectile collision"},"queue"..i) end
 check(#ah.projectiles==4,"the projectile queue is bounded during a busy gore pipeline")
 F.step(1.6); blocked=false; hitsAfter(pawn,E.mesh)

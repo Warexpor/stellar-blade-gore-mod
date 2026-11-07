@@ -91,6 +91,20 @@ screen.cloth_tick(pawn)
 check(restores == 1 and screen.cloth == nil, "due collision restore still runs and completes the reset")
 check(walks == 0, "collision-only restore performs no unused attachment walk")
 screen.cloth_meshes, screen.cloth_restore, screen.autoF8 = walk, restore, nil
+-- A pending recovery must neither scan sequences every tick nor reset dynamics while a cut is off.
+local gore = assert(findup(screen.auto_f8, "get_gore"))()
+local cut_parts, scene = gore.cut_parts, screen.cloth_scene
+local scans = 0
+gore.cut_parts = function() return { "Bip001-L-UpperArm" } end
+screen.cloth_scene = function(_, sequences) if sequences then scans = scans + 1 end; return false end
+screen.cloth, screen.autoF8 = nil, os.clock() - 1
+screen.auto_f8(pawn)
+check(scans == 0 and screen.autoF8 > os.clock(), "piece off backs automatic recovery off before sequence scan")
+screen.cloth = { at = os.clock() - 10, i = 1, why = "pending reset" }
+screen.cloth_tick(pawn)
+check(screen.cloth and screen.cloth.i == 1 and scans == 0, "pending cloth reset waits while piece is off")
+gore.cut_parts, screen.cloth_scene = cut_parts, scene
+screen.cloth, screen.autoF8 = nil, nil
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

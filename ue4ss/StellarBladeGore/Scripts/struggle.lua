@@ -407,7 +407,10 @@ local function reach(mesh, s, kind, t, pole, k, dt)
   local d1, d2 = solve(a, m, e, t, hinge(mesh, b .. j[2]), pole, kind)
   if not d1 then return nil end
   servo(mesh, b .. j[1], d1, k, dt)
-  servo(mesh, b .. j[2], d2, k, dt, true)
+  -- the middle joint drives at half again: elbows and knees lagged ~100 deg behind their fold targets at full
+  -- strength while shoulders and hips converged (playtest errM), the fold math verified by sim_fold, so this is
+  -- authority, not aim. Caps still bind (127 deg/s, 2850 deg/s^2 at k 1: far from frantic)
+  servo(mesh, b .. j[2], d2, k * 1.5, dt, true)
   -- (the wrist: nothing held it, and her hands flopped about on every move, playtest)
   local w = cfg().wrist or 0.6
   if kind == "arm" and w > 0 then servo(mesh, b .. "Hand", d2, k * w, dt) end

@@ -60,19 +60,18 @@ fi
 # its own ClientRestart callback. Only patch the exact stock script and keep a backup.
 python3 "$ROOT/ue4ss/patch_console_hook.py" \
   "$MODS/ConsoleEnablerMod/Scripts/main.lua" "$SRC/ue4ss/Mods/ConsoleEnablerMod/Scripts/main.lua"
-# keep the log and the schema-dump marker (also from the old name), replace everything else
+# Keep the current mod's logs in place, without rewriting them. Preserve the schema marker from earlier names.
 KEEP=$(mktemp -d)
 for d in "${OLDS[@]}" "$NEW"; do
-  for l in probe.log severed.log stellarbladegore.log; do
-    [[ -f $d/$l ]] && cat "$d/$l" >> "$KEEP/stellarbladegore.log"
-  done
-  [[ -f $d/stellarbladegore.log.old ]] && cp "$d/stellarbladegore.log.old" "$KEEP/stellarbladegore.log.old"
   [[ -f $d/usmap.done ]] && cp "$d/usmap.done" "$KEEP/"
 done
 # the player's settings.lua and the in-game menu's menu.lua stay as they left them (main.lua makes settings.lua
 # from settings.default.lua when there's none)
 for f in settings.lua menu.lua; do [[ -f $NEW/Scripts/$f ]] && cp "$NEW/Scripts/$f" "$KEEP/$f"; done
-rm -rf "${OLDS[@]}" "$NEW"
+rm -rf "${OLDS[@]}"
+if [[ -d $NEW ]]; then
+  find "$NEW" -mindepth 1 -maxdepth 1 ! -name stellarbladegore.log ! -name stellarbladegore.log.old -exec rm -rf -- {} +
+fi
 cp -r "$ROOT/ue4ss/StellarBladeGore" "$MODS/"
 for f in settings.lua menu.lua; do [[ -f $KEEP/$f ]] && mv "$KEEP/$f" "$NEW/Scripts/$f"; done
 cp "$KEEP"/* "$NEW/" 2>/dev/null || true

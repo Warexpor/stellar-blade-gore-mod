@@ -1,4 +1,4 @@
--- bosses.lua: Sandbox Bosses (tune.bosses, F3 → Sandbox): the game's humanoid bosses (Tachy, Raven, Scarlet) spawned
+-- bosses.lua: Sandbox Bosses (tune.bosses, F3 → Spawner → Bosses): the game's humanoid bosses (Tachy, Raven, Scarlet) spawned
 -- in front of her anywhere and killed like any enemy: no death cutscene, no phase change to wait out, their body cut
 -- (enemies.lua, as the skulls), then a struggle on the floor (a copy of struggle.lua of its own) and a dead face held
 -- on its face mesh (main.lua's death face, goreCtx.new_face).
@@ -141,9 +141,10 @@ local function hold_again(why)
   log(string.format("their phases' floors back as the game has them (%s): %d of %d rows", why, n, #h.was))
 end
 
--- the row of kind k made mortal (once; a second spawn of it counts on). nil when done, else why not
-function M.prepare(k)
-  if cfg().enabled ~= true then return "Sandbox Bosses is off (F3 → Sandbox)" end
+-- the row of kind k made mortal (once; a second spawn of it counts on). force: a spawner-initiated spawn
+-- works without the Boss Spawning toggle (the row still goes back exactly on forget). nil when done, else why not
+function M.prepare(k, force)
+  if cfg().enabled ~= true and not force then return "Sandbox Bosses is off (F3 → Spawner → Bosses)" end
   if not ctx.gore or ctx.gore.native_state() ~= "ready" then return "sbslice.dll isn't up yet" end
   -- (a new one may bring its bar: looked for again soon)
   if M.bar_soon then M.bar_soon() end
@@ -152,7 +153,7 @@ function M.prepare(k)
   for _, x in pairs(live) do
     if x.k.alias == k.alias and not x.hp then x.hpTries, x.hpAt = 0, os.clock() + 1 end
   end
-  if r then r.t = os.clock(); return nil end
+  if r then r.t = os.clock(); r.forced = r.forced or force; return nil end
   local dt, rs = table_of()
   if not dt then return "no CharacterTable loaded" end
   local off = offsets(rs)
@@ -206,7 +207,7 @@ function M.prepare(k)
     out[#out + 1] = string.format("despawns after %.0f s (was %.1f)", want, u2f(ds))
   end
   local mhp, msh = field(dt, rs, k.row, off.MaxHP), field(dt, rs, k.row, off.MaxShield)
-  rows[k.row] = { dt = addr(dt), was = was, off = off, t = os.clock(), mhp = mhp, msh = msh }
+  rows[k.row] = { dt = addr(dt), was = was, off = off, t = os.clock(), mhp = mhp, msh = msh, forced = force }
   log(string.format("%s's row made mortal while one of yours is up: %s", k.row, table.concat(out, ", ")))
   let_go()
   return nil
@@ -560,7 +561,7 @@ function M.tick(pawn)
     for row, r in pairs(rows) do
       if not up[row] and now - r.t > 15 then put_back(row, "none of yours left") end
     end
-    if cfg().enabled ~= true then for row in pairs(rows) do put_back(row, "Sandbox Bosses off") end end
+    if cfg().enabled ~= true then for row, r in pairs(rows) do if not up[row] and not r.forced then put_back(row, "Sandbox Bosses off") end end end
     if holds and not next(rows) then hold_again(cfg().enabled ~= true and "Sandbox Bosses off" or "none of yours left") end
   end
   local passive = cfg().passive == true and cfg().enabled == true
@@ -626,7 +627,7 @@ function M.tick(pawn)
   end
 end
 
--- F3 → Sandbox → Spawn Boss: the picked one in front of her
+-- F3 → Spawner → Bosses → Spawn: the picked one in front of her (kept for the key; the menu picks by name)
 function M.spawn_pick(pawn)
   local pick = cfg().pick or "tachy"
   for _, k in ipairs(cfg().kinds or {}) do
@@ -639,7 +640,7 @@ function M.spawn_pick(pawn)
   end
   log("spawn: no boss " .. tostring(pick) .. " in tune.bosses.kinds")
 end
--- F3 → Sandbox → Remove Spawned: everything the spawner made goes
+-- F3 → Spawner → Remove Spawned: everything the spawner made goes
 function M.remove(pawn)
   if ctx.enemies and ctx.enemies.remove_spawned then ctx.enemies.remove_spawned() end
   for a in pairs(dead) do M.gone(a) end

@@ -102,9 +102,36 @@ local phase2calls = 0
 for i = before2 + 1, #F.cmds do if F.cmds[i].s:sub(1, 1) == "G" then phase2calls = phase2calls + 1 end end
 check(phase2 == again and phase2calls == 0, "later phases share the same walk (" .. phase2calls .. " extra lifetime checks)")
 
+-- The hub throttle: rapid polls share one validation, no new lifetime checks; the window expiring rebuilds.
+newpoll()
+local w1 = ctx.live_chars()
+newpoll()
+local w2 = ctx.live_chars()
+check(w2 == w1, "rapid polls share one validation")
+local beforeT = #F.cmds
+newpoll()
+ctx.live_chars()
+local tcalls = 0
+for i = beforeT + 1, #F.cmds do if F.cmds[i].s:sub(1, 1) == "G" then tcalls = tcalls + 1 end end
+check(tcalls == 0, "no lifetime checks inside the refresh window (" .. tcalls .. " calls)")
+ctx.charsAt = os.clock() - 10
+newpoll()
+local w3 = ctx.live_chars()
+check(w3 ~= nil and math.abs(ctx.charsAt - os.clock()) < 1, "the refresh window expiring rebuilds the list")
+for _, e in ipairs(w3) do e.k.asked = -1000 end
+ctx.charsDirty = true
+local beforeD = #F.cmds
+newpoll()
+ctx.live_chars()
+local dcalls = 0
+for i = beforeD + 1, #F.cmds do if F.cmds[i].s:sub(1, 1) == "G" then dcalls = dcalls + 1 end end
+check(dcalls > 0, "a fresh spawn revalidates before the window ends (" .. dcalls .. " calls)")
+
 -- A long loading screen leaves guards listed but past the three-second held-list expiry. Previously the first
--- held() pruned all the others and each character revalidated a growing list on its own.
+-- held() pruned all the others and each character revalidated a growing list on its own. (Backdated past the hub
+-- throttle so the rebuild path runs as before.)
 for _, e in ipairs(again) do e.k.asked = -1000 end
+ctx.charsAt = os.clock() - 10
 newpoll()
 before = #F.cmds
 local after_pause = ctx.live_chars()

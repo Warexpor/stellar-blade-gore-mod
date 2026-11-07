@@ -50,10 +50,10 @@ M.ACTIONS = {
   { id = "animDeath", label = "Test: Animated Death", def = "Alt+F6", dev = true, help = "Developer Keys: kills her with the game's own death animations, the next each press: standing, two hit deaths, lying down (death animation mods show in them). Always the animated death, with no cut. She lies till Test: Get Up." },
   { id = "blade", label = "Test: Blade Death", def = "DEL", dev = true, help = "Developer Keys: ragdolls her and cuts along a made-up blade." },
   -- (parked) { id = "diagonal", label = "Test: Diagonal Cut", def = "Alt+DEL", dev = true, help = "Developer Keys: ragdolls her and cuts her diagonally, from over one shoulder down to the other hip: her right shoulder, then her left, each press." },
-  { id = "spawn", label = "Test: Spawn Enemy", def = "F5", dev = true, help = "Developer Keys: spawns the enemy kind picked in front of her." },
-  { id = "nextEnemy", label = "Test: Next Enemy Kind", def = "INS", dev = true, help = "Developer Keys: picks the next enemy kind to spawn." },
-  { id = "spawner", label = "Test: Spawner Window", def = "HOME", dev = true, help = "Developer Keys: opens the enemy spawner window." },
-  { id = "kill", label = "Test: Kill Nearest Enemy", def = "END", dev = true, help = "Developer Keys: kills the enemy nearest her." },
+  { id = "spawn", label = "Test: Spawn NPC", def = "F5", dev = true, help = "Developer Keys: spawns the NPC picked (F3 → Spawner) in front of her." },
+  { id = "nextEnemy", label = "Test: Next NPC Kind", def = "INS", dev = true, help = "Developer Keys: picks the next NPC kind to spawn." },
+  { id = "spawner", label = "Test: Spawner Window", def = "HOME", dev = true, help = "Developer Keys: opens the NPC spawner window." },
+  { id = "kill", label = "Test: Kill Nearest NPC", def = "END", dev = true, help = "Developer Keys: kills the NPC nearest her." },
   -- (hidden for now) { id = "glass", label = "Test: Glass Cannon", def = "PAGE_DOWN", dev = true, help = "Developer Keys: glass cannon mode on and off." },
 }
 M.BY_ID = {}

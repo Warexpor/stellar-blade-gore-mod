@@ -43,6 +43,11 @@ check(w.split == 1 and w.torso <= 0.25 and w.head < 1, "a blade down her length:
 w = gore.near_odds(mesh, { loc = at(130), dir = vec(0.2, 0, -1), fwd = vec(1, 0, 0) }, nil)
 show("blow from above", w)
 check(w.torso == 0 and w.split > 0, "a blow from above: no waist cut, a split")
+-- a sharp blow straight down onto her waist (a downward hair-whip landing at the waist, far nearer it than the neck):
+-- the waist stays in the roll with its distance factor instead of zeroing out into a head cut
+w = gore.near_odds(mesh, { loc = at(110), dir = vec(0, 0.2, -1) }, nil)
+show("blow from above at her waist", w)
+check(w.torso == 1 and w.head < 1, "a blow from above at her waist: the waist in full, the head less")
 -- no blade seen, the hit at her right hand
 w = gore.near_odds(mesh, nil, E.bone("Bip001-R-Hand"))
 show("no blade, hit at her hand", w)

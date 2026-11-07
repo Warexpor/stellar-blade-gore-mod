@@ -10,6 +10,8 @@ end
 local function close(a, b) return math.abs(a-b) < 0.00001 end
 check(s.fullBody == true and dofile(T.dir .. "settings.default.lua").gore.smash.fullBody == true,
   "full-body eligibility is on in both shipped defaults")
+check(s.fullBodyChance == 0.5 and dofile(T.dir .. "settings.default.lua").gore.smash.fullBodyChance == 0.5,
+  "full-body chance defaults to 0.5 in both shipped defaults")
 check(close(G.smashed.overlap(10,10,0),math.pi*100), "coincident contact circles cover the full area")
 check(G.smashed.overlap(10,10,20) == 0, "tangent circles have no contact area")
 check(close(G.smashed.overlap(5,10,0),math.pi*25), "contained footprint uses the smaller area")
@@ -83,8 +85,11 @@ s.fullBody = false
 smash("disabled full-body with broad volley",{loc=chest,impactRadius=200,projectile=true,volley=2},false,"Bip001-Spine1")
 s.fullBody = true
 smash("two narrow shots do not invent broad contact",{loc=chest,impactRadius=6,projectile=true,volley=2},false,"Bip001-Spine1")
+s.fullBodyChance = 0.7
+smash("a four-hit volley promotes a broad impact (0.7 + 0.3 bonus)",{loc=chest,impactRadius=200,projectile=true,volley=4},true,"Bip001-Spine1")
 s.fullBodyChance = 0
 smash("zero maximum chance",{loc=chest,impactRadius=200},false,"Bip001-Spine1")
+smash("zero maximum chance ignores even a volley",{loc=chest,impactRadius=200,projectile=true,volley=2},false,"Bip001-Spine1")
 s.fullBodyChance = 1
 E.s.sim = true
 G.slice_bone(pawn,E.mesh,"Bip001-L-Forearm",nil,"test")

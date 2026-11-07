@@ -261,6 +261,29 @@ rag.weapon_cut(E.mesh, E.bone("Bip001-R-Hand"), v(1,0,0), true)
 check(F.find("in two already", cutlog) ~= nil and #splits==1,
   "repeated sword cut recognizes a fresh wrapper for the already split component")
 splits[#splits]=nil
+-- Split sword halves stay frozen in the cut pose: the game re-enables the original's skeleton updates (attach,
+-- LOD) and the segments go on animating, dragging the cut faces into stretched strips. The copy follows the
+-- frozen pose through its master and must be left alone: freezing it stops the follow and leaves a second whole
+-- sword standing in the bind pose.
+local splits_watch = upvalue(rag.tick, "splits_watch")
+assert(splits_watch, "split-sword freeze watch")
+local half = F.obj("SwordHalf", "SkeletalMeshComponent")
+local wrongMaster = F.obj("WrongMaster", "SkeletalMeshComponent")
+local masterSets = 0
+half.MasterPoseComponent = { Get = function() return wrongMaster end }
+half.SetMasterPoseComponent = function(_, m) masterSets = masterSets + 1; half.MasterPoseComponent = { Get = function() return m end } end
+splits[#splits + 1] = { w = sword, b = half }
+sword.bNoSkeletonUpdate, half.bNoSkeletonUpdate = false, nil
+splits_watch()
+check(sword.bNoSkeletonUpdate == true and half.bNoSkeletonUpdate == nil, "re-freezes the original every tick, never the copy")
+-- a copy whose master follow broke (found pointing elsewhere on a drop: a second whole sword and stretched
+-- strips at the break, playtest): re-set onto the original, once, and left alone when it holds
+splits_watch()
+check(masterSets == 1, "a broken copy master is re-set onto the original")
+half.MasterPoseComponent = { Get = function() return sword end }
+splits_watch()
+check(masterSets == 1, "an intact follow is left alone")
+splits[#splits] = nil
 E.mesh.GetOwner = owner_before
 F.objects["/Script/Engine.BoxComponent"], pawn.MeshInfoList, pawn.AddComponentByClass = boxClass, oldInfo, oldAdd
 for _, e in ipairs(F.errors) do print("FAIL hook: "..e); fails=fails+1 end

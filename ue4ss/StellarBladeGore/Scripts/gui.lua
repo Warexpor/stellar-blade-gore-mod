@@ -60,7 +60,7 @@ M.ROWS = {
   { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the head comes off." },
   { key = "gore.death.torso", label = "Waist Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut in two at the waist, leaning a little at random." },
   { key = "gore.death.split", label = "Vertical Split Chance", kind = "num", min = 0, max = 100, step = 1, help = "Weight against the other chances: the body splits in two from head to hips. Like the others it is rolled when Hit Decides leaves the cut to chance (a tracked blade decides first); set only this one above 0 and every death splits." },
-  { key = "gore.noSplits", label = "No Vertical Splits", kind = "bool", help = "Off by default. On: she is never split in half from head to hips, by any blow, chance or hit after her death. A blade down her length becomes a beheading or a waist cut based on where it struck; other cuts follow the usual rules. The split chance goes to the others." },
+  { key = "gore.noSplits", label = "No Vertical Splits", kind = "bool", help = "On by default. On: she is never split in half from head to hips, by any blow, chance or hit after her death. A blade down her length becomes a beheading or a waist cut based on where it struck; other cuts follow the usual rules. The split chance goes to the others." },
   -- (parked) { key = "gore.death.diagonal", label = "Diagonal Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the body is cut from over one shoulder down to the other hip; the head and the other arm go one way, that arm and the legs the other." },
   { key = "gore.death.moreLimbs", label = "Extra Limb Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "Chance a limb cut takes the next nearest limb too (0-1), and a third at the same chance again. At 0.35: 35% two or more limbs, 12% three. Rolled limb cuts only; a tracked blade cuts every limb it crosses." },
   { key = "gore.followUpCuts", label = "Follow-up Cuts", kind = "bool", help = "One swing cuts everything it went through: both arms and the body, say. Off: one cut a swing, the body when the blade went through it, else the limb it met first (Extra Limb Chance does nothing either). A laser trap still cuts along its beam." },
@@ -68,10 +68,10 @@ M.ROWS = {
   -- (parked) { key = "gore.diagonal.enabled", label = "Diagonal Cuts", kind = "bool", help = "Cuts from over one shoulder down to the other hip: rolled by Diagonal Cut Chance, and from a tracked blade slanting across her body (20-60 degrees off her spine), which otherwise came out a waist cut or a split. Off: none." },
   { key = "gore.oddsNear.enabled", label = "Chances Follow the Hit", kind = "bool", help = "The chances above lean to what is near where the blow landed: a swing at her waist cuts the waist, a nearby arm or leg, or splits her if it came down her length, never her head; a blow at her neck mostly beheads. Set only one chance above 0 and every death still does that one, wherever it hit. Off: the chances as they are." },
   { key = "gore.oddsNear.floor", label = "   Far Part Chance", kind = "num", min = 0, max = 1, step = 0.05, help = "With Chances Follow the Hit: share of its chance a part far from the hit keeps (0-1). 0: never (a waist swing never beheads), 0.1: now and then, 1: as if off." },
-  { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Weapon swings can cut Eve again; reported projectile hits can smash her when Blunt Smash is enabled. Up to 6 hits per death." },
+  { key = "gore.afterHits.enabled", label = "Hits After Death", kind = "bool", help = "Weapon swings can cut Eve again; reported projectile hits can smash her when Blunt Smash is enabled. No per-death hit limit: set gore.afterHits.max in tune.lua to cap it." },
   { key = "gore.smash.enabled", label = "Blunt Smash", kind = "bool", help = "On by default. A killing blow from a blunt weapon (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit: the part vanishes and the game's meat chunks burst out with blood, the stump stays. Blades still cut." },
   { key = "gore.smash.fullBody", label = "   Full-Body Smashes", kind = "bool", help = "On by default. Broad impacts covering her upper and lower trunk can smash the whole body. Narrow hits and unknown hit sizes stay local. Earlier cuts prevent a full-body result." },
-  { key = "gore.smash.fullBodyChance", label = "      Full-Body Chance", kind = "num", min = 0, max = 1, step = 0.05, pct = true, help = "Maximum full-body chance for a body-covering impact. Smaller or off-centre hits reduce it. Even 100% cannot make a narrow hit smash the whole body." },
+  { key = "gore.smash.fullBodyChance", label = "      Full-Body Chance", kind = "num", min = 0, max = 1, step = 0.05, pct = true, help = "Maximum full-body chance for a body-covering impact. Smaller or off-centre hits reduce it. A simultaneous volley adds 0.1 per extra impact, up to +0.3. Even 100% cannot make a narrow hit smash the whole body." },
   { key = "gore.smash.overrideTargets", label = "   Custom Smash Mix", kind = "bool", help = "Off by default: smashes follow the hit. On: choose limb, head or upper body by the weights below. Full-Body Chance is rolled first." },
   { key = "gore.smash.targetWeights.limb", label = "      Limb Smash Weight", kind = "num", min = 0, max = 100, step = 1, help = "Relative weight for a limb smash in Custom Smash Mix. The hit selects which limb." },
   { key = "gore.smash.targetWeights.head", label = "      Head Smash Weight", kind = "num", min = 0, max = 100, step = 1, help = "Relative weight for a head smash in Custom Smash Mix." },
@@ -93,6 +93,7 @@ M.ROWS = {
   { key = "deathSlowmo.enabled", label = "Slow Motion on Death", kind = "bool", help = "The game runs in slow motion for a few seconds when she dies, so the damage reads, then time goes back well before the death screen. Esc's fast forward still wins. Off: deaths play at normal speed." },
   { key = "deathSlowmo.speed", label = "   Slow Motion Speed", kind = "num", min = 0.01, max = 0.9, step = 0.01, help = "With Slow Motion on Death: game speed while it lasts, any fraction of full speed." },
   { key = "deathSlowmo.duration", label = "   Slow Motion Length", kind = "num", min = 0.5, max = 60, step = 0.5, unit = " s", help = "With Slow Motion on Death: real seconds it lasts." },
+  { key = "deathSlowmo.easeOut", label = "   Slow Motion Ease Back", kind = "num", min = 0, max = 5, step = 0.1, unit = " s", help = "With Slow Motion on Death: seconds gliding back to full speed after (0: back at once)." },
   { key = "manualSlowmo.enabled", label = "Manual Slow Motion (Experimental)", kind = "bool", help = "Off by default, being tested. The Slow Motion key (Y, rebindable under Keys) runs the game at Slow Motion Speed till the key again. A death's own slow motion or fast forward runs first while it lasts." },
   { key = "gore.voice.enabled", label = "Death Scream", kind = "bool", help = "Eve cries out, from her own voice recordings, the moment she dies. Off: only the game's own death voice." },
   { key = "gore.deathFace.enabled", label = "Death Expression", kind = "bool", help = "Holds a lifeless expression on her face for the whole death, her eyes closing. Off: the game's own face, which goes blank about a second in with her eyes open." },
@@ -153,16 +154,21 @@ M.ROWS = {
   { key = "gore.lowArm.healBack", label = "   Grows Back With HP", kind = "bool", help = "Off by default. With Lose Arm at Low HP: the arm also grows back once her HP is back up to Grows Back At, however she healed (gear that restores HP on kills or over time; heal items too with No Heals or Gun off). Off: only a camp rest or her next life bring it back." },
   { key = "gore.lowArm.healAt", label = "   Grows Back At", kind = "num", min = 0.3, max = 1, step = 0.01, pct = true, help = "With Grows Back With HP: the share of her HP bar at which the arm grows back (90% by default)." },
   { key = "gore.lowArm.effect", label = "Regrow Effect", kind = "bool", help = "On by default. A part cut off her alive (Lose Arm at Low HP's arm, F9's) dissolves back in with a glow when it comes back (a camp rest, Grows Back With HP). Off: it is back at once, with no effect." },
-  { section = "Sandbox" },
-  { key = "bosses.enabled", label = "Sandbox Bosses (Experimental)", kind = "bool", help = "Off by default. Spawn Tachy, Raven, Scarlet or a Royal Guard Sister in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
-  { key = "bosses.pick", label = "   Boss", kind = "list", values = { "tachy", "raven", "scarlet", "royalguard" },
-    names = { tachy = "Tachy", raven = "Raven", scarlet = "Scarlet (DLC)", royalguard = "Royal Guard Sister" }, help = "With Sandbox Bosses on: the one Spawn Boss brings in." },
-  { key = "bosses.hpScale", label = "   Boss HP", kind = "num", min = 0.05, max = 1, step = 0.05, pct = true, help = "With Sandbox Bosses on: their HP and shield, as a share of the game's (25%: a quarter). Takes effect for the next boss once none you spawned is up." },
-  { key = "bosses.passive", label = "   Passive Bosses", kind = "bool", help = "With Sandbox Bosses on: a boss you spawned stands where it is and never attacks, so you can cut it at will. Off again, it fights." },
-  { key = "bosses.struggle", label = "   Boss Struggle", kind = "bool", help = "With Sandbox Bosses and Death Struggle on: a boss with a limb cut off struggles on the floor before it dies, as Eve does." },
-  { key = "bosses.face", label = "   Boss Death Expression", kind = "bool", help = "With Sandbox Bosses and Death Expression on: a dead face held on the boss's face." },
-  { button = "call", call = "bosses.spawn_pick", label = "Spawn Boss", help = "With Sandbox Bosses on: the boss picked above, 7 m in front of Eve, facing her. It fights at once." },
-  { button = "call", call = "bosses.remove", label = "Remove Spawned", help = "Every boss and enemy spawned here goes, corpses too." },
+  { section = "Spawner", dev = true },
+  { key = "spawner.count", label = "Spawn Count", kind = "num", min = 1, max = 9, step = 1, help = "How many each Spawn makes, in a row across in front of her." },
+  { button = "call", call = "enemies.spawn_pick", label = "Spawn", help = "The picked NPC, Spawn Count of them in front of her, facing her." },
+  { button = "call", call = "enemies.remove_spawned", label = "Remove Spawned", help = "Every boss and NPC spawned here goes, corpses too." },
+  { button = "call", call = "enemies.kill_nearest", label = "Kill Nearest", help = "The followed character nearest her goes down as a ragdoll (the cut follows). Passive NPCs the blows don't hurt go down this way." },
+  { key = "spawner.hostile", label = "Hostile", kind = "list", values = { "game", "hostile", "passive" },
+    names = { game = "As Game", hostile = "Hostile to Eve", passive = "Passive" },
+    help = "What NPCs spawned here fight. Hostile to Eve: even the angels turn on her (their row made hostile and damageable while one is up). Passive: their AI stopped, they never fight. As Game: as the game has them." },
+  { key = "spawner.infight", label = "   Fight Each Other", kind = "bool", help = "With Hostile to Eve: spawned NPCs fight each other too, not only Eve." },
+  { key = "spawner.id", label = "   CharacterTable ID", kind = "num", min = 0, max = 999999, step = 1, ingroup = "custom", help = "With the Custom ID entry picked: the CharacterTable ID spawned instead (any NPC in the game)." },
+  { key = "bosses.enabled", label = "Sandbox Bosses (Experimental)", kind = "bool", ingroup = "bosses", help = "Off by default. Spawn Tachy, Raven, Scarlet or a Royal Guard Sister in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
+  { key = "bosses.hpScale", label = "   Boss HP", kind = "num", min = 0.05, max = 1, step = 0.05, pct = true, ingroup = "bosses", help = "With Sandbox Bosses on: their HP and shield, as a share of the game's (25%: a quarter). Takes effect for the next boss once none you spawned is up." },
+  { key = "bosses.passive", label = "   Passive Bosses", kind = "bool", ingroup = "bosses", help = "With Sandbox Bosses on: a boss you spawned stands where it is and never attacks, so you can cut it at will. Off again, it fights." },
+  { key = "bosses.struggle", label = "   Boss Struggle", kind = "bool", ingroup = "bosses", help = "With Sandbox Bosses and Death Struggle on: a boss with a limb cut off struggles on the floor before it dies, as Eve does." },
+  { key = "bosses.face", label = "   Boss Death Expression", kind = "bool", ingroup = "bosses", help = "With Sandbox Bosses and Death Expression on: a dead face held on the boss's face." },
   { section = "Camera" },
   { key = "cameraStill", label = "Free Camera", kind = "bool", help = "At a death the camera stops riding her pawn and holds where it is until she gets up. Turn it with the mouse or right stick; fly it with WASD, Q/E or the left stick and triggers (Shift: faster); zoom with the mouse wheel or the D-pad (up in, down out), right up to her." },
   { key = "cameraMouse", label = "   Mouse Sensitivity", kind = "num", min = 0.5, max = 10, step = 0.5, help = "How fast the mouse turns the death camera." },
@@ -223,7 +229,7 @@ local function lang()
   end
   return M.lang[code] or nil, code
 end
-local function row_id(r) return r.key or r.call or (r.button and ("button." .. r.button)) end
+local function row_id(r) return r.key or r.call or r.select or (r.group and ("group." .. r.group)) or (r.button and ("button." .. r.button)) end
 local function row_tr(r) local L = lang(); return L and L.rows and L.rows[row_id(r)] end
 -- (a sub-setting keeps its indent: the rows' look of it)
 local function label_of(r)
@@ -313,6 +319,21 @@ local function set(path, v)
 end
 M.get = get
 
+-- the Spawner groups' effective folded state: everything folded till the first touch (set on toggle, saved to menu.lua)
+local function eff_collapsed()
+  local g = (ctx.tune or {}).spawner or {}
+  local saved = type(g.collapsed) == "table" and g.collapsed or {}
+  local folded, opened = {}, false
+  if ctx.enemies and ctx.enemies.pick_groups then
+    for _, gr in ipairs(ctx.enemies.pick_groups()) do
+      local open = saved[gr.id] == false and not opened
+      folded[gr.id] = not open
+      if open then opened = true end
+    end
+  end
+  return folded
+end
+
 -- Visual dependencies only: dim an unavailable child without hiding it or changing its saved value.
 M.DEPENDS = {
   ["gore.smash.always"] = { { "gore.smash.enabled", true } },
@@ -347,7 +368,7 @@ end
 for _, key in ipairs({ "gore.lowArm.below", "gore.lowArm.side", "gore.lowArm.noHealGun", "gore.lowArm.noSword",
   "gore.lowArm.notice", "gore.lowArm.healBack" }) do M.DEPENDS[key] = { { "gore.lowArm.enabled", true } } end
 M.DEPENDS["gore.lowArm.notice"] = { { "gore.lowArm.enabled", true }, { "gore.lowArm.noHealGun", true } }
-for _, key in ipairs({ "bosses.pick", "bosses.hpScale", "bosses.passive", "bosses.struggle", "bosses.face", "bosses.spawn_pick" }) do
+for _, key in ipairs({ "bosses.hpScale", "bosses.passive", "bosses.struggle", "bosses.face" }) do
   M.DEPENDS[key] = { { "bosses.enabled", true } }
 end
 for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraInvertY", "cameraBody", "cameraFlyAfter", "cameraBodyBone", "cameraTrack", "cameraMove" }) do
@@ -355,6 +376,8 @@ for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraInvertY", "cameraBod
 end
 M.DEPENDS.cameraBodyBone = { { "cameraStill", true }, { "cameraBody", true } }
 M.DEPENDS.cameraTrack = { { "cameraStill", true }, { "cameraBody", false } }
+M.DEPENDS["spawner.id"] = { { "spawner.pick", "custom" } }
+M.DEPENDS["spawner.infight"] = { { "spawner.hostile", "hostile" } }
 function M.dimmed(row)
   for _, dep in ipairs(M.DEPENDS[row_id(row)] or {}) do if get(dep[1]) ~= dep[2] then return true end end
   return false
@@ -390,10 +413,55 @@ function M.refresh()
   local dev = get("dev") == true
   local rows = {}
   for _, r in ipairs(M.ALL or M.ROWS) do if not r.dev or dev then rows[#rows + 1] = r end end
+  -- the Spawner tab's foldable groups: a header and one select row per NPC, built from the spawner's kinds (a
+  -- user's own kinds show up without touching the menu); static ingroup rows rejoin their group
+  do
+    local extra, plain, at = {}, {}, nil
+    for _, r in ipairs(rows) do
+      if r.ingroup then extra[r.ingroup] = extra[r.ingroup] or {}; extra[r.ingroup][#extra[r.ingroup] + 1] = r
+      else plain[#plain + 1] = r; if r.section == "Spawner" then at = #plain end end
+    end
+    rows = plain
+    local collapsed = eff_collapsed()
+    if at and ctx and ctx.enemies and ctx.enemies.pick_groups then
+      local dyn = {}
+      for _, gr in ipairs(ctx.enemies.pick_groups()) do
+        local n = #gr.members + (gr.id == "custom" and 1 or 0)
+        dyn[#dyn + 1] = { kind = "group", group = gr.id, label = gr.label .. " (" .. n .. ")", dyn = true, help = gr.help }
+        if not collapsed[gr.id] then
+          for _, m in ipairs(gr.members) do
+            dyn[#dyn + 1] = { select = m.alias, label = "  " .. m.label, ingroup = gr.id, dyn = true,
+              help = "Spawn " .. m.label .. ": picks it (Spawn makes Spawn Count of them)." }
+          end
+          if gr.id == "custom" then
+            dyn[#dyn + 1] = { select = "custom", label = "  Custom ID...", ingroup = gr.id, dyn = true,
+              help = "Spawn any NPC by its CharacterTable ID (set below); Spawn makes Spawn Count of them." }
+          end
+          for _, r in ipairs(extra[gr.id] or {}) do dyn[#dyn + 1] = r end
+        end
+      end
+      for i, r in ipairs(dyn) do table.insert(rows, at + i, r) end
+    elseif at then
+      -- the spawner not loaded (the menu first): its static rows stay under the section
+      local back = {}
+      for _, r in ipairs(M.ALL or {}) do if r.ingroup then back[#back + 1] = r end end
+      for i, r in ipairs(back) do table.insert(rows, at + i, r) end
+    end
+  end
   if get("menuGrouped") ~= false then M.group_rows(rows) end
   M.ROWS, M.TABS = rows, nil
-  -- (the first row shown too: kept at its old index, Developer Keys turned off scrolled the Mod tab past its own rows
-  -- and showed only its last three, playtest)
+  -- a collapsed group or a rebuild: stay on the same NPC or group header (dynamic rows are made again each time)
+  local function same(a, b)
+    return a and b and ((a.select ~= nil and a.select == b.select) or (a.group ~= nil and a.group == b.group))
+  end
+  if cur and (cur.select ~= nil or cur.group ~= nil) then
+    local found = nil
+    for i, r in ipairs(rows) do if same(r, cur) then found = i; break end end
+    if not found and cur.ingroup then
+      for i, r in ipairs(rows) do if r.group == cur.ingroup then found = i; break end end
+    end
+    if found then s.sel = found end
+  end
   local top = nil
   for i, r in ipairs(rows) do
     if r == cur then s.sel = i end
@@ -437,7 +505,7 @@ end
 function write_menu(saved)
   local keys = {}
   for k in pairs(saved) do keys[#keys + 1] = k end
-  if #keys == 0 then return true end
+  if #keys == 0 then os.remove(M.PATH); return true end
   table.sort(keys)
   local f = io.open(M.PATH, "w")
   if not f then log("menu: can't write " .. M.PATH); return false end
@@ -448,7 +516,13 @@ function write_menu(saved)
     if type(v) == "table" then
       -- (a controller combo: its button names)
       local q = {}
-      for i, x in ipairs(v) do q[i] = string.format("%q", tostring(x)) end
+      for i, x in ipairs(v) do q[#q + 1] = string.format("%q", tostring(x)) end
+      local names = {}
+      for key, value in pairs(v) do
+        if type(key) == "string" and type(value) == "boolean" then names[#names + 1] = key end
+      end
+      table.sort(names)
+      for _, key in ipairs(names) do q[#q + 1] = string.format("[%q] = %s", key, tostring(v[key])) end
       f:write(string.format("  [%q] = { %s },\n", k, table.concat(q, ", ")))
     else
       f:write(string.format("  [%q] = %s,\n", k, type(v) == "string" and string.format("%q", v) or tostring(v)))
@@ -468,7 +542,7 @@ function M.prune()
   for _, r in ipairs(M.ALL or M.ROWS) do if r.key then known[r.key] = true end end
   local kept, gone = {}, {}
   for k, v in pairs(m) do
-    if type(k) == "string" and (known[k] or k:find("^keys%.")) then kept[k] = v else gone[#gone + 1] = tostring(k) end
+    if type(k) == "string" and (known[k] or k == "spawner.collapsed" or k:find("^keys%.")) then kept[k] = v else gone[#gone + 1] = tostring(k) end
   end
   if #gone == 0 then return end
   table.sort(gone)
@@ -482,6 +556,10 @@ function M.prune()
 end
 
 local function value_text(row)
+  if row.kind == "group" then
+    return (eff_collapsed()[row.group] and "[+]" or "[-]")
+  end
+  if row.select then return get("spawner.pick") == row.select and "Picked" or "" end
   if row.kind == "key" then
     if M.state.capture and M.state.capture.id == row.id then return ui_text("Press a key...") end
     local k = ctx.keys.show(ctx.keys.binding(row.id))
@@ -799,6 +877,10 @@ local function build()
       ra = text(vc + 170, cy, 18, ">", { font = bold, centre = true, mid = true }) }
   end
   -- the Language row's value: each language's name in its own font, one shown over the row's (moved to it)
+  -- the Spawner tab's avatar (the play-as menu's picture): the selected NPC's, right of the rows, else none
+  ui.portraitImg = box(VW - 580, r0, 540, 540, 1, 1, 1, 1)
+  try(function() ui.portraitImg:SetRenderOpacity(0) end)
+  ui.portraitFor, ui.portraitOk = nil, false
   ui.langVal, ui.langUp = {}, {}
   for c, f in pairs(names) do
     ui.langVal[c] = text(vc, 0, 18, M.LANG_NAMES[c], { font = f or bold, centre = true, mid = true })
@@ -929,7 +1011,10 @@ local function render()
   if s.sel > s.top + M.VISIBLE - 1 then s.top = s.sel - M.VISIBLE + 1 end
   -- (and no empty rows below a tab's end while rows above are scrolled off)
   if s.top > t.first and t.last - s.top + 1 < M.VISIBLE then s.top = math.max(t.first, t.last - M.VISIBLE + 1) end
-  try(function() set_text(ui.context, tab_name(t.name)); set_text(ui.counter, string.format("%d / %d", s.sel - t.first + 1, t.last - t.first + 1)) end)
+  -- the tab strip names it plain; its own header keeps the experimental mark
+  local title = tab_name(t.name)
+  if t.name == "Spawner" then title = title .. " (Experimental)" end
+  try(function() set_text(ui.context, title); set_text(ui.counter, string.format("%d / %d", s.sel - t.first + 1, t.last - t.first + 1)) end)
   show(ui.context, get("menuGrouped") ~= false); show(ui.counter, get("menuGrouped") ~= false)
   local langShown
   for k, tab in ipairs(ui.tabs) do
@@ -944,7 +1029,7 @@ local function render()
     local on = row ~= nil and idx == s.sel
     local dim = row and M.dimmed(row)
     show_all(r.focus, on)
-    local lab, val = row and label_of(row) or "", row and row.key and value_text(row) or ""
+    local lab, val = row and label_of(row) or "", row and (row.key or row.select or row.kind == "group") and value_text(row) or ""
     -- (the Language row's value: its name in its own font, over the row's empty one)
     local lv = row and row.key == "language" and ui.langVal and ui.langVal[get("language") or "en"] or nil
     -- (too long for one line at 17: the smaller label)
@@ -959,8 +1044,8 @@ local function render()
       try(function() lv.Slot:SetPosition({ X = ui.vc * ui.K, Y = (ui.r0 + (i - 1) * ui.rh + ui.bh / 2 + 18 / 12 - 18 * up) * ui.K }) end)
       if on then tint(lv, 0.022, 0.025, 0.05) else tint(lv, 0.85, 0.85, 0.86) end
     end
-    -- (no arrows on a key: Enter takes a new one)
-    local arrows = on and val ~= "" and row.kind ~= "key" and row.kind ~= "pad"
+    -- (no arrows on a key: Enter takes a new one; none on a picked NPC either)
+    local arrows = on and val ~= "" and row.kind ~= "key" and row.kind ~= "pad" and not row.select
     show(r.la, arrows); show(r.ra, arrows)
     if on then
       local c = dim and 0.43 or 0.022
@@ -978,6 +1063,35 @@ local function render()
   for _, lv in pairs(ui.langVal or {}) do show(lv, lv == langShown) end
   local cur = M.ROWS[s.sel]
   try(function() set_text(ui.help, cur and help_of(cur) or "") end)
+  -- its avatar on the Spawner tab (the play-as menu's picture): the first candidate the game has, else none
+  local paths = t.name == "Spawner" and cur and cur.select and ctx.enemies and ctx.enemies.portrait_paths
+    and ctx.enemies.portrait_paths(cur.select) or nil
+  if paths and #paths > 0 then
+    if ui.portraitFor ~= cur.select and (not ui.portraitRetry or os.clock() >= ui.portraitRetry) then
+      ui.portraitFor = cur.select
+      ui.portraitOk = false
+      for _, ppath in ipairs(paths) do
+        local full = ppath:find("%.") and ppath or (ppath .. "." .. (ppath:match("[^/]+$") or ""))
+        local tex = try(function() return StaticFindObject(full) end)
+        if valid(tex) and try(function() ui.portraitImg:SetBrushFromTexture(tex, false); return true end) then
+          ui.portraitOk = true
+          break
+        end
+      end
+      if not ui.portraitOk then
+        log("menu: no portrait for " .. tostring(cur.select) .. " (" .. #paths .. " paths tried, none loaded)")
+        ui.portraitFor = nil -- retry when loading is safe or the asset becomes available
+        ui.portraitRetry = os.clock() + 10
+      end
+    end
+  else
+    if t.name == "Spawner" and cur and cur.select and cur.select ~= "custom" and ui.noPortraitFor ~= cur.select then
+      ui.noPortraitFor = cur.select
+      log("menu: no portrait for " .. tostring(cur.select) .. " (no known path)")
+    end
+    ui.portraitFor = nil
+  end
+  show(ui.portraitImg, paths ~= nil and #paths > 0 and ui.portraitOk == true)
   local padSet = ctx.tune.menuPadIcons == "xbox" and "xbox" or "playstation"
   for set, list in pairs(ui.keys) do show_all(list, set == (s.pad and padSet or "kb")) end
   -- the scroll bar, only on a tab longer than the screen
@@ -1109,13 +1223,36 @@ function M.toggle(pawn, pad)
   if M.state.open then M.close(pawn) else M.open(pawn) end
 end
 
+local function toggle_group(row)
+  local g = ctx.tune.spawner or {}
+  local ids = {}
+  if ctx.enemies and ctx.enemies.pick_groups then for _, gr in ipairs(ctx.enemies.pick_groups()) do ids[#ids + 1] = gr.id end end
+  local collapsed = eff_collapsed()
+  if collapsed[row.group] then
+    -- unfolding: fold everything else (only one group open at a time)
+    local open = {}
+    for _, id in ipairs(ids) do open[id] = id ~= row.group end
+    collapsed = open
+  else
+    collapsed[row.group] = true
+  end
+  g.collapsed = collapsed
+  if not ctx.tune.spawner then ctx.tune.spawner = g end
+  set("spawner.collapsed", collapsed)
+  M.state.changed["spawner.collapsed"] = true
+  log("menu: Spawner group " .. tostring(row.group) .. (collapsed[row.group] and " folded" or " unfolded"))
+  M.refresh()
+end
+
 local function step(dir)
   local s = M.state
   local row = M.ROWS[s.sel]
+  if row and row.kind == "group" then toggle_group(row); render(); return end
   if not row or not row.key or row.kind == "key" or row.kind == "pad" then return end
   local v = get(row.key)
   if row.kind == "bool" then v = not (v == true)
   elseif row.kind == "list" then
+    if #row.values == 0 then return end
     local k = 1
     for i, x in ipairs(row.values) do if x == v then k = i end end
     v = row.values[(k - 1 + dir) % #row.values + 1]
@@ -1170,6 +1307,15 @@ local function press(pawn)
     log("menu: back to settings.lua (menu.lua deleted)")
     M.refresh()
     render()
+  elseif row.kind == "group" then
+    toggle_group(row)
+    render()
+  elseif row.select then
+    -- the play-as menu's picker: Enter on a name picks it (Spawn makes Spawn Count of them)
+    set("spawner.pick", row.select)
+    s.changed["spawner.pick"] = true
+    log("menu: Spawn picks " .. tostring(row.select))
+    render()
   elseif row.kind == "bool" or row.kind == "list" then step(1)
   elseif row.kind == "pad" then
     -- (read in M.tick: nothing counts till every button is up, A included)
@@ -1208,8 +1354,13 @@ local function reset_tab()
   if not base then log("menu: tab reset: settings couldn't be read"); return end
   local _, t = tab_of(s.sel)
   local n, applies = 0, {}
-  for i = t.first, t.last do
-    local row = M.ROWS[i]
+  local resetRows = {}
+  for i = t.first, t.last do resetRows[#resetRows + 1] = M.ROWS[i] end
+  if t.name == "Spawner" then
+    for _, row in ipairs(M.ALL or {}) do if row.ingroup then resetRows[#resetRows + 1] = row end end
+    set("spawner.collapsed", nil); s.changed["spawner.collapsed"] = true
+  end
+  for _, row in ipairs(resetRows) do
     if row.key then
       local v = get_in(base, row.key)
       -- (a key unset in settings.lua goes back to its default: unset here too)

@@ -8,7 +8,7 @@
 -- waist, never a split), and her swings through its corpse cut it again. The game's own monster slicer is switched
 -- off on them (tune.enemies.nativeSlice). When the corpse starts dissolving its caps and bleeds go (gore.enemy_fading);
 -- when it goes (destroyed, hidden for reuse, or up again) the rest of its gore goes with it (gore.enemy_gone).
--- Spawner (only with settings.lua's dev on): F5 spawns the kind picked (Insert picks the next) in front of her, Home opens the spawner window
+-- Experimental spawner: F5 spawns the kind picked (Insert picks the next) in front of her, Home opens the spawner window
 -- (sbslice.dll, native/sbslice/spawner.c), which lists the kinds and asks for spawns (and kills) through spawner.req. Spawning
 -- goes through the game's own SBNetworkPlayerController:ServerRequest_CreateActor (CharacterTable ID, position,
 -- rotation), which runs locally in single player.
@@ -29,7 +29,6 @@ local HAND_S = 1.5
 local known = {}     -- actor address -> { obj, mesh, cls, kind, dead, t, hit, cut, hits, still, sm }
 local mine = {}      -- actor address -> true: spawned here (Remove all takes them)
 local expect = {}    -- { kind, at, t }: spawn requests waiting for their actor
-local pick = 1       -- the kind F5 spawns
 local hand = {}      -- Eve's right hand, the last HAND_S seconds: { t, p }
 local n = 0
 local freed = false  -- the mouse is given to the spawner window
@@ -48,8 +47,8 @@ local function addr(o) return try(function() return o:GetAddress() end) end
 local FN = setmetatable({}, { __index = function(t, b) local f = FName(b); t[b] = f; return f end })
 local function bone_loc(mesh, b) return try(function() return vof(mesh:GetSocketLocation(FN[b])) end) end
 
--- the kinds followed: tune.enemies.kinds, then the sandbox bosses (tune.bosses.kinds, bosses.lua: spawned from F3 →
--- Sandbox, cut as these are)
+-- the kinds followed: tune.enemies.kinds, then the Bosses group's kinds (bosses.lua: spawned from F3 →
+-- Spawner, cut as these are)
 local allKinds, allFor, allForB = {}, nil, nil
 local function kinds()
   local a, b = cfg().kinds or {}, (ctx.tune.bosses or {}).kinds or {}
@@ -72,11 +71,150 @@ local function kind_of(cls)
   return byClass[cls]
 end
 
--- the spawner window's list (spawner.c reads it whenever it opens)
+local function spcfg() return ctx.tune.spawner or {} end
+-- every CharacterTable row (roster.lua, generated from the base game's table dump): spawnable by alias or ID.
+-- No Blueprint: adopted by proximity, tracked and hostility-patched, but never cut
+local rosterKinds, rosterByAlias = nil, nil
+local function load_roster()
+  if rosterKinds then return rosterKinds, rosterByAlias end
+  rosterKinds, rosterByAlias = {}, {}
+  local known = {}
+  for _, k in ipairs(kinds()) do known[k.alias] = true end
+  local ok, r = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/roster.lua")
+  if ok and type(r) == "table" then
+    for _, e in ipairs(r) do
+      if e.alias and e.id and e.id > 0 and not known[e.alias] then
+        known[e.alias] = true
+        local k = { alias = e.alias, label = e.alias:gsub("_", " "), id = e.id,
+          tribe = (e.tribe ~= "" and e.tribe) or "Other", roster = true }
+        rosterKinds[#rosterKinds + 1] = k
+        rosterByAlias[e.alias] = k
+      end
+    end
+  end
+  return rosterKinds, rosterByAlias
+end
+function M.roster() return load_roster() end
+-- the Spawner tab's foldable groups (F3 → Spawner, the play-as menu's character list): the curated NPCs by name,
+-- then every other table row by tribe
+function M.pick_groups()
+  local naytiba, angels, bosses = {}, {}, {}
+  for _, k in ipairs(kinds()) do
+    local m = { alias = k.alias, label = k.label or k.alias }
+    if k.row then bosses[#bosses + 1] = m
+    elseif k.alias == "N_AirborneSquad" then angels[#angels + 1] = m
+    else naytiba[#naytiba + 1] = m end
+  end
+  local groups = {
+    { id = "naytiba", label = "Naytiba", members = naytiba,
+      help = "The curated monsters: skulls, crickets, gorillas, the lab mutant, the statues, the lurkers and more (cut as Eve is)." },
+    { id = "angels", label = "Angels", members = angels,
+      help = "The Airborne Squad: passive NPCs, hostile to nothing by default." },
+    { id = "bosses", label = "Bosses", members = bosses,
+      help = "Humanoid bosses, spawned and killed like any enemy (Boss Spawning on)." },
+  }
+  -- the rest of the table by tribe (tracked and hostile-patched, never cut: no Blueprint to follow)
+  local byTribe, order = {}, {}
+  for _, r in ipairs(load_roster()) do
+    local t = r.tribe ~= "" and r.tribe or "Other"
+    if not byTribe[t] then byTribe[t] = {}; order[#order + 1] = t end
+    byTribe[t][#byTribe[t] + 1] = { alias = r.alias, label = r.label }
+  end
+  for _, t in ipairs(order) do
+    groups[#groups + 1] = { id = "tribe_" .. t, label = t:gsub("_", " "), members = byTribe[t],
+      help = "Every CharacterTable row of this tribe (spawned as-is: tracked, never cut)." }
+  end
+  groups[#groups + 1] = { id = "custom", label = "Custom", members = {},
+    help = "Any NPC in the game by its CharacterTable ID." }
+  return groups
+end
+-- Album assets use full object paths; some are only available after the game loads them.
+local PORTRAITS = {
+  B_Tachy = "/Game/Art/UI/Texture/Album/NPC/image/CH_NPC_TachyNPC.CH_NPC_TachyNPC",
+  B_TachyNPC = "/Game/Art/UI/Texture/Album/NPC/image/CH_NPC_TachyNPC.CH_NPC_TachyNPC",
+  B_Raven = "/Game/Art/UI/Texture/Album/NPC/image/CH_NPC_Raven.CH_NPC_Raven",
+  B_Scarlet = "/Game/DLC_2/Art/UI/Texture/Album/NPC/image/CH_NPC_Scarlet.CH_NPC_Scarlet",
+  B_RoyalGuard = "/Game/Art/UI/Texture/Album/NPC/image/CH_NPC_Rael.CH_NPC_Rael",
+}
+-- an NPC's avatar candidates (the play-as menu's pictures): its own, the album's NPC and Native
+-- pictures by name. The menu loads the first one the game has, else shows none (memory-only lookups)
+function M.portrait_paths(alias)
+  local out = {}
+  local k = M.pick_kind(alias)
+  if k and k.portrait then out[#out + 1] = k.portrait end
+  for _, p in ipairs(PORTRAITS[alias] and { PORTRAITS[alias] } or {}) do out[#out + 1] = p end
+  local name = k and k.bp and (k.bp:match("/(CH_M_NA_%d+)[^/]*_Blue[Pp]rint$") or k.bp:match("/(CH_M_NA_%d+)[^/]*_BP$"))
+  local variant = k and k.bp and k.bp:match("_Type_([BC])_Blueprint$")
+  if name and variant and name ~= "CH_M_NA_45" then name = name .. "_Type_" .. variant end
+  if name then out[#out + 1] = "/Game/Art/UI/Texture/Album/Native/image/" .. name .. "." .. name end
+  local base = k and k.bp and k.bp:match("([^/]+)$")
+  if base then base = base:gsub("_Blueprint$", "") end
+  if base and base ~= "" then
+    out[#out + 1] = "/Game/Art/UI/Texture/Album/NPC/image/" .. base .. "." .. base
+  end
+  if not name and alias then
+    out[#out + 1] = "/Game/Art/UI/Texture/Album/Native/image/" .. alias .. "." .. alias
+    out[#out + 1] = "/Game/Art/UI/Texture/Album/NPC/image/" .. alias .. "." .. alias
+  end
+  return out
+end
+function M.portrait(alias)
+  return M.portrait_paths(alias)[1]
+end
+-- the Spawner tab's pick (F3 → Spawner, the play-as mod's character list): every known NPC by name, then the
+-- custom CharacterTable ID (spawner.id: any NPC in the game)
+function M.pick_list()
+  local v = {}
+  for _, k in ipairs(kinds()) do v[#v + 1] = k.alias end
+  v[#v + 1] = "custom"
+  return v
+end
+function M.pick_names()
+  local n = {}
+  for _, k in ipairs(kinds()) do n[#n + 1] = k.label or k.alias end
+  n[#n + 1] = "Custom ID..."
+  return n
+end
+function M.pick_kind(pick)
+  if pick == "custom" then
+    local id = math.floor(tonumber(spcfg().id) or 0)
+    if id > 0 then return { alias = "ID_" .. id, label = "Custom NPC " .. id, id = id, custom = true } end
+    return nil
+  end
+  for _, k in ipairs(kinds()) do if k.alias == pick then return k end end
+  local _, byAlias = load_roster()
+  return byAlias[pick]
+end
+-- a freshly spawned actor of a class no kind names near a pending spawn request is it (a roster kind without
+-- a Blueprint, or a custom ID: kind_of knows nothing about it). Never Eve herself standing by the spawn point
+local function proximity_expect(c, selfAddr)
+  for i = #expect, 1, -1 do
+    local x = expect[i]
+    if os.clock() - x.t > 10 then table.remove(expect, i)
+    elseif not x.kind.bp then
+      local a = c.addr or try(function() return c.obj:GetAddress() end)
+      if a and a ~= selfAddr and not (x.before and x.before[a]) then
+        local l = try(function() return vof(c.obj:K2_GetActorLocation()) end)
+        if l and len(sub(l, x.at)) < 800 then return x.kind end
+      end
+    end
+  end
+  return nil
+end
+
+-- the spawner window's list (spawner.c reads it whenever it opens; the window shows the first 64)
 local function write_list()
   local f = io.open(LIST, "w")
   if not f then return end
-  for i, k in ipairs(kinds()) do f:write(string.format("%s\t%d. %s\n", k.alias, i, k.label or k.alias)) end
+  local n = 0
+  for i, k in ipairs(kinds()) do
+    n = n + 1
+    f:write(string.format("%s\t%d. %s\n", k.alias, i, k.label or k.alias))
+  end
+  for _, r in ipairs(load_roster()) do
+    n = n + 1
+    f:write(string.format("%s\t%d. %s\n", r.alias, n, r.alias:gsub("_", " ")))
+  end
   f:close()
 end
 
@@ -104,11 +242,21 @@ local function spawn(pawn, k, count)
   local yaw = math.rad(rot and rot.Yaw or 0)
   local fwd, right = vec(math.cos(yaw), math.sin(yaw), 0), vec(-math.sin(yaw), math.cos(yaw), 0)
   local d, spread = cfg().spawnDistance or 450, cfg().spawnSpread or 160
-  -- a sandbox boss: its CharacterTable row made mortal first (bosses.lua), and set further off (they lunge)
-  if k.row and ctx.bosses then
-    local why = ctx.bosses.prepare(k)
+  -- a Bosses-group boss: its CharacterTable row made mortal first (bosses.lua forced: the Spawner is the
+  -- boss spawner now, no toggle needed), and set further off (they lunge)
+  if k.row and not (ctx.bosses and ctx.bosses.prepare) then
+    log("spawn " .. tostring(k.alias) .. ": not spawned: boss preparation unavailable"); return false
+  end
+  if k.row then
+    local why = ctx.bosses.prepare(k, true)
     if why then log(string.format("spawn %s: not spawned: %s", k.alias, why)); return false end
     d = k.distance or d
+  end
+  -- A proximity-only request must not claim a character already present at the spawn point.
+  local before
+  if not k.bp then
+    before = {}
+    for _, c in ipairs(ctx.live_chars()) do if c.addr then before[c.addr] = true end end
   end
   local ok_n = 0
   for i = 1, count do
@@ -116,11 +264,11 @@ local function spawn(pawn, k, count)
     local p = vec(at.X + fwd.X * d + right.X * off, at.Y + fwd.Y * d + right.Y * off, at.Z + (cfg().spawnLift or 30))
     local r = { Pitch = 0, Yaw = math.deg(yaw) + 180, Roll = 0 }
     local ok, err = pcall(function()
-      pc:ServerRequest_CreateActor(k.id, p, r, false, true, 0, 0, 0, FName("None"), false)
+      return pc:ServerRequest_CreateActor(k.id, p, r, false, true, 0, 0, 0, FName("None"), false)
     end)
-    if ok then
+    if ok and err ~= false then
       ok_n = ok_n + 1
-      expect[#expect + 1] = { kind = k, at = p, t = os.clock() }
+      expect[#expect + 1] = { kind = k, at = p, t = os.clock(), before = before }
     else
       log(string.format("spawn %s: ServerRequest_CreateActor failed: %s", k.alias, tostring(err)))
     end
@@ -148,15 +296,34 @@ local function remove_all()
 end
 
 function M.spawn_pick(pawn)
-  local k = kinds()[pick]
-  if not k then log("F5: no kinds in tune.enemies.kinds"); return end
-  spawn(pawn, k, 1)
+  local g = ctx.tune.spawner or {}
+  local k = M.pick_kind(g.pick)
+  if not k then
+    log(g.pick == "custom" and "spawn: Custom ID picked but spawner.id is 0 (F3 → Spawner: set the CharacterTable ID)"
+      or string.format("spawn: no NPC %s in the kinds (F3 → Spawner)", tostring(g.pick)))
+    return
+  end
+  spawn(pawn, k, math.max(1, math.min(9, tonumber(g.count) or 1)))
 end
 function M.next_pick()
-  local ks = kinds()
-  if #ks == 0 then return end
-  pick = pick % #ks + 1
-  log(string.format("Insert: F5 now spawns %d of %d, %s (%s)", pick, #ks, ks[pick].label or ks[pick].alias, ks[pick].alias))
+  local g = ctx.tune.spawner or {}
+  -- within its own group (the full roster made one long Insert cycle useless)
+  local members = nil
+  for _, gr in ipairs(M.pick_groups()) do
+    for _, m in ipairs(gr.members) do if m.alias == g.pick then members = gr.members break end end
+    if members then break end
+  end
+  local v = {}
+  if members then for _, m in ipairs(members) do v[#v + 1] = m.alias end
+  else v = M.pick_list() end
+  if #v == 0 then return end
+  local k = 1
+  for i, x in ipairs(v) do if x == g.pick then k = i end end
+  k = k % #v + 1
+  g.pick = v[k]
+  if not ctx.tune.spawner then ctx.tune.spawner = g end
+  local kn = M.pick_kind(v[k])
+  log(string.format("Insert: F5 now spawns %d of %d, %s (%s)", k, #v, kn and (kn.label or kn.alias) or v[k], v[k]))
 end
 function M.toggle_window()
   local f = io.open(CMD, "w")
@@ -520,6 +687,21 @@ local function drop_boss_weapons(e)
   elseif #candidates == 0 then log(e.kind.alias .. ": no visible weapon component found to drop") end
 end
 M._drop_boss_weapons, M._restore_boss_weapons = drop_boss_weapons, restore_boss_weapons
+local function match_spawn(o, a, k)
+  local miss
+  for i = #expect, 1, -1 do
+    local x = expect[i]
+    if os.clock() - x.t > 10 then table.remove(expect, i)
+    elseif x.kind.alias == k.alias then
+      local l = try(function() return vof(o:K2_GetActorLocation()) end)
+      local d = l and len(sub(l, x.at))
+      if d and d < (k.row and M.BOSS_FAR or 800) then mine[a] = true; table.remove(expect, i); break end
+      miss = d
+    end
+  end
+  return miss
+end
+
 local function adopt(o, a, cls, k, cuts)
   local mesh = try(function() return o.Mesh end)
   if not valid(mesh) then return nil end
@@ -534,17 +716,7 @@ local function adopt(o, a, cls, k, cuts)
   -- turns up (BOSS_FAR): Tachy comes in from off where she was asked for, wasn't taken for one spawned here, and
   -- Passive Bosses never touched her (she attacked, playtest). Told by alias: a setting changed in the menu that
   -- spawned it makes the kinds over (Scarlet, Tachy and the Royal Guard weren't taken for hers, playtest)
-  local miss
-  for i = #expect, 1, -1 do
-    local x = expect[i]
-    if os.clock() - x.t > 10 then table.remove(expect, i)
-    elseif x.kind.alias == k.alias then
-      local l = try(function() return vof(o:K2_GetActorLocation()) end)
-      local d = l and len(sub(l, x.at))
-      if d and d < (k.row and M.BOSS_FAR or 800) then mine[a] = true; table.remove(expect, i); break end
-      miss = d
-    end
-  end
+  local miss = match_spawn(o, a, k)
   ;((mine[a] or miss or k.row) and log or vlog)(string.format("following %s %x (%s)%s%s%s", k.alias, a, cls,
     mine[a] and ", spawned here" or "", miss and not mine[a] and string.format(", not the one asked for (%.0f cm off)", miss) or "",
     e.slice ~= nil and string.format(", its own slicer %s -> off", tostring(e.slice)) or ""))
@@ -567,12 +739,24 @@ end
 local function try_cut(pawn, a, e)
   local r = e.want
   if not r then return end
+  -- a kind with no Blueprint to follow (a roster row): tracked, never cut (its skeleton isn't Eve's Bip001)
+  if not e.kind.bp then
+    log(string.format("%s %x: left whole (no Blueprint to cut by)", e.kind.alias, a))
+    e.want = nil
+    return
+  end
   if os.clock() - r.t > (cfg().killWait or 2.0) then
     log(string.format("%s %x: its cut never started (another kept gore busy)", e.kind.alias, a))
     e.want = nil
     return
   end
   if ctx.gore.busy() then return end
+  -- (a kind whose waist can't be cut, Marionette's legs following the upper body: a rolled torso becomes a limb,
+  -- and the blade carries the veto (M.blow's noTorso) so no waist cut lands through it either)
+  if e.kind.noTorso then
+    if r.kind == "torso" then r.kind = "limb" end
+    if r.h then r.h.noTorso = true end
+  end
   local pel = r.pel and bone_loc(e.mesh, "Bip001-Pelvis")
   if pel then
     local d = sub(pel, r.pel)
@@ -592,7 +776,7 @@ local function try_cut(pawn, a, e)
     local h = { loc = r.loc, push = r.h and r.h.push }
     r.h = nil
     for _, k in ipairs({ "limb", "head", "torso" }) do
-      if not r.tried[k] then r.kind = k; got = ctx.gore.enemy_cut(a, e.obj, e.mesh, h, k, e.kind.face); if got then break end; r.tried[k] = true end
+      if not r.tried[k] and not (k == "torso" and e.kind.noTorso) then r.kind = k; got = ctx.gore.enemy_cut(a, e.obj, e.mesh, h, k, e.kind.face); if got then break end; r.tried[k] = true end
     end
   end
   if got or ctx.gore.busy() then
@@ -1261,22 +1445,33 @@ end
 local function swings_tick(pawn, c)
   if c.swing == false then return end
   local her = valid(pawn) and try(function() return pawn.Mesh end)
-  local body = valid(her) and bone_loc(her, "Bip001-Spine1")
+  -- aim at what is left of her: her upper body gone, the lunges and swings go for her pelvis and legs instead
+  -- of where her chest was (or nowhere, when even her pelvis gives no socket)
+  local gl = ctx.gore
+  local upperGone = gl and gl.has_cut and try(function() return gl.has_cut(her, "Bip001-Spine1") end)
+  local body = valid(her) and bone_loc(her, upperGone and "Bip001-Pelvis" or "Bip001-Spine1")
+  if not body then body = valid(her) and bone_loc(her, upperGone and "Bip001-Spine1" or "Bip001-Pelvis") end
   if not body then return end
   local now, me = os.clock(), addr(pawn)
+  local speed = ctx.time_scale and ctx.time_scale() or 1
+  if not (speed and speed > 0) then speed = 1 end
   local reach, near, nearCls = c.swingReach or 450, nil, nil
   for _, ch in ipairs(ctx.live_chars()) do
     local a = ch.addr
     local e = known[a]
     local sw = aft.sw[a]
-    if sw and sw.till and now >= sw.till then
+    if sw and sw.till then
+      sw.elapsed = (sw.elapsed or 0) + math.max(0, now - (sw.tick or now)) * speed
+      sw.tick = now
+    end
+    if sw and sw.till and sw.elapsed >= sw.duration then
       swing_back(sw)
       sw.till, sw.next, sw.lunge = nil, now + 0.6 + math.random() * 1.4, nil
     end
     -- the lunge: slid along the floor to `lunge` cm off her body over the swing's first third (swept: walls stop it)
     if sw and sw.lunge and valid(ch.obj) then
       local l = sw.lunge
-      local k = math.min(1, (now - l.t0) / l.dur)
+      local k = math.min(1, sw.elapsed / l.dur)
       try(function()
         ch.obj:K2_SetActorLocation({ X = l.from.X + (l.to.X - l.from.X) * k, Y = l.from.Y + (l.to.Y - l.from.Y) * k,
           Z = l.from.Z }, true, {}, false)
@@ -1301,9 +1496,15 @@ local function swings_tick(pawn, c)
           if ok and d > stop then
             local k = (d - stop) / d
             lunge = { from = at, to = { X = at.X + (body.X - at.X) * k, Y = at.Y + (body.Y - at.Y) * k }, t0 = now,
-              dur = math.max(0.15, math.min(len_s, 4) / 3) }
+              dur = math.max(0.15, len_s / 3) }
           end
-          aft.sw[a] = { mesh = mesh, till = ok and now + math.min(len_s, 4) or nil, next = now + 3, lunge = lunge }
+          -- AnimSequence playback follows game time. A real-time deadline cut every slow-motion attack off
+          -- before its contact frame; the four-second clamp also truncated long combos at full speed.
+          aft.sw[a] = { mesh = mesh, till = ok and true or nil, elapsed = 0, tick = now, duration = len_s,
+            next = now + 3, lunge = lunge }
+          -- (ordered attacks with no weapon trail died before geometry with no line at all, playtest: stamp the order
+          -- so hits_after can tell "no swing" from "a swing with no trail")
+          if ok then ctx.afterOrderedAt = os.clock() end
           aft.swings = (aft.swings or 0) + 1
           if aft.swings <= 6 then
             log(string.format("after death: %s %x swings %s at her body %.0f cm off%s (%.1f s)%s", ch.cls, a, pick.name, d,
@@ -1325,7 +1526,7 @@ end
 local function swings_stop()
   local n = 0
   for _, sw in pairs(aft.sw) do if sw.till then swing_back(sw); n = n + 1 end end
-  aft.sw, aft.swings, aft.near = {}, 0, nil
+  aft.sw, aft.swings, aft.near, aft.checked = {}, 0, nil, nil
   return n
 end
 
@@ -1386,18 +1587,21 @@ local function after_putback()
   end
   return back
 end
+-- the takeover undone, once, with its reason
+local function after_over(why)
+  if not aft.tasks then return end
+  local back = after_putback()
+  local sws, stopped = aft.swings or 0, swings_stop()
+  log(string.format("after death: over (%s), %d decision nodes put back, blackboards kept on her %d times, %d swings at her body (%d cut short)",
+    why, back, aft.sets or 0, sws, stopped))
+  aft.tasks, aft.sets, aft.undo = nil, 0, nil
+end
 function M.after_tick(pawn)
   local c = cfg().afterDeath or {}
   local since = ctx.dead_since and ctx.dead_since()
   local on = c.enabled == true and since and os.clock() - since < (c.time or 10)
   if not on then
-    if aft.tasks then
-      local back = after_putback()
-      local sws, stopped = aft.swings or 0, swings_stop()
-      log(string.format("after death: over (%s), %d decision nodes put back, blackboards kept on her %d times, %d swings at her body (%d cut short)",
-        since and "time up" or "she is up", back, aft.sets or 0, sws, stopped))
-      aft.tasks, aft.sets, aft.undo = nil, 0, nil
-    end
+    after_over(since and "time up" or "she is up")
     if c.enabled ~= true or since then return end
     -- while she lives: which of the near enemies' object keys hold her, every 2 s; and the trees looked up again
     -- once an enemy of a new class is around and none is near her
@@ -1427,9 +1631,7 @@ function M.after_tick(pawn)
     return
   end
   if not aft.tasks then
-    aft.tasks, aft.sets, aft.undo = {}, 0, {}
-    local t0 = os.clock()
-    -- the nodes looked up ahead (after_scan), still alive: else looked up now (a hitch, but rare)
+    -- the nodes looked up ahead (after_scan), still alive
     local function live(list)
       local out = {}
       for i = 1, #list, 64 do
@@ -1440,13 +1642,31 @@ function M.after_tick(pawn)
       end
       return out
     end
-    local det, alv = {}, {}
+    local det, alv, ready = {}, {}, true
     if aft.scan then det, alv = live(aft.scan.det), live(aft.scan.alive) end
+    if #det + #alv == 0 then
+      -- cold cache at her death: the full scan hits the death frame with hundreds of ms (the stutter on the
+      -- smash deaths, playtest). Defer the takeover a moment; the ordered attacks below still play meanwhile,
+      -- enemies taking seconds to close in anyway.
+      ready = false
+      if aft.deferUntil and os.clock() < aft.deferUntil then
+        -- still waiting
+      elseif not aft.deferUntil then
+        aft.deferUntil = os.clock() + 1.5
+        log("after death: trees not looked up ahead: takeover in 1.5 s, ordered attacks meanwhile")
+      else
+        aft.deferUntil = nil
+        ready = true
+      end
+    end
+    if ready then
     local ahead = #det + #alv > 0
     if not ahead then
       after_scan("in her death: none looked up ahead lives", aft.scan and aft.scan.classes)
       det, alv = aft.scan.det, aft.scan.alive
     end
+    aft.tasks, aft.sets, aft.undo = {}, 0, {}
+    local t0 = os.clock()
     -- a node changed, its fields as they were kept (put back through its index when the time is up)
     local function change(k, set)
       local o, was = k.obj, {}
@@ -1481,7 +1701,18 @@ function M.after_tick(pawn)
       c.time or 10, nd, #cs > 0 and table.concat(cs, " ") or "-", na, nk, ahead and "trees looked up ahead" or "trees looked up now",
       (os.clock() - t0) * 1000))
   end
-  swings_tick(pawn, c)
+  end
+  if on then
+    -- nothing left of her to hit (every part cut or smashed away, at her death or after follow-ups): call it off
+    -- early, same as time up. Probed after the takeover so the over line fires with its nodes to put back.
+    local mesh = valid(pawn) and try(function() return pawn.Mesh end)
+    local gl = ctx.gore
+    if mesh and gl and gl.nothing_left and (try(function() return gl.nothing_left(mesh) end) or false) then
+      on = false
+      after_over("nothing left of her")
+    end
+  end
+  if on then swings_tick(pawn, c) end
   if os.clock() < aft.next then return end
   aft.next = os.clock() + 0.25
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
@@ -1492,6 +1723,12 @@ function M.after_tick(pawn)
       local at = not (e and e.dead) and (ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end))
       local bb = her and at and len(sub(at, her)) < (c.reach or 3000) and M.after_bb(ch.obj)
       if bb then
+        -- re-checking every blackboard key every quarter second cost whole slow ticks with a pack around her
+        -- (playtest): each enemy's keys are re-read at most every 2 s, a dropped key noticed no later than that
+        local checked = aft.checked or {}
+        aft.checked = checked
+        if os.clock() - (checked[ch.addr] or 0) >= 2 then
+          checked[ch.addr] = os.clock()
         local names = aft.keys[ch.addr]
         if not names then
           names = {}
@@ -1507,6 +1744,7 @@ function M.after_tick(pawn)
             if (aft.sets or 0) <= 5 then log(string.format("after death: %s %x dropped her off %s (%s): set again", ch.cls, ch.addr, nm, v and "something else" or "empty")) end
           end
         end
+        end
       end
     end
   end
@@ -1521,6 +1759,9 @@ function M.tick(pawn, mesh, tm)
   tm("enemies attack-down")
   M.force_tick()
   tm("enemies force grabs")
+  -- Always maintain the spawner's selected hostility mode.
+  M.hostile_tick(pawn)
+  tm("enemies hostility")
   M.after_tick(pawn)
   tm("enemies after death")
   if n % 8 == 0 and ctx.tune.dev then read_req(pawn); read_state(pawn) end
@@ -1534,21 +1775,44 @@ function M.tick(pawn, mesh, tm)
   -- the cuts, or only the death's push (cuts off: the ragdolls still get it)
   local cuts = g.enabled ~= false and gore and (ctx.tune.gore or {}).enabled ~= false
   local pushes = (tonumber(g.push) or 0) > 0 or (tonumber(g.pushScale) or 1) ~= 1
-  if not (cuts or pushes) then return end
+  -- Adoption and spawn diagnostics must run even when enemy gore and pushes are disabled.
+  for i = #expect, 1, -1 do
+    local x = expect[i]
+    if os.clock() - x.t > 10 then
+      log(string.format("spawn %s (CharacterTable %d): no matching actor observed within 10 seconds; request was sent but the game did not confirm creation", x.kind.alias, x.kind.id))
+      table.remove(expect, i)
+    end
+  end
   if cuts then track_hand(pawn, mesh) end
   tm("enemies hand")
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
+  local me = addr(pawn)
   local seen = {}
   local now = os.clock()
   for _, c in ipairs(ctx.live_chars()) do
-    local k = kind_of(c.cls)
+    local k = kind_of(c.cls) or proximity_expect(c, me)
+    if not k then
+      -- already followed (an unknown class adopted by proximity: its request is gone, but it is still it)
+      local old = known[c.addr]
+      if old and addr(old.obj) == c.addr then k = old.kind end
+    end
     if k then
       seen[c.addr] = true
       local e = known[c.addr]
       if e and e.obj ~= c.obj and addr(e.obj) ~= c.addr then e = nil end
       -- (an actor being destroyed stays in the list until the next GC: a removed spawn was adopted again every tick)
       if not e and not dying(c.obj) then e = adopt(c.obj, c.addr, c.cls, k, cuts) end
-      if e then e.k = c.k end
+      if e then
+        e.k = c.k
+        -- A pooled actor can already be followed when the game reuses it for a request.
+        if not mine[c.addr] then
+          match_spawn(c.obj, c.addr, k)
+          if mine[c.addr] then
+            log(string.format("following %s %x (%s), reused for spawn", k.alias, c.addr, c.cls))
+            if k.row and ctx.bosses then ctx.bosses.adopted(c.addr, e, true) end
+          end
+        end
+      end
       -- one out of reach at the last look is looked at every FAR_EVERY polls, each on its own poll (by its address):
       -- every enemy and corpse of the level every poll was ~1 ms of each poll, the poll's costliest part while she
       -- played (frame cost, a Nexus report of 144 fps down to 100-110 with microstutter). Nothing is cut or pushed
@@ -1793,8 +2057,232 @@ end
 -- (bosses.lua: spawning a kind, and a followed character by its address)
 M.spawn_kind = function(pawn, k, count) return spawn(pawn, k, count or 1) end
 function M.entry(a) return known[a] end
--- every one spawned here still followed (Remove all, and the sandbox's own Remove)
+-- every one spawned here still followed (Remove all takes them)
 function M.remove_spawned() remove_all() end
+
+-- ---- hostility: what spawned NPCs fight (F3 → Spawner, dev only) ----
+-- spawner.hostile = "game": as the game has them; "hostile": hostile to Eve (and damageable, even the angels);
+-- "passive": their AI stopped, they never fight. spawner.infight with hostile: they fight each other too.
+-- Hostile works two ways. The NPC's CharacterTable row is patched while one spawned of it lives (bIsHostile when
+-- the row names one, bApplyDamageWhenPlayerAlive, its immortality dispelled; put back exactly once none is left,
+-- as the bosses' rows are), and its blackboard's target keys are kept on Eve — or on each other for infight (the
+-- after-death code's trick: after_keys/after_bb). A row the spawn didn't name (a custom ID) gets blackboards only.
+local hos = { rows = {}, stopped = {}, next = 0, logged = {}, setLogged = nil }
+local CHAR = "/Game/Local/Data/CharacterTable.CharacterTable"
+local EFFECT = "/Game/Local/Data/EffectTable.EffectTable"
+
+local function name_idx(s) return try(function() return FName(s):GetComparisonIndex() end) end
+local function row_struct(path)
+  local dt = try(function() return StaticFindObject(path or CHAR) end)
+  local rs = valid(dt) and try(function() return dt.RowStruct end)
+  if not (valid(dt) and valid(rs)) then return nil end
+  return dt, rs
+end
+local function row_fields(rs) -- the row's fields: name -> { off, cls, mask }
+  local out = {}
+  try(function() rs:ForEachProperty(function(p)
+    local nm = try(function() return p:GetFName():ToString() end)
+    if nm then out[nm] = { off = try(function() return p:GetOffset_Internal() end),
+      cls = try(function() return p:GetClass():GetFName():ToString() end),
+      mask = try(function() return p:GetFieldMask() end) } end
+  end) end)
+  return out
+end
+-- the 4 bytes at a row's field: read, and written with u when given (sbslice's d, as the bosses' rows)
+local function row_u32(row, off, u)
+  if not ctx.gore then return nil, "no gore" end
+  local dt, rs = row_struct()
+  if not dt then return nil, "no CharacterTable loaded" end
+  local idx = name_idx(row)
+  if not (idx and off) then return nil, "no name or field" end
+  local s = string.format("d%x,%x,%x,0,%x", addr(dt), addr(rs), idx, off)
+  if u then s = s .. string.format(",%x", u & 0xffffffff) end
+  local r = ctx.gore.command(s)
+  local was = r:match("^ok row %x+ (%x+) %x+$")
+  if not was then return nil, r end
+  return tonumber(was:sub(-8), 16)
+end
+local function swap_effect(row, rs, off, from, to) -- DefaultEffectArray's from -> to; the answer's count or nil
+  local dt = row_struct()
+  if not dt then return nil end
+  local ri, a, b = name_idx(row), name_idx(from), name_idx(to)
+  if not (ri and a and off and b) then return nil end
+  local r = ctx.gore and ctx.gore.command(string.format("N%x,%x,%x,0,%x,%x,0,%x,0", addr(dt), addr(rs), ri, off, a, b))
+  return r and r:match("^ok names (%d+)")
+end
+local function dispel_exists(name) -- an effect row exists (a dispel to swap in proves by reading, as bosses.lua's)
+  local dt, rs = row_struct(EFFECT)
+  if not dt then return false end
+  local off
+  for _, f in pairs(row_fields(rs)) do if f.off and (not off or f.off < off) then off = f.off end end
+  if not off then return false end
+  local idx = name_idx(name)
+  if not idx then return false end
+  local r = ctx.gore and ctx.gore.command(string.format("d%x,%x,%x,0,%x", addr(dt), addr(rs), idx, off - off % 4)) or ""
+  return r:match("^ok row") ~= nil
+end
+local function hostile_patch(row) -- the row hostile to Eve while one's up; nil ok, else why not
+  if hos.rows[row] then return nil end
+  if not (ctx.gore and ctx.gore.native_state() == "ready") then return "sbslice.dll isn't up yet" end
+  local dt, rs = row_struct()
+  if not dt then return "no CharacterTable loaded" end
+  local fs = row_fields(rs)
+  local was, out = { u32 = {} }, {}
+  local function save_byte(f, off, byte) -- one byte written in its aligned 4, the old 4 kept for the put-back
+    local at = off - off % 4
+    local old = row_u32(row, at)
+    if not old then return false end
+    local new = old & ~(0xff << (off % 4 * 8)) | (byte & 0xff) << (off % 4 * 8)
+    if new ~= old and not row_u32(row, at, new) then return false end
+    was.u32[at] = old
+    return true
+  end
+  -- damageable (an ally takes nothing while she lives: bApplyDamageWhenPlayerAlive false, the angels)
+  local df = fs.bApplyDamageWhenPlayerAlive
+  if df and df.off then
+    if save_byte("bApplyDamageWhenPlayerAlive", df.off, 1) then out[#out + 1] = "damageable" end
+  end
+  -- the hostile flag, when the row names one: a plain byte (an enum or a byte), or a single-bit bool. Anything
+  -- else is left alone (a bitfield's neighbours are not ours to clear)
+  local hf = fs.bIsHostile
+  if hf and hf.off then
+    if hf.cls == "ByteProperty" or hf.cls == "EnumProperty" then
+      if save_byte("bIsHostile", hf.off, 1) then out[#out + 1] = "hostile" end
+    elseif hf.cls == "BoolProperty" and hf.mask and hf.mask ~= 0 and (hf.mask & (hf.mask - 1)) == 0 then
+      local bit, m = 0, hf.mask
+      while m > 1 do m = m >> 1; bit = bit + 1 end
+      local at = hf.off - hf.off % 4
+      local old = row_u32(row, at)
+      if old then
+        local new = old | (1 << (hf.off % 4 * 8 + bit))
+        if (new ~= old and row_u32(row, at, new) or new == old) then
+          was.u32[at] = old; out[#out + 1] = "hostile"
+        end
+      end
+    else
+      out[#out + 1] = "bIsHostile left (" .. tostring(hf.cls) .. ")"
+    end
+  end
+  -- its immortality dispelled (a row that lists none stays as it is)
+  local ef = fs.DefaultEffectArray
+  if ef and ef.off and dispel_exists("Passive_Immortal_Dispel") then
+    local n = swap_effect(row, rs, ef.off, "Passive_Immortal", "Passive_Immortal_Dispel")
+    if n and n ~= "0" then was.immortal = true; out[#out + 1] = "not immortal" end
+  end
+  if not (next(was.u32) or was.immortal) then return "nothing to change (" .. table.concat(out, ", ") .. ")" end
+  hos.rows[row] = { dt = addr(dt), was = was }
+  log(string.format("%s's row hostile while one spawned here is up: %s", row, table.concat(out, ", ")))
+  return nil
+end
+local function hostile_unpatch(row, why)
+  local st = hos.rows[row]
+  hos.rows[row] = nil
+  if not st then return end
+  local dt, rs = row_struct()
+  if not (dt and addr(dt) == st.dt) then log(string.format("%s: its table is gone (%s), nothing to put back", row, why)); return end
+  local fs = row_fields(rs)
+  local ef = fs.DefaultEffectArray
+  local n = 0
+  for at, v in pairs(st.was.u32) do if row_u32(row, at, v) then n = n + 1 end end
+  if st.was.immortal and ef and ef.off then
+    if swap_effect(row, rs, ef.off, "Passive_Immortal_Dispel", "Passive_Immortal") then n = n + 1 end
+  end
+  log(string.format("%s's row put back as the game has it (%s): %d fields", row, why, n))
+end
+local function force_target(e, who) -- its blackboard's target keys kept on who (Eve, or another spawn for infight)
+  local bb = M.after_bb(e.obj)
+  if not bb then return false end
+  local did = false
+  for _, nm in ipairs(M.after_keys(bb)) do
+    if nm:find("Target", 1, true) then
+      local cur = try(function() return bb:GetValueAsObject(FName(nm)) end)
+      if (not cur and who) or (cur and who and addr(cur) ~= addr(who)) then
+        if try(function() bb:SetValueAsObject(FName(nm), who); return true end) then did = true end
+      end
+    end
+  end
+  return did
+end
+function M.hostile_tick(pawn)
+  if os.clock() < hos.next then return end
+  hos.next = os.clock() + 0.25
+  local g = spcfg()
+  local mode = g.hostile or "game"
+  if mode ~= "hostile" and mode ~= "passive" then mode = "game" end
+  if mode ~= "hostile" then hos.logged = {} end
+  local live = {}
+  for a, e in pairs(known) do
+    if mine[a] and not e.dead and valid(e.mesh) then live[#live + 1] = { a = a, e = e } end
+  end
+  -- rows wanted hostile now (a spawn's own kind row, never a story fight's: only spawned here are counted)
+  local need = {}
+  if mode == "hostile" then
+    for _, x in ipairs(live) do
+      local r = x.e.kind.row or (not x.e.kind.custom and x.e.kind.alias)
+      if r then need[r] = true end
+    end
+  end
+  for row in pairs(need) do
+    if not hos.rows[row] and not hos.logged[row] then
+      local why = hostile_patch(row)
+      if why then hos.logged[row] = true; log(string.format("hostile: %s: %s", row, why)) end
+    end
+  end
+  for row in pairs(hos.rows) do if not need[row] then hostile_unpatch(row, "none spawned here left") end end
+  for _, x in ipairs(live) do
+    local a, e = x.a, x.e
+    if mode == "passive" then
+      local o = e.obj
+      local ctl = try(function() return o.Controller end)
+      if not valid(ctl) then ctl = nil end
+      local own = try(function() return o.BrainComponent end)
+      if not valid(own) then own = nil end
+      local held = hos.stopped[a]
+      local running = own and try(function() return own:IsRunning() end)
+      if own and running ~= false then try(function() own:StopLogic("SBGore passive") end) end
+      if ctl then
+        local b = try(function() return ctl.BrainComponent end)
+        if valid(b) and b ~= own then try(function() b:StopLogic("SBGore passive") end) end
+        try(function() ctl:StopMovement() end)
+        try(function() ctl:UnPossess() end)
+      end
+      if ctl or running == true or not held then
+        try(function() e.mesh:GetAnimInstance():Montage_Stop(0.25, nil) end)
+        try(function() o.CharacterMovement:StopMovementImmediately() end)
+      end
+      if not held and (ctl or own) then
+        hos.stopped[a] = { ctl = ctl, own = own }
+        log(string.format("passive: %s %x: its AI stopped, it never fights", e.kind.alias, a))
+      elseif held then
+        if ctl then held.ctl = ctl end
+        if own then held.own = own end
+      end
+    elseif hos.stopped[a] then
+      local held = hos.stopped[a]
+      hos.stopped[a] = nil
+      local ctl = try(function() return e.obj.Controller end)
+      if not valid(ctl) and valid(held.ctl) then try(function() held.ctl:Possess(e.obj) end) end
+      local b = valid(held.ctl) and try(function() return held.ctl.BrainComponent end)
+      if valid(b) then try(function() b:RestartLogic() end) end
+      if valid(held.own) and held.own ~= b then try(function() held.own:RestartLogic() end) end
+      log(string.format("%s %x: its AI started again", mode, a))
+    end
+  end
+  if mode == "hostile" then
+    table.sort(live, function(x, y) return x.a < y.a end)
+    local fight = g.infight == true and #live > 1
+    for i, x in ipairs(live) do
+      local who = fight and live[i % #live + 1].e.obj or pawn
+      if who and force_target(x.e, who) and not hos.setLogged then
+        hos.setLogged = true
+        log(string.format("hostile: spawned NPCs target %s now", fight and "each other (infight)" or "Eve"))
+      end
+    end
+  else
+    hos.setLogged = nil
+  end
+end
+function M.hostile_rows() return hos.rows end
 
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()
@@ -1809,8 +2297,10 @@ function M.forget()
   end
   aft.keys, aft.tasks, aft.undo, aft.sets = {}, nil, nil, 0
   grab.on, grab.pawn, grab.mesh = {}, nil, nil
-  aft.sw, aft.swings, aft.near, aft.anims, aft.scan, aft.loaded = {}, 0, nil, {}, nil, nil
+  aft.sw, aft.swings, aft.near, aft.anims, aft.scan, aft.loaded, aft.checked = {}, 0, nil, {}, nil, nil, nil
   down.done, down.next, down.pending = {}, 0, {}
+  for row in pairs(hos.rows) do hostile_unpatch(row, "level reloaded") end
+  hos.stopped, hos.logged, hos.setLogged, hos.next = {}, {}, nil, 0
   freed = false
 end
 

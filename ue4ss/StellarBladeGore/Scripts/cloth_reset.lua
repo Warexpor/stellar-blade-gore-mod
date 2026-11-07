@@ -161,13 +161,16 @@ function screen.auto_f8(pawn)
   local gore = get_gore()
   if not screen.autoF8 or os.clock() < screen.autoF8 then return end
   if get_active() or screen.photoOn or screen.cloth or hm.regrow or hm.ghost then return end
+  local mesh = try(function() return pawn.Mesh end)
+  if not valid(mesh) or (gore and #(gore.cut_parts(mesh) or {}) > 0) then
+    screen.autoF8 = os.clock() + screen.AUTO_F8_S
+    return
+  end
   if screen.cloth_scene(pawn, true) then
     log("cloth: skipped automatic recovery during cinematic (" .. (screen.clothSceneReason or "unknown") .. ")")
     screen.autoF8 = nil
     return
   end
-  local mesh = try(function() return pawn.Mesh end)
-  if not valid(mesh) or (gore and #(gore.cut_parts(mesh) or {}) > 0) then return end
   screen.autoF8, screen.autoF8Ran = nil, os.clock()
   sandbox_recover("auto F8: her ponytail set right after she came into the world")
 end
@@ -182,7 +185,8 @@ function screen.piece_off(pawn)
 end
 function screen.cloth_tick(pawn)
   local c = screen.cloth
-  local due = c and not get_active() and not screen.photoOn and os.clock() - c.at >= (screen.CLOTH_AFTER[c.i] or 0)
+  local piece = screen.piece_off(pawn)
+  local due = c and not (piece and c.i == 1) and not get_active() and not screen.photoOn and os.clock() - c.at >= (screen.CLOTH_AFTER[c.i] or 0)
   if (c or screen.autoF8 or screen.clothColl or screen.clothSim) and screen.cloth_scene(pawn, due) then
     local had = screen.cloth or screen.autoF8 or screen.clothColl or screen.clothSim
     screen.cloth, screen.autoF8 = nil, nil
@@ -194,7 +198,6 @@ function screen.cloth_tick(pawn)
   screen.cloth_sim_tick()
   screen.auto_f8(pawn)
   c = screen.cloth
-  local piece = screen.piece_off(pawn)
   local bodyOff = piece and screen.clothColl and (function()
     for _, k in ipairs(screen.clothColl) do if valid(k.obj) and k.obj:GetAddress() == piece:GetAddress() then return true end end
   end)()
@@ -202,7 +205,7 @@ function screen.cloth_tick(pawn)
     local n = screen.cloth_restore()
     log(string.format("cloth: her meshes' collision given back early (%d)%s", n, piece and ": a part is off her" or ""))
   end
-  if not c or get_active() or screen.photoOn then return end
+  if not c or get_active() or screen.photoOn or (piece and c.i == 1) then return end
   local wait = screen.CLOTH_AFTER[c.i]
   if not wait then screen.cloth = nil; return end
   if os.clock() - c.at < wait then return end

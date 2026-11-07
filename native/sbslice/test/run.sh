@@ -179,6 +179,13 @@ if [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_
       fi
     done
   done
+  # her right arm and its cape (the loop above cuts the left arm; CAPE defaults to the left cape, so the right
+  # arm names its own: a right-arm cut with the left cape detached fails the stump rim, playtest screenshot)
+  if on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_09/CH_P_EVE_09.uasset ]]; then
+    jobs+=("real right arm cut CH_P_EVE_09, cape cut off|ARM=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.4 CAPE=Ab_CapeR01|CH_P_EVE_09"
+           "real right cape, mixed weights and flung arm|ARM=1 DRIVEN=1 RIBBON=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.4 CAPE=Ab_CapeR01|CH_P_EVE_09"
+           "real right arm cut CH_P_EVE_09, cape kept on the body|ARM=1 ARMBONE=Bip001-R-UpperArm ARMEND=Bip001-R-Forearm ARMAT=0.4 CAPE=Ab_CapeR01 KEEPCAPE=1|CH_P_EVE_09")
+  fi
   # Outfit seen in the 23:08 crash, with a living left-arm cut before the failure. Exercise its actual mesh rather
   # than assuming the other outfits' bone maps and section layouts represent it.
   if on arm && [[ -f ${CACHE}/work/vanilla/SB/Content/Art/Character/PC/CH_P_EVE_59/CH_P_EVE_59.uasset ]]; then
@@ -302,6 +309,23 @@ if on enemy; then
   m=CH_M_NA_17/CH_M_NA_17_1
   [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] &&
     jobs+=("enemy CH_M_NA_17_1 cut after cut|ENEMY=1 SEQ=Bip001-L-Thigh:0.86,Bip001-R-Calf:0.4,Bip001-L-UpperArm:0.9,Bip001-R-UpperArm:0.65 PKG=vanilla/SB/Content/Art/Character/Monster/$m|CH_M_NA_17_1|$(cd "$EV" && pwd)")
+  # the new upright humanoid kinds (tune.enemies.kinds): an arm, the head and across the waist, as above
+  for m in CH_M_NA_15/CH_M_NA_15 CH_M_NA_05/CH_M_NA_05_Var01 CH_M_NA_13/CH_M_NA_13 \
+           CH_M_NA_31/CH_M_NA_31 CH_M_NA_39/CH_M_NA_39 \
+           CH_M_NA_43/CH_M_NA_43 CH_M_NA_44/CH_M_NA_44 \
+           CH_M_NA_51/CH_M_NA_51; do
+    [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] || continue
+    for cut in LIMB HEAD WAIST; do
+      jobs+=("enemy ${m#*/} ${cut,,}|ENEMY=1 $cut=1 PKG=vanilla/SB/Content/Art/Character/Monster/$m|${m#*/}|$(cd "$EV" && pwd)")
+    done
+  done
+  # headless variants (no beheading in game either): an arm and across the waist
+  for m in CH_M_NA_03/CH_M_NA_03 CH_M_NA_05/CH_M_NA_05 CH_M_NA_44/CH_M_NA_44_B; do
+    [[ -f $EV/SB/Content/Art/Character/Monster/$m.uasset ]] || continue
+    for cut in LIMB WAIST; do
+      jobs+=("enemy ${m#*/} ${cut,,}|ENEMY=1 $cut=1 PKG=vanilla/SB/Content/Art/Character/Monster/$m|${m#*/}|$(cd "$EV" && pwd)")
+    done
+  done
   if (( ${#jobs[@]} == enemy_start )); then
     echo "enemy: no cached enemy meshes, skipped"
     if (( explicit > 0 )); then fail=1; fi

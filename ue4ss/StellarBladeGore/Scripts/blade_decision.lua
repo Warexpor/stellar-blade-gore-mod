@@ -113,7 +113,15 @@ function M.near_odds(mesh, h, hit)
   if not n then w.diagonal = w.diagonal * (o.noPlane or 0.5)
   elseif not (deg and deg >= (dg.bladeFrom or 20) and deg <= (dg.bladeTo or 60)) then w.diagonal = w.diagonal * (o.offSlant or 0.3) end
   if dn and dn.Z < -(cfg().splitDown or 0.6) then
-    w.torso, how = 0, "from above"
+    -- (a sharp blow straight down onto her waist, clearly nearer the waist than the neck: the waist stays in the
+    -- roll with its distance factor. Zeroing it gave every downward hair-whip landing at her waist a head cut,
+    -- playtest: 0 cm from the waist, 18 from the neck, torso 0.00. Higher up the old rule stands: a blow from above
+    -- at her chest still never cuts the waist)
+    if db and dh and db <= near and dh > db + near then
+      how = "from above, at the waist"
+    else
+      w.torso, how = 0, "from above"
+    end
   elseif n and ax and math.abs(dot(ax, norm(n))) < M.ALONG then
     w.torso, how = w.torso * (o.across or 0.25), "down her length"
   elseif n and ax then
@@ -576,9 +584,24 @@ function M.blow(pawn, mesh, h, why)
     end
   end
   if splits and (not lengthwise or c.shave) then
-    local body = not h.noSplit and mc.body ~= false and body_blade()
+    -- (noSplit blocks only the split itself and the diagonal: a torso cut lands on a body already cut too)
+    local body = mc.body ~= false and body_blade()
     if not body then
-      log(string.format("blade (%s): %s plane across her body, too far from the hit or cut already", why, how))
+      log(string.format("blade (%s): %s plane across her body, too far from the hit", why, how))
+      return false
+    end
+    if h.noTorso then
+      -- (a kind whose waist can't be cut: the limbs its plane crossed come off instead, else nothing. Eve never
+      -- sets noTorso, so her cuts are unchanged)
+      local list = extras(nil)
+      if list[1] and list[1].kind == "limb" then
+        local first = table.remove(list, 1)
+        local more2 = queue(list)
+        log(string.format("blade (%s): %s plane across its body, no waist cut (noTorso): %s at %.2f instead%s",
+          why, how, first.blade.bone, first.blade.t, more2))
+        return go(at, why, "limb", nil, nil, first.blade)
+      end
+      log(string.format("blade (%s): %s plane across its body, no waist cut (noTorso)", why, how))
       return false
     end
     local more = (why == "death" or why == "enemy") and queue(extras({ kind = "torso" })) or ""
@@ -610,8 +633,9 @@ function M.blow(pawn, mesh, h, why)
     log(string.format("blade (%s): %s plane through her body, she is cut already: no split, no arm, leg or body cut near it", why, how))
     return false
   end
-  -- (an enemy: its waist cut square to the spine, as a body cut: it is never split)
-  if (hip or knee) and why == "enemy" and not already_cut(mesh, "Bip001-Spine1") then
+  -- (an enemy: its waist cut square to the spine, as a body cut: it is never split. A kind whose waist can't be
+  -- cut (h.noTorso) falls through to no cut below instead; Eve never sets noTorso)
+  if (hip or knee) and why == "enemy" and not h.noTorso and not already_cut(mesh, "Bip001-Spine1") then
     local a, b = bl("Bip001-Spine1"), bl("Bip001-Spine2")
     local sp = a and b and norm(sub(b, a))
     if sp then
@@ -653,8 +677,9 @@ function M.blow(pawn, mesh, h, why)
     blade and (" " .. blade.bone .. string.format(" at %.2f", blade.t)) or ""))
   if what == "limb" then
     if not blade then return false end
-    -- one cut a swing: her body when the plane goes on through it, else the limb
-    local body = one and (why == "death" or why == "enemy") and mc.body ~= false and body_blade()
+    -- one cut a swing: her body when the plane goes on through it, else the limb (never the body of a kind whose
+    -- waist can't be cut; Eve never sets noTorso)
+    local body = one and (why == "death" or why == "enemy") and not h.noTorso and mc.body ~= false and body_blade()
     if body then
       log(string.format("blade (%s): %s plane through %s and her body: her body at %s %.2f alone (followUpCuts off)",
         why, how, blade.bone, body.bone, body.t))

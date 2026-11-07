@@ -10,7 +10,8 @@ local nosink_list, nocarry_list, limbs_list, LIMB_ROOTS = d.nosink_list, d.nocar
 -- tm: main.lua's slow tick marker, each part named (a look held a frame 466-563 ms in the first minute with no asset
 -- load over 15 ms, playtest)
 -- gap: s between two preloads (each one 30-35 ms of the game thread: a sound a look, every 5 ticks, was 20 hitches in
--- a row, a stutter run, playtest)
+-- a row, a stutter run, playtest). While polls arrive late the game is already stalling and the preload waits
+-- (w.calm): one async ask took 553 ms in a hub and popped the lighting on resume.
 M.watching = { every = 5, n = 0, gap = 0.5, at = 0 }
 function M.watch(mesh, tm)
   local w = M.watching
@@ -19,6 +20,11 @@ function M.watch(mesh, tm)
   if not valid(mesh) or M.busy() then return end
   local ctx = get_ctx()
   w.n = w.n + 1
+  -- the game thread already stalling (streaming, shaders) is when a preload ask hurts: one async ask took
+  -- 553 ms in a hub and popped the lighting when it resumed. While polls arrive late, the preload waits.
+  local now0 = os.clock()
+  w.calm = w.lastPoll == nil or now0 - w.lastPoll <= 0.1
+  w.lastPoll = now0
   -- Pool creation can itself cost a frame. Run it on the poll after the bone scan, not alongside that scan and
   -- preload work; recheck all safety conditions because a cut or load may have started in between.
   if w.fillNext then
@@ -139,12 +145,18 @@ function M.watch(mesh, tm)
   if path and native.rooted[path] then
     if late then table.remove(w.late, 1) else w.next = w.next + 1 end
   elseif path and not late and native.async.pending[path] then w.next = w.next + 1
-  elseif path and not late and os.clock() >= w.at and ctx.may_load() and native.async_ready()
-    and native.async_load(path, mesh) then
-    w.next = w.next + 1
-    w.asyncTurn = true
-    tm("bone watch async ask")
-  elseif path and os.clock() >= w.at and ctx.may_load() then
+  elseif path and not late and os.clock() >= w.at and ctx.may_load() and native.async_ready() and w.calm then
+    local t0 = os.clock()
+    local asked = native.async_load(path, mesh)
+    -- which asset, told once: one ask stalled the game thread 553 ms (playtest)
+    local ms = (os.clock() - t0) * 1000
+    if ms >= (cfg().slowMs or 15) then log(string.format("cut asset async ask took %.0f ms: %s", ms, path)) end
+    if asked then
+      w.next = w.next + 1
+      w.asyncTurn = true
+      tm("bone watch async ask")
+    end
+  elseif path and os.clock() >= w.at and ctx.may_load() and (late or w.calm) then
     if late then table.remove(w.late, 1) else w.next = w.next + 1 end
     w.at = os.clock() + w.gap
     local t0 = os.clock()

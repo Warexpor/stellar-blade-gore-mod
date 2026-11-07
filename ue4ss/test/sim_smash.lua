@@ -171,6 +171,23 @@ check(G.smash_part(E.mesh) == nil, "no smash kinds weighted: no arbitrary part r
 tune.death = death
 local missing = F.obj("NoBones", "SkeletalMeshComponent", { GetBoneIndex = function() return -1 end })
 check(G.smash_part(missing) == nil and G.smash_part(missing, v(0,0,0)) == nil, "missing skeleton never selects a nonexistent part")
+-- Lower-body remainder: the upper body smashed, a blunt leg hit explodes what is left as full-body.
+G.cleanup(pawn, E.mesh)
+run(0.2)
+E.s.sim = true
+G.aim(v(1, 0, 0))
+check(G.smash(pawn, E.mesh, { loc = midpoint("Bip001-Spine1", "Bip001-Spine2") }, "death"), "remainder setup: upper-body smash starts")
+run(0.6)
+check(G.already_cut(E.mesh, "Bip001-Spine1") and not G.already_cut(E.mesh, "Bip001-L-Thigh"), "remainder setup: upper gone, legs remain")
+local rloc = midpoint("Bip001-R-Thigh", "Bip001-R-Calf")
+local n0r = #W.spheres
+G.aim(v(1, 0, 0))
+check(G.smash(pawn, E.mesh, { loc = rloc }, "after"), "remainder: blunt leg hit smashes")
+run(0.6)
+check(G.already_cut(E.mesh, "Bip001-L-Thigh"), "remainder: full-body entry blocks further cuts")
+check(#W.spheres - n0r > 16, "remainder: lower-body burst exceeds a lone leg (" .. (#W.spheres - n0r) .. " chunks)")
+G.cleanup(pawn, E.mesh)
+run(0.2)
 for _, e in ipairs(F.errors) do print("FAIL hook: " .. e); fails = fails + 1 end
 for _, l in ipairs(F.log_lines()) do
   if l:find("tick error") or l:find("smash failed") or l:find("delayed step failed") then print("FAIL log: " .. l); fails = fails + 1 end

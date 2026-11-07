@@ -1634,13 +1634,48 @@ int main(int argc, char **argv)
                 }
                 if (under) { printf("FAIL: %d sinks under a helper that swung while she played\n", under); return 1; }
             }
-            printf("arm: no carrier, as wanted\nPASS\n");
-            return 0;
+            printf("arm: no carrier, as wanted\n");
+            if (!env_on("RIBBON")) { printf("PASS\n"); return 0; }
         }
         unsigned char *capeall = calloc(NB, 1);
         for (int i = 0; i < NB; i++) {
             for (int k = 0; k < ncape; k++) if (i == capes[k]) capeall[i] = 1;
             if (bparent[i] >= 0 && capeall[bparent[i]]) capeall[i] = 1;
+        }
+        if (env_on("RIBBON")) {
+            // Model the mixed top-band weights seen in the playtest, on a visible body triangle of the real mesh.
+            int chosen = -1;
+            for (int sc = 0; sc < NSEC && chosen < 0; sc++) {
+                unsigned char *sec = (unsigned char *)secbuf + sc * 0xe8;
+                int base = *(int *)(sec + SEC_BASE_VERTEX), end = base + *(int *)(sec + SEC_NUM_VERTICES);
+                int nm = *(int *)(sec + SEC_BONE_MAP + 8), mapped = 0;
+                u16 *bm = *(u16 **)(sec + SEC_BONE_MAP);
+                for (int j = 0; j < nm; j++) if (bm[j] == ua) mapped = 1;
+                if (!mapped || !split_visible((u64)secbuf, sc)) continue;
+                for (int t = 0; t + 2 < NIDX && chosen < 0; t += 3) {
+                    int ok = 1;
+                    for (int k = 0; k < 3; k++) {
+                        int v = idx[t + k];
+                        if (v < base || v >= end) { ok = 0; break; }
+                        for (int j = 0; j < MAX_INF; j++) if (ov_a[v].weights[j]) {
+                            int b = ov_a[v].bones[j], old = 0;
+                            for (int a = b; a >= 0; a = bparent[a]) if (a == ua) old = 1;
+                            if (old || is_sink(&(cut_ctx){ .sm = (u64)sm_buf }, b)) ok = 0;
+                        }
+                    }
+                    if (ok) chosen = idx[t];
+                }
+            }
+            if (chosen < 0) { printf("FAIL: no body triangle for ribbon case\n"); return 1; }
+            skin_info *copy = malloc(sizeof(skin_info) * (size_t)NV);
+            memcpy(copy, ov_a, sizeof(skin_info) * (size_t)NV);
+            int body = copy[chosen].bones[0];
+            memset(&copy[chosen], 0, sizeof(skin_info));
+            copy[chosen].bones[0] = body; copy[chosen].weights[0] = 127;
+            copy[chosen].bones[1] = ua; copy[chosen].weights[1] = 128;
+            tarray arr = { copy, NV, NV };
+            st_set_override((u64)comp_a, 0, &arr); free(copy);
+            printf("ribbon: mixed body/arm weights on vertex %d\n", chosen);
         }
         for (int ck = 0; detach && ck < ncape; ck++) {
             int cape = capes[ck];
@@ -1663,7 +1698,8 @@ int main(int argc, char **argv)
                 if (capeall[i] && i != cape) nosink[i] = 0;
                 else if (arm && !capeall[i]) nosink[i] = 1;
             }
-            limbs_comp = (u64)comp_a; ngone = nkeep = ndrop = nride = 0;
+            limbs_comp = (u64)comp_a; ngone = env_on("RIBBON_OLD") ? 0 : 1; gone_roots[0] = ua;
+            nkeep = ngone ? ncape : 0; memcpy(keep_roots, capes, 4 * nkeep); ndrop = nride = 0;
             skin_cut((u64)comp_a, 0, cape, r0, cn, MODE_CUT, 0, 0, -1);
             printf("cape: %.300s\n", lastres);
             set_nosink();
@@ -1987,7 +2023,7 @@ int main(int argc, char **argv)
             float fa0[3] = { space[fa * 12 + 4], space[fa * 12 + 5], space[fa * 12 + 6] };
             for (int i = 0; i < NB; i++) if (i == ua || armb[i]) {
                 float *t = space + i * 12, nq[4]; qmul(q, t, nq); memcpy(t, nq, 16);
-                float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + 40; t[5] = r[1]; t[6] = r[2] - 20;
+                float r[3]; quat_rot(q, t + 4, r); t[4] = r[0] + (env_on("RIBBON") ? 200 : 40); t[5] = r[1]; t[6] = r[2] - 20;
             }
             // the first leg flies its own way: 40 cm the other side and 20 down
             if (lf >= 0) {
@@ -1997,7 +2033,7 @@ int main(int argc, char **argv)
                 free(ls);
             }
             // detached, the cape falls its own way: 30 cm back and 25 down, turned the other way
-            if (detach) {
+            if (detach && !env_on("RIBBON")) {
                 float q2[4] = { -0.3826834f, 0, 0, 0.9238795f };
                 for (int i = 0; i < NB; i++) if (capeall[i]) {
                     float *t = space + i * 12, nq[4]; qmul(q2, t, nq); memcpy(t, nq, 16);

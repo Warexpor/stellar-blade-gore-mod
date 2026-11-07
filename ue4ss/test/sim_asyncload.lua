@@ -166,6 +166,29 @@ do
   check(#syncLoads == before + 1 and syncLoads[#syncLoads].path == path and #w.late == 0,
     "late asset loads before new requests once the window opens")
 end
+-- A stalling game thread holds the preload: no new async asks while polls arrive late.
+do
+  local w = G.watching
+  local function asks()
+    local n = 0
+    for _, c in ipairs(F.cmds) do
+      local s = c.s
+      if s:sub(1, 1) == "J" and s:sub(2, 2):match("[0-9a-fA-F]") then n = n + 1 end
+    end
+    return n
+  end
+  w.preload, w.next, w.sounds = { "/Game/Test/CalmAsset.CalmAsset" }, 1, 2
+  w.late, w.at, w.n, w.every, w.fillNext, w.asyncTurn = nil, 0, 0, 100000, nil, false
+  w.lastPoll = os.clock() - 1
+  local before = asks()
+  G.watch(pawn.Mesh, function() end)
+  check(w.calm == false and asks() == before, "no async ask while the game stalls")
+  w.lastPoll = os.clock()
+  for _ = 1, 30 do
+    G.watch(pawn.Mesh, function() end)
+    if asks() > before then break end
+  end
+  check(w.calm == true and asks() == before + 1, "the preload resumes once polls are on time")end
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

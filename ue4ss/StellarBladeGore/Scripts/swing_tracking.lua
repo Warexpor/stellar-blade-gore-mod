@@ -32,11 +32,14 @@ end
 -- hand, and its arc ran parallel to her 38 cm off her spine where the blade went through her (playtest 42)
 local SWING_WEAPON_SLOTS = { [5] = true, [6] = true, [7] = true, [8] = true }
 local function swing_weapons(actor)
-  local out = {}
+  local out, seen = {}, {}
   try(function()
     actor.MeshInfoList:ForEach(function(_, e)
       local info = e:get()
       local c = info.MeshComponent
+      local nm = try(function() return (c.SkeletalMesh or c.StaticMesh):GetName() end)
+        or try(function() return c:GetName() end) or "?"
+      seen[#seen + 1] = string.format("%s:%s", tostring(info.MeshSlot), nm)
       if SWING_WEAPON_SLOTS[info.MeshSlot] and valid(c) then
         local b = try(function() local x = c.SkeletalMesh:GetImportedBounds(); return { o = vof(x.Origin), e = vof(x.BoxExtent) } end)
           or try(function() local x = c.StaticMesh:GetBounds(); return { o = vof(x.Origin), e = vof(x.BoxExtent) } end)
@@ -52,6 +55,7 @@ local function swing_weapons(actor)
       end
     end)
   end)
+  if #out == 0 and #seen > 0 then log(string.format("swing: MeshInfoList slots: %s", table.concat(seen, ", "))) end
   return out
 end
 -- a point given in a component's space, in the world
@@ -134,7 +138,7 @@ local function track_swing(pawn, mesh)
   if not (scale and scale > 0) then scale = 1 end
   for i = #sw.list, 1, -1 do
     local S = sw.list[i]
-    if not goreCtx.held(S.k) or try(function() return S.actor.bActorIsBeingDestroyed end) ~= false then
+    if not goreCtx.held(S.k) or try(function() return S.actor.bActorIsBeingDestroyed end) == true then
       table.remove(sw.list, i)
       if get_swing() == S then set_swing(sw.list[1] or sw.state()) end
     elseif (S.bones and #S.bones > 0) or (S.weapons and #S.weapons > 0) then

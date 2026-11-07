@@ -122,6 +122,13 @@ local function has(pat) for _, l in ipairs(logs) do if l:find(pat) then return t
 -- off: nothing changed
 tune.bosses.enabled = false
 check(B.prepare(kinds.tachy) ~= nil and #cmds == 0, "off: not spawned, nothing written")
+-- forced (a Spawner spawn): mortal with the toggle off, and put back on forget
+check(B.prepare(kinds.raven, true) == nil, "forced: Raven's row made mortal with the toggle off")
+check(byIdx[rowsMem.M_Raven[0x10]] == "M_SkullSword", "forced: she dies as M_SkullSword too")
+F.t = F.t + 1.5; B.tick(nil)
+check(byIdx[rowsMem.M_Raven[0x10]] == "M_SkullSword", "forced: row stays prepared while spawn adoption is pending")
+B.forget()
+check(byIdx[rowsMem.M_Raven[0x10]] == "M_Raven", "forget: the forced row put back too")
 tune.bosses.enabled = true
 
 -- Tachy made mortal
@@ -436,6 +443,12 @@ check(gb.stops == 1 and rael.Controller == nil and has("B_RoyalGuard 4a1 stands 
 tune.bosses.passive = false
 F.t = F.t + 0.3; B.tick(pawn)
 check(gb.running and rael.Controller == gai and has("B_RoyalGuard 4a1 fights again"), "passive off: she fights again")
+-- the toggle off with one live: her row stays mortal till she is gone (the Spawner forces it anyway)
+tune.bosses.enabled = false
+F.t = F.t + 1.5; B.tick(pawn)
+check(byIdx[rowsMem.M_RoyalGuardFemale[0x10]] == "M_SkullSword" and rowsMem.M_RoyalGuardFemale.eff[1] == "Passive_Immortal_Dispel",
+  "toggle off with one live: her row stays mortal")
+tune.bosses.enabled = true
 
 -- prologue Tachy (N_TachyNPC): refused while her dispel isn't in the EffectTable (row untouched), mortal and
 -- damageable once it is, everything put back on forget

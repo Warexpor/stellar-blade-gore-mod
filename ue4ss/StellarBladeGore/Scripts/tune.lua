@@ -98,7 +98,8 @@ return {
   deathSlowmo = {             -- slow motion on her death: the game runs slower for a few seconds so the damage
     enabled = true,           --   reads, then time goes back well before the death screen (Esc's fast forward wins)
     speed = 0.15,             --   game speed while it lasts, any fraction of full speed
-    duration = 4,             --   real seconds it lasts, no upper limit
+    duration = 2.5,          --   real seconds it lasts, no upper limit
+    easeOut = 1.2,            --   seconds gliding back to full speed after (0: back at once)
   },
   manualSlowmo = {            -- the Slow Motion key (Y): the death slow motion's speed on demand, till the key again
     enabled = false,          --   (off: the key does nothing)
@@ -156,7 +157,7 @@ return {
     bladeJitter = 15,          -- for variety, each blade is turned up to this many degrees at random
     bladeShift = 10,           --   and moved up to this many cm along its normal
     bladeTries = 4,            --   turns tried for a death that would take the same first part as the last one
-    noSplits = false,          -- vertical splits off altogether: no blow, roll or after-death hit splits her down her
+    noSplits = true,           -- vertical splits off altogether: no blow, roll or after-death hit splits her down her
                                --   length; lengthwise hits choose a neck or waist cut, the odds' split share goes to the others
                                --   (the F11 / F5 test keys still split)
     deathSplit = true,         -- a blade down her length at death splits her (false: the limbs it crosses come off
@@ -220,6 +221,10 @@ return {
     swingSnap = 30,            --   cm: a plane passing her this close stays where the weapon put it (further: moved
                                --   onto the part of her nearest it, at the same angle)
     swingBones = 8,            --   most weapon bones followed per enemy
+    charsRefresh = 0.5,        --   seconds the nearby-character list (and its engine validation) is cached: rewalking
+                             --   every guard every poll stalled the game thread up to 700 ms in a hub, flashing the
+                             --   lighting when it resumed. Positions still refresh through char_at's own cache; every
+                             --   consumer guards dying actors itself. A fresh spawn waits for the next refresh.
     blowPose = true,           --   her pose is noted with each sample, and the killing blade is judged on her body as
                                --   the weapon met it (false: as it is when the death starts, the death show's first
                                --   moves on: an arm raised to block had swung away and only her body was cut)
@@ -418,7 +423,8 @@ return {
                                --   (SM_meat_01-04) and a burst of blood fly out where it was; its stump stays as a cut's
       always = false,          --   every death smashes, blunt or not (to try it)
       fullBody = true,         --   full-body eligibility follows impact location and footprint coverage
-      fullBodyChance = 0.25,   --   maximum full-body chance, scaled by body coverage squared
+      fullBodyChance = 0.5,    --   maximum full-body chance, scaled by body coverage squared (a simultaneous
+                               --   volley adds 0.1 per extra impact, up to +0.3; an explicit 0 stays never)
       overrideTargets = false, --   choose a weighted local smash category instead of following the hit
       targetWeights = { limb = 1, head = 1, torso = 1 }, -- relative weights, all zero uses hit targeting
       torsoHitChance = 1,      --   ordinary torso hits kept as torso; otherwise nearest surviving head/limb
@@ -447,12 +453,15 @@ return {
       -- swinging bone, then the enemy's name and class. With bareHands on, an unarmed downward blow is blunt too
       sharp = { "sword", "blade", "claw", "knife", "axe", "spear", "lance", "scythe", "saw", "sickle", "katana",
         "dagger", "cutter", "spike", "thorn", "lion", "mite", "raven", "tachy", "gorgon", "lurker", "weaponmaster",
-        "behemoth" },
+        "behemoth", "hair", "marionette" },
       blunt = { "hammer", "club", "mace", "fist", "punch", "gorilla", "juggernaut", "brute", "exosuit",
         "hunchback", "statue", "bodybag", "lump", "roadblock", "hedgeboar" },
       species = {               -- clawed enemies with no weapon meshes, judged by this name (a bare hand is blunt,
         ["CH_M_NA_13"] = "sawshark", --   but their swipes cut): class fragment -> name, matched by the sharp/blunt
                                 --   words above (the stalker: its swipes cut, never smash)
+        ["CH_M_NA_42"] = "sickleraven", -- the sickle boss: its blades read as bare hands (no weapon mesh
+                                --   in the weapon slots), so its downward swipes smashed as stomps; they cut
+        ["CH_M_NA_26"] = "marionette", -- the Marionette's hair whips read as bare hands (LeftHandHair): they cut
       },
     },
     afterHits = {              -- enemy weapon swings cut her again; reported projectile hits can smash her again
@@ -463,14 +472,20 @@ return {
       minSpeed = 500,          --   cm/s it moves at least, in an attack (one of its montages that isn't a walk, turn,
                                --   hit reaction...): 300 and any weapon passing by cut her (a brush, reported)
       noMontageSpeed = 1500,   --   cm/s relative to the attacker when its animation graph exposes no montage
-      max = 6,                 --   hits a death
-      from = 0.6,              --   s into the death before the first (the killing swing itself doesn't count twice)
+      max = nil,               -- per-death hit cap, nil: uncapped (every swing or shot can cut or smash;
+                                --   distinct cuts stay bounded by her remaining parts: a recut lands as a hit mark or blood)
+      from = 0.4,              --   s into the death before the first (the killing swing itself doesn't count twice;
+                                --   0.6 ate genuine combo follow-ups too, playtest: every landing hit should count. The
+                                --   slowdown/rearm arming still guards double-counts)
       rearm = 0.35,            --   s after an enemy's last cut (or the death) it may cut again, slowed down or not (a
                                --   combo's next blow came with its hands never slowing, and cut nothing, playtest)
       cutChance = 0.75,        --   share that cut (the rest leave a hit mark, see hitMarks; with the marks off all cut)
     },
     hitWindow = 0.6,           -- seconds before death the game's last hit on her still counts as the killing blow
     splitPush = 140,           -- cm/s the halves get away from each other (300 flung them apart, fifteenth playtest)
+    splitVelMax = 2000,        -- cm/s fastest one animated frame may give a body when the halves open: a socket read
+                              --   mid-cut jumped metres in a frame (93 m/s) and the halves left the map; over this is
+                              --   a sampling glitch, capped
     splitTip = 110,            -- cm/s more on each half's upper body (Spine2 up), so a cut down her length falls open
     splitBleedDelay = 0.3,     -- seconds after a split opens before it bleeds (the halves come apart first)
     splitSpine = false,        -- a split down her length shows the spine halved along each lid (GM_Brokenbone pieces;
@@ -682,9 +697,9 @@ return {
     splatSize = 14,            --   cm across the splat under a cut or a hit is, about (radius; the pools' blood)
     splatLife = 30,            --   s the splat under a hit she lives through stays (a death's stay till she is up)
     pool = true,               -- floor blood: a cut's openings (F9, F11 too) drip while they move and pool where they rest
-                               -- (without a cut: one pool begins under the body after 1 s)
+                               -- (without a cut: one pool begins under the body after 0.5 s)
     poolScale = 0.85,          --   pool size multiplier (15% smaller than the base radii)
-    poolGrow = 8,              --   growth timescale in seconds (63% of its size after this long)
+    poolGrow = 4,              --   growth timescale in seconds (63% of its size after this long)
     poolTime = 12,             --   seconds each opening is followed
     dripEvery = 18,            --   cm between drips while it moves
     maxDecals = 150,           --   drips and pools in all (at the cap the oldest drip goes, a pool only when no
@@ -1030,6 +1045,8 @@ return {
       damping = 25,            --   physics asset (needs sbslice.dll's bind pose), on from the ragdoll's start
       most = 4,                --   s at most
       landOff = true,          --   off as she lands (as the tone's landOff), and as she settles
+      floorOver = 25,          --   cm over the floor under which a slow pelvis counts as lying on it (a soft death
+      floorTime = 0.5,         --   never fell fast): the drives go off after this long there, they only fight contact
       pose = {                 --   degrees from the bind pose its far end swings towards her front (- her back) and
                                --   out (- in), as physfix.ranges count them; k: a share of the strength
         ["Bip001-L-UpperArm"] = { front = 30, out = 5, k = 0.6 }, ["Bip001-R-UpperArm"] = { front = 30, out = 5, k = 0.6 },
@@ -1052,6 +1069,11 @@ return {
       linearFloor = 1500,      --   cm/s, nineteenth playtest)
       launchTime = 0.5,        -- s: over the start every main body, torso too, is held to her momentum + impact +
       launchOver = 250,        --   launchOver cm/s (+ the fall since): a leg cut mid-fall shot her off at 16 m/s
+      linearMax = 6000,        -- cm/s no main body ever exceeds, torso included, the whole death: a mid-cut socket
+                              --   glitch read 93-210 m/s and the halves left the map; the torso-relative cap below is
+                              --   blind to the whole body flying together
+      leash = 5000,            -- cm sideways from where she went limp past which both halves are stopped, once, and
+                              --   the log says so (vertical falls are legit; leaving sideways never is)
     },
     fall = {                   -- a death in the air fell at a steady 2 m/s: from when her pelvis drops faster than
       enabled = true,          --   start cm/s until it slows under land cm/s, the bodies still on her are kept at
@@ -1071,6 +1093,8 @@ return {
       driftMost = 12,          --   fast they shiver (6 left CH_P_EVE_29's feet shaking on the floor for 6 s)
       splitMost = 1.5,         -- the same for a split's halves (they shivered on the floor for 3 s)
       wake = 60,               -- cm/s: something moved her this fast, she settles again
+      zero = 3,                -- cm/s: asleep with nothing to move her, anything slower than this is stopped (a body
+                               --   the sleep never took, jittering under its drives; deliberate moves are faster)
       air = 60,                -- cm: her pelvis higher than this over the floor never settles (she hung in mid-air)
     },
   },
@@ -1081,7 +1105,7 @@ return {
                                 --   grab instead of its attack (a tree with no grab skill stays as the game has it)
     afterDeath = {             -- after her death the enemies around her keep at her as if she lived (the game drops her)
       enabled = false,
-      time = 10,               --   seconds they keep at her
+      time = 30,               --   seconds they keep at her
       reach = 3000,            --   cm: enemies within this of her
       swing = true,            --   an enemy near her body plays its own attacks at it (the game's skills don't fire
       swingReach = 450,        --   at a dead target); within this many cm of her body, lunging in to lunge cm
@@ -1125,7 +1149,7 @@ return {
     spawnLift = 30,
     -- the kinds (Naytiba on the Bip001 skeleton, each cut offline on its mesh: native/sbslice/test/real, ENEMY=1):
     -- alias (CharacterTable row), id (its ID), bp (its Blueprint, CharacterAppearanceTable). Not here: the
-    -- hunchbacks (no Bip001 spine), the VIP guard (its head only knows hair bones: the face vanished)
+    -- hunchbacks (no Bip001-Head), the VIP guard (its head only knows hair bones: the face vanished)
     kinds = {
       { alias = "M_SkullSword", label = "Skull, sword", id = 50170, bp = "/Game/Art/Character/Monster/CH_M_NA_17/BluePrints/CH_M_NA_17_Blueprint" },
       { alias = "M_SkullSpear", label = "Skull, spear", id = 50180, bp = "/Game/Art/Character/Monster/CH_M_NA_18/BluePrints/CH_M_NA_18_Blueprint" },
@@ -1137,13 +1161,49 @@ return {
       { alias = "M_StatueC", label = "Statue C", id = 50402, bp = "/Game/Art/Character/Monster/CH_M_NA_40/BluePrints/CH_M_NA_40_Type_C_Blueprint" },
       { alias = "M_LurkerA", label = "Lurker A", id = 50450, bp = "/Game/Art/Character/Monster/CH_M_NA_45/Blueprints/CH_M_NA_45_Blueprint" },
       { alias = "M_LurkerB", label = "Lurker B", id = 50452, bp = "/Game/Art/Character/Monster/CH_M_NA_45/Blueprints/CH_M_NA_45_Type_B_Blueprint" },
+      -- the rest of the upright Bip001 humanoids (asset-verified: full cut-bone set; thin or missing parts fall back
+      -- to the next cut by ENEMY_LIMB_MIN, so headless variants skip beheading).
+      { alias = "M_SkullJuggernaut", label = "Skull juggernaut", id = 50150, bp = "/Game/Art/Character/Monster/CH_M_NA_15/BluePrints/CH_M_NA_15_Blueprint" },
+      { alias = "M_ClriketA", label = "Cricket A", id = 50030, bp = "/Game/Art/Character/Monster/CH_M_NA_03/BluePrints/CH_M_NA_03_BP" },
+      { alias = "M_ClriketB", label = "Cricket B", id = 50032, bp = "/Game/Art/Character/Monster/CH_M_NA_03/BluePrints/CH_M_NA_03_Var01_BP" },
+      { alias = "M_ClriketCGrab", label = "Cricket C", id = 50039, bp = "/Game/Art/Character/Monster/CH_M_NA_03/BluePrints/CH_M_NA_03_Var02_BP" },
+      { alias = "M_GorillaB", label = "Gorilla", id = 50050, bp = "/Game/Art/Character/Monster/CH_M_NA_05/Blueprints/CH_M_NA_05_Blueprint" },
+      { alias = "M_GorillaBBrokenHead", label = "Gorilla, broken head", id = 50051, bp = "/Game/Art/Character/Monster/CH_M_NA_05/Blueprints/CH_M_NA_05_TypeB_Blueprint" },
+      { alias = "M_Sawshark", label = "Sawshark", id = 50130, bp = "/Game/Art/Character/Monster/CH_M_NA_13/BluePrints/CH_M_NA_13_Blueprint" },
+      { alias = "M_SawsharkWasteland", label = "Sawshark, wasteland", id = 50131, bp = "/Game/Art/Character/Monster/CH_M_NA_13/BluePrints/CH_M_NA_13_TypeB_Blueprint" },
+      { alias = "M_WeaponMasterA", label = "Weapon master", id = 50310, bp = "/Game/Art/Character/Monster/CH_M_NA_31/BluePrints/CH_M_NA_31_Blueprint" },
+      { alias = "M_Opener", label = "Opener", id = 50390, bp = "/Game/Art/Character/Monster/CH_M_NA_39/Blueprints/CH_M_NA_39_Blueprint" },
+      { alias = "M_OpenerWasteland", label = "Opener, wasteland", id = 50391, bp = "/Game/Art/Character/Monster/CH_M_NA_39/Blueprints/CH_M_NA_39_TypeB_Blueprint" },
+      { alias = "M_HedgeBoarBrute", label = "Hedge boar brute", id = 50430, bp = "/Game/Art/Character/Monster/CH_M_NA_43/Blueprints/CH_M_NA_43_Blueprint" },
+      { alias = "M_HedgeBoarA", label = "Hedge boar A", id = 50440, bp = "/Game/Art/Character/Monster/CH_M_NA_44/Blueprints/CH_M_NA_44_Blueprint" },
+      { alias = "M_HedgeBoarB", label = "Hedge boar B", id = 50441, bp = "/Game/Art/Character/Monster/CH_M_NA_44/Blueprints/CH_M_NA_44_Type_B_Blueprint" },
+      { alias = "M_Beholder", label = "Beholder", id = 50510, bp = "/Game/Art/Character/Monster/CH_M_NA_51/Blueprints/CH_M_NA_51_Blueprint" },
+      { alias = "M_StatueD", label = "Statue D", id = 50990, bp = "/Game/Art/Character/Monster/CH_M_NA_40/BluePrints/CH_M_NA_40_Type_D_Blueprint" },
+      -- Marionette: upright Bip001 with its own physics, but its legs' skin follows the upper body (real-mesh ENEMY
+      -- waist harness FAILs: 27,481 leg verts move with the flung upper body), so its waist is never cut (noTorso:
+      -- rolled and fallback torso become a limb, the blade vetoes the waist and takes a crossed limb instead)
+      { alias = "M_Marionette", label = "Marionette", id = 50260, noTorso = true, bp = "/Game/Art/Character/Monster/CH_M_NA_26/BluePrints/CH_M_NA_26_Blueprint" },
+      -- not kinds: the bosses (no boss cuts: the Elder's phases, the Raven Beast sickle boss), the non-upright
+      -- (Behemoths, the Bot animal and Bots, the Grub dashers and shooters: quadruped and crawler bind poses), M_Mann
+      -- and the ExoSuit (no physics asset to ragdoll on), the Bot upper body alone (no legs to read its death), the
+      -- hunchbacks (no Bip001-Head), the VIP guard (its head only knows hair bones: the face vanished).
       -- the Airborne Squad (the angels of the endings): Eve's skeleton, physics and a face mesh of their own (face:
       -- cut with her rules, the face goes with the head). Passive NPCs, unhurt by her blows: the spawner's Kill nearest
       -- (End) drops them
       { alias = "N_AirborneSquad", label = "Airborne Squad angel", id = 30030, face = true, bp = "/Game/Art/Character/NPC/CH_NPC_AirborneSquad/Blueprints/CH_NPC_AirborneSquad" },
     },
   },
-  bosses = {                   -- Sandbox Bosses (bosses.lua, F3 → Sandbox): humanoid bosses spawned and killed like any enemy
+  spawner = {                  -- experimental entity spawner (enemies.lua, F3 → Spawner), available without dev
+  pick = "M_SkullSword",       -- the NPC the Spawn button and F5 spawn (a kinds alias below, a boss key, or "custom")
+  id = 0,                      -- a CharacterTable ID spawned instead of the pick (0: the pick; any NPC in the game)
+  count = 1,                   -- how many each Spawn makes (1-9), in a row across in front of her
+  hostile = "game",            -- spawned NPCs: "game" (as the game has them), "hostile" (hostile to Eve, damageable),
+                               --   "passive" (their AI stopped, they never fight)
+  infight = false,             -- with hostile: spawned NPCs fight each other too (hostile to each other, not only to Eve)
+  -- any other NPC goes in enemies.kinds above (alias = its CharacterTable row, id, bp = its Blueprint) or is
+  -- spawned by its CharacterTable ID through id
+  },
+  bosses = {                   -- Sandbox Bosses (bosses.lua, F3 → Spawner → Bosses): humanoid bosses spawned and killed like any enemy
     enabled = false,           -- off by default: while on, a boss you spawn is mortal (its CharacterTable row changed in game)
     pick = "tachy",            -- the one Spawn Boss makes (a kinds key)
     hpScale = 0.25,            -- its MaxHP and MaxShield times this (1: the game's)

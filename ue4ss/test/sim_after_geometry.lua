@@ -45,4 +45,13 @@ check(second>1 and reads.B==1, 'next pass reads the updated joint position')
 reads={}; failOnce=true
 local _, retried=shared(sharedMesh,{p=v(-10,30,30),q=v(10,30,30)},40)
 check(reads.B==2 and retried ~= nil, 'a failed shared socket read is retried later in the pass')
+-- a severed part is no target: the same sweep through the head and the limb reads the head with nothing cut, and
+-- the limb once the head is off (a swing at her body after a beheading must read the torso, never the severed head)
+points["Bip001-Head"]=v(0,0,10)
+local _, headed, headBone=geometry(mesh,{p=v(-20,0,10),q=v(20,0,10)},40)
+check(headBone=="Bip001-Head", 'with nothing cut the head sphere wins the tie at its own point')
+local _, kept, keptBone=geometry(mesh,{p=v(-20,0,10),q=v(20,0,10)},40,function(b) return b=="Bip001-Head" end)
+check(keptBone=="Bip001-L-UpperArm" and kept and kept<1e-6, 'with the head cut the same sweep reads the limb instead')
+local _, _, segBone=shared(sharedMesh,{p=v(-10,0,10),q=v(10,0,10)},40,function(b) return b=="A" end)
+check(segBone=="B", 'a cut segment is skipped, its neighbour still reads')
 print(fails==0 and "PASS" or "FAIL")

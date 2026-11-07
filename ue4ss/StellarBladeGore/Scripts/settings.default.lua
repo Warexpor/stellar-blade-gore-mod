@@ -16,7 +16,7 @@ return {
       -- diagonal = 15,        --   (parked for now) cut diagonally from over a shoulder to the other hip
       moreLimbs = 0.35,        --   chance a limb cut takes another limb too (and a third, at the same chance again)
     },
-    noSplits = false,          -- true: she is never split top to bottom, by any blow, roll or hit after death (the
+    noSplits = true,           -- true: she is never split top to bottom, by any blow, roll or hit after death (the
                                -- lengthwise hits choose a neck or waist cut by hit position)
     followUpCuts = true,       -- one swing cuts everything it went through (both arms and her body); false: one cut
                                -- a swing, her body when it went through it (a laser trap still cuts along its beam)
@@ -40,7 +40,8 @@ return {
     smash = {
       enabled = true,          -- blunt killing blows smash the part hit
       fullBody = true,         -- broad, centred impacts can smash the full body; narrow/unknown hits stay local
-      fullBodyChance = 0.25,   -- maximum full-body chance, reduced by estimated impact coverage
+      fullBodyChance = 0.5,    -- maximum full-body chance, reduced by estimated impact coverage
+                               -- (a simultaneous volley adds 0.1 per extra impact, up to +0.3; an explicit 0 stays never)
       overrideTargets = false, -- optional weighted choice of local smash type instead of hit-based type
       targetWeights = { limb = 1, head = 1, torso = 1 }, -- relative weights; all 0 falls back to hit targeting
       always = false,          -- every death smashes, regardless of the blow (to try it out)
@@ -132,7 +133,8 @@ return {
     enabled = true,           -- slow motion on her death: the game runs slower for a few seconds so the damage
                               --   reads, then time goes back well before the death screen (Esc's fast forward wins)
     speed = 0.15,             --   game speed while it lasts, any fraction of full speed
-    duration = 5,             --   real seconds it lasts, no upper limit
+    duration = 2.5,           --   real seconds it lasts, no upper limit
+    easeOut = 1.2,            --   seconds gliding back to full speed after (0: back at once)
   },
   manualSlowmo = {
     enabled = false,          -- the Slow Motion key (Y): the death slow motion's speed on demand, till the key again
@@ -172,14 +174,22 @@ return {
     attackDown = true,         -- they keep attacking her while she is knocked down (false: they wait, as in the game)
     afterDeath = {
       enabled = false,         -- after her death the enemies around her keep attacking her body (being tested): those
-      time = 10,               --   within 4.5 m play their own attacks at it for this many seconds, and their weapons
+      time = 30,               --   within 4.5 m play their own attacks at it for this many seconds, and their weapons
     },                         --   cut it through Hits After Death
     cutChance = 1.0,           -- chance a kill near her cuts something off (0-1)
     pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: drops on the spot; 2: twice as far);
                                -- works with the cuts off too
     push = 0,                  -- cm/s every dying enemy is pushed along the blow on top (0: none)
   },
-  bosses = {                   -- Sandbox Bosses (F3 → Sandbox): spawn Tachy, Raven, Scarlet or a Royal Guard Sister and kill
+  spawner = {                  -- experimental entity spawner (F3 → Spawner), available without dev
+    pick = "M_SkullSword",     -- the NPC the Spawn button and F5 spawn (a kinds alias, a boss key, or "custom")
+    id = 0,                    -- a CharacterTable ID spawned instead of the pick (0: the pick)
+    count = 1,                 -- how many each Spawn makes (1-9), in a row across in front of her
+    hostile = "game",          -- spawned NPCs: "game" as the game has them, "hostile" hostile to Eve and damageable,
+                               -- "passive" their AI stopped, they never fight
+    infight = false,           -- with hostile: spawned NPCs fight each other too (hostile to each other)
+  },
+  bosses = {                   -- Sandbox Bosses (F3 → Spawner → Bosses): spawn Tachy, Raven, Scarlet or a Royal Guard Sister and kill
     enabled = false,           -- them like any enemy (no cutscene), cut, struggling and with a dead face
     pick = "tachy",            -- tachy, raven, scarlet (DLC), royalguard (a Royal Guard Sister)
     hpScale = 0.25,            -- their HP and shield times this

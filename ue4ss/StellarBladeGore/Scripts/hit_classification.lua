@@ -44,10 +44,10 @@ function sw.blunt_of(h, real)
   end
   -- (the swing's weapons only when it was the swing that killed her: a made-up blow names the nearest enemy)
   local mine = h.attacker == nil or h.attacker == swing.who
-  local weapons = mine and swing.weapons or {}
+  local weapons = h.weaponNames or (mine and swing.weapons) or {}
   local bluntWeapon, bluntWhy
   for _, w in ipairs(weapons) do
-    local b, why = judge("weapon", w.name)
+    local b, why = judge("weapon", type(w) == "string" and w or w.name)
     -- MeshInfoList order isn't evidence of which weapon hit. A blade among several meshes wins over a generic
     -- blunt match, just as sharp wins inside a single name; never turn a sword into a hammer by slot order.
     if why and not b then return false, why end
@@ -59,7 +59,7 @@ function sw.blunt_of(h, real)
     local b, why = judge("weapon bone", wb)
     if why then return b, why end
   end
-  for _, t in ipairs({ h.attacker or swing.who or "", mine and swing.cls or "" }) do
+  for _, t in ipairs({ h.attacker or swing.who or "", h.attackerClass or (mine and swing.cls) or "" }) do
     local b, why = judge("enemy", t)
     if why then return b, why end
     local alias = sw.blunt_alias(t)
@@ -68,12 +68,15 @@ function sw.blunt_of(h, real)
   end
   if #weapons == 0 and s.bareHands ~= false and wb then
     local low = wb:lower()
+    -- hair whips (Marionette LeftHandHair) contain "hand": judged sharp above, never a bare fist
+    if low:find("hair", 1, true) then return false, string.format("hair weapon (%s), not a bare hand", wb) end
     for _, w in ipairs({ "hand", "fist", "foot", "toe", "knee", "elbow" }) do
       if low:find(w, 1, true) then return true, string.format("bare %s (%s), no weapon mesh", w, wb) end
     end
   end
   local d = h.dir
-  if #weapons == 0 and s.bareHands ~= false and d and len(d) > 1e-3 and d.Z / len(d) < -(g.splitDown or 0.6) then
+  if #weapons == 0 and s.bareHands ~= false and (not h.made or h.stomp) and d and len(d) > 1e-3
+    and d.Z / len(d) < -(g.splitDown or 0.6) then
     return true, "a blow from above with no weapon (a stomp)"
   end
   return false, string.format("nothing blunt about %s%s", tostring(h.attacker or swing.who),

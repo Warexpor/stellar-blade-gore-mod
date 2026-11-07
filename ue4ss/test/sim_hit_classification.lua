@@ -22,4 +22,20 @@ tune={gore={enabled=true,smash={enabled=true,sharp={'saw'},blunt={},species={['C
 swing={who='CH_M_NA_13_Blueprint_C_1',weapons={}}
 check(sw.blunt_of({attacker='CH_M_NA_13_Blueprint_C_1',wbone='Bip001-R-Hand'})==false, 'a clawed species swipes cut, never smashed')
 check(sw.blunt_of({attacker='CH_M_NA_16_Blueprint_C_1',wbone='Bip001-R-Hand'})==true, 'other bare hands still smash')
+tune={gore={enabled=true,smash={enabled=true,sharp={'hair','marionette'},blunt={},species={['CH_M_NA_26']='marionette'}}}}
+swing={who='CH_M_NA_26_Blueprint_C_1',weapons={}}
+check(sw.blunt_of({attacker='CH_M_NA_26_Blueprint_C_1',wbone='LeftHandHair1'})==false, 'marionette hair whips cut, never smashed')
+check(sw.blunt_of({attacker='CH_M_NA_26_Blueprint_C_1',wbone='LeftHandHair4'})==false, 'marionette off-hand hair cuts too')
+check(sw.blunt_of({attacker='CH_M_NA_26_Blueprint_C_1',wbone='Bip001-R-Hand'})==false, 'marionette species resolves, bare hand still cuts')
+tune={gore={enabled=true,smash={enabled=true,sharp={'sword'},blunt={'hammer'}}}}
+swing={who='nearest',cls='SwordGuy',weapons={{name='sword'}}}
+check(sw.blunt_of({attacker='packmate',weaponNames={'hammer'}})==true,
+  'a packmate hammer is classified by its own weapon, not the selected tracker')
+check(sw.blunt_of({attacker='packmate',weaponNames={'sword'},dir={X=0,Y=0,Z=-1}})==false,
+  'a packmate sword cannot become an unarmed stomp')
+swing={who='unknown',weapons={}}
+check(sw.blunt_of({attacker='unknown',made=true,dir={X=0,Y=0,Z=-1}})==false,
+  'a guessed downward plane alone is not stomp evidence')
+check(sw.blunt_of({attacker='unknown',made=true,stomp=true,dir={X=0,Y=0,Z=-1}})==true,
+  'an observed downward mesh hit still counts as a stomp without a weapon trail')
 print(fails==0 and 'PASS' or 'FAIL')

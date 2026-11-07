@@ -1,0 +1,82 @@
+-- Out-of-map flight guards: a mid-cut socket glitch once read 93-210 m/s and the halves left the map.
+-- Covers the animated-split velocity cap at the source, the absolute whole-body speed cap in the ragdoll tick,
+-- and the map leash (sideways and up) that stops both halves and says so.
+local T = require("smash_world").boot('s.gore.blood=false\ns.active.buzzLog=false\ns.active.settle={enabled=false}')
+local F, E, ctx = T.F, T.E, T.ctx
+local R = require("rag")
+R.install(F, E)
+local function vec(x, y, z) return { X = x, Y = y, Z = z } end
+local function len(v) return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) end
+local fails = 0
+local function check(c, s) F.say((c and "ok   " or "FAIL ") .. s); if not c then fails = fails + 1 end end
+local rag = ctx.rag
+rag.start(T.pawn, E.mesh, "quiet")
+E.s.sim = true -- her bodies simulate (E.die would set this on a real death)
+local function tick() rag.tick(1 / 30, function() end) end
+for _ = 1, 20 do tick() end -- past the launch window, so only the absolute cap can bite
+-- A uniform 200 m/s on the whole body defeats the torso-relative cap: the absolute one still holds.
+R.V["Bip001-Pelvis"] = vec(20000, 0, 0)
+R.V["Bip001-Spine1"] = vec(20000, 0, 0)
+R.V["Bip001-R-Hand"] = vec(20000, 0, 0)
+local vmax = ((ctx.tune.active or {}).spin or {}).linearMax or 6000
+tick()
+local held = true
+for _, b in ipairs({ "Bip001-Pelvis", "Bip001-Spine1", "Bip001-R-Hand" }) do
+  local l = len(E.mesh:GetPhysicsLinearVelocity(F.fname(b)))
+  held = held and l <= vmax + 50 and l > 0
+end
+check(held, string.format("uniform 200 m/s flight is capped at the absolute ceiling (%d cm/s)", vmax))
+check(F.find("absolute:") ~= nil, "the absolute cap logs its first bite")
+-- The source: one animated frame's per-bone speeds, capped at splitVelMax, never applied raw.
+local function find(fn, wanted, seen)
+  seen = seen or {}; if type(fn) ~= "function" or seen[fn] then return end; seen[fn] = true
+  for i = 1, math.huge do
+    local name, v = debug.getupvalue(fn, i); if not name then break end
+    if name == wanted then return v end
+    if name ~= "_ENV" and type(v) == "function" then
+      local r = find(v, wanted, seen); if r then return r end
+    end
+  end
+end
+local split_vel = assert(find(T.G.pump_once, "split_vel"), "animated-split velocity helper reachable")
+local cap = (ctx.tune.gore or {}).splitVelMax or 2000
+local v, n = split_vel({ a = vec(0, 0, 0) }, { a = vec(3000, 0, 0) }, 1, cap)
+check(n == 1 and math.abs(len(v.a) - cap) < 1e-6, "a 30 m/s sampling jump is capped at splitVelMax")
+local v2, n2 = split_vel({ a = vec(0, 0, 0) }, { a = vec(50, 0, 0) }, 0.05, cap)
+check(n2 == 0 and math.abs(len(v2.a) - 1000) < 1e-6, "an ordinary 10 m/s animated speed passes through")
+local v3, n3 = split_vel(nil, { a = vec(50, 0, 0) }, 0.05, cap)
+check(n3 == 0 and next(v3) == nil, "no first sample means no velocities")
+-- The leash: 60 m sideways from where she went limp stops every body and says so.
+local px = R.P["Bip001-Pelvis"]
+R.P["Bip001-Pelvis"] = vec(px.X + 6000, px.Y, px.Z)
+tick()
+check(len(E.mesh:GetPhysicsLinearVelocity(F.fname("Bip001-Pelvis"))) < 50, "past the leash the pelvis is stopped")
+check(F.find("out of the map: her pelvis") ~= nil, "the leash logs where it held her")
+-- Straight up is held too (a split's copy took off upward, playtest); falling down stays free.
+rag.stop(T.pawn)
+R.lay()
+R.V["Bip001-Pelvis"] = vec(0, 0, 0)
+R.V["Bip001-Spine1"] = vec(0, 0, 0)
+R.V["Bip001-R-Hand"] = vec(0, 0, 0)
+rag.start(T.pawn, E.mesh, "quiet")
+E.s.sim = true
+for _ = 1, 20 do tick() end
+local py = R.P["Bip001-Pelvis"]
+R.P["Bip001-Pelvis"] = vec(py.X, py.Y, py.Z + 6000)
+tick()
+check(len(E.mesh:GetPhysicsLinearVelocity(F.fname("Bip001-Pelvis"))) < 50, "past the leash above she is stopped")
+check(F.find("out of the map: her pelvis (%d+) cm above") ~= nil, "the leash logs a climb")
+-- A split copy made before her ragdoll starts is parked, then tracked with her from the first tick.
+do
+  rag.stop(T.pawn)
+  local copy = F.obj("SplitCopy", "SkeletalMeshComponent")
+  T.ctx.rag.add_body(copy)
+  rag.start(T.pawn, E.mesh, "quiet")
+  E.s.sim = true
+  for _ = 1, 3 do tick() end
+  check(F.find("split: late copy tracked with her half") ~= nil, "a pre-ragdoll copy joins her")
+  rag.stop(T.pawn)
+end
+for _, e in ipairs(F.errors) do F.say("hook error: " .. e) end
+check(#F.errors == 0, "no engine simulation errors")
+F.say(fails == 0 and "PASS" or "FAIL")

@@ -45,4 +45,19 @@ check(M.start() == 0.01, "starts again")
 now = now + 1
 check(M.stop("Esc fast forward", function() speeds[#speeds + 1] = 1 end) == true, "Esc hands time back first")
 check(M.running() == false and speeds[2] == 1, "idle for the fast forward")
+-- the ease back: flat through the window, gliding to full after, done at the end of the glide
+tune.deathSlowmo.speed, tune.deathSlowmo.duration, tune.deathSlowmo.easeOut = 0.15, 4, 1.2
+now = 3000
+check(M.start() == 0.15, "starts again for the ease")
+now = now + 2
+check(M.speed() == 0.15 and M.easing() == false and M.done() == false, "flat through its window")
+now = now + 2.6
+local mid = M.speed()
+check(M.easing() == true and M.done() == false and mid > 0.15 and mid < 1, "gliding back after its window")
+now = now + 0.4
+local late = M.speed()
+check(late > mid and late < 1, "still climbing toward full speed")
+now = now + 0.3
+check(M.done() == true and M.easing() == false, "done at the end of the glide")
+M.stop("cleanup")
 print(fails == 0 and "PASS" or "FAIL")

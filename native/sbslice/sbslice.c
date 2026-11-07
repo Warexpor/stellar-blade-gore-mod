@@ -1948,8 +1948,17 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // hangs off the upper arm's twist bone and went off with the arm. Used by this cut only.
     // A rigid one (KEEP_RIGID, 2 here) keeps its bones on the limb: its skin stays on the body by side[], and gives
     // its weight up to the stub's carrier (or the nearest kept ancestor) as the stub's does
-    static unsigned char keepcut[MAX_BONES];
-    int anykeep = mode == MODE_CUT && limbs_comp == comp && nkeep > 0 && nb <= MAX_BONES;
+    static unsigned char priorcut[MAX_BONES], keepcut[MAX_BONES];
+    int anyprior = mode == MODE_CUT && limbs_comp == comp && ngone > 0 && nb <= MAX_BONES;
+    if (anyprior) {
+        for (int i = 0; i < nb; i++) {
+            int par = parent_of(&c, i), root = 0, kept = i == b;
+            for (int r = 0; r < ngone; r++) if (gone_roots[r] == i) root = 1;
+            for (int r = 0; r < nkeep; r++) if (keep_roots[r] == i) kept = 1;
+            priorcut[i] = kept ? 0 : (unsigned char)(root || (par >= 0 && par < i && priorcut[par]));
+        }
+    }
+    int anykeep = mode == MODE_CUT && !anyprior && limbs_comp == comp && nkeep > 0 && nb <= MAX_BONES;
     if (anykeep) {
         for (int i = 0; i < nb; i++) {
             int par = parent_of(&c, i);
@@ -2168,6 +2177,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             float q2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - h * h; // squared distance from the axis
             // mostly on a kept accessory chain: on the body, wherever it lies (its edge on the arm too)
             if (mode == MODE_CUT) side[v] = (sub > 0 && (h > 0 || hang > 127) && kept <= 127) || with > 127;
+            if (anyprior) {
+                int old = 0, other = 0;
+                for (u32 i = 0; i < cn; i++) if (o->weights[i] && o->bones[i] < nb) {
+                    if (priorcut[o->bones[i]]) old = 1; else other = 1;
+                }
+                if (old && other) side[v] = 0;
+            }
             // wholly on an earlier cut's sink: collapsed already, a triangle of only such vertices starts no seam of
             // this cut (vkind 9, MODE_CUT only). A statue's thigh seam lay on a lump helper of its upper body; the
             // waist cut after it took the collapsed thigh's triangles for its own seam and drew the cut-off leg's
@@ -2838,6 +2854,13 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         skin_info *o = &out[v];
         int s = vsec[v];
         if (s == 0xffff) continue;
+        if (anyprior) {
+            int old = 0, other = 0;
+            for (int i = 0; i < MAX_INF; i++) if (o->weights[i] && o->bones[i] < nb) {
+                if (priorcut[o->bones[i]]) old = 1; else other = 1;
+            }
+            if (old && !other) continue; // the earlier piece stays intact, even at this cut's seam
+        }
         if (seam[v]) {
             int sink = mode == MODE_SIDE ? vsink[v] : secsink[s * 2 + side[v]];
             if (sink >= 0) {
@@ -2894,6 +2917,19 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
             if (all) continue;
         }
         const unsigned char *drop = side[v] ? drop_l : drop_b;
+        unsigned char detach_drop[MAX_BONES];
+        if (anyprior) {
+            int old = 0, other = 0;
+            for (int i = 0; i < MAX_INF; i++) if (o->weights[i] && o->bones[i] < nb) {
+                if (priorcut[o->bones[i]]) old = 1; else other = 1;
+            }
+            // A vertex wholly on the old piece must keep riding it. Only mixed skin gives up the old piece's bones.
+            if (old && other) {
+                memcpy(detach_drop, drop, nb);
+                for (int i = 0; i < nb; i++) if (priorcut[i]) detach_drop[i] = 1;
+                drop = detach_drop;
+            }
+        }
         // a split's kept skin on a bone it gives up, with no kept ancestor of that bone in its section: that ancestor is
         // borrowed in, so the skin stays on its own side. Else it went to the section's first kept bone by index:
         // CH_P_EVE_01's outer suit (11 shoulder and hip helpers, no main bone) put 4103 hip vertices given up with
@@ -5387,7 +5423,8 @@ static int parse_fields(const u16 *txt, int len, u64 *f, int max)
 //   g<comp>,<gone root>,...,0,<kept root>,...[,0,<ride bone>,...]
 //                        a split half's limbs for the next MODE_SIDE cut on comp (0 = Root, never a limb root), and
 //                        the spine bones its lid rides (its flattening sinks band by them). Before a MODE_CUT: no
-//                        gone roots, and the kept roots are accessory chains on the limb that stay on the body
+//                        gone roots name a previously separated limb for an accessory detach; mixed skin gives up that
+//                        limb, while its own vertices stay on it. Kept roots are chains staying on the body.
 //   o<object>            keep that asset loaded for good (root it: see root_object)
 //   w<comp>              watch her bones once for the stub carriers (Lua, every few ticks while she is alive)
 //   v...                 actor stats, for the glass cannon mode (see stats.c)

@@ -157,12 +157,21 @@ return function(swing, mesh)
     end
   end
   if not swing.bones or #swing.bones == 0 then return nil end
+  -- in the actor's own frame: a dash carries the whole body, and world-space hand speed read a dash as a
+  -- 13572 cm/s swing with a garbage plane (a downward cut from a midsection-upward blow, playtest). A real swing
+  -- still reads (the arm moves against the body); a pure dash reads ~0 and is no swing, as it should be
+  local function rel(j, b)
+    local p = h[j].p[b]
+    local o = h[j].origin
+    if p and o then return { X = p.X - o.X, Y = p.Y - o.Y, Z = p.Z - o.Z } end
+    return p
+  end
   local best
   for i = 2, #h do
     local dt = (h[i].t - h[i - 1].t) * gts
     if dt > 1e-3 then
       for b = 1, #swing.bones do
-        local p, q = h[i - 1].p[b], h[i].p[b]
+        local p, q = rel(i - 1, b), rel(i, b)
         if p and q then
           local v = dist(p, q) / dt
           if not best or v > best.speed then best = { speed = v, i = i, b = b } end
@@ -175,12 +184,12 @@ return function(swing, mesh)
     return nil
   end
   local b, i = best.b, best.i
-  local p0, p1 = h[i - 1].p[b], h[i].p[b]
+  local p0, p1 = rel(i - 1, b), rel(i, b)
   local dir = unit(sub(p1, p0))
   -- the arc: the samples either side of the fastest step, when the weapon turned enough between them
   local n, how
-  local pa = h[i - 2] and h[i - 2].p[b]
-  local pc = h[i + 1] and h[i + 1].p[b]
+  local pa = h[i - 2] and rel(i - 2, b)
+  local pc = h[i + 1] and rel(i + 1, b)
   local u, w = pa and sub(p0, pa), pc and sub(pc, p1)
   for _, pair in ipairs({ { u, sub(p1, p0) }, { sub(p1, p0), w }, { u, w } }) do
     if not n and pair[1] and pair[2] then
@@ -193,7 +202,7 @@ return function(swing, mesh)
     if len(c) > 0.3 then n, how = unit(c), "weapon swing x forward" end
   end
   if not (n and dir) then return nil end
-  return { dir = dir, n = n, how = how, at = p1, speed = best.speed, bone = swing.bones[b], fwd = fwd,
+  return { dir = dir, n = n, how = how, at = h[i].p[b], speed = best.speed, bone = swing.bones[b], fwd = fwd,
     ago = os.clock() - h[i].t, pose = h[i].pose }
 end
 

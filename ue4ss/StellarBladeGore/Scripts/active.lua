@@ -84,6 +84,7 @@ local dropped = {}      -- { comp, box, parent, socket, loc, rot }: weapons let 
 local standins = {}
 local gripped = {}      -- address -> { comp, parent, socket, loc, rot }: weapons still in her hand in a ragdoll death
 local extra = {}        -- other ragdolls to settle with hers (a split's copy)
+local pendingExtra = {} -- split copies made before her ragdoll started (animated split's masses stage)
 -- her hands opening once a weapon left them (tune.active.grip.open): hand bone -> { t, comps = { {comp, bone index} } }
 local eased = {}
 local STILL = { "Bip001-Pelvis", "Bip001-Spine2", "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand", "Bip001-L-Foot", "Bip001-R-Foot" }
@@ -432,6 +433,25 @@ local function neutral_tick()
   local t = (cfg().tone or {})
   if run.nfall < -(n.fallSpeed or t.fallSpeed or 150) and vz > -(n.landSpeed or t.landSpeed or 40) then
     neutral_stop(string.format("on landing (fell at %.0f cm/s)", -run.nfall))
+    return
+  end
+  -- a soft death never fell fast: lying on the floor with slow bodies, the drives only fight the contact
+  -- (a trace each quarter second, not each tick)
+  if run.t < (run.floorNext or 0) then return end
+  run.floorNext = run.t + 0.25
+  local slow = vz and math.abs(vz) < 40
+  local over
+  if slow then
+    local pawn = run.pawn or try(function() return run.mesh:GetOwner() end)
+    local p = try(function() return run.mesh:GetSocketLocation(FN["Bip001-Pelvis"]) end)
+    over = p and M.over_floor(pawn, vec(p.X, p.Y, p.Z))
+  end
+  if slow and over and over < (n.floorOver or 25) then
+    if not run.floorSince then run.floorSince = run.t end
+    if run.t - run.floorSince >= (n.floorTime or 0.5) then neutral_stop("lying on the floor")
+    end
+  else
+    run.floorSince = nil
   end
 end
 
@@ -1041,11 +1061,17 @@ function M.weapon_cut(mesh, at, n, blocked)
         local tm = try(function() return w:K2_GetComponentToWorld() end)
         if tm then try(function() b:K2_SetWorldTransform(tm, false, {}, true) end) end
         try(function() b:SetMasterPoseComponent(w, true) end)
+        local kept = try(function() return b.MasterPoseComponent:Get() end)
+        if not (valid(kept) and addr(kept) == addr(w)) then
+          out[#out + 1] = nm .. ": master follow NOT set at the split (the watch will retry it)"
+        end
         gore.lod0(w, true)
         gore.lod0(b, true)
         -- its pose frozen as it is cut (the copy follows it): the sword's gears, panels and blade segments go on
         -- animating, and the flat cut faces and the collapsed ends are made in this pose, so both halves showed most
-        -- of the sword with its ends bent off to where the moved bones went (playtest)
+        -- of the sword with its ends bent off to where the moved bones went (playtest). The copy follows the frozen
+        -- pose through its master; freezing it too would stop the follow and leave it standing in the bind pose as a
+        -- second whole sword (playtest)
         try(function() w.bNoSkeletonUpdate = true end)
         local r = gore.command(string.format("e%x,%x,0", w:GetAddress(), b:GetAddress()), pa, pn)
         if r:sub(1, 2) ~= "ok" then
@@ -1103,6 +1129,28 @@ function M.weapon_cut(mesh, at, n, blocked)
 end
 -- a sword of hers already in two (this death)
 function M.sword_split() return #splits > 0 end
+-- the split sword's original frozen in its cut pose, every tick: the game re-enables its skeleton updates
+-- (attach, LOD), and the gears, panels and blade segments go on animating, dragging the cut faces into stretched
+-- strips (playtest screenshots). Only the original: the copy follows its frozen pose through the master, and
+-- freezing it would stop the follow and leave a second whole sword standing in the bind pose. The follow link has
+-- been found broken on a drop (the copy's master no longer the original: a second whole sword and stretched strips
+-- at the break, playtest): verified and re-set here
+local function splits_watch()
+  for _, sp in ipairs(splits) do
+    if valid(sp.w) then try(function() sp.w.bNoSkeletonUpdate = true end) end
+    if valid(sp.w) and valid(sp.b) then
+      local kept = try(function() return sp.b.MasterPoseComponent:Get() end)
+      if not (valid(kept) and addr(kept) == addr(sp.w)) then
+        if try(function() sp.b:SetMasterPoseComponent(sp.w, true); return true end) then
+          if not sp.fixSaid then sp.fixSaid = true
+            log("split sword: the copy's master follow restored onto the original") end
+        elseif not sp.fixSaid then sp.fixSaid = true
+          log("split sword: the copy's master follow NOT set (a second whole sword)")
+        end
+      end
+    end
+  end
+end
 -- she got up: each split sword whole again, its other half gone (the asset's sinks with the weights)
 local function splits_back()
   local gore = ctx.gore
@@ -1311,7 +1359,18 @@ local function hang_capes(pawn, mesh, g)
   local skipped = {}
   for _, root in ipairs(list) do
     local arm = not MASS[root] and arm_of(root)
-    if arm and (cut(arm) or cut(root)) then skipped[#skipped + 1] = root; arm = nil end
+    if arm and cut(root) then
+      skipped[#skipped + 1] = root; arm = nil
+    elseif arm and cut(arm) then
+      -- the anchor gone but the chain still on her: hang it off the shoulder like an intact one instead of leaving
+      -- it unmanaged to stretch into twigs (playtest: the back chains on many cuts). Flown far with a piece, it
+      -- stays left alone, never re-hung across the map onto a rigid lever.
+      local clav = anchor_of(mesh, arm)
+      local rl = try(function() local v = mesh:GetSocketLocation(FName(root)); return vec(v.X, v.Y, v.Z) end)
+      local cl = clav and try(function() local v = mesh:GetSocketLocation(FName(clav)); return vec(v.X, v.Y, v.Z) end)
+      local near = rl and cl and math.sqrt((rl.X - cl.X) ^ 2 + (rl.Y - cl.Y) ^ 2 + (rl.Z - cl.Z) ^ 2) < 60
+      if not (clav and near) then skipped[#skipped + 1] = root; arm = nil end
+    end
     if arm then
       -- the chain under it, and its next link for the way it runs
       local chain, n, nxt = { [root] = true }, 1, nil
@@ -1422,6 +1481,10 @@ function M.start(pawn, mesh, kind, dir)
   if run then M.stop(pawn, true) end
   if addr(mesh) ~= severedOn then severed, severedOn = {}, addr(mesh) end
   run = { mesh = mesh, t = 0, masses = {}, still = 0, hung = {} }
+  -- where she went limp, in the plane: the last resort if physics ever throws her out of the map again (a split's
+  -- halves ended 495 m off, near the world origin). Past the leash she is stopped where she is, never followed out.
+  run.origin = try(function() local v = mesh:GetSocketLocation(FN["Bip001-Pelvis"]); return vec(v.X, v.Y, v.Z) end)
+    or try(function() local v = mesh:K2_GetComponentLocation(); return vec(v.X, v.Y, v.Z) end)
   -- the killing blow's direction, when it has one (a death, not a sandbox): a dropped sword flies with it
   if dir and kind ~= "sandbox" then run.throwDir = dir end
   -- Tower manual ragdolls flung her 3 km to the origin (pelvis 27k cm/s, calf 800k cm/s before any push): stale body
@@ -1641,7 +1704,9 @@ function M.add_body(comp)
     if valid(pawn) then hung = hang_capes(pawn, comp, g) end
   end
   if masses then log("split copy: " .. masses .. hung) end
-  if not run then return end
+  -- her ragdoll starts after the copy's masses (an animated split opens first): parked till the first tick with
+  -- her, else the copy settles, caps and leashes with nobody watching and sails off unwatched (playtest)
+  if not run then pendingExtra[#pendingExtra + 1] = comp; return end
   extra[#extra + 1] = comp
   run.split = true
   local had = valid(run.pac)
@@ -1665,13 +1730,40 @@ local TORSO = { "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2
 local function lin_vel(comp, b)
   return live(comp, b) and try(function() local x = comp:GetPhysicsLinearVelocity(FN[b]); return vec(x.X, x.Y, x.Z) end)
 end
-local function clamp_flung(comp, s)
+local function clamp_flung(comp, s, ci)
   if s.linear == false then return end
+  -- absolute ceiling: nothing human-scale moves faster than linearMax, not even falling (a split's Spine1 read
+  -- 93 m/s and its pelvis 210 m/s from a mid-cut socket glitch, and the halves left the map: the torso-relative
+  -- cap below is blind to the whole body flying together). Over it is slowed to it, every tick, both halves.
+  local absmax = s.linearMax or 6000
+  do
+    local over = 0
+    for b in pairs(MASS) do
+      local v = lin_vel(comp, b)
+      local l = v and len(v)
+      if l and l > absmax then
+        local k = absmax / l
+        try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
+        over = over + 1
+        if not run.absCapped then
+          run.absCapped = true
+          log(string.format("absolute: %s at %.0f cm/s capped to %.0f at %.2f s on %s", b, l, absmax, run.t, (ci or 1) == 1 and "her" or "the split copy"))
+        end
+      end
+    end
+    if over > 0 then run.absN = (run.absN or 0) + over end
+  end
   -- the start: nothing she has moves faster than her momentum and the blow (and the fall since) allow. A ragdoll
   -- that started mid-fall (a leg cut) shot her torso off at 1600 cm/s with 57 of momentum, thirty-fourth playtest
   if run.t < (s.launchTime or 0.5) then
     local g = cfg()
     local lim = (run.mom or 0) + (g.impact or 200) * math.max(tonumber(g.push) or 1, 1) + (run.launchV or 0) + (s.launchOver or 400) + 981 * run.t
+    -- the fastest riser alongside: which half climbs, and how fast, when one takes off upward (playtest)
+    local up, upb = 0, nil
+    for b in pairs(MASS) do
+      local v = lin_vel(comp, b)
+      if v and v.Z > up then up, upb = v.Z, b end
+    end
     for b in pairs(MASS) do
       local v = lin_vel(comp, b)
       local l = v and len(v)
@@ -1679,7 +1771,8 @@ local function clamp_flung(comp, s)
         local k = lim / l
         try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
         run.launched = (run.launched or 0) + 1
-        if run.launched == 1 then log(string.format("launched: %s at %.0f cm/s slowed to %.0f at %.2f s", b, l, lim, run.t)) end
+        if run.launched == 1 then log(string.format("launched: %s at %.0f cm/s slowed to %.0f at %.2f s on %s (fastest riser %s at %.0f up)",
+          b, l, lim, run.t, (ci or 1) == 1 and "her" or "the split copy", tostring(upb), up)) end
       end
     end
     return
@@ -1699,7 +1792,7 @@ local function clamp_flung(comp, s)
       run.flung = (run.flung or 0) + 1
       writes.flung = writes.flung + 1
       if run.flung == 1 then
-        log(string.format("flung: %s at %.0f cm/s (torso %.0f) slowed to %.0f at %.2f s", b, l, ref, cap, run.t or 0))
+        log(string.format("flung: %s at %.0f cm/s (torso %.0f) slowed to %.0f at %.2f s on %s", b, l, ref, cap, run.t or 0, (ci or 1) == 1 and "her" or "the split copy"))
       end
     end
   end
@@ -1711,9 +1804,9 @@ local function clamp_spin()
   for _, c in ipairs(extra) do comps[#comps + 1] = c end
   local main, ends = s.main or 720, s.ends or 360
   if run.split then main, ends = s.splitMain or 360, s.splitEnds or 240 end
-  for _, comp in ipairs(comps) do
+  for i, comp in ipairs(comps) do
     if valid(comp) then
-      clamp_flung(comp, s)
+      clamp_flung(comp, s, i)
       for b in pairs(MASS) do
         local cap = ENDS[b] and ends or main
         local w = live(comp, b) and try(function() local x = comp:GetPhysicsAngularVelocityInDegrees(FN[b]); return vec(x.X, x.Y, x.Z) end)
@@ -1816,6 +1909,14 @@ local function settle(dt)
       run.asleep, run.still = false, 0
       log(string.format("woken (%.0f cm/s, %s)", top, tostring(which)))
     end
+    -- asleep with nothing to move her, but something still creeping: stop it (a body the sleep never took,
+    -- jittering under its drives on the floor). Deliberate moves are faster, and convulse/struggle motion keeps
+    -- her awake anyway, so this never touches a movement of hers
+    if not run.awake and top > 0 and top < (st.zero or 3) then
+      for _, c in ipairs(comps) do if valid(c) then stop_all(c) end end
+      if not run.zeroSaid then run.zeroSaid = true
+        log(string.format("still: slow bodies (%.0f cm/s) stopped at %.1f s", top, run.t)) end
+    end
     return
   end
   local calm = top < (st.speed or 15) or drift < (st.drift or 2)
@@ -1833,7 +1934,7 @@ local function settle(dt)
   else
     if run.still > 0 and run.toneHeld then
       run.toneHeld = false
-      tone_set(run.toneNow or 1)
+      if not run.toneDone then tone_set(run.toneNow or 1) end
     end
     run.still = 0
   end
@@ -1897,8 +1998,16 @@ local function settle(dt)
   -- settling again after a twitch: once is enough in the log
   if run.settled then return end
   run.settled = true
-  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies %s, %d spins slowed to the cap, %d flung bodies slowed, %d launched", run.t, top,
-    drift == math.huge and -1 or drift, n, run.awake and "stopped, kept awake for her last movements" or "asleep", run.clamped or 0, run.flung or 0, run.launched or 0))
+  local peak = ""
+  if run.peak then
+    local parts = {}
+    for i, c in ipairs(comps) do
+      if valid(c) then parts[#parts + 1] = string.format("%s %.0f cm", i == 1 and "her" or "copy", run.peak[i] or 0) end
+    end
+    if #parts > 0 then peak = string.format(", highest above the limp point: %s", table.concat(parts, ", ")) end
+  end
+  log(string.format("settled after %.2f s (%.0f cm/s, drift %.1f cm): tone off, %d bodies %s, %d spins slowed to the cap, %d flung bodies slowed, %d launched%s", run.t, top,
+    drift == math.huge and -1 or drift, n, run.awake and "stopped, kept awake for her last movements" or "asleep", run.clamped or 0, run.flung or 0, run.launched or 0, peak))
   log(string.format("settle rotation: fastest %s %.0f deg/s (component %d)", tostring(fastBone), fastest, fastComponent))
   if run.rolls then log("rolled about the bone since the start (deg): " .. roll_report(run.mesh, run.rolls)) end
 end
@@ -1991,6 +2100,7 @@ end
 function M.tick(dt, mark)
   mark = mark or function() end
   if #standins > 0 then standins_watch(dt) end
+  if #splits > 0 then splits_watch() end
   for _, d in ipairs(dropped) do
     if d.probe then
       d.probe = d.probe - dt
@@ -2019,6 +2129,18 @@ function M.tick(dt, mark)
   -- (an animated death's hand too: its animation kept the fist as well)
   if not (run and run.held) then grip_ease(dt) end
   if not run then return end
+  -- a split copy parked before her ragdoll started joins her now (animated split's masses stage)
+  if #pendingExtra > 0 and not run.held then
+    for _, c in ipairs(pendingExtra) do if valid(c) then extra[#extra + 1] = c end end
+    pendingExtra = {}
+    if not run.split then
+      run.split = true
+      tone_stop()
+      run.toneDone = true
+      neutral_stop("at the split")
+      log("split: late copy tracked with her half")
+    end
+  end
   if run.held then
     run.held.t = run.held.t + dt
     if not valid(run.mesh) or run.held.t >= HOLD_MAX then M.release(); return end
@@ -2026,6 +2148,35 @@ function M.tick(dt, mark)
     return
   end
   run.t = run.t + dt
+  -- the map leash: past this far sideways from where she went limp, or this far above it, a half is stopped,
+  -- once, and the log says which. Falling down is legit (tower drops, pits); leaving sideways or sailing up never
+  -- is (a split's copy took off upward, playtest). Both her half and the split's copy are watched.
+  do
+    local leash = (cfg().spin or {}).leash or 5000
+    local o = run.origin
+    if o and not run.leashed then
+      local comps = { run.mesh }
+      for _, c in ipairs(extra) do comps[#comps + 1] = c end
+      for i, c in ipairs(comps) do
+        if valid(c) then
+          local p = try(function() local v = c:GetSocketLocation(FN["Bip001-Pelvis"]); return vec(v.X, v.Y, v.Z) end)
+          if p then
+            local dx, dy, dz = p.X - o.X, p.Y - o.Y, p.Z - o.Z
+            run.peak = run.peak or {}
+            if dz > (run.peak[i] or -1e30) then run.peak[i] = dz end
+            if dx * dx + dy * dy > leash * leash or dz > leash then
+              for _, s in ipairs(comps) do if valid(s) then stop_all(s) end end
+              run.leashed = true
+              log(string.format("out of the map: %s %.0f cm %s from where she went limp, held at %.2f s",
+                i == 1 and "her pelvis" or "the split copy's pelvis",
+                dz > leash and dz or math.sqrt(dx * dx + dy * dy), dz > leash and "above" or "sideways", run.t))
+              break
+            end
+          end
+        end
+      end
+    end
+  end
   if run.gripAt and run.t >= run.gripAt then
     local pawn = run.pawn or try(function() return run.mesh:GetOwner() end)
     local r = grip_release(pawn, run.mesh, cfg())
@@ -2240,8 +2391,17 @@ function M.stop(pawn, restart)
       if s and s > 2000 then log(string.format("stopping with %s at %.0f cm/s on %s", tostring(b), s, i == 1 and "her" or "the split copy")) end
     end
   end
+  -- highest each half climbed: how high a split half really went, when the caps saw nothing (playtest)
+  if run.peak then
+    local parts = {}
+    for i, c in ipairs({ mesh, table.unpack(extra) }) do
+      if valid(c) then parts[#parts + 1] = string.format("%s %.0f cm", i == 1 and "her" or "copy", run.peak[i] or 0) end
+    end
+    if #parts > 0 then log("highest above where she went limp: " .. table.concat(parts, ", ")) end
+  end
   run = nil
   freed = {}
+  pendingExtra = {}
   vlog(string.format("stopped, %d masses put back", n))
 end
 

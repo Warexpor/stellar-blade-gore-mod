@@ -38,12 +38,19 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
     local c2 = { X = p2.X + d2.X * t, Y = p2.Y + d2.Y * t, Z = p2.Z + d2.Z * t }
     return dist(c1, c2), c1, c2
   end
-  return function(mesh, best, cfgReach)
+  return function(mesh, best, cfgReach, is_cut)
     local at, d, bone, allow
   do
     -- Body segments in world space: full limb segments where SWING_AT names both ends, spheres elsewhere.
     -- A swing must cross one of these within its anatomical radius (+4 cm slack, capped by the configured
     -- reach), not merely pass near a joint point. Missing sockets are skipped: no geometry, no hit.
+    -- Parts already cut off her are skipped too (a swing through her body after a beheading must read the
+    -- torso, never the severed head wherever it flew).
+    local function gone(b)
+      if not is_cut then return false end
+      local ok, r = pcall(is_cut, b)
+      return ok and r or false
+    end
     local segs, sockets = {}, {}
     local function socket(name)
       if sockets[name] then return sockets[name] end
@@ -52,9 +59,11 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
       return position
     end
     local head = socket("Bip001-Head")
-    if head then segs[#segs + 1] = { a = head, b = nil, bone = "Bip001-Head", r = after_radius("Bip001-Head") } end
+    if head and not gone("Bip001-Head") then segs[#segs + 1] = { a = head, b = nil, bone = "Bip001-Head", r = after_radius("Bip001-Head") } end
     for _, e in ipairs(SWING_AT) do
-      if e[3] then
+      if gone(e[1]) then
+        -- (its segment lies where the piece flew, not on her: a later swing must read what is left)
+      elseif e[3] then
         local a, b = socket(e[1]), socket(e[3])
         if a and b then segs[#segs + 1] = { a = a, b = b, bone = e[1], r = after_radius(e[1]) } end
       else

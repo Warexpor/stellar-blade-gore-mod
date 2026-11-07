@@ -1,5 +1,8 @@
 # Stellar Blade Gore Mod
 
+The F3 Spawner (Experimental, Developer Keys on) lists every CharacterTable row by tribe. Its groups open one at a time and remember their folded state. Portraits use album textures already in memory; unavailable or unknown portraits and unobserved spawn requests are reported in the log.
+
+
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
 Working version: **0.7.0**, in development. See the [changelog](CHANGELOG.md).
@@ -58,7 +61,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `enemies.grab.enabled` | `true` | A death in an enemy's grab waits for the grab to end (at most `most`, 6 s): a limb or the head the killing blow cuts falls off at once; the ragdoll, a split or a cut across her waist come as it lets go. |
 | `gore.smash.enabled` | `true` | Experimental. A blunt killing blow (a hammer, a fist, a stomp) smashes the arm, leg, head or upper body it hit instead of cutting it (no blow seen: rolled on the death odds): the part vanishes, the game's own meat chunks and a brief spray of falling blood droplets fly out where it was, proportional to the remaining part, and the stump stays as a cut's. An upper-body smash leaves only small silent leg twitches. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`); blades still cut. F3 → Blunt Smash. `gore.smash.always` is off by default: with it on, every death smashes, to try it. |
 | `gore.smash.fullBody` | `true` | Broad, centered impacts can smash the whole body. F3 → Full-Body Smashes. Estimated coverage of the upper and lower trunk governs eligibility; narrow hits and unknown hit sizes stay local. Earlier cuts prevent a full-body result. |
-| `gore.smash.fullBodyChance` | `0.25` | Maximum full-body chance (0–1), reduced by estimated body coverage squared. Even 100% cannot turn a narrow hit into a full-body smash. Measured impact area also guides local targeting; Custom Smash Mix remains an explicit category override. |
+| `gore.smash.fullBodyChance` | `0.5` | Maximum full-body chance (0–1), reduced by estimated body coverage squared; a simultaneous volley adds 0.1 per extra impact, up to +0.3 (an explicit 0 stays never). Even 100% cannot turn a narrow hit into a full-body smash. Measured impact area also guides local targeting; Custom Smash Mix remains an explicit category override. |
 | `gore.smash.overrideTargets` | `false` | Optional Custom Smash Mix: choose limb, head or upper body by `gore.smash.targetWeights` relative weights. A limb choice uses the nearest limb to the hit. All weights zero falls back to ordinary hit targeting. |
 | `gore.laserCut` | `true` | A laser trap death cuts her along the beam: every arm, leg, her body or her head its plane goes through comes off (a level beam cuts her at its height). The beam that hit her, else one within `laserReach` (40) cm of her. Off: the death odds. F3 → Laser Cuts Along the Beam. |
 | `gore.bluntRagdoll` | `false` | A blunt killing blow (a hammer, a fist, a stomp) cuts nothing: her death is a plain ragdoll, and hits after it cut nothing either; blades still cut. What hit her is told by name (the enemy's weapon, the bone it swung, the enemy itself: `smash.sharp` / `smash.blunt` in `tune.lua`). F3 → Blunt Kills Only Ragdoll. |
@@ -129,7 +132,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `bosses.enabled` | `false` | Sandbox Bosses (experimental): F3 → Sandbox → Spawn Boss brings Tachy, Raven, Scarlet or a Royal Guard Sister (`bosses.pick`; Scarlet needs her DLC) in 7 m in front of Eve, anywhere, fighting at once. Killed, a boss dies like any enemy: no death cutscene, no phase change to wait out; it is cut, struggles on the floor (`bosses.struggle`, with Death Struggle on) and wears a dead face (`bosses.face`, with Death Expression on). Their HP and shield are `bosses.hpScale` (25%) of the game's. `bosses.passive` (Passive Bosses) keeps a spawned one standing still, never attacking (its own behaviour tree stopped, its AI controller off it). Its phases' HP floors (the game's `MinimumHP` effects, and Scarlet's immortality) are off while one you spawned is up, so a phase change it can't play (a passive one's, or Scarlet's outside her arena) never holds it up: its HP goes to 0 and it dies. One still up at 0 HP is taken down after `bosses.zeroWait` s (`bosses.zeroKill`). While one you spawned is up, that boss is mortal everywhere, a story fight with it too, and no boss has its phase floors; once none is, the game's own boss is back. Remove Spawned takes them all away. |
 | `smoothAnim` | `false` | Every character animated every frame. The engine skips animation frames on characters further off or small on screen, which can look choppy next to a smooth world, most when they run. Costs some CPU with many characters around. |
 | `verboseLog` | `false` | A detailed log (every death's bone speeds, each cut stage, every slow frame...), for a bug report when asked for one. Off, slow frames are summed up once a minute. |
-| `dev` | `false` | Test keys and the enemy spawner (see below). |
+| `dev` | `false` | Developer test keys (see below). |
 
 In game, **F3** (on a controller LB + RB + L3, `menuPad`) opens a menu with most of these, in the look of the game's own settings screen: the game pauses while it is open (`menuPause`), Q/E (LB/RB) switch the tab, the arrow keys pick (Up/Down) and change (Left/Right, or < and >), R (Y / Triangle) puts the open tab back to `settings.lua`, Enter / A presses, Backspace / B or F3 closes. The mouse works too: hover picks, click presses (or steps, on a value's arrows), the wheel scrolls. Its key hints are the game's own icons, the keyboard's or the controller's, whichever you used last (`menuPadIcons`: Xbox or PlayStation buttons). Changes apply at once and are saved to `menu.lua` next to `settings.lua`, which they win over (a change to a setting the menu no longer has is dropped from it as the menu starts) ("Reset to settings.lua" deletes it). The menu needs no `FText_Constructor.lua` in `UE4SS_Signatures` (disable it as described in Install: when enabled, it can close the game at launch). If F3 does nothing, the log's `menu:` lines say why; `settings.lua` sets everything without the menu.
 
@@ -171,11 +174,13 @@ With `dev = true` in `settings.lua`:
 | Alt+F6 | Test the animated death: plays the game's own death animations on her, the next each press (standing, two hit deaths, lying down), so a death animation mod's show; always the animated death, no cut; she lies till F8 |
 | Delete | Cut her along a made-up blade |
 | Page Up | Her death face, the next mood each press, for 6 s |
-| F5 / Insert | Spawn an enemy / pick the next kind |
+| F5 / Insert | Spawn an NPC / pick the next kind (F3 → Spawner) |
 | Home | The spawner window |
-| End | Kill the enemy nearest her |
+| End | Kill the NPC nearest her |
 
-For testing a game without this mod, the repo has the spawner on its own (`minimods/SBSpawner`, `./build.sh`; not released).
+These four need Developer Keys. For testing a game without this mod, the repo has the spawner on its own (`minimods/SBSpawner`, `./build.sh`; not released).
+
+F3 → Spawner (Developer Keys on) spawns any NPC in the game, bosses included: foldable groups (Naytiba, Angels, Bosses, Custom) with one select row per NPC, like the play-as menu's character list, and the selected NPC's avatar beside the rows. Enter on a name picks it; Spawn makes Spawn Count of them. The Custom ID entry spawns any CharacterTable ID you type in. Hostile turns even the angels hostile to Eve and damageable while one spawned here is up; Fight Each Other has spawned NPCs fight each other too; Passive stops their AI so they never fight. Story NPCs are never touched: only what was spawned here.
 
 These are the defaults; the F3 menu's Keys tab changes them. Its last two rows are the controller's combos (`menuPad`, `holdPad`): A, then hold the new buttons together and let go. With Ultra Violence installed, Cut and Split default to Alt+F9 and Alt+F11. Blunt Smash stays on F10; rebind either mod’s F10 action if they conflict.
 
