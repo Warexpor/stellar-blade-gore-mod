@@ -272,8 +272,12 @@ function M.smashed.out(q)
   local nb, nv = M.smashed.hide(q)
   if q.fullSmash then
     local legs = { pawn = q.pawn, mesh = q.mesh, c = q.c, bone = "Bip001-Pelvis" }
+    local pidx = try(function() return q.mesh:GetBoneIndex(FName("Bip001-Pelvis")) end)
     local moreBones, moreVisible = M.smashed.hide(legs)
     nb, nv = nb + moreBones, nv + moreVisible
+    -- the remainder's lower body stayed visible and hittable while the entry claimed all gone (playtest):
+    -- whether the pelvis hide ran at all decides between a hide bug and an entry bug
+    if moreBones == 0 then log(string.format("smash: full-body pelvis hide hid nothing (pelvis index %s)", tostring(pidx))) end
   end
   mark("smash hide")
   if not at then log("smash: nowhere to put the meat"); return end

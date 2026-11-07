@@ -1309,8 +1309,17 @@ end
 -- "target alive" guards their attacks), put back as the game had them when the time is up or she gets up. How far the trees go on attacking a dead target is the game's: the log
 -- says what was kept and set ("after death: ...")
 local aft = { keys = {}, next = 0, tasks = nil, sw = {}, anims = {} }
+-- blackboard key names, by blackboard asset: static per asset, so the asset walk (ForEach plus a class
+-- and name lookup per key, ~55 ms every 2 s with a pack around her, playtest) runs once. Values are still
+-- re-read every look: that is the look.
+local keyNames, keyNameCount = {}, 0
 function M.after_keys(bb)
   local out = {}
+  local aid = try(function() local a = bb.BlackboardAsset; return a and addr(a) end)
+  if aid and keyNames[aid] then
+    for i, nm in ipairs(keyNames[aid]) do out[i] = nm end
+    return out
+  end
   try(function()
     local asset = bb.BlackboardAsset
     local guard = 0
@@ -1325,6 +1334,10 @@ function M.after_keys(bb)
       asset = asset.Parent
     end
   end)
+  if aid then
+    if keyNameCount > 60 then keyNames, keyNameCount = {}, 0 end
+    keyNames[aid], keyNameCount = out, keyNameCount + 1
+  end
   return out
 end
 function M.after_bb(o)
@@ -1364,8 +1377,8 @@ local function path_of(o)
   return f:match("^%S+ (.+)$") or ""
 end
 M.path_of = path_of
--- the monsters' attack animations loaded now (the ones they played or have ready), by folder: paths only, nothing held
--- (anywhere under the monster's folder with Anim in its path: Animation/, Animations/, Anim/...)
+-- the monsters' attack animations loaded now (kept objects, not paths: per-path lookups cost
+-- ~10 ms each in this build, 465 ms draining one folder on the death frame, playtest), by folder
 function aft.scan_anims()
   aft.loaded = {}
   local nl = 0
@@ -1375,7 +1388,7 @@ function aft.scan_anims()
     local nm = rest and rest:find("Anim", 1, true) and rest:match("([^/%.]+)%.[^/]*$")
     if folder and nm and attacky(nm) then
       aft.loaded[folder] = aft.loaded[folder] or {}
-      table.insert(aft.loaded[folder], p)
+      table.insert(aft.loaded[folder], { name = nm, hold = ctx.keep and ctx.keep(an) or nil, obj = an })
       nl = nl + 1
     end
   end
@@ -1383,8 +1396,9 @@ function aft.scan_anims()
 end
 local ANIM_CLS
 -- its attacks, found a few at a time: the skill names are every loaded tree's, and a load of each in one go (most
--- aren't its own: the load fails) would stall the game; the loaded ones (after_scan) are only looked up
-local function attack_anims(mesh)
+-- aren't its own: the load fails) would stall the game; the loaded ones (after_scan) are only looked up.
+-- Budgets per call (quests of ~10 ms each, playtest): the death path never drains (kept objects only).
+local function attack_anims(mesh, sfBudget, loadBudget)
   local sk = try(function() return mesh.SkeletalMesh end)
   local path = path_of(sk)
   local folder = path:match("^(/Game/Art/Character/Monster/[^/]+/)")
@@ -1399,30 +1413,44 @@ local function attack_anims(mesh)
   local f = aft.anims[folder]
   if not f then
     f = { out = {}, todo = {}, seen = {} }
-    -- none of its own loaded at the last look (it came after): looked for again now, once a folder
-    if not (aft.loaded and aft.loaded[folder]) then
-      local t0 = os.clock()
-      local nl = aft.scan_anims()
-      aft.loaded[folder] = aft.loaded[folder] or {}
-      log(string.format("after death: %s: attack animations loaded looked up again: %d of its own, %d in all, %.0f ms",
-        folder, #aft.loaded[folder], nl, (os.clock() - t0) * 1000))
+    -- the scan's own need no lookup: kept already
+    for _, e in ipairs((aft.loaded or {})[folder] or {}) do
+      local a = (e.hold and e.hold.obj) or e.obj
+      if valid(a) and not f.seen[e.name] then
+        f.seen[e.name] = true
+        f.out[#f.out + 1] = { a = a, name = e.name }
+      end
     end
-    for _, p in ipairs((aft.loaded or {})[folder] or {}) do f.todo[#f.todo + 1] = { path = p, loaded = true } end
     for nm in pairs(aft.skills or {}) do
-      if not skipped(nm) then f.todo[#f.todo + 1] = { path = folder .. "Animation/" .. nm .. "." .. nm } end
+      if not skipped(nm) and not f.seen[nm] then
+        f.todo[#f.todo + 1] = { path = folder .. "Animation/" .. nm .. "." .. nm }
+      end
     end
     aft.anims[folder] = f
-    if #f.todo == 0 then log(string.format("after death: %s attacks of its own: nothing to look for", folder)) end
+    if #f.todo == 0 and #f.out == 0 then log(string.format("after death: %s attacks of its own: nothing to look for", folder)) end
+  else
+    -- a kept asset gone: order only what plays
+    for i = #f.out, 1, -1 do if not valid(f.out[i].a) then table.remove(f.out, i) end end
   end
   if #f.todo == 0 then return f.out, true end
+  -- skill guesses resolve only while she lives: in-death each lookup cost ~10 ms (the drain ran 465 ms
+  -- on one death frame, playtest); the scan's own above need none
+  if ctx.dead_since and ctx.dead_since() then
+    if #f.out == 0 and not f.noOutLogged then
+      f.noOutLogged = true
+      log(string.format("after death: %s attacks of its own: none loaded, skill guesses wait for life", folder))
+    end
+    return f.out, false
+  end
   ANIM_CLS = ANIM_CLS or StaticFindObject("/Script/Engine.AnimSequence")
-  local loads = 0
-  while #f.todo > 0 and loads < 2 do
+  local loads, n, sfMax, loadMax = 0, 0, sfBudget or 40, loadBudget or 2
+  while #f.todo > 0 and loads < loadMax and n < sfMax do
+    n = n + 1
     local t = table.remove(f.todo, 1)
     local nm = t.path:match("([^/%.]+)%.[^/]*$") or t.path
     if not f.seen[nm] then
       local a = try(function() return StaticFindObject(t.path) end)
-      if not valid(a) and not t.loaded and LoadAsset and ctx.may_load and ctx.may_load() then
+      if not valid(a) and LoadAsset and ctx.may_load and ctx.may_load() then
         loads = loads + 1
         a = try(function() return LoadAsset(t.path) end)
       end
@@ -1599,7 +1627,11 @@ end
 function M.after_tick(pawn)
   local c = cfg().afterDeath or {}
   local since = ctx.dead_since and ctx.dead_since()
-  local on = c.enabled == true and since and os.clock() - since < (c.time or 10)
+  -- a spent death stays spent: without the latch every tick re-took over and put back (property writes plus
+  -- two log lines a tick till time up, playtest). A new death carries a new `since` and clears it.
+  if aft.overSince and aft.overSince ~= since then aft.overSince = nil end
+  local on = c.enabled == true and since and os.clock() - since < (c.time or 10) and not aft.overSince
+  local tAft = os.clock()
   if not on then
     after_over(since and "time up" or "she is up")
     if c.enabled ~= true or since then return end
@@ -1607,6 +1639,7 @@ function M.after_tick(pawn)
     -- once an enemy of a new class is around and none is near her
     if os.clock() < aft.next then return end
     aft.next = os.clock() + 2
+    local tAlive = os.clock()
     local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
     local me = addr(pawn)
     local classes, fresh, close = {}, false, false
@@ -1627,7 +1660,27 @@ function M.after_tick(pawn)
         end
       end
     end
+    local tKeys = os.clock()
     if fresh and not close and next(classes) then after_scan("new enemies around", classes) end
+    local tScan = os.clock()
+    -- attack animations warmed while she lives: in-death lookups cost ~10 ms each (465 ms draining one
+    -- folder on the death frame, playtest). Only out of combat (enemies near: the tick matters more than
+    -- the warming); one unfinished folder per 2 s look, few lookups and one load, gated as ever.
+    if not close and aft.scan and c.swing ~= false and ctx.may_load and ctx.may_load() then
+      for _, ch in ipairs(ctx.live_chars()) do
+        if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
+          local m = try(function() return ch.obj.Mesh end)
+          if valid(m) then
+            local _, done = attack_anims(m, 4, 1)
+            if not done then break end
+          end
+        end
+      end
+    end
+    local tEnd = os.clock()
+    if (tEnd - tAlive) * 1000 > 50 then log(string.format(
+      "after death: slow alive tick %.0f ms: keys %.0f, scan %.0f, warm %.0f",
+      (tEnd - tAlive) * 1000, (tKeys - tAlive) * 1000, (tScan - tKeys) * 1000, (tEnd - tScan) * 1000)) end
     return
   end
   if not aft.tasks then
@@ -1647,17 +1700,20 @@ function M.after_tick(pawn)
     if #det + #alv == 0 then
       -- cold cache at her death: the full scan hits the death frame with hundreds of ms (the stutter on the
       -- smash deaths, playtest). Defer the takeover a moment; the ordered attacks below still play meanwhile,
-      -- enemies taking seconds to close in anyway.
+      -- enemies taking seconds to close in anyway. Real 1.5 s or 90 ticks (the same at 60 fps), whichever first.
       ready = false
-      if aft.deferUntil and os.clock() < aft.deferUntil then
+      aft.deferTicks = (aft.deferTicks or 0) + 1
+      if aft.deferUntil and os.clock() < aft.deferUntil and (aft.deferTicks or 0) <= 90 then
         -- still waiting
       elseif not aft.deferUntil then
         aft.deferUntil = os.clock() + 1.5
         log("after death: trees not looked up ahead: takeover in 1.5 s, ordered attacks meanwhile")
       else
-        aft.deferUntil = nil
+        aft.deferUntil, aft.deferTicks = nil, nil
         ready = true
       end
+    else
+      aft.deferTicks = nil
     end
     if ready then
     local ahead = #det + #alv > 0
@@ -1702,6 +1758,7 @@ function M.after_tick(pawn)
       (os.clock() - t0) * 1000))
   end
   end
+  local tTake = os.clock()
   if on then
     -- nothing left of her to hit (every part cut or smashed away, at her death or after follow-ups): call it off
     -- early, same as time up. Probed after the takeover so the over line fires with its nodes to put back.
@@ -1709,11 +1766,28 @@ function M.after_tick(pawn)
     local gl = ctx.gore
     if mesh and gl and gl.nothing_left and (try(function() return gl.nothing_left(mesh) end) or false) then
       on = false
-      after_over("nothing left of her")
+      aft.overSince = since
+      -- what reads gone and why (playtest: the loop ended with a leg left)
+      local detail = ""
+      if gl.cut_state then
+        detail = try(function() return " [" .. table.concat(gl.cut_state(mesh), ", ") .. "]" end) or ""
+      end
+      after_over("nothing left of her" .. detail)
     end
   end
   if on then swings_tick(pawn, c) end
-  if os.clock() < aft.next then return end
+  local tSwing = os.clock()
+  do
+    -- the blackboard loop runs at most every quarter second; a slow takeover/swings tick that skips it
+    -- still reports itself
+    local tNow = os.clock()
+    if tNow < aft.next then
+      if (tNow - tAft) * 1000 > 100 then log(string.format(
+        "after death: slow tick %.0f ms: takeover %.0f, swings %.0f, blackboards skipped",
+        (tNow - tAft) * 1000, (tTake - tAft) * 1000, (tSwing - tTake) * 1000)) end
+      return
+    end
+  end
   aft.next = os.clock() + 0.25
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
   local me = addr(pawn)
@@ -1748,6 +1822,11 @@ function M.after_tick(pawn)
       end
     end
   end
+  -- which phase of the corpse loop costs when the tick is slow (the 671 ms death-frame hitch, playtest)
+  local tEnd = os.clock()
+  if (tEnd - tAft) * 1000 > 100 then log(string.format(
+    "after death: slow tick %.0f ms: takeover %.0f, swings %.0f, blackboards %.0f",
+    (tEnd - tAft) * 1000, (tTake - tAft) * 1000, (tSwing - tTake) * 1000, (tEnd - tSwing) * 1000)) end
 end
 
 -- every tick of hers (main.lua), pawn and mesh hers
@@ -2295,7 +2374,7 @@ function M.forget()
     local ok, back = pcall(after_putback)
     log(string.format("after death: the level reloaded while it was on: %s decision nodes put back", ok and tostring(back) or ("? (" .. tostring(back) .. ")")))
   end
-  aft.keys, aft.tasks, aft.undo, aft.sets = {}, nil, nil, 0
+  aft.keys, aft.tasks, aft.undo, aft.sets, aft.overSince, aft.deferUntil, aft.deferTicks = {}, nil, nil, 0, nil, nil, nil
   grab.on, grab.pawn, grab.mesh = {}, nil, nil
   aft.sw, aft.swings, aft.near, aft.anims, aft.scan, aft.loaded, aft.checked = {}, 0, nil, {}, nil, nil, nil
   down.done, down.next, down.pending = {}, 0, {}

@@ -19,10 +19,16 @@ local geometry=dofile("ue4ss/Mods/StellarBladeGore/Scripts/after_hit_geometry.lu
 local fails=0
 local function check(ok,msg) print((ok and "ok   " or "FAIL ")..msg); if not ok then fails=fails+1 end end
 local hit,d,bone,reach=geometry(mesh,{p=v(-20,0,10),q=v(20,0,10)},40)
-check(hit and bone=="Bip001-L-UpperArm" and d<1e-6 and reach==12 and math.abs(hit.Z-10)<1e-6,
+check(hit and bone=="Bip001-L-UpperArm" and d<1e-6 and reach==28 and math.abs(hit.Z-10)<1e-6,
   "hand sweep intersects the middle of the limb")
 local _,miss,_,limit=geometry(mesh,{p=v(-20,30,10),q=v(20,30,10)},40)
 check(miss and miss>limit, "a distant sweep misses the limb")
+-- playtest: a bare fist grazing 27 cm off her forearm registers (its extent, capped by the hand window),
+-- 30 cm does not
+local _, graze, grazeBone=geometry(mesh,{p=v(-20,0,47),q=v(20,0,47)},40)
+check(graze and graze<=28 and grazeBone=="Bip001-L-UpperArm", "a 27 cm fist graze registers on the limb")
+local _, far, _=geometry(mesh,{p=v(-20,0,50),q=v(20,0,50)},40)
+check(far and far>28, "a 30 cm fist pass still misses")
 local steps={ {v(-20,-5,10),v(20,-5,10)}, {v(-20,0,10),v(20,0,10)}, {v(-20,5,10),v(20,5,10)} }
 local _,swept,which,allowed=geometry(mesh,{steps=steps},25)
 check(which=="Bip001-L-UpperArm" and swept<1e-6 and swept<=allowed,

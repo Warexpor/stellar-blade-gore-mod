@@ -1,5 +1,5 @@
 -- Geometry of a weapon or hand crossing body segments after death.
-return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
+  return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
   local function after_radius(b)
     if b == "Bip001-Head" then return 12 end
     if b == "Bip001-Neck" then return 9 end
@@ -38,14 +38,19 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
     local c2 = { X = p2.X + d2.X * t, Y = p2.Y + d2.Y * t, Z = p2.Z + d2.Z * t }
     return dist(c1, c2), c1, c2
   end
-  return function(mesh, best, cfgReach, is_cut)
-    local at, d, bone, allow
+  -- Body segments in world space (sockets read once per call: a tick evaluates many candidates against
+  -- the same body, and re-reading ~15 sockets per candidate cost tens of ms, playtest). Pass segments
+  -- built by the second return to share them; without, they are built here.
+  local build_segs
   do
     -- Body segments in world space: full limb segments where SWING_AT names both ends, spheres elsewhere.
-    -- A swing must cross one of these within its anatomical radius (+4 cm slack, capped by the configured
-    -- reach), not merely pass near a joint point. Missing sockets are skipped: no geometry, no hit.
-    -- Parts already cut off her are skipped too (a swing through her body after a beheading must read the
-    -- torso, never the severed head wherever it flew).
+    -- A swing must cross one of these within tolerance, not merely pass near a joint point. Missing sockets
+    -- are skipped: no geometry, no hit. Parts already cut off her are skipped too (a swing through her body
+    -- after a beheading must read the torso, never the severed head wherever it flew).
+    -- A bare hand, foot or claw has no blade: its tracked point sits in the palm while the fist reaches on
+    -- past it, so point trails get the fist's own extent (+20, still capped by the configured reach: the old
+    -- 40 cm hand window is the ceiling). Blades stay anatomical (their width is in the sweep).
+    build_segs = function(mesh, is_cut)
     local function gone(b)
       if not is_cut then return false end
       local ok, r = pcall(is_cut, b)
@@ -71,6 +76,12 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
         if a then segs[#segs + 1] = { a = a, b = nil, bone = e[1], r = after_radius(e[1]) } end
       end
     end
+    return segs
+    end
+  end
+  local function geometry(mesh, best, cfgReach, is_cut, pre)
+    local segs = pre or build_segs(mesh, is_cut)
+    local at, d, bone, allow
     -- Blade sweep: the blade segment at sampled fractions of this step (every ~15 cm of travel, up to 8
     -- samples), so a fast swing cannot tunnel past a limb between endpoints. Hand/claw motion (no blade
     -- mesh) is a single moving point instead. Weapon bounds are used as-is; only the tolerance shrank.
@@ -95,7 +106,7 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
       end
     end
     for _, s in ipairs(segs) do
-      local lim = math.min(s.r + 4, cfgReach)
+      local lim = math.min(s.r + (best.steps and 4 or 20), cfgReach)
       if best.steps and #blades > 0 then
         for _, bl in ipairs(blades) do
           local dd, c2
@@ -128,7 +139,7 @@ return function(try, vof, SWING_AT, sub, dot, dist, seg_dist)
         if dd and (not d or dd - lim < d - allow) then at, d, bone, allow = c2, dd, s.bone, lim end
       end
     end
-  end
     return at, d, bone, allow
   end
+  return geometry, build_segs
 end

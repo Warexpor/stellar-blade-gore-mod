@@ -1907,7 +1907,7 @@ function sw.laser_hit(pawn, mesh)
     bone = best.p.bone:find("%-[LR]%-") and best.p.bone or nil }
 end
 -- Spatial hit testing is kept separate from attack gating and cut dispatch.
-sw.after_geometry = dofile("ue4ss/Mods/StellarBladeGore/Scripts/after_hit_geometry.lua")(try, vof, SWING_AT, sub, dot, dist, seg_dist)
+sw.after_geometry, sw.after_segments = dofile("ue4ss/Mods/StellarBladeGore/Scripts/after_hit_geometry.lua")(try, vof, SWING_AT, sub, dot, dist, seg_dist)
 local hits_after = dofile("ue4ss/Mods/StellarBladeGore/Scripts/hits_after.lua")(sw, ah, goreCtx,
   function() return tune end, function() return gore end, function() return swing end,
   try, vof, len, dist, sub, dot, cross, unit, log)

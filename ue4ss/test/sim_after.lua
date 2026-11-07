@@ -175,7 +175,9 @@ end
 F.run(4, pawn)
 check(det[1].bDead == true and det[1].TargetCancel == 2, "target searches take a dead target, dropped only once destroyed")
 check(alive[1].CheckType == 1, "'target alive' checks swapped")
-check(F.find("attacks of its own: M_NA_14_Attack_01", d0) ~= nil or F.find("attacks of its own: M_NA_14_Combo_02", d0) ~= nil,
+-- (warmed while she lives now, so the folder summary may predate the death: the drain, not the
+-- moment, is what this checks)
+check(F.find("attacks of its own: M_NA_14_Attack_01") ~= nil or F.find("attacks of its own: M_NA_14_Combo_02") ~= nil,
   "its own attack animations found (by its mesh's folder)")
 check(not F.find("no monster folder", d0), "no 'in no monster folder'")
 check(#near.plays > 0, "the nearest one swings at her body (" .. table.concat(near.plays, ", ") .. ")")

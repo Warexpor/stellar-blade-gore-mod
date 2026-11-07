@@ -44,7 +44,7 @@ end
 function sw.after_step(S, g)
   return sw.after_steps(S, g)[1]
 end
-local function hit_step(pawn, mesh, S, best, g, c, gore)
+local function hit_step(pawn, mesh, S, best, g, c, gore, segs)
   local hist = S.hist
   if ah.blunt or os.clock() - ah.t0 < (c.from or 0.6) then
     -- (the killing swing's own follow-through, and a blunt-ragdoll death: never a hit. Told once a death: a second
@@ -82,7 +82,7 @@ local function hit_step(pawn, mesh, S, best, g, c, gore)
     local ok, r = pcall(gore.already_cut, mesh, b)
     return ok and r or false
   end or nil
-  local at, d, bone, allow = sw.after_geometry(mesh, best, cfgReach, cut)
+  local at, d, bone, allow = sw.after_geometry(mesh, best, cfgReach, cut, segs)
   -- (a hand or claw with no weapon mesh: its bone sits in the palm, the fingers reach on past it. The palm
   -- sphere above keeps that reach; the old 40 cm window is now only a ceiling.)
   local reach = allow or cfgReach
@@ -248,8 +248,17 @@ local function hits_after(pawn, mesh)
     end
   end
   table.sort(candidates, function(x, y) return x.step.v > y.step.v end)
+  -- the body segments once per tick, not per candidate: re-reading ~15 sockets per candidate cost tens of
+  -- ms with a pack around her (53 ms one tick, playtest)
+  local segs = #candidates > 0 and sw.after_segments and try(function()
+    local cut = gore.already_cut and function(b)
+      local ok, r = pcall(gore.already_cut, mesh, b)
+      return ok and r or false
+    end or nil
+    return sw.after_segments(mesh, cut)
+  end) or nil
   for _, hit in ipairs(candidates) do
-    if hit_step(pawn, mesh, hit.tracker, hit.step, g, c, gore) then return end
+    if hit_step(pawn, mesh, hit.tracker, hit.step, g, c, gore, segs) then return end
   end
   if #candidates == 0 then
     -- an attack was ordered at her body but no weapon trail reached geometry: told, capped, never silent (an ordered

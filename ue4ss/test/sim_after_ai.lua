@@ -32,9 +32,17 @@ local ctx={tune=tune,log=function(s) alog[#alog+1]=s end,
   valid=function(o) return o~=nil and o~=false and not o.__dead end,
   keep=function(o) return {obj=o,alive=true} end,alive_ask=function() return true end,
   live_chars=function() return {{obj=enemy,addr=enemy:GetAddress(),cls='Test_C'}} end,
-  dead_since=function() return since end,time_scale=function() return scale end}
+  dead_since=function() return since end,time_scale=function() return scale end,
+  may_load=function() return true end}
 local en=dofile('ue4ss/Mods/StellarBladeGore/Scripts/enemies.lua')
 en.init(ctx)
+-- warm tree cache while she lives (deterministic: the cold-cache deferral waits real 1.5 s, so the
+-- death ticks below never depend on wall time)
+at=v(5000,0,0)
+since=nil
+en.after_tick(pawn)
+at=v(300,0,0)
+since=F.t
 local fails=0
 local function check(ok,s) print((ok and 'ok   ' or 'FAIL ')..s); if not ok then fails=fails+1 end end
 en.after_tick(pawn)
@@ -60,17 +68,34 @@ local mark0 = #alog
 en.after_tick(pawn)
 for _=1,40 do F.t=F.t+0.05; en.after_tick(pawn) end
 local function hasNew(pat) for i=mark0+1,#alog do if alog[i]:find(pat,1,true) then return true end end; return false end
+local function countAll(pat) local n=0; for _,s in ipairs(alog) do if s:find(pat,1,true) then n=n+1 end end; return n end
 check(probes > 0,'nothing-left check sees her mesh')
-check(hasNew('keep at her'),'takeover establishes while a body is left')
+check(has('keep at her'),'takeover establishes while a body is left (tick-counted deferral, no wall time)')
 destroyed = true
 en.after_tick(pawn)
 check(hasNew('nothing left of her'),'a destroyed body ends corpse attacks early')
--- a smashed-away upper body does not blind the corpse AI: it aims at her pelvis and keeps attacking
-spineGone = true
+-- latched: a spent death stays spent (no re-takeover every tick: the property churn and log flood, playtest).
+-- Past the 90-tick deferral without the latch the takeover would fire again; with it, nothing does.
+local keeps = countAll('keep at her')
+for _=1,120 do F.t=F.t+0.05; en.after_tick(pawn) end
+check(countAll('keep at her') == keeps,'a spent death stays spent: no re-takeover')
+-- a new death recovers the loop; a smashed-away upper body does not blind the corpse AI: it aims at her
+-- pelvis and keeps attacking
+since = F.t + 1000000
 destroyed = false
+spineGone = true
 local p0 = plays
 for _=1,80 do F.t=F.t+0.05; en.after_tick(pawn) end
 check(plays > p0,'a smashed upper-body socket falls back to her pelvis')
 spineGone = false
+-- cold cache defers the takeover off the death frame (a fresh module: no warm cache, real ms pass)
+local enCold = dofile('ue4ss/Mods/StellarBladeGore/Scripts/enemies.lua')
+enCold.init(ctx)
+local markC = #alog
+enCold.after_tick(pawn)
+for _=1,5 do enCold.after_tick(pawn) end
+local function hasCold(pat) for i=markC+1,#alog do if alog[i]:find(pat,1,true) then return true end end; return false end
+check(hasCold('takeover in 1.5 s'),'cold cache defers the takeover off the death frame')
+check(not hasCold('keep at her'),'no takeover before the deferral expires')
 check(#F.errors==0,'no fake engine errors')
 print(fails==0 and 'PASS' or 'FAIL')

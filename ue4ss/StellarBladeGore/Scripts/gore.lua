@@ -3905,6 +3905,26 @@ function M.nothing_left(mesh)
   end
   return true
 end
+-- which parts read gone and why (the corpse loop's over line, playtest: it ended with a leg left).
+-- Mirrors already_cut's three rules; "whole" agrees with already_cut false on every root.
+function M.cut_state(mesh)
+  local out, a = {}, addr(mesh)
+  for b in pairs(PARTS) do
+    local how = "whole"
+    for _, c in ipairs(cuts) do
+      if c.addr == a then
+        if c.fullSmash then how = "full smash"; break
+        elseif c.bone == b then how = c.smashed and "smashed" or "cut"; break
+        elseif c.smashed and try(function() return mesh:BoneIsChildOf(FName(b), FName(c.bone)) end) == true then
+          how = "gone with " .. c.bone; break
+        end
+      end
+    end
+    out[#out + 1] = b .. "=" .. how
+  end
+  table.sort(out)
+  return out
+end
 -- the parts cut off her whose mesh wears another asset now: an outfit put on her over the cut (Nexus 672, ESE: her
 -- shield broken, her suit torn or gone to the inner suit) is a new asset on the same component, its weights uncut, and
 -- the arm cut off her was back on her (reported). forget: their records dropped, the old asset's sinks put back

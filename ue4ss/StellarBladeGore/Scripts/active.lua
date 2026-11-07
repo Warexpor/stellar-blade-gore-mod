@@ -1736,18 +1736,31 @@ local function clamp_flung(comp, s, ci)
   -- 93 m/s and its pelvis 210 m/s from a mid-cut socket glitch, and the halves left the map: the torso-relative
   -- cap below is blind to the whole body flying together). Over it is slowed to it, every tick, both halves.
   local absmax = s.linearMax or 6000
+  -- one read per body per tick, not one per phase (five passes cost ~5 ms with a pack of bodies, playtest)
+  local vs, ls = {}, {}
+  for b in pairs(MASS) do
+    local v = lin_vel(comp, b)
+    vs[b], ls[b] = v, v and len(v) or 0
+  end
+  local me = (ci or 1) == 1 and "her" or "the split copy"
+  local function slow(b, l, lim)
+    local v = vs[b]
+    local k = lim / l
+    if try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end) then
+      vs[b] = vec(v.X * k, v.Y * k, v.Z * k)
+      ls[b] = lim
+    end
+  end
   do
     local over = 0
     for b in pairs(MASS) do
-      local v = lin_vel(comp, b)
-      local l = v and len(v)
-      if l and l > absmax then
-        local k = absmax / l
-        try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
+      if ls[b] > absmax then
+        local was = ls[b]
+        slow(b, was, absmax)
         over = over + 1
         if not run.absCapped then
           run.absCapped = true
-          log(string.format("absolute: %s at %.0f cm/s capped to %.0f at %.2f s on %s", b, l, absmax, run.t, (ci or 1) == 1 and "her" or "the split copy"))
+          log(string.format("absolute: %s at %.0f cm/s capped to %.0f at %.2f s on %s", b, was, absmax, run.t, me))
         end
       end
     end
@@ -1758,41 +1771,33 @@ local function clamp_flung(comp, s, ci)
   if run.t < (s.launchTime or 0.5) then
     local g = cfg()
     local lim = (run.mom or 0) + (g.impact or 200) * math.max(tonumber(g.push) or 1, 1) + (run.launchV or 0) + (s.launchOver or 400) + 981 * run.t
-    -- the fastest riser alongside: which half climbs, and how fast, when one takes off upward (playtest)
-    local up, upb = 0, nil
     for b in pairs(MASS) do
-      local v = lin_vel(comp, b)
-      if v and v.Z > up then up, upb = v.Z, b end
-    end
-    for b in pairs(MASS) do
-      local v = lin_vel(comp, b)
-      local l = v and len(v)
-      if l and l > lim then
-        local k = lim / l
-        try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
+      if ls[b] > lim then
+        local was = ls[b]
+        slow(b, was, lim)
         run.launched = (run.launched or 0) + 1
-        if run.launched == 1 then log(string.format("launched: %s at %.0f cm/s slowed to %.0f at %.2f s on %s (fastest riser %s at %.0f up)",
-          b, l, lim, run.t, (ci or 1) == 1 and "her" or "the split copy", tostring(upb), up)) end
+        if run.launched == 1 then
+          -- the fastest riser alongside: which half climbs, and how fast, when one takes off upward (playtest)
+          local up, upb = 0, nil
+          for bb in pairs(MASS) do if vs[bb] and vs[bb].Z > up then up, upb = vs[bb].Z, bb end end
+          log(string.format("launched: %s at %.0f cm/s slowed to %.0f at %.2f s on %s (fastest riser %s at %.0f up)",
+            b, was, lim, run.t, me, tostring(upb), up))
+        end
       end
     end
     return
   end
   local ref = 0
-  for _, b in ipairs(TORSO) do
-    local v = lin_vel(comp, b)
-    if v then ref = math.max(ref, len(v)) end
-  end
+  for _, b in ipairs(TORSO) do ref = math.max(ref, ls[b] or 0) end
   local cap = math.max(s.linearFloor or 1500, ref + (s.linearOver or 1200))
   for b in pairs(MASS) do
-    local v = lin_vel(comp, b)
-    local l = v and len(v)
-    if l and l > cap then
-      local k = cap / l
-      try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end)
+    if ls[b] > cap then
+      local was = ls[b]
+      slow(b, was, cap)
       run.flung = (run.flung or 0) + 1
       writes.flung = writes.flung + 1
       if run.flung == 1 then
-        log(string.format("flung: %s at %.0f cm/s (torso %.0f) slowed to %.0f at %.2f s on %s", b, l, ref, cap, run.t or 0, (ci or 1) == 1 and "her" or "the split copy"))
+        log(string.format("flung: %s at %.0f cm/s (torso %.0f) slowed to %.0f at %.2f s on %s", b, was, ref, cap, run.t or 0, me))
       end
     end
   end
