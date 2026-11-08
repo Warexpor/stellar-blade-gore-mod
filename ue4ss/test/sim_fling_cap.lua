@@ -27,6 +27,31 @@ for _, b in ipairs({ "Bip001-Pelvis", "Bip001-Spine1", "Bip001-R-Hand" }) do
 end
 check(held, string.format("uniform 200 m/s flight is capped at the absolute ceiling (%d cm/s)", vmax))
 check(F.find("absolute:") ~= nil, "the absolute cap logs its first bite")
+-- Both caps apply in the same tick. The sky trim must use the already-capped velocity,
+-- not restore the original horizontal speed after the absolute trim.
+R.V["Bip001-Pelvis"] = vec(20000, 0, 10000)
+R.V["Bip001-Spine1"] = vec(20000, 0, 10000)
+R.V["Bip001-R-Hand"] = vec(20000, 0, 10000)
+tick()
+local mixed = E.mesh:GetPhysicsLinearVelocity(F.fname("Bip001-R-Hand"))
+check(len(mixed) <= vmax + 1 and mixed.Z <= ctx.tune.active.spin.riseMax + 1,
+  "combined absolute and rise trims preserve both limits")
+ctx.tune.active.spin.linear = false
+R.V["Bip001-R-Hand"] = vec(0, 0, 2000)
+tick()
+check(E.mesh:GetPhysicsLinearVelocity(F.fname("Bip001-R-Hand")).Z == 2000,
+  "disabling linear speed trims also disables the rise trim")
+ctx.tune.active.spin.linear = true
+R.V["Bip001-R-Hand"] = vec(10, 0, 600)
+tick()
+check(E.mesh:GetPhysicsLinearVelocity(F.fname("Bip001-R-Hand")).Z <= ctx.tune.active.spin.riseMax + 1,
+  "the rise limit also trims a non-projectile 600 cm/s upward limb")
+ctx.tune.active.spin.riseMax = nil
+R.V["Bip001-R-Hand"] = vec(10, 0, 600)
+tick()
+check(E.mesh:GetPhysicsLinearVelocity(F.fname("Bip001-R-Hand")).Z <= 501,
+  "the missing rise setting falls back to the 500 cm/s default")
+ctx.tune.active.spin.riseMax = 500
 -- The source: one animated frame's per-bone speeds, capped at splitVelMax, never applied raw.
 local function find(fn, wanted, seen)
   seen = seen or {}; if type(fn) ~= "function" or seen[fn] then return end; seen[fn] = true

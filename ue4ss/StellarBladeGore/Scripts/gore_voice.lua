@@ -1,13 +1,18 @@
 -- Voice state, playback and preload paths.
 return function(M, cfg, load_obj, try, valid, log, vec, get_cuts, get_ctx)
--- the game's clock as it runs now (slow motion while she dies): her sounds pitch down with it, never up. The game's
+-- the game's clock as it runs now (slow motion while she dies): her cry slows only partway with it
+-- (about two thirds pitch at the default 0.15 speed), never up; full speed with voice.fullSpeed. The game's
 -- own sounds and music are outside this mod and keep their pitch
+local function voice_pitch(k)
+  if type(k) ~= "number" or k >= 1 or k <= 0 then return 1 end
+  return 0.6 + 0.4 * math.max(k, 0.05)
+end
 local function tscale()
+  local v = cfg and cfg().voice or {}
+  if v.fullSpeed == true then return 1 end
   local c = get_ctx and get_ctx()
   local f = c and c.time_scale
-  local k = f and f()
-  if type(k) ~= "number" or k >= 1 or k <= 0 then return 1 end
-  return math.max(k, 0.05)
+  return voice_pitch(f and f())
 end
 -- ---- her voice (tune.gore.voice) ----
 -- Eve's own death cry (vo_eve_die_*, SoundWaves under Sound/Dialogue/ActionVoice/Eve, localized like the game's
@@ -48,8 +53,9 @@ function vox.spawn(pawn, mesh, snd, vol)
     local x = mesh:GetSocketLocation(FName("Bip001-Head")); return { X = x.X, Y = x.Y, Z = x.Z }
   end) or try(function() local x = pawn:K2_GetActorLocation(); return { X = x.X, Y = x.Y, Z = x.Z } end)
   if not (gs and at) then return false, "nowhere" end
-  local pitch, att = (0.97 + math.random() * 0.06) * tscale(), load_obj(vox.ATTENUATION)
-  vox.ac, vox.acPitch = nil, pitch
+  local base = 0.97 + math.random() * 0.06
+  local pitch, att = base * tscale(), load_obj(vox.ATTENUATION)
+  vox.ac, vox.acBase = nil, base
   -- (KeepRelativeOffset 0, stopped if her mesh goes, not auto-destroyed till it ends)
   local ok, ac = pcall(function()
     return gs:SpawnSoundAttached(snd, mesh, FName("Bip001-Head"), vec(0, 0, 0), { Pitch = 0, Yaw = 0, Roll = 0 }, 0, true,
@@ -136,7 +142,10 @@ function M.voice_slow(k)
   local ac = vox.ac
   if not valid(ac) or not try(function() return ac:IsPlaying() end) then return end
   if type(k) ~= "number" or k <= 0 then k = 1 end
-  try(function() ac:SetPitchMultiplier((vox.acPitch or 0.97) * math.min(math.max(k, 0.05), 1)) end)
+  k = math.min(math.max(k, 0.05), 1)
+  local v = cfg and cfg().voice or {}
+  local f = v.fullSpeed == true and 1 or voice_pitch(k)
+  try(function() ac:SetPitchMultiplier((vox.acBase or 0.97) * f) end)
 end
 
 

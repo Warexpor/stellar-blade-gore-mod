@@ -152,8 +152,13 @@ local function track_swing(pawn, mesh)
       end
       local h = S.hist
       h[#h + 1] = s
-      while #h > 0 and (now - h[1].t) * scale > keep do table.remove(h, 1) end
-      while #h > 240 do table.remove(h, 1) end
+      local n, drop = #h, 0
+      while drop < n and (now - h[drop + 1].t) * scale > keep do drop = drop + 1 end
+      drop = math.max(drop, n - 240)
+      if drop > 0 then
+        table.move(h, drop + 1, n, 1)
+        for j = n - drop + 1, n do h[j] = nil end
+      end
     end
   end
   local ms = (os.clock() - t0) * 1000

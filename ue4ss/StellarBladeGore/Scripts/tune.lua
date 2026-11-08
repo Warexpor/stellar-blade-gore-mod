@@ -7,7 +7,8 @@ return {
   impulse = 400,               --   cm/s the upper body gets on top (spread over chest, neck, head, arms; 0 = none)
   legKick = 250,               --   cm/s her feet (calves less) are swept the other way, so she goes over and lands on
                                --   her back with "back"
-  direction = "back",          -- "back", "forward", "left", "right" of...
+  direction = "random",        -- "back", "forward", "left", "right" of...; "random" shoves her forward or back
+                               --   independently with equal odds on each F7 press
   relativeTo = "eve",          --   ..."eve" (her own facing) or "camera" (the camera's view)
   up = 0.1,                    -- upward share of the shove
   selfCollision = false,       -- her bodies collide with each other: an arm landing on her body set her spinning
@@ -449,6 +450,7 @@ return {
       --                            its colour/roughness; without a cap, the same seam material setup. false:
       --                            the meshes' own effect materials
       bareHands = true,        --   a bare hand, foot, knee or elbow swinging (no weapon mesh) is blunt
+      grabPounds = true,       --   a blunt pound in an enemy's grab smashes a limb while she lives, one a pound
       -- names (any part, any case) of what hit her, sharp checked first: the swinging enemy's weapon meshes, its
       -- swinging bone, then the enemy's name and class. With bareHands on, an unarmed downward blow is blunt too
       sharp = { "sword", "blade", "claw", "knife", "axe", "spear", "lance", "scythe", "saw", "sickle", "katana",
@@ -553,6 +555,9 @@ return {
       volume = 1.0,
       cutFade = 0.08,          --   s to fade after beheading or a head/upper-body smash (other cuts keep the cry)
       rest = 8,                --   s a recording rests before it can play again
+      fullSpeed = false,       --   true: the cry always plays at full speed, slow motion never bends it (false: it
+                                --   slows only partway with slow motion, about two thirds pitch at the default 0.15 speed,
+                                --   so a deep slow-mo no longer turns it into a long low groan)
       sounds = nil,            --   recordings to pick from (nil: vo_eve_die_01-05): names under
                                --   Sound/Dialogue/ActionVoice/Eve ("vo_eve_die_fall_01") or full paths of any
                                --   SoundWave / SoundCue ("/Game/Mods/MyVoice/scream_01"). A voice mod that replaces
@@ -984,16 +989,16 @@ return {
     bisect = false,            -- buzz hunt: F7 / F11 ragdolls take turns at 1 as it is, 2 plain engine
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s
     momentum = 1.0,            -- share of her speed before death carried into the fall (0 = drops on the spot)
-    momentumMax = 1500,        -- cm/s
+    momentumMax = 900,         -- cm/s: a dash into a Raven kill no longer starts the fall at a sprint
     push = 1.0,                -- times impact and launch below: how hard her death throws her (0: none of ours)
-    impact = 120,              -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
+    impact = 75,               -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
                                -- from the attacker when the game gives no direction)
-    impactUp = 0.15,           -- upward share of that push
-    launch = 200,              -- cm/s her whole body is launched along the killing blow on top (deaths only): the
-    launchUp = 0.2,            --   upper body's push alone toppled her on the spot, feet stuck to the floor; upward
+    impactUp = 0.08,           -- upward share of that push
+    launch = 110,              -- cm/s her whole body is launched along the killing blow on top (deaths only): the
+    launchUp = 0.12,           --   upper body's push alone toppled her on the spot, feet stuck to the floor; upward
                                --   share lifts her feet off it so she flies (0 = no launch; never on a split)
-    launchTicks = 4,           --   ticks after the push every body on her is kept at least that fast along it
-    twist = 35,                -- deg/s random turn about the vertical as she goes down (0 = none)
+    launchTicks = 3,           --   ticks after the push every body on her is kept at least that fast along it
+    twist = 20,                -- deg/s random turn about the vertical as she goes down (0 = none)
     dropWeapon = true,         -- her sword falls out of her hand (it hung in the air where she died)
     weaponKg = 1.5,            --   its weight
     weaponToss = 150,          --   cm/s it is thrown off on top of her hand's speed
@@ -1065,13 +1070,18 @@ return {
       splitMain = 360,         --   the same on a split's halves, which spun at up to 1000 deg/s as they fell
       splitEnds = 240,
       linear = true,           -- a main body flying off faster than her torso by more than linearOver cm/s (and
-      linearOver = 1200,       --   faster than linearFloor) is slowed to that every tick (a hand shot off at 15000
-      linearFloor = 1500,      --   cm/s, nineteenth playtest)
+      linearOver = 800,        --   faster than linearFloor) is slowed to that every tick (a hand shot off at 15000
+      linearFloor = 1200,      --   cm/s, nineteenth playtest)
       launchTime = 0.5,        -- s: over the start every main body, torso too, is held to her momentum + impact +
-      launchOver = 250,        --   launchOver cm/s (+ the fall since): a leg cut mid-fall shot her off at 16 m/s
-      linearMax = 6000,        -- cm/s no main body ever exceeds, torso included, the whole death: a mid-cut socket
+      launchOver = 150,        --   launchOver cm/s (+ the fall since): a leg cut mid-fall shot her off at 16 m/s
+      launchCap = 1100,        --   cm/s the start's total above never exceeds before the fall is added: a dash into
+                               --   a Raven kill no longer stacks momentum and the blow into a launch across the room
+      linearMax = 3500,        -- cm/s no main body ever exceeds, torso included, the whole death: a mid-cut socket
                               --   glitch read 93-210 m/s and the halves left the map; the torso-relative cap below is
                               --   blind to the whole body flying together
+      riseMax = 500,           -- cm/s main-body rise limit while the linear trims run: a rock volley kicked her foot to
+                              --   90 m/s and re-pumped her between 30 Hz trims till she peaked 13 m up (normal deaths
+                              --   can briefly exceed 500 up); horizontal throws are untouched, 500 still flies ~1.3 m up
       leash = 5000,            -- cm sideways from where she went limp past which both halves are stopped, once, and
                               --   the log says so (vertical falls are legit; leaving sideways never is)
     },
@@ -1133,6 +1143,11 @@ return {
     pushUp = 0.2,              --   upward share of it
     pushScale = 1.0,           -- times the game's own throw of a dying enemy (0: it drops on the spot; 2: twice as far)
     capFade = 1.5,             -- seconds a dissolving corpse's caps and bone stubs shrink away over (0: gone at once)
+    keepAngelBodies = false,   -- buried, experimental (tune.lua only: not in settings.lua or the F3 menu): dead Airborne
+                               --   Squad angels stay on the ground instead of dissolving with the game's despawn. While one
+                               --   lies, its CharacterTable row's DespawnTimeAfterDeath is held long and put back exactly
+                               --   after; story rows are touched while held: that's the point. Needs an in-game check.
+    keepAngelFor = 3600,       --   s a kept angel body stays at least (an hour: the session, in practice)
     maxCorpses = 6,            -- cut corpses at once; past it a kill is left whole (each holds caps, effects and its
                                -- kind's collapsed helpers, which bend every live enemy of that kind near the cut)
     corpseHits = {             -- her swings through a corpse cut it again

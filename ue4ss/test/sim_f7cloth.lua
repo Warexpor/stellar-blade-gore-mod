@@ -120,6 +120,41 @@ rawset(mesh, "GetBoneIndex", oldIndex)
 rawset(mesh, "GetParentBone", oldParent)
 rawset(mesh, "GetSocketTransform", oldTransform)
 
+-- Test the actual shove selection deterministically, including its direction and log.
+local visited, shove = {}, nil
+local function find(fn)
+  if type(fn) ~= "function" or visited[fn] or shove then return end
+  visited[fn] = true
+  for i = 1, math.huge do
+    local name, value = debug.getupvalue(fn, i)
+    if not name then break end
+    if name == "f7_shove" then shove = value; return end
+    if name ~= "_ENV" then find(value) end
+  end
+end
+for _, callbacks in pairs(F.hooks) do for _, fn in ipairs(callbacks) do find(fn) end end
+for _, b in ipairs(F.binds) do find(b.cb) end
+check(type(shove) == "function", "production F7 shove found")
+local tune
+for i = 1, math.huge do local n, v = debug.getupvalue(shove, i); if not n then break end; if n == "tune" then tune = v; break end end
+local originalForward, originalImpulse = rawget(pawn, "GetActorForwardVector"), rawget(mesh, "AddImpulseToAllBodiesBelow")
+local originalRandom, lastPush = math.random, nil
+rawset(pawn, "GetActorForwardVector", function() return { X = 1, Y = 0, Z = 0 } end)
+rawset(mesh, "AddImpulseToAllBodiesBelow", function(_, v) lastPush = v end)
+tune.direction, tune.relativeTo = "random", "eve"
+math.random = function() return 0.25 end
+at = mark(); shove(pawn, mesh)
+check(lastPush and lastPush.X > 0 and F.find("F7: pushed forward", at), "random lower half shoves forward and logs forward")
+math.random = function() return 0.75 end
+at = mark(); shove(pawn, mesh)
+check(lastPush and lastPush.X < 0 and F.find("F7: pushed back", at), "random upper half shoves back and logs back")
+tune.direction = "invalid"
+at = mark(); shove(pawn, mesh)
+check(lastPush and lastPush.X < 0 and F.find("F7: pushed back", at), "unknown direction falls back to and logs back")
+math.random = originalRandom
+rawset(pawn, "GetActorForwardVector", originalForward)
+rawset(mesh, "AddImpulseToAllBodiesBelow", originalImpulse)
+
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

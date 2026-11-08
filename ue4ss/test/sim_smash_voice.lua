@@ -11,9 +11,10 @@ for i = 1, 5 do
   local path = "/Game/Sound/Dialogue/ActionVoice/Eve/" .. name .. "." .. name
   F.objects[path] = F.obj(name, "SoundWave")
 end
-local function spawn()
-  local c = F.obj("Cry", "AudioComponent", { started = F.t, fades = {}, playing = true })
+local function spawn(...)
+  local c = F.obj("Cry", "AudioComponent", { started = F.t, fades = {}, playing = true, pitch = select(10, ...) })
   c.IsPlaying = function(self) return self.playing end
+  c.SetPitchMultiplier = function(self, pitch) self.pitch = pitch end
   c.FadeOut = function(self, seconds, volume, curve)
     self.fades[#self.fades + 1] = { at = F.t, seconds = seconds, volume = volume, curve = curve }
     self.playing = false
@@ -23,6 +24,21 @@ local function spawn()
 end
 local gs = F.objects["/Script/Engine.Default__GameplayStatics"]
 gs.SpawnSoundAttached, gs.SpawnSoundAtLocation = spawn, spawn
+-- A cry spawned during slow motion and later retuned must always use its original pitch once.
+local oldTime = T.ctx.time_scale
+T.ctx.time_scale = function() return 0.15 end
+G.voice_death(pawn, E.mesh)
+local pitched = audio[#audio]
+local base = pitched.pitch / 0.66
+check(base >= 0.97 and base <= 1.03, "spawned slow cry uses two-thirds of its random base pitch")
+G.voice_slow(0.5)
+check(math.abs(pitched.pitch - base * 0.8) < 1e-6, "mid-cry speed change uses base pitch, not the previous factor")
+T.ctx.tune.gore.voice.fullSpeed = true
+G.voice_slow(0.15)
+check(math.abs(pitched.pitch - base) < 1e-6, "full-speed setting bypasses pitch bending")
+G.voice_death(pawn, E.mesh)
+check(audio[#audio].pitch >= 0.97 and audio[#audio].pitch <= 1.03, "full-speed setting also applies at spawn")
+T.ctx.tune.gore.voice.fullSpeed, T.ctx.time_scale = false, oldTime
 local function run(sec)
   for _ = 1, math.floor(sec * 60) do F.step(1/60); G.tick(pawn); G.pump() end
 end

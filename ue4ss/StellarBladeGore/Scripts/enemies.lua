@@ -70,6 +70,31 @@ local function kind_of(cls)
   end
   return byClass[cls]
 end
+-- story angels on a different Blueprint but Eve's body (an ending fight's humanoids): cut as the Airborne Squad.
+-- kind_of only knows the curated Blueprint, so variants would track as roster rows and never cut. Eve herself
+-- (CH_P_) is never it. Cached by address; cleared when the actor goes and on forget.
+local angelCache, angelKind = {}, nil
+local function angel_kind_for(c)
+  local a = c.addr
+  if angelCache[a] ~= nil then return angelCache[a] or nil end
+  local k = nil
+  if not c.cls:find("CH_P_", 1, true) then
+    local mesh = valid(c.obj) and try(function() return c.obj.Mesh end)
+    local sm = valid(mesh) and try(function() return mesh.SkeletalMesh end)
+    -- Meshes can arrive after their actor; don't cache a miss or call into a null engine object.
+    if not valid(sm) then return nil end
+    local nm = try(function() return sm:GetFName():ToString() end) or ""
+    if nm == "" then nm = try(function() return sm:GetFullName() end) or "" end
+    if nm == "" then return nil end
+    if nm:find("AirborneSquad", 1, true) or nm:find("CH_P_EVE_01_Body", 1, true) then
+      if not angelKind then for _, x in ipairs(kinds()) do if x.alias == "N_AirborneSquad" then angelKind = x break end end end
+      k = angelKind
+      if k then log(string.format("following %s %x (%s): Eve-bodied story angel, cut as %s", k.alias, a, c.cls, k.alias)) end
+    end
+  end
+  angelCache[a] = k or false
+  return k
+end
 
 local function spcfg() return ctx.tune.spawner or {} end
 -- every CharacterTable row (roster.lua, generated from the base game's table dump): spawnable by alias or ID.
@@ -727,10 +752,36 @@ end
 -- how: nil (the corpse is still there), "destroyed" (being destroyed) or "vanished" (see gore.enemy_gone)
 local function gone(a, e, how, why)
   known[a] = nil
+  angelCache[a] = nil
   if e.kind.row and ctx.bosses then ctx.bosses.gone(a, e) end
   if e.cut and ctx.gore then try(function() ctx.gore.enemy_gone(a, e.mesh, how) end) end
   restore_boss_weapons(e, how == nil)
   if e.cut then log(string.format("%s %x %s: its gore removed", e.kind.alias, a, why)) end
+end
+
+-- buried: dead angels kept on the ground (tune.enemies.keepAngelBodies): the N_AirborneSquad row's
+-- DespawnTimeAfterDeath held long while one lies, put back exactly after. Kept cut angels don't count at
+-- maxCorpses (they're meant to stay; live ones may pinch near their helpers meanwhile).
+local function is_angel(kind) return kind and kind.alias == "N_AirborneSquad" end
+local angelKept, angelRetry = nil, 0
+local function keep_secs() return math.max(tonumber(cfg().keepAngelFor) or 3600, 60) end
+local function angel_keep_tick()
+  local want = cfg().keepAngelBodies == true
+  local n = 0
+  if want then for _, e in pairs(known) do if e.dead and is_angel(e.kind) then n = n + 1 end end end
+  if n > 0 and not angelKept and os.clock() >= angelRetry then
+    local err
+    if ctx.bosses and ctx.bosses.keep_despawn then err = ctx.bosses.keep_despawn("N_AirborneSquad", keep_secs())
+    else err = "bosses unavailable" end
+    if err then angelRetry = os.clock() + 5; log(string.format("keep angel bodies: not held (%s)", tostring(err)))
+    else angelKept = "N_AirborneSquad" end
+  elseif n == 0 and angelKept and os.clock() >= angelRetry then
+    local err = ctx.bosses and ctx.bosses.unkeep_despawn and ctx.bosses.unkeep_despawn(angelKept, "no kept bodies left")
+      or (not (ctx.bosses and ctx.bosses.unkeep_despawn) and "bosses unavailable")
+    if err then angelRetry = os.clock() + 5; log(string.format("keep angel bodies: restore pending (%s)", tostring(err)))
+    else angelKept = nil end
+  end
+  return angelKept ~= nil
 end
 
 -- the kill: its cut, once gore is free (one cut opens at a time), tried for killWait seconds. What it waited for is
@@ -1866,10 +1917,11 @@ function M.tick(pawn, mesh, tm)
   tm("enemies hand")
   local her = try(function() return vof(pawn:K2_GetActorLocation()) end)
   local me = addr(pawn)
-  local seen = {}
+  local seen, seenCharacters = {}, {}
   local now = os.clock()
   for _, c in ipairs(ctx.live_chars()) do
-    local k = kind_of(c.cls) or proximity_expect(c, me)
+    seenCharacters[c.addr] = true
+    local k = kind_of(c.cls) or angel_kind_for(c) or proximity_expect(c, me)
     if not k then
       -- already followed (an unknown class adopted by proximity: its request is gone, but it is still it)
       local old = known[c.addr]
@@ -1930,7 +1982,10 @@ function M.tick(pawn, mesh, tm)
               if near and pushes then death_push(pawn, e, pel) end
               local cut_now = cuts and near and math.random() <= (g.cutChance or 1.0)
               local corpses = 0
-              for _, x in pairs(known) do if x.cut then corpses = corpses + 1 end end
+              local kept = angelKept ~= nil
+              for _, x in pairs(known) do
+                if x.cut and not (kept and is_angel(x.kind)) then corpses = corpses + 1 end
+              end
               if cut_now and corpses >= (g.maxCorpses or 6) then
                 log(string.format("%s %x died: %d cut corpses already (maxCorpses), left whole", k.alias, c.addr, corpses))
                 cut_now = false
@@ -1965,6 +2020,9 @@ function M.tick(pawn, mesh, tm)
                   e.faded, e.want = true, nil
                   if e.cut and gore then gore.enemy_fading(c.addr) end
                   log(string.format("%s %x dissolving (%s)%s", e.kind.alias, c.addr, now, e.cut and ": its caps and bleeds removed" or ""))
+                  if angelKept and is_angel(e.kind) then
+                    log(string.format("%s %x kept but dissolving: its CharacterTable row may differ from N_AirborneSquad; send this log", e.kind.alias, c.addr))
+                  end
                 end
               end
               if e.faded or not cuts then -- nothing more on a body going (cuts off: the push was all)
@@ -1979,6 +2037,8 @@ function M.tick(pawn, mesh, tm)
   for a, e in pairs(known) do
     if not seen[a] then gone(a, e, "vanished", "gone") end
   end
+  for a in pairs(angelCache) do if not seenCharacters[a] then angelCache[a] = nil end end
+  angel_keep_tick()
 end
 -- ---- her death in an enemy's grab (tune.enemies.grab) ----
 -- Raven grabbed her and hit her again and again; she died on one of the hits, the mod's ragdoll took her out of it at
@@ -2366,6 +2426,12 @@ function M.hostile_rows() return hos.rows end
 -- the level reloaded: everything of the old world is dropped without touching it (gore.forget drops the gore)
 function M.forget()
   known, mine, expect, hand = {}, {}, {}, {}
+  angelCache, angelKind = {}, nil
+  if angelKept then
+    if ctx.bosses and ctx.bosses.unkeep_despawn then pcall(ctx.bosses.unkeep_despawn, angelKept, "level reloaded") end
+    angelKept = nil
+  end
+  angelRetry = 0
   -- (after death's swings, attacks and tree nodes were the old level's, by address: a swing still on would be given back
   -- to a freed mesh, IsValid reading it, once a new enemy took its address. Dropped without touching them; the trees
   -- are looked up again in the new level. Nodes it changed that outlive the level, their tree asset kept loaded, are

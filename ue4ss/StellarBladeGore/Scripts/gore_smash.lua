@@ -11,10 +11,11 @@ local function v3(...) return d.v3()(...) end
 -- at the lethal hit (it needs her ragdoll: smashed at the death instead)
 function M.smash(pawn, mesh, h, why)
   local s = cfg().smash or {}
+  local grabPound = h and h.grabPound or nil
   -- Full-body likelihood follows measured footprint coverage, including the hit's position.
   local volley = h and h.projectile and (h.volley or 0) >= 2
   local impactRadius = M.smashed.number(h and h.impactRadius, 0, 0, 500)
-  local canFull = s.fullBody ~= false and impactRadius > 0 and M.cuts_on(mesh) == 0
+  local canFull = not grabPound and s.fullBody ~= false and impactRadius > 0 and M.cuts_on(mesh) == 0
     and valid(mesh) and (try(function() return mesh:GetBoneIndex(FName("Bip001-Spine1")) end) or -1) >= 0
     and not already_cut(mesh, "Bip001-Spine1")
   local coverage = canFull and M.smashed.coverage(mesh, h) or 0
@@ -26,7 +27,8 @@ function M.smash(pawn, mesh, h, why)
   if h and h.smashFullRoll == nil then h.smashFullRoll = canFull and (chance >= 1 or (chance > 0 and math.random() < chance)) or false end
   local full = canFull and (h and h.smashFullRoll or (not h and (chance >= 1 or (chance > 0 and math.random() < chance))))
   local pose = h and h.pose
-  local bone, d, kind, distances = M.smash_part(mesh, h and h.loc, full and "torso" or nil, pose, impactRadius)
+  -- a grab pound while she lives takes one limb (never the head or body: those need her ragdoll)
+  local bone, d, kind, distances = M.smash_part(mesh, h and h.loc, full and "torso" or (grabPound and "limb" or nil), pose, impactRadius)
   -- Reported impact points often cluster at the chest. The optional balance can redirect torso picks;
   -- otherwise use the nearest surviving head or limb. Persist the roll across deferred deaths.
   if not full and s.overrideTargets ~= true and kind == "torso" and h and h.loc then
@@ -47,7 +49,7 @@ function M.smash(pawn, mesh, h, why)
   full = full and kind == "torso"
   -- Remainder: the upper body already smashed, a blunt hit to a leg explodes what is left (pelvis and legs).
   -- No footprint needed: melee after-death hits carry none, and only the lower body remains.
-  local remainder = not full and bone and kind == "limb" and (bone:find("Thigh") or bone:find("Calf"))
+  local remainder = not grabPound and not full and bone and kind == "limb" and (bone:find("Thigh") or bone:find("Calf"))
     and already_cut(mesh, "Bip001-Spine1") and s.fullBody ~= false
   if remainder then
     full = true

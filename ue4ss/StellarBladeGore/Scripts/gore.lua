@@ -130,6 +130,7 @@ local cuts = {}     -- { mesh, addr, bone } per cut, in order
 local forced = {}   -- address -> component this script forced to LOD0
 local clones = {}   -- components made for a split (the other half's body), destroyed on cleanup
 local rehomed = {}  -- { comp, parent, socket, master }: gloves, suit pieces, accessories moved onto a split's copy
+local headwearMoved = {} -- neck riders moved to the head, restored on recovery
 local copy_watch = nil -- { comp, n }: a split's copy, its ragdoll logged for a couple of seconds
 local limb_watch = nil -- { mesh, bone, kept, anchor, n }: a limb cut's stretched skin and hanging chains, logged at 1 and 5 s
 local skinned = {}      -- split lids that bend with her spine: { actor, pmc, comp, bones, v = per vertex skin, n }
@@ -1278,8 +1279,9 @@ end
 
 M.face_of = face_of
 
--- her hair (mesh slots Hair1, Ponytail, PonytailShort) that is showing, and any hair another mod put on her body's
--- pose or on her head (Play As's Raven: her own hair, a component of its own at Eve's head bone, its strands simulated)
+-- her hair (mesh slots Hair1, Ponytail, PonytailShort) that is showing, any hair another mod put on her body's
+-- pose or on her head (Play As's Raven: her own hair, a component of its own at Eve's head bone, its strands simulated),
+-- and headwear that covers it (a nun's veil, hood, coif: no "Hair" in its mesh name, on her head all the same)
 local HAIR_SLOTS = { [2] = true, [3] = true, [4] = true }
 local function hair_of(pawn)
   local out, seen = {}, {}
@@ -1300,18 +1302,75 @@ local function hair_of(pawn)
       local c = e:get()
       local n = mesh_name(c)
       local a = n and addr(c)
-      if a and not seen[a] and n:find("Hair", 1, true) and try(function() return c:IsVisible() end) == true then
+      if a and not seen[a] and try(function() return c:IsVisible() end) == true then
+        local headwear = n:find("Hair", 1, true) or n:find("Veil", 1, true) or n:find("Hood", 1, true)
+          or n:find("Nun", 1, true) or n:find("Coif", 1, true) or n:find("Wimple", 1, true)
+          or n:find("Habit", 1, true)
         local m = try(function() return c.MasterPoseComponent:Get() end)
+        if not valid(m) then m = nil end
         local sock = not m and try(function() return c.AttachSocketName end)
-        local onHead = sock and (try(function() return sock:ToString() end) == "Bip001-Head"
+        local sname = sock and try(function() return sock:ToString() end)
+        local socketBone = sname and try(function() return body:GetSocketBoneName(sock):ToString() end)
+        local onHead = sname and (sname == "Bip001-Head"
+          or sname:find("Hair") or sname:find("Head") or sname:find("Veil") or sname:find("Hood") or sname:find("Nun")
+          or socketBone == "Bip001-Head"
+          or socketBone and try(function() return body:BoneIsChildOf(FName(socketBone), FName("Bip001-Head")) end) == true
           or try(function() return body:BoneIsChildOf(sock, FName("Bip001-Head")) end) == true)
-        if m and addr(m) == me or onHead then out[#out + 1] = c; seen[a] = true end
+        -- Named headwear can ride the neck: a head smash must hide it just as a behead moves it.
+        local onNeck = headwear and (sname == "Bip001-Neck" or socketBone == "Bip001-Neck")
+        if (headwear or onHead) and (m and addr(m) == me or onHead or onNeck) then out[#out + 1] = c; seen[a] = true end
       end
     end) end)
   end
   return out
 end
 M.hair_of = hair_of
+
+-- a beheading: headwear riding her neck (a veil's hood) goes with the head, not the stump.
+-- Master-pose hair follows the head bone on its own; only socket riders off the head move.
+function M.headwear_to_head(pawn, mesh)
+  local moved = {}
+  local face = face_of(pawn, mesh)
+  local fa = addr(face)
+  local kids = {}
+  try(function() mesh.AttachChildren:ForEach(function(_, e) kids[#kids + 1] = e:get() end) end)
+  for _, k in ipairs(kids) do
+    local a = valid(k) and addr(k)
+    if a and a ~= fa then
+      local n = mesh_name(k) or ""
+      local headwear = n:find("Veil", 1, true) or n:find("Hood", 1, true) or n:find("Nun", 1, true)
+        or n:find("Coif", 1, true) or n:find("Wimple", 1, true) or n:find("Habit", 1, true)
+        or n:find("Hair", 1, true)
+      if headwear then
+        -- master-pose hair follows the head bone on its own; only socket riders move
+        local master = try(function() return k.MasterPoseComponent:Get() end)
+        if valid(master) and addr(master) == addr(mesh) then
+          -- already posed by her mesh: follows the head on its own
+        else
+        local sock = try(function() return k:GetAttachSocketName() end)
+        local s = sock and try(function() return sock:ToString() end)
+        local bone = s and (try(function() return mesh:GetSocketBoneName(sock):ToString() end) or s)
+        local underHead = bone and (s == "Bip001-Head" or bone == "Bip001-Head"
+          or try(function() return mesh:BoneIsChildOf(FName(bone), FName("Bip001-Head")) end) == true)
+        local onNeck = bone and (s == "Bip001-Neck" or bone == "Bip001-Neck"
+          or try(function() return mesh:BoneIsChildOf(FName(bone), FName("Bip001-Neck")) end) == true)
+        if onNeck and not underHead then
+          local rel = try(function()
+            local p, r, sc = k.RelativeLocation, k.RelativeRotation, k.RelativeScale3D
+            return { p = vec(p.X, p.Y, p.Z), r = { Pitch = r.Pitch, Yaw = r.Yaw, Roll = r.Roll }, sc = vec(sc.X, sc.Y, sc.Z) }
+          end)
+          if sock and rel and try(function() return k:K2_AttachToComponent(mesh, FName("Bip001-Head"), 1, 1, 1, false) end) == true then
+            headwearMoved[#headwearMoved + 1] = { comp = k, parent = mesh, socket = sock, rel = rel }
+            moved[#moved + 1] = n .. "@" .. tostring(s)
+          end
+        end
+        end
+      end
+    end
+  end
+  if #moved > 0 then log("beheaded: headwear follows the head: " .. table.concat(moved, ", ")) end
+  return #moved
+end
 
 -- who she looks like when another mod plays her as someone else (Stellar Blade Play As, or any mod putting that character's
 -- meshes on Eve): "tachy" (Tachy's NPC body), "scarlet" (her DLC body), "raven" (Raven's own hair on her pose), else nil.
@@ -2471,6 +2530,10 @@ local function stage_open(q)
     for _, c in ipairs(tops) do try(function() ctx.on_cut(q.mesh, c) end) end
   end
   mark("on_cut")
+  -- a beheading on a normal cut: headwear off the head (a veil's hood) rides with it, not the stump
+  if q.bone == "Bip001-Head" and not q.smash and not q.quiet and not enemy.cur then
+    try(function() M.headwear_to_head(q.pawn, q.mesh) end)
+  end
   local nh = hang_chains(q)
   mark("chains")
   if nh ~= "" then world = world .. ", " .. nh end
@@ -4154,7 +4217,8 @@ function M.hide_pieces(pawn, mesh, on, bake)
     end
   end
   local function under(s)
-    if head and (s:find("Hair") or s:find("Head") or s:find("Face") or s:find("Ear")) then return true end
+    if head and (s:find("Hair") or s:find("Head") or s:find("Face") or s:find("Ear")
+      or s:find("Veil") or s:find("Hood") or s:find("Nun") or s:find("Coif") or s:find("Wimple") or s:find("Habit")) then return true end
     local bone = try(function() return mesh:GetSocketBoneName(FName(s)):ToString() end) or s
     for _, b in ipairs(roots) do
       if bone == b or try(function() return mesh:BoneIsChildOf(FName(bone), FName(b)) end) == true then return true end
@@ -4257,6 +4321,11 @@ end
 function M.torso_legs(blade)
   local t = cfg().torsoLegs
   if type(t) ~= "table" or t.enabled == false then return nil end
+  -- a death after an enemy's grab: the full ragdoll, so the finisher can't pull the half back
+  if ctx.grabDeath and ctx.grabDeath() then
+    log("waist cut: grab death, legs off (the full ragdoll)")
+    return nil
+  end
   local odds, what = tonumber(t.rolled) or 0.5, "no blade seen"
   local n = blade and blade.n and norm(blade.n)
   if n then
@@ -4733,6 +4802,16 @@ function M.cleanup(pawn, mesh)
   M.clear_marks()
   -- (a piece lying on its copy back on her first: its bones stayed hidden on her, the regrown arm unseen)
   if M.pieceHid then M.hide_pieces(nil, nil, false) end
+  for _, h in ipairs(headwearMoved) do
+    if valid(h.comp) and valid(h.parent) then
+      try(function()
+        h.comp:K2_AttachToComponent(h.parent, h.socket, 0, 0, 0, false)
+        h.comp:K2_SetRelativeLocationAndRotation(h.rel.p, h.rel.r, false, {}, true)
+        h.comp:SetRelativeScale3D(h.rel.sc)
+      end)
+    end
+  end
+  headwearMoved = {}
   local t = {}
   spawned, t.spawned = aside(spawned)
   bleeds, t.bleeds = aside(bleeds)
@@ -4993,6 +5072,7 @@ function M.state() return native.state end
 -- (assets_prune), and one of an enemy kind still around stays on its corpses' records till they go
 function M.forget(pawn)
   M.outfit_forget()
+  headwearMoved = {}
   M.weddingCloth = {}
   M.stubs = {}
   local wears = {}

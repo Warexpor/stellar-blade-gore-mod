@@ -247,6 +247,53 @@ function M.is_passive(a) local x = live[a]; return x ~= nil and x.passive == tru
 -- within a second of her death, standing (playtests); starting it again with hers stretched her legs out across
 -- the map: her death's physics is logged (M.physics_line) and left to the game
 M.PHYS_HOLD = 1.0
+-- buried: keep a row's bodies on the ground (DespawnTimeAfterDeath at least `secs`, only that field).
+-- For angels (tune.enemies.keepAngelBodies): their corpses dissolve on the game's despawn show otherwise. Held while
+-- keepers exist, put back exactly once none do; a story row is touched while held: that's the point.
+local keeps = {} -- row -> { dt, off, was, n, t }
+function M.keep_despawn(row, secs)
+  if not ctx.gore or ctx.gore.native_state() ~= "ready" then return "sbslice.dll isn't up yet" end
+  secs = tonumber(secs) or 3600
+  local k = keeps[row]
+  local dt, rs = table_of()
+  if not dt then return "no CharacterTable loaded" end
+  if k and k.dt ~= addr(dt) then keeps[row], k = nil, nil end
+  if k then
+    if k.restorePending then k.restorePending, k.orphanRetry = nil, nil else k.n = k.n + 1 end
+    k.t = os.clock()
+    return nil
+  end
+  local off = offsets(rs)
+  if not off.DespawnTimeAfterDeath then return "no DespawnTimeAfterDeath field" end
+  local was = field(dt, rs, row, off.DespawnTimeAfterDeath)
+  if not was then return "row not found: " .. tostring(row) end
+  if u2f(was) >= secs then
+    keeps[row] = { dt = addr(dt), off = off, was = nil, n = 1, t = os.clock() }
+    log(string.format("%s already despawns after %.0f s: held as it is while its bodies lie", row, u2f(was)))
+    return nil
+  end
+  if not field(dt, rs, row, off.DespawnTimeAfterDeath, f2u(secs)) then return "not written" end
+  keeps[row] = { dt = addr(dt), off = off, was = was, n = 1, t = os.clock() }
+  log(string.format("%s kept on the ground while its bodies lie: despawns after %.0f s (was %.1f)", row, secs, u2f(was)))
+  return nil
+end
+function M.unkeep_despawn(row, why)
+  local k = keeps[row]
+  if not k then return end
+  if k.n > 1 then k.n = k.n - 1; return end
+  if k.was == nil then keeps[row] = nil; log(string.format("%s no longer held (%s)", row, why or "was already long")); return end
+  local dt, rs = table_of()
+  if not dt then k.restorePending = true; return "CharacterTable unavailable" end
+  if addr(dt) ~= k.dt then keeps[row] = nil; log(string.format("%s: its table is gone, nothing to put back (%s)", row, why or "?")); return end
+  if field(dt, rs, row, k.off.DespawnTimeAfterDeath, k.was) then
+    keeps[row] = nil
+    log(string.format("%s's despawn put back as the game has it (%s)", row, why or "no kept bodies left"))
+  else
+    k.restorePending = true
+    log(string.format("%s's despawn NOT put back: write failed (%s)", row, why or "?"))
+    return "despawn restore failed"
+  end
+end
 local function own_physics(e)
   local want = e.kind.physics
   local mesh = e.mesh or try(function() return e.obj.Mesh end)
@@ -547,6 +594,12 @@ end
 
 function M.tick(pawn)
   local now = os.clock()
+  for row, k in pairs(keeps) do
+    if k.orphanRetry and now >= k.orphanRetry then
+      k.orphanRetry = now + 5
+      M.unkeep_despawn(row, "retry after level reload")
+    end
+  end
   -- the rows put back once none of their kind spawned here is left (and none asked for in the last 15 s); one whose
   -- actor went without enemies.lua telling (removed from the spawner window, destroyed) isn't left counted: its row
   -- stayed mortal for good
@@ -654,9 +707,15 @@ function M.forget()
   for a, d in pairs(dead) do if d.struggle then pcall(d.struggle.forget) end end
   live, dead, hud.w = {}, {}, nil
   for row in pairs(rows) do pcall(put_back, row, "level reloaded") end
+  for row, k in pairs(keeps) do
+    k.n = 1
+    local ok, err = pcall(M.unkeep_despawn, row, "level reloaded")
+    if not ok or err then k.orphanRetry = os.clock() + 5 end
+  end
   pcall(hold_again, "level reloaded")
 end
 
 -- (the sims)
 M._rows, M._live, M._dead = function() return rows end, function() return live end, function() return dead end
+M._keeps = function() return keeps end
 return M

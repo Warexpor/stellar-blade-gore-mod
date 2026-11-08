@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.0"
+local VERSION = "0.7.1"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -1161,7 +1161,11 @@ local function f7_shove(pawn, mesh)
   local fl = math.max(math.sqrt(f.X * f.X + f.Y * f.Y), 1e-3)
   local fx, fy = f.X / fl, f.Y / fl
   local dirs = { forward = { fx, fy }, back = { -fx, -fy }, left = { fy, -fx }, right = { -fy, fx } }
-  local d = dirs[tune.direction] or dirs.back
+  local dirName = tune.direction or "back"
+  -- "random" picks forward or back independently with equal odds each press.
+  if dirName == "random" then dirName = math.random() < 0.5 and "forward" or "back" end
+  if not dirs[dirName] then dirName = "back" end
+  local d = dirs[dirName]
   local up, kick, push = tune.up or 0, tune.legKick or 0, tune.push or 0
   local h = math.sqrt(math.max(0, 1 - up * up))
   local before = body_speed(mesh, "Bip001-Pelvis")
@@ -1189,7 +1193,7 @@ local function f7_shove(pawn, mesh)
   end
   try(function() mesh:WakeAllRigidBodies() end)
   log(string.format("F7: pushed %s (from %s's facing): whole body %.0f cm/s%s, upper body %.0f, legs the other way %.0f, on %d bones; pelvis at %.0f cm/s",
-    tune.direction or "back", (tune.relativeTo or "eve") == "camera" and "the camera" or "her", push, all and "" or " (FAILED)",
+    dirName, (tune.relativeTo or "eve") == "camera" and "the camera" or "her", push, all and "" or " (FAILED)",
     tune.impulse or 0, kick, n, before))
 end
 
@@ -1956,6 +1960,43 @@ function hm.guard_watch(pawn, mesh)
   if st then
     hm.stance = st
     if tune.dev and not hm.stances[st] then hm.stances[st] = true; log("stance: " .. st) end
+    -- hold-down flicker diagnostic (tune.holdDown): a Down stance broken and resumed within 2 s
+    -- (an enemy shove playing a standing reaction over it?) names the interrupter; a real getup,
+    -- away longer, stays silent. Head height catches standing frames inside a Down-named stance.
+    if tune.holdDown ~= false then
+      local now = os.clock()
+      local downish = st:find("Down", 1, true) or st:find("Tumbl", 1, true)
+      local headz = (downish or hm.downWas) and try(function()
+        local x = mesh:GetSocketLocation(FName("Bip001-Head")); return x and x.Z
+      end) or nil
+      if downish then
+        if headz and (not hm.downBase or headz < hm.downBase) then hm.downBase = headz end
+        if headz and hm.downBase and headz - hm.downBase > 80 and now - (hm.downHeadLog or -100) >= 5 then
+          hm.downHeadLog = now
+          log(string.format("hold down: head up %.0f cm while still %s", headz - hm.downBase, st))
+          hm.downBase = headz
+        end
+        if hm.downLeft and now - hm.downLeft.t <= 2 and now - (hm.downBreakLog or -100) >= 5 then
+          hm.downBreakLog = now
+          log(string.format("hold down: down broken by %s for %.1f s", table.concat(hm.downLeft.stances, " > "), now - hm.downLeft.t))
+        end
+        hm.downWas, hm.downLeft = true, nil
+      elseif hm.downWas then
+        local ai = valid(mesh) and try(function() return mesh:GetAnimInstance() end)
+        local mont = valid(ai) and try(function() return ai:GetCurrentActiveMontage() end)
+        local mn = valid(mont) and try(function() return mont:GetFName():ToString() end)
+        local entry = st .. (mn and (" [" .. mn .. "]") or "")
+        if not hm.downLeft then
+          hm.downLeft = { t = now, last = entry, stances = { entry } }
+        elseif entry ~= hm.downLeft.last then
+          hm.downLeft.last = entry
+          if #hm.downLeft.stances < 12 then hm.downLeft.stances[#hm.downLeft.stances + 1] = entry end
+        end
+        if now - hm.downLeft.t > 2 then hm.downWas, hm.downLeft, hm.downBase = nil, nil, nil end
+      end
+    else
+      hm.downWas, hm.downLeft, hm.downBase = nil, nil, nil
+    end
   end
   local why = hm.guarding(st) and ("stance " .. st)
   if not why then
@@ -2063,7 +2104,7 @@ function hm.dead_proof(t)
 end
 function hm.lethal_watch(pawn, mesh)
   local g = tune.gore or {}
-  if not gore or g.enabled == false or g.woundAtHit == false or not goreCtx.glass then return end
+  if not gore or g.enabled == false then return end
   -- (an enemy's grab on her, followed while she lives: a death in it waits for its end, enemies.grab_now)
   local en = goreCtx.enemies
   if en and en.grab_tick and not hm.lethal then
@@ -2073,6 +2114,8 @@ function hm.lethal_watch(pawn, mesh)
     if ms >= 10 then log(string.format("lethal watch: grab check %.0f ms", ms)) end
     if not ok then log("grab watch: " .. tostring(err)) end
   end
+  -- Grab tracking also drives living pounds; disabling the lethal-hit watcher must not disable it.
+  if g.woundAtHit == false or not goreCtx.glass then return end
   -- (a death came after the hit: the cut was its own, undone with it at its end. A death that began 5 s or more after
   -- the hit left it on record, gore_cut not taking it, and her first tick up logged "she lived" and cleaned up again)
   if hm.lethal and hm.lethal.cut and (screen.deathAt or -1) >= hm.lethal.t then hm.lethal.cut = nil end
@@ -2192,6 +2235,7 @@ function hm.lethal_watch(pawn, mesh)
   if en and en.near_montages then log("lethal hit: near her: " .. tostring(select(2, pcall(en.near_montages, pawn)))) end
   if gb then
     hm.lethal.grab = { obj = gb.obj, mont = gb.mont, cls = gb.cls, t0 = os.clock() }
+    hm.lethal.wasGrab = true
     -- (no montage: the grab lasts while its hand stays on her, enemies.grab_holds). The cut comes now as below, a
     -- limb falling off her while it holds her; her head, body and ragdoll and a split wait for it to let go
     log(string.format("lethal hit: in %s's grab (%s, %s on her for %.1f s): her death waits for it to let go, the cut now",
@@ -2222,6 +2266,26 @@ function hm.lethal_watch(pawn, mesh)
     if done then hm.lethal.cut, hm.lethal.h = true, h; return end
     if later == "later" then hm.grab_keep(h); return end
   end
+  if hm.lethal.roll ~= "blade" and not (hm.lethal.grab and hm.lethal.roll == "odds") then return end
+  -- in a grab, a rolled limb cut fires at the hit instead of after the grab ends: waiting read as the arm
+  -- surviving the finisher. Head, body and split cuts still wait (the finisher poses her neck and waist).
+  -- A real blade still cuts along itself below; this is for the rolled odds (or no blade seen at all).
+  if hm.lethal.grab and not (h and not h.made and (h.n or (h.dir and h.fwd))) then
+    local kind = pick_kind(false, hm.lethal.near,
+      (g.diagonal or {}).enabled ~= false and g.deathSplit ~= false and g.noSplits ~= true)
+    hm.lethal.kind = kind
+    if kind == "limb" and not (h and sw.blunt_of(h)) then
+      local ok, cut = pcall(gore.slice, pawn, mesh, at, "death", "limb")
+      if ok and cut then
+        hm.lethal.cut, hm.lethal.h = true, h
+        log("lethal hit: in a grab, the rolled limb cut at the hit")
+        return
+      elseif not ok then
+        log("lethal hit: early limb cut failed: " .. tostring(cut))
+      end
+    end
+  end
+  if hm.lethal.kind then return end -- the grab's rolled result is already chosen, not a later guessed blade
   if hm.lethal.roll ~= "blade" then return end
   h = h or death_hit(pawn, mesh)
   if not (h and not h.made and (h.n or (h.dir and h.fwd))) then return end
@@ -2243,6 +2307,33 @@ function hm.grab_keep(h)
   if not (hm.lethal.grab and h) then return end
   h.early = nil
   hm.lethal.held = h
+end
+
+-- a blunt pound in an enemy's grab while she lives smashes one limb (progressive grab smash).
+-- One limb a pound: each distinct mesh hit smashes the nearest surviving limb, never the head
+-- or body (those need her ragdoll). Tracked by the hit's time so a pound is not smashed twice.
+hm.poundT = nil
+function hm.grab_pound(pawn, mesh)
+  local g = tune.gore or {}
+  local s = g.smash or {}
+  if not gore or g.enabled == false or s.enabled ~= true or s.grabPounds == false then return end
+  if active or hm.lethal then return end
+  local en = goreCtx.enemies
+  local grab = en and en.grab_now and en.grab_now()
+  if not grab then return end
+  local m = meshHit and os.clock() - meshHit.t <= 0.5 and meshHit or nil
+  if not (m and m.loc) then return end
+  if hm.poundT and m.t <= hm.poundT then return end
+  if gore.busy() then return end
+  hm.poundT = m.t
+  local h = { t = m.t, loc = m.loc, dir = m.push, push = m.push, attacker = grab.cls,
+    attackerClass = grab.cls, grabPound = true, src = "grab pound" }
+  local okb, blunt = pcall(sw.blunt_of, h)
+  if not (okb and blunt) then return end
+  gore.aim(m.push)
+  local ok, made = pcall(gore.smash, pawn, mesh, h, "grab")
+  if not ok then log("grab pound: smash failed: " .. tostring(made)); return end
+  if made then log(string.format("grab pound: %s's pound smashed a limb", tostring(grab.cls))) end
 end
 
 -- tune.gore.lowArm: a hit that leaves her HP bar under lowArm.below (a quarter) takes an arm off where she stands
@@ -2359,6 +2450,16 @@ end
 goreCtx.swing, goreCtx.SWING_AT, goreCtx.seg_dist, goreCtx.dist, goreCtx.sub, goreCtx.unit = swing, SWING_AT, seg_dist, dist, sub, unit
 goreCtx.cross, goreCtx.len, goreCtx.ignored = cross, len, ignored
 goreCtx.mesh_hit = function() return meshHit end
+-- whether her death follows an enemy's grab: the lethal hit landed in one, or one held her
+-- within the last seconds. Grab deaths skip the animated fall and the legs-on fall path, so
+-- the finisher's posing can't pull a separated half back onto her.
+goreCtx.grabDeath = function()
+  if hm.lethal and hm.lethal.wasGrab and os.clock() - hm.lethal.t < 10 then return true end
+  local en = goreCtx.enemies
+  local ok, grab = pcall(function() return en and en.grab_now and en.grab_now() end)
+  if ok and grab then return true end
+  return false
+end
 
 -- a blow from above: the split plane holds the swing and the attacker's forward (its normal is their cross
 -- product), else nil
@@ -2670,6 +2771,7 @@ local function gore_cut(pawn, mesh, h, hit)
     end
   end
   if roll ~= "none" then
+    local earlyKind = hm.lethal and roll and os.clock() - hm.lethal.t < 5 and hm.lethal.kind
     -- a killing blow the game told us about cuts along the blade (gore.blow), else the roll below. A made-up one (no
     -- skill hit, no weapon swing seen: a guessed plane through a guessed part of her, most of the time her spine) is
     -- rolled: cut along, it took her body at most deaths, the legs almost never (playtest)
@@ -2677,9 +2779,9 @@ local function gore_cut(pawn, mesh, h, hit)
     -- where it hit: a blade mostly crossed her body, and waist cuts and splits were nearly every death, playtest)
     if h and h.made then
       log(string.format("death: no blade seen (blow from %s), rolling the odds", tostring(h.src)))
-    elseif h and roll ~= "blade" then
+    elseif h and (roll ~= "blade" or earlyKind) then
       log(string.format("death: last hit %.2f s ago, its blade left aside (%s), rolling the odds", os.clock() - h.t,
-        roll == "split" and "the split failed" or "bladeFollow"))
+        earlyKind and "the grab's result was rolled at the hit" or roll == "split" and "the split failed" or "bladeFollow"))
     elseif h then
       log(string.format("death: last hit %.2f s ago (hook called %d times, %d on Eve), cutting along the blade",
         os.clock() - h.t, hitCalls, hitsOnEve))
@@ -2687,10 +2789,11 @@ local function gore_cut(pawn, mesh, h, hit)
     end
     local normal = split_normal(h)
     -- a death always takes something off
-    local kind = pick_kind(false, near, (g.diagonal or {}).enabled ~= false and g.deathSplit ~= false and g.noSplits ~= true)
+    local kind = earlyKind
+      or pick_kind(false, near, (g.diagonal or {}).enabled ~= false and g.deathSplit ~= false and g.noSplits ~= true)
     -- from above, the body is cut down through her, not across the waist (a stomp's level cut, playtest). Not on a
     -- made-up blow: it comes from the nearest enemy, mostly "from above", and turned most waist cuts into splits
-    if normal and kind == "torso" and g.noSplits ~= true and g.deathSplit ~= false and not (h and h.made) then
+    if normal and kind == "torso" and not earlyKind and g.noSplits ~= true and g.deathSplit ~= false and not (h and h.made) then
       log("death: rolled torso on a blow from above, split down her instead")
       kind = "split"
     end
@@ -2953,6 +3056,12 @@ local function animated_death(pawn, mesh, hit)
   -- with the cuts off nothing would ever switch her fall to the ragdoll: a plain ragdoll, as the menu says (reported)
   if (tune.gore or {}).enabled == false then
     log("death: cuts off, the ragdoll")
+    return false
+  end
+  -- a death after an enemy's grab: the finisher still poses her neck and waist, and a cut
+  -- opened under it read as reattached once the show moved her on. Full ragdoll, no fall.
+  if goreCtx.grabDeath and goreCtx.grabDeath() then
+    log("death: grab death, the ragdoll instead of an animated fall")
     return false
   end
   local marked, v = animated_marker(pawn)
@@ -3272,6 +3381,8 @@ function hm.alive_watch(pawn, mesh)
   tp.mark("hit marks")
   hm.lethal_watch(pawn, mesh)
   tp.mark("lethal")
+  hm.grab_pound(pawn, mesh)
+  tp.mark("grab pound")
   hm.low_arm(pawn, mesh)
   tp.mark("low HP arm")
   hm.rest_watch(pawn, mesh)
@@ -3745,6 +3856,7 @@ local function forget_world(pawn)
   -- them back; sbslice drops, unwritten, those of an asset gone with the level)
   if (hm.ghost or hm.regrow) and gore then gore.fire("Z") end
   hm.ghost, hm.regrow = nil, nil
+  hm.downWas, hm.downLeft, hm.downBase, hm.downHeadLog, hm.downBreakLog = nil, nil, nil, nil, nil
   if gore then gore.forget(pawn) end
   if goreCtx.enemies then goreCtx.enemies.forget() end
   if goreCtx.bosses then goreCtx.bosses.forget() end

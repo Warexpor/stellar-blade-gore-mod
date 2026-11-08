@@ -1746,7 +1746,7 @@ local function clamp_flung(comp, s, ci)
   local function slow(b, l, lim)
     local v = vs[b]
     local k = lim / l
-    if try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]) end) then
+    if try(function() comp:SetPhysicsLinearVelocity(vec(v.X * k, v.Y * k, v.Z * k), false, FN[b]); return true end) then
       vs[b] = vec(v.X * k, v.Y * k, v.Z * k)
       ls[b] = lim
     end
@@ -1766,11 +1766,35 @@ local function clamp_flung(comp, s, ci)
     end
     if over > 0 then run.absN = (run.absN or 0) + over end
   end
+  -- sky-shots get their own trim, every tick in every phase: a rock volley kicked her foot to 90 m/s
+  -- and re-pumped her between the 30 Hz trims till she peaked 13 m over the limp point, while some normal deaths
+  -- peak near 340 up. Older logs also show brief ordinary limb speeds above 500, so the effect needs a playtest.
+  local riseMax = s.riseMax or 500
+  for b in pairs(MASS) do
+    local v = vs[b]
+    if v and v.Z > riseMax then
+      local ok = try(function() comp:SetPhysicsLinearVelocity(vec(v.X, v.Y, riseMax), false, FN[b]); return true end)
+      local still = ok and lin_vel(comp, b)
+      if still and still.Z <= riseMax + 1 then
+        vs[b] = vec(v.X, v.Y, riseMax)
+        ls[b] = math.sqrt(v.X * v.X + v.Y * v.Y + riseMax * riseMax)
+        run.risen = (run.risen or 0) + 1
+        if run.risen == 1 then
+          log(string.format("riser: %s at %.0f up capped to %.0f at %.2f s on %s", b, v.Z, riseMax, run.t or 0, me))
+        end
+      end
+    end
+  end
   -- the start: nothing she has moves faster than her momentum and the blow (and the fall since) allow. A ragdoll
-  -- that started mid-fall (a leg cut) shot her torso off at 1600 cm/s with 57 of momentum, thirty-fourth playtest
+  -- that started mid-fall (a leg cut) shot her torso off at 1600 cm/s with 57 of momentum, thirty-fourth playtest.
+  -- The total before the fall never exceeds launchCap: a dash into a fast boss kill (Raven) stacked momentum and the
+  -- blow into a launch across the room.
   if run.t < (s.launchTime or 0.5) then
     local g = cfg()
-    local lim = (run.mom or 0) + (g.impact or 200) * math.max(tonumber(g.push) or 1, 1) + (run.launchV or 0) + (s.launchOver or 400) + 981 * run.t
+    local base = (run.mom or 0) + (g.impact or 200) * math.max(tonumber(g.push) or 1, 1) + (run.launchV or 0) + (s.launchOver or 400)
+    local cap0 = s.launchCap or 1100
+    if base > cap0 then base = cap0 end
+    local lim = base + 981 * run.t
     for b in pairs(MASS) do
       if ls[b] > lim then
         local was = ls[b]
