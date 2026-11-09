@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2
+
+Released 9 November 2026.
+
+- Follow-camera follow-point hotkey (C by default, rebindable in F3 → Keys): switches the death camera between her upper body and her pelvis at once, mid-death too (the held view re-eases onto the new bone and the follow line logs again). Off by default behind F3 → Camera → Follow-Point Hotkey (`tune.cameraBodyKey`); the key just says it is off till then. Saved to menu.lua so opening the F3 menu doesn't revert it.
+- Spawner gating completed: with Developer Keys off the spawner action rows (Spawn Count, Spawn, Remove Spawned, Kill Nearest, Hostile, Fight Each Other) no longer show under Gameplay. The Spawner tab with its NPC picker needs dev on, as do the spawn keys and window.
+- Menu key icons: a DualSense icon missing from memory falls back to its DualShock4 twin (same glyphs), and icons still missing at build are looked for again on later opens (the game loads its hints on demand). A white key cap with the key's text remains the last resort.
+- Crash guard for freed enemies: 0.7.1 cached the nearby-character list for 0.5 s, and location reads plus adopt/warmup touches could then land on an enemy the engine had already freed (UE4SS access violation reading 0x40, reported after a low-HP arm cut with enemies despawning around her). Location reads now go through a native-lifetime check first (`goreCtx.alive`, GUObjectArray only, no object touch), the direct-read fallbacks are gone, and the adopt, warmup and stale-guard touches skip dead guards. Existing `charcache`, `lowarm`, `grab`, `enemy_tracker`, `corpse`, `spawner`, `stains`, `after_ai`, `hits_after`, `swing_history`, `reload` and `frame` runs pass; needs an in-game retest of the reported crash.
+- Death-throw guards against enormous hits: sometimes she ended up floating mid-air or sunk under the floor, scaling with the killing blow. The engine's own death impulse lands after the ragdoll's velocities are cleared, so per-tick caps only trimmed it after it already tunnelled her through geometry. That impulse is now capped at the source (`active.engineImpulseMax`, 700 cm/s like the data mod's death shows; 0 leaves it alone). Settling with no floor trace at all no longer counts as grounded (unknown, not settled: that hung her in mid-air). A pelvis with a ceiling just above and no floor below near is lifted back above the floor it fell through. `fling_cap`, `settle`, `fall`, `capsule`, `ragdoll_probe` and `quitdeath` pass; needs an in-game retest against a hard boss hit.
+- Leftover failures from the crash-guard round fixed. Its `goreCtx.alive(k)` lifetime check was clobbered by the older no-arg `goreCtx.alive()` ("is she up"), so during her death `char_at` and the enemy filters read every character as dead: after-death enemies never swung at her body and the follow-up cut went wrong. The is-up helper is now `goreCtx.up`. The DualShock4 icon fallback also renamed only the folder, looking up a nonexistent DualSense-named asset; it renames both now. `after`, `after_nomontage` and `menu_layout` pass; the three were bisected to the earlier work, failing identically with the death-throw changes shelved.
+
 ## 0.7.1
 
 Released 8 November 2026.

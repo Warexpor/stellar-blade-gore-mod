@@ -256,7 +256,9 @@ local function camera_orbit()
   -- till then the point it turns about rides her body (tune.cameraBody, as Customized Ragdoll's camera does on her
   -- pelvis: up and down too, every frame, lightly smoothed by tune.cameraBodyRate so her ragdoll's shakes don't reach
   -- it): her upper body (Spine2, the chest) or her pelvis, tune.cameraBodyBone. Where it looked at her death is eased
-  -- onto it over tune.cameraBodyBlend s; the range it may be flown in rides along
+  -- onto it over tune.cameraBodyBlend s; the range it may be flown in rides along.
+  -- The follow-point hotkey (keys.lua's cameraBone) flips tune.cameraBodyBone mid-death: h.off is cleared so the
+  -- pivot re-eases onto the new bone and the follow line is logged again.
   local rate = tune.cameraTrack or 2.5
   screen.CAM_BONES = screen.CAM_BONES or { upper = FName("Bip001-Spine2"), pelvis = PELVIS }
   local bone = screen.CAM_BONES[tune.cameraBodyBone or "upper"] or screen.CAM_BONES.upper
@@ -308,6 +310,16 @@ local function camera_orbit()
   local loc = { X = h.pivot.X + b.X * h.wd, Y = h.pivot.Y + b.Y * h.wd, Z = h.pivot.Z + b.Z * h.wd }
   try(function() h.cam:K2_SetActorLocationAndRotation(loc, rot, false, {}, true) end)
 end
+-- the follow-point hotkey (keys.lua's cameraBone): flip which part the held camera follows, mid-death
+-- too. The pivot re-eases onto the new bone on the next tick (h.off cleared, so the follow line logs again).
+local function camera_toggle_bone()
+  local tune = get_tune()
+  if type(tune) ~= "table" then return nil end
+  local nxt = tune.cameraBodyBone == "pelvis" and "upper" or "pelvis"
+  tune.cameraBodyBone = nxt
+  if camHeld then camHeld.off = nil end
+  return nxt
+end
 local function camera_release(pawn)
   local h = camHeld
   camHeld, camWatch = nil, nil
@@ -335,5 +347,6 @@ local function camera_watch(pawn, mesh)
 end
 
 return { hold = camera_hold, orbit = camera_orbit, release = camera_release, watch = camera_watch,
+  toggle_bone = camera_toggle_bone,
   held = function() return camHeld end, forget = function() camHeld, camWatch = nil, nil end }
 end

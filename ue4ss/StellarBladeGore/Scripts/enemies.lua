@@ -1558,7 +1558,7 @@ local function swings_tick(pawn, c)
       if k >= 1 then sw.lunge = nil end
     end
     if a ~= me and not (e and e.dead) and not (ctx.ignored and ctx.ignored(ch.cls)) then
-      local at = ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+      local at = ctx.char_at and ctx.char_at(ch) or (ctx.char_at == nil and try(function() return vof(ch.obj:K2_GetActorLocation()) end) or nil)
       local d = at and len(vec(body.X - at.X, body.Y - at.Y, 0))
       if d and (not near or d < near) then near, nearCls = d, ch.cls end
       local mesh = d and d < reach and not (sw and (sw.till or now < (sw.next or 0))) and try(function() return ch.obj.Mesh end)
@@ -1696,7 +1696,7 @@ function M.after_tick(pawn)
     local classes, fresh, close = {}, false, false
     for _, ch in ipairs(ctx.live_chars()) do
       if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
-        local at = ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end)
+        local at = ctx.char_at and ctx.char_at(ch) or (ctx.char_at == nil and try(function() return vof(ch.obj:K2_GetActorLocation()) end) or nil)
         classes[ch.cls] = true
         if not (aft.scan and aft.scan.classes[ch.cls]) then fresh = true end
         if her and at and len(sub(at, her)) < (c.scanClear or 1500) then close = true end
@@ -1719,7 +1719,7 @@ function M.after_tick(pawn)
     -- the warming); one unfinished folder per 2 s look, few lookups and one load, gated as ever.
     if not close and aft.scan and c.swing ~= false and ctx.may_load and ctx.may_load() then
       for _, ch in ipairs(ctx.live_chars()) do
-        if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
+        if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) and (not ctx.alive or ctx.alive(ch.k) ~= false) then
           local m = try(function() return ch.obj.Mesh end)
           if valid(m) then
             local _, done = attack_anims(m, 4, 1)
@@ -1845,7 +1845,7 @@ function M.after_tick(pawn)
   for _, ch in ipairs(ctx.live_chars()) do
     if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) then
       local e = known[ch.addr]
-      local at = not (e and e.dead) and (ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end))
+      local at = not (e and e.dead) and (ctx.char_at and ctx.char_at(ch) or (ctx.char_at == nil and try(function() return vof(ch.obj:K2_GetActorLocation()) end) or nil))
       local bb = her and at and len(sub(at, her)) < (c.reach or 3000) and M.after_bb(ch.obj)
       if bb then
         -- re-checking every blackboard key every quarter second cost whole slow ticks with a pack around her
@@ -1921,15 +1921,18 @@ function M.tick(pawn, mesh, tm)
   local now = os.clock()
   for _, c in ipairs(ctx.live_chars()) do
     seenCharacters[c.addr] = true
+    if not ctx.alive or ctx.alive(c.k) ~= false then
     local k = kind_of(c.cls) or angel_kind_for(c) or proximity_expect(c, me)
     if not k then
       -- already followed (an unknown class adopted by proximity: its request is gone, but it is still it)
       local old = known[c.addr]
+      if old and old.k and ctx.alive and ctx.alive(old.k) == false then old = nil end
       if old and addr(old.obj) == c.addr then k = old.kind end
     end
     if k then
       seen[c.addr] = true
       local e = known[c.addr]
+      if e and e.k and ctx.alive and ctx.alive(e.k) == false then e = nil end
       if e and e.obj ~= c.obj and addr(e.obj) ~= c.addr then e = nil end
       -- (an actor being destroyed stays in the list until the next GC: a removed spawn was adopted again every tick)
       if not e and not dying(c.obj) then e = adopt(c.obj, c.addr, c.cls, k, cuts) end
@@ -2032,6 +2035,7 @@ function M.tick(pawn, mesh, tm)
         end
       end
     end
+    end
   end
   -- gone from the characters list (its object went): its gore without touching it
   for a, e in pairs(known) do
@@ -2106,7 +2110,7 @@ function M.grab_tick(pawn, mesh)
     -- (a boss standing still, Passive Bosses: her walking up to it put its hand on her neck, a grab logged, playtest)
     if ch.addr ~= me and not (ctx.ignored and ctx.ignored(ch.cls)) and not (ctx.bosses and ctx.bosses.is_passive(ch.addr)) then
       local o = ch.obj
-      local at = ctx.char_at and ctx.char_at(ch) or try(function() return vof(o:K2_GetActorLocation()) end)
+      local at = ctx.char_at and ctx.char_at(ch) or (ctx.char_at == nil and try(function() return vof(o:K2_GetActorLocation()) end) or nil)
       if at and len(sub(at, at0)) < GRAB_NEAR then
         local touch, bone, d = parent and parent == ch.addr and "attached", nil, nil
         if not touch then
@@ -2168,7 +2172,7 @@ function M.near_montages(pawn)
   local mesh = try(function() return pawn.Mesh end)
   if not valid(mesh) then mesh = nil end
   for _, ch in ipairs(her and ctx.live_chars() or {}) do
-    local at = ch.addr ~= me and (ctx.char_at and ctx.char_at(ch) or try(function() return vof(ch.obj:K2_GetActorLocation()) end))
+    local at = ch.addr ~= me and (ctx.char_at and ctx.char_at(ch) or (ctx.char_at == nil and try(function() return vof(ch.obj:K2_GetActorLocation()) end) or nil))
     if at and len(sub(at, her)) < GRAB_NEAR then
       local _, _, mn = montage_of(ch.obj)
       -- (its nearest hand to her body: a grab without a montage told from a miss)

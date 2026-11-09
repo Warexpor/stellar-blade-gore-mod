@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.1"
+local VERSION = "0.7.2"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -187,7 +187,7 @@ goreCtx.physics_of = function(m)
   return valid(pa) and pa or nil
 end
 -- a severed limb stops being driven by the muscle tone
-goreCtx.on_cut = function(mesh, bone) if rag then rag.on_cut(mesh, bone, goreCtx.alive and goreCtx.alive()) end end
+goreCtx.on_cut = function(mesh, bone) if rag then rag.on_cut(mesh, bone, goreCtx.up and goreCtx.up()) end end
 -- a cut-off piece collides with the rest of her (physfix.piece_collision: its pairs join the collision table's), the
 -- mesh blocking its own bodies' channel, switched off and on so the engine filters her body pairs again
 goreCtx.piece_collision = function(mesh, roots)
@@ -343,7 +343,7 @@ local active, polls, deaths = false, 0, 0
 -- a cut on her alive (F9, Lose Arm at Low HP) leaves her bodies' PhysicsBody response alone when the table keeps her
 -- main bodies apart already: turned off, her ponytail's bodies sank through her head and back again (physfix.alive_pairs)
 goreCtx.table_filled = function(mesh) return not active and physfix and physfix.table_filled(goreCtx.physics_of(mesh)) or false end
-goreCtx.alive = function() return not active end
+goreCtx.up = function() return not active end
 local saved = {}
 local after = -1            -- polls since recovery; watch the mesh until ~10 s after the game respawns her
 local AFTER_POLLS = 300     -- ~10 s
@@ -1491,6 +1491,7 @@ goreCtx.live_chars = live_chars
 -- (goreCtx fields, not locals: this chunk is at Lua's 200)
 goreCtx.CHAR_FAR, goreCtx.CHAR_RUN, goreCtx.CHAR_KEEP, goreCtx.CHAR_NEW = 4500, 2000, 1, 3
 function goreCtx.char_at(e)
+  if e.k and goreCtx.alive(e.k) == false then return nil end
   local now = os.clock()
   local her = goreCtx.herAt
   if e.atT then
@@ -2891,6 +2892,21 @@ key_on("slowmo", function()
   blur_sync()
   if k == 1 then log("manual slow motion off")
   else log(string.format("manual slow motion x%.2f (%s again for full speed)", k, screen.key_name("slowmo"))) end
+end)
+-- C: switch the death camera's follow point between her upper body and her pelvis (F3 → Camera →
+-- Follow-Point Hotkey, off by default). Applies at once, mid-death too (the held view re-eases onto the
+-- new bone), and is saved to menu.lua so opening the F3 menu doesn't revert it.
+key_on("cameraBone", function()
+  if tune.cameraBodyKey ~= true then
+    log(string.format("%s: follow-point hotkey is off (F3 → Camera)", screen.key_name("cameraBone")))
+    return
+  end
+  if not (camera and camera.toggle_bone) then log("follow camera: no camera"); return end
+  local bone = camera.toggle_bone()
+  if not bone then log("follow camera: no setting"); return end
+  if goreCtx.gui and goreCtx.gui.persist then goreCtx.gui.persist("cameraBodyBone", bone) end
+  log(string.format("%s: follow point %s", screen.key_name("cameraBone"),
+    bone == "pelvis" and "pelvis" or "upper body"))
 end)
 -- Esc on her death: fast forward to the death screen (tune.deathSkip; parked for now, untested)
 -- (a key "skip": if active then skip_start(find_eve()) end)

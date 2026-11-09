@@ -2,7 +2,7 @@
 -- kept that view held till she got up (playtest). Her usual view, learnt while she lives (the field of view and the
 -- camera's distance most polls had), is eased out to
 local sf = assert(io.open("ue4ss/Mods/StellarBladeGore/Scripts/settings.lua", "w"))
-sf:write("return { cameraInvertY = true }\n"); sf:close()
+sf:write("return { cameraInvertY = true, cameraBodyKey = true }\n"); sf:close()
 local F = require("fake")
 local E = require("eve")
 local R = require("rag")
@@ -153,6 +153,26 @@ F.run(0.5, pawn)
 check(F.find("camera: zooming", at) ~= nil, "3: the wheel zooms")
 o = off_body()
 check(o and math.abs(o - 15) < 2, "3: in to 15 cm off the point (" .. tostring(o) .. ")")
+
+-- 4: the follow-point hotkey (C) switches mid-death between her upper body and her pelvis, and back
+at = mark()
+local function off_pelvis()
+  local l, p = cam.at, pawn.Mesh:GetSocketLocation(FName("Bip001-Pelvis"))
+  return l and math.sqrt((l.X - p.X) ^ 2 + (l.Y - p.Y) ^ 2 + (l.Z - p.Z) ^ 2)
+end
+check(F.press("C", ""), "4: C bound")
+F.run(2, pawn)
+check(F.find("follow point pelvis", at) ~= nil, "4: toggle to pelvis logged")
+check(F.find("following her body %(her pelvis", at) ~= nil, "4: it follows her pelvis again")
+local op = off_pelvis()
+check(op and math.abs(op - 15) < 8, "4: in to 15 cm off her pelvis (" .. tostring(op) .. ")")
+at = mark()
+check(F.press("C", ""), "4: C bound again")
+F.run(2, pawn)
+check(F.find("follow point upper body", at) ~= nil, "4: toggle back to upper body logged")
+check(F.find("following her body %(her upper body", at) ~= nil, "4: it follows her upper body again")
+o = off_body()
+check(o and math.abs(o - 15) < 8, "4: back to 15 cm off her upper body (" .. tostring(o) .. ")")
 E.respawn(); F.run(20, pawn)
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end

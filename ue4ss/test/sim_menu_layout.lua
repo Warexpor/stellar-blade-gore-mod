@@ -42,4 +42,13 @@ local same=true; for _,r in ipairs(menu.ROWS) do same=same and original[r]==true
 check(same,"classic layout retains the same settings and buttons")
 tune.menuGrouped=true; menu.refresh()
 check(index("gore.smash.enabled")==index("gore.enabled")+1,"grouped layout can be restored")
+-- key icons resolve from memory, with a DualShock4 twin as fallback; misses are remembered for a later open
+local dsb = "DualSense/KeyIcon_DualSense_Gamepad_FaceButton_Bottom"
+local dsbfull = menu.ICONS..dsb..".KeyIcon_DualSense_Gamepad_FaceButton_Bottom"
+local ds4full = menu.ICONS.."DualShock4/KeyIcon_DualShock4_Gamepad_FaceButton_Bottom.KeyIcon_DualShock4_Gamepad_FaceButton_Bottom"
+check(menu.icon_tex(dsb) == nil and menu.missingIcons[dsb] == true, "a missing icon is remembered, not a crash")
+F.objects[ds4full] = F.obj("DualShock4 cross", "Texture2D")
+check(menu.icon_tex(dsb) == F.objects[ds4full] and menu.missingIcons[dsb] == nil, "the DualShock4 twin fills in for a missing DualSense icon")
+F.objects[dsbfull] = F.obj("DualSense cross", "Texture2D")
+check(menu.icon_tex(dsb) == F.objects[dsbfull], "the DualSense icon wins when both are in memory")
 F.say(fails==0 and "PASS" or "FAIL")

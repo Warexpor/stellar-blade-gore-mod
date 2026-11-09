@@ -1491,6 +1491,28 @@ function M.start(pawn, mesh, kind, dir)
   -- velocities from the previous state survived into the new ragdoll. Clear them before any impulse.
   try(function() mesh:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
   try(function() mesh:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
+  -- the game's own death impulse is applied after ImpulseDelayTime, past the clearing above, so a huge hit
+  -- (a boss charge, an explosion) tunnels a floor before the per-tick caps ever see it. Cap it at the source.
+  do
+    local cap = (g.engineImpulseMax == nil and 700) or g.engineImpulseMax
+    if cap and cap > 0 and valid(pawn) then
+      local iv = try(function() return pawn.RagdollInfo.ImpulseValue end)
+      local l = iv and len(vec(iv.X, iv.Y, iv.Z))
+      if l and l > cap then
+        local k, ok = cap / l, false
+        ok = try(function() pawn.RagdollInfo.ImpulseValue.X = iv.X * k; return true end) == true
+          and try(function() pawn.RagdollInfo.ImpulseValue.Y = iv.Y * k; return true end) == true
+          and try(function() pawn.RagdollInfo.ImpulseValue.Z = iv.Z * k; return true end) == true
+        if not ok then
+          ok = try(function()
+            pawn.RagdollInfo.ImpulseValue = { X = iv.X * k, Y = iv.Y * k, Z = iv.Z * k }
+            return true
+          end) == true
+        end
+        log(string.format("engine impulse %.0f cm/s capped to %.0f at the source%s", l, cap, ok and "" or " (write failed: per-tick caps only)"))
+      end
+    end
+  end
   -- These snapshots are diagnostics only, never used by the ragdoll or cut mechanics. Reading dozens of
   -- sockets and rotations during every real death adds work to the same setup frame as masses and drives.
   if (ctx.tune.gore or {}).probes == true then
@@ -1866,6 +1888,20 @@ function M.over_floor(pawn, p)
   local z = ok and try(function() return (hit.ImpactPoint or hit.Location).Z end)
   return z and p.Z - z or nil
 end
+-- how far the ceiling above p is (a visibility trace up 3 m, her own actor ignored): nil with nothing there.
+-- Underground she reads no floor below but a floor just above: the floor she tunnelled through.
+function M.over_head(pawn, p)
+  if not valid(ksLib) then ksLib = try(function() return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary") end) end
+  local ks = ksLib
+  if not (valid(ks) and p) then return nil end
+  local hit = {}
+  local ok = try(function()
+    return ks:LineTraceSingle(pawn, vec(p.X, p.Y, p.Z), vec(p.X, p.Y, p.Z + 300), 0, false, { pawn }, 0, hit, true,
+      { R = 1, G = 0, B = 0, A = 1 }, { R = 0, G = 1, B = 0, A = 1 }, 0)
+  end)
+  local z = ok and try(function() return (hit.ImpactPoint or hit.Location).Z end)
+  return z and z - p.Z or nil
+end
 -- the bones looked at for hanging in the air: the pelvis, and on her body the root of each piece cut off it. A waist
 -- cut's upper half hung in the air while its pelvis lay on the stairs with her legs (Nexus report)
 local function aloft_bones(c)
@@ -1981,12 +2017,26 @@ local function settle(dt)
   if run.still < (st.time or 0.5) then return end
   -- not up in the air: still there (slowed at the top of a fall, held by something that let go) she was put to sleep
   -- and hung there (0.4.0 report: killed in mid-air, hung in the air). Woken and left to fall, checked again later
-  local over, ob
+  local over, ob, found, looked = nil, nil, false, false
   for _, c in ipairs(comps) do
     if valid(c) then
+      if #aloft_bones(c) > 0 then looked = true end
       local o, b = aloft(c)
+      if b then found = true end
       if o and (not over or o > over) then over, ob = o, b end
     end
+  end
+  -- no floor under her at all (a trace that hits nothing, over a void or a floor it doesn't block):
+  -- unknown, not grounded. Settling here is what hung her in mid-air. Only when a bone was looked at
+  -- (a cut piece's run has no live pelvis to check: those settle as before).
+  if looked and not found then
+    run.still = 0
+    if not run.airSaid then
+      run.airSaid = true
+      log(string.format("not settled at %.1f s: no floor under her, woken to fall", run.t))
+    end
+    for _, c in ipairs(comps) do if valid(c) then try(function() c:WakeAllRigidBodies() end) end end
+    return
   end
   if over and over > (st.air or 60) then
     run.still = 0
@@ -2059,6 +2109,26 @@ local function hang_watch()
     for _, bone in ipairs(valid(c) and aloft_bones(c) or {}) do
       local key = i .. bone
       local l = try(function() local x = c:GetSocketLocation(FN[bone]); return vec(x.X, x.Y, x.Z) end)
+      -- tunnelled through: no floor below near but one just above (the floor she fell through).
+      -- Lift her back above it at once (no stillness wait: the signature is already unambiguous), with a
+      -- cooldown so a real ceiling (a low overhang with no floor under it yet) can't pump her upward.
+      if l and (not run.liftedAt or run.t - run.liftedAt > 5) then
+        local over0, up0 = M.over_floor(pawn, l), M.over_head(pawn, l)
+        if up0 and up0 < 150 and (not over0 or over0 > 200) then
+          run.liftedAt = run.t
+          local dz = up0 + 25
+          local ok = try(function()
+            local wl = c:K2_GetComponentLocation()
+            c:K2_SetWorldLocationAndRotation({ X = wl.X, Y = wl.Y, Z = wl.Z + dz },
+              c:K2_GetComponentRotation(), false, {}, true)
+            return true
+          end)
+          try(function() c:SetAllPhysicsLinearVelocity(vec(0, 0, 0), false) end)
+          try(function() c:WakeAllRigidBodies() end)
+          log(string.format("%s through the floor at %.1f s: %s %.0f cm under it, lifted %.0f cm above it%s",
+            i == 1 and "her body" or "the split's copy", run.t, bone, up0, dz, ok and "" or " (move failed)"))
+        end
+      end
       local h = run.hang[key] or { zs = {} }
       run.hang[key] = h
       if l then

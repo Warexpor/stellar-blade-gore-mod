@@ -51,6 +51,22 @@ M.HINTS = {
     { { "DualSense/KeyIcon_DualSense_Gamepad_FaceButton_Top" }, "Reset Tab", "TRI" },
     { { "DualSense/KeyIcon_DualSense_Gamepad_FaceButton_Right" }, "Exit", "O" } },
 }
+-- a key icon's texture, as found in memory (never loaded: a LoadAsset on her tick crashed launches). A
+-- DualSense path missing is retried as DualShock4 (same glyphs): whichever set the game has in. A path still
+-- missing is looked for again on later opens: the game loads its hints on demand, so one missing at the
+-- first open can be there at the next (a white key cap with the key's text meanwhile).
+M.missingIcons = {}
+function M.icon_tex(path)
+  local tex = StaticFindObject(M.ICONS .. path .. "." .. path:match("[^/]+$"))
+  if not valid(tex) then
+    -- the twin's folder and asset names both say DualShock4 (KeyIcon_DualShock4_...), not just its folder
+    local alt = path:gsub("DualSense", "DualShock4")
+    if alt ~= path then tex = StaticFindObject(M.ICONS .. alt .. "." .. alt:match("[^/]+$")) end
+  end
+  if valid(tex) then M.missingIcons[path] = nil; return tex end
+  M.missingIcons[path] = true
+  return nil
+end
 -- rows: a tab (section), a setting (bool, num with min/max/step, list of values with their names), or a button
 M.ROWS = {
   { section = "Gore" },
@@ -156,14 +172,14 @@ M.ROWS = {
   { key = "gore.lowArm.healAt", label = "   Grows Back At", kind = "num", min = 0.3, max = 1, step = 0.01, pct = true, help = "With Grows Back With HP: the share of her HP bar at which the arm grows back (90% by default)." },
   { key = "gore.lowArm.effect", label = "Regrow Effect", kind = "bool", help = "On by default. A part cut off her alive (Lose Arm at Low HP's arm, F9's) dissolves back in with a glow when it comes back (a camp rest, Grows Back With HP). Off: it is back at once, with no effect." },
   { section = "Spawner", dev = true },
-  { key = "spawner.count", label = "Spawn Count", kind = "num", min = 1, max = 9, step = 1, help = "How many each Spawn makes, in a row across in front of her." },
-  { button = "call", call = "enemies.spawn_pick", label = "Spawn", help = "The picked NPC, Spawn Count of them in front of her, facing her." },
-  { button = "call", call = "enemies.remove_spawned", label = "Remove Spawned", help = "Every boss and NPC spawned here goes, corpses too." },
-  { button = "call", call = "enemies.kill_nearest", label = "Kill Nearest", help = "The followed character nearest her goes down as a ragdoll (the cut follows). Passive NPCs the blows don't hurt go down this way." },
-  { key = "spawner.hostile", label = "Hostile", kind = "list", values = { "game", "hostile", "passive" },
+  { key = "spawner.count", label = "Spawn Count", kind = "num", min = 1, max = 9, step = 1, dev = true, help = "How many each Spawn makes, in a row across in front of her." },
+  { button = "call", call = "enemies.spawn_pick", label = "Spawn", dev = true, help = "The picked NPC, Spawn Count of them in front of her, facing her." },
+  { button = "call", call = "enemies.remove_spawned", label = "Remove Spawned", dev = true, help = "Every boss and NPC spawned here goes, corpses too." },
+  { button = "call", call = "enemies.kill_nearest", label = "Kill Nearest", dev = true, help = "The followed character nearest her goes down as a ragdoll (the cut follows). Passive NPCs the blows don't hurt go down this way." },
+  { key = "spawner.hostile", label = "Hostile", kind = "list", dev = true, values = { "game", "hostile", "passive" },
     names = { game = "As Game", hostile = "Hostile to Eve", passive = "Passive" },
     help = "What NPCs spawned here fight. Hostile to Eve: even the angels turn on her (their row made hostile and damageable while one is up). Passive: their AI stopped, they never fight. As Game: as the game has them." },
-  { key = "spawner.infight", label = "   Fight Each Other", kind = "bool", help = "With Hostile to Eve: spawned NPCs fight each other too, not only Eve." },
+  { key = "spawner.infight", label = "   Fight Each Other", kind = "bool", dev = true, help = "With Hostile to Eve: spawned NPCs fight each other too, not only Eve." },
   { key = "spawner.id", label = "   CharacterTable ID", kind = "num", min = 0, max = 999999, step = 1, ingroup = "custom", help = "With the Custom ID entry picked: the CharacterTable ID spawned instead (any NPC in the game)." },
   { key = "bosses.enabled", label = "Sandbox Bosses (Experimental)", kind = "bool", ingroup = "bosses", help = "Off by default. Spawn Tachy, Raven, Scarlet or a Royal Guard Sister in front of Eve, anywhere, and kill them like any enemy: no death cutscene, no phase changes to wait out. They are cut as enemies are, then struggle on the floor and wear a dead face. While one you spawned is up, that boss is mortal everywhere, a story fight with it too." },
   { key = "bosses.hpScale", label = "   Boss HP", kind = "num", min = 0.05, max = 1, step = 0.05, pct = true, ingroup = "bosses", help = "With Sandbox Bosses on: their HP and shield, as a share of the game's (25%: a quarter). Takes effect for the next boss once none you spawned is up." },
@@ -179,6 +195,7 @@ M.ROWS = {
   { key = "cameraFlyAfter", label = "   Fly After", kind = "num", min = 0, max = 10, step = 0.5, unit = " s", help = "Seconds into her death before WASD, Q/E or the left stick and triggers fly the camera. Till then it stays locked on her body while you turn and zoom round her; the first fly press after that lets go of her and flies it." },
   { key = "cameraBodyBone", label = "   Follow Point", kind = "list", values = { "upper", "pelvis" },
     names = { upper = "Upper Body", pelvis = "Pelvis" }, help = "Which part of her the death camera follows and turns round: her upper body (chest) or her pelvis." },
+  { key = "cameraBodyKey", label = "   Follow-Point Hotkey", kind = "bool", help = "Off by default. The follow-point key (C, F3 → Keys) switches Follow Point at once, mid-death too. Off: the key does nothing." },
   { key = "cameraTrack", label = "   Follow Strength", kind = "num", min = 0, max = 10, step = 0.5, help = "With Follow Her Body off: how quickly the death camera slides sideways after her body, never up or down (0: it stays put). It stops following once you fly it." },
   { key = "cameraMove", label = "   Fly Speed", kind = "num", min = 100, max = 2000, step = 50, unit = " cm/s", help = "How fast the death camera flies (Shift: three times that). It stays within 15 m of where it started." },
   { section = "Mod" },
@@ -373,7 +390,7 @@ M.DEPENDS["gore.lowArm.notice"] = { { "gore.lowArm.enabled", true }, { "gore.low
 for _, key in ipairs({ "bosses.hpScale", "bosses.passive", "bosses.struggle", "bosses.face" }) do
   M.DEPENDS[key] = { { "bosses.enabled", true } }
 end
-for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraInvertY", "cameraBody", "cameraFlyAfter", "cameraBodyBone", "cameraTrack", "cameraMove" }) do
+for _, key in ipairs({ "cameraMouse", "cameraStick", "cameraInvertY", "cameraBody", "cameraFlyAfter", "cameraBodyBone", "cameraBodyKey", "cameraTrack", "cameraMove" }) do
   M.DEPENDS[key] = { { "cameraStill", true } }
 end
 M.DEPENDS.cameraBodyBone = { { "cameraStill", true }, { "cameraBody", true } }
@@ -533,6 +550,13 @@ function write_menu(saved)
   f:write("}\n")
   f:close()
   return true
+end
+-- a hotkey's change outside the menu (the follow-point toggle): set live and save to menu.lua at once,
+-- so opening the menu (which re-reads the settings) doesn't revert it.
+function M.persist(path, value)
+  set(path, value)
+  M.state.changed[path] = true
+  return save()
 end
 -- a change in menu.lua whose row the menu no longer has (taken out, parked) is dropped from it, the settings read
 -- again: it went on winning over settings.lua with no row to see or turn it back (Attacks While Down, taken out of
@@ -899,10 +923,6 @@ local function build()
   tint(ui.help, 0.32, 0.33, 0.35)
   -- the keys, bottom right: the game's key icons and their names, the keyboard's or the controller's (the last one
   -- used; the controller's as menuPadIcons says). An icon that doesn't load is a white key cap with its text
-  local function icon_tex(path)
-    local tex = StaticFindObject(M.ICONS .. path .. "." .. path:match("[^/]+$"))
-    return valid(tex) and tex or nil
-  end
   local function hints(list)
     -- each key its own: the game's icon (44 square, the key ~30 of it in the middle) where one is in memory, else a
     -- white key cap of the icon's height, as wide as its text. Caps were one box over the whole hint, sized for the
@@ -930,7 +950,7 @@ local function build()
     for i, h in ipairs(list) do
       local caps, keys, kw = caps_of(h), {}, 0
       for j, p in ipairs(h[1]) do
-        local tex = icon_tex(p)
+        local tex = M.icon_tex(p)
         local cap = caps[j] or "?"
         local w = tex and (CAP + 2) or math.max(CAP, ulen(cap) * CW + 14)
         keys[j] = { tex = tex, cap = cap, w = w }
@@ -969,21 +989,28 @@ local function build()
   end
   stage("key icons")
   ui.keys = {}
-  -- the keyboard's Exit is the menu's key as bound (a key cap with its name when the game has no icon for it)
-  local mk = ctx.keys and ctx.keys.binding("menu") or "F3"
-  ui.menuKey = mk
-  for set, list in pairs(M.HINTS) do
-    if set == "kb" and ctx.keys then
-      local l = {}
-      for i, h in ipairs(list) do l[i] = h end
-      local mods, key = ctx.keys.parse(mk)
-      local k = key and ctx.keys.BY_ENUM[key]
-      local plain = k and next(mods) == nil
-      l[#l] = { { "PC/KeyIcon_KeyBoard_" .. (plain and k.fkey or "None") }, "Exit", ctx.keys.show(mk) }
-      list = l
+  local function make_keys()
+    -- drop the old hint widgets and make them again: an icon missing at build can be in memory now
+    for _, list in pairs(ui.keys) do for _, o in ipairs(list) do try(function() o:RemoveFromParent() end) end end
+    ui.keys = {}
+    -- the keyboard's Exit is the menu's key as bound (a key cap with its name when the game has no icon for it)
+    local mk = ctx.keys and ctx.keys.binding("menu") or "F3"
+    ui.menuKey = mk
+    for set, list in pairs(M.HINTS) do
+      if set == "kb" and ctx.keys then
+        local l = {}
+        for i, h in ipairs(list) do l[i] = h end
+        local mods, key = ctx.keys.parse(mk)
+        local k = key and ctx.keys.BY_ENUM[key]
+        local plain = k and next(mods) == nil
+        l[#l] = { { "PC/KeyIcon_KeyBoard_" .. (plain and k.fkey or "None") }, "Exit", ctx.keys.show(mk) }
+        list = l
+      end
+      ui.keys[set] = hints(list)
     end
-    ui.keys[set] = hints(list)
   end
+  make_keys()
+  ui.rekey = make_keys
   stage("on screen")
   try(function() w:SetVisibility(3) end) -- not hit-testable: clicks reach the game's input, read in M.tick
   w:AddToViewport(960)
@@ -1186,6 +1213,18 @@ function M.open(pawn)
   -- (settings.lua read again: a hand edit shows here and applies without a restart, as the old Reload Settings key did)
   if ctx.reload_tune then ctx.reload_tune() end
   M.refresh()
+  -- icons missing at build can be in memory now (the game loads its hints on demand): look again,
+  -- rebuilding the key hints if one turned up
+  do
+    local missed = {}
+    for path in pairs(M.missingIcons) do missed[#missed + 1] = path end
+    local found = false
+    for _, path in ipairs(missed) do if M.icon_tex(path) then found = true end end
+    if found and s.ui and s.ui.rekey then
+      log("menu: key icons now in memory since build, hints made again")
+      s.ui.rekey()
+    end
+  end
   if not selectable(s.sel) then s.sel = 2 end
   pause(pawn, true)
   log("menu: making it: first draw")

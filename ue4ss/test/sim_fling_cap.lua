@@ -102,6 +102,56 @@ do
   check(F.find("split: late copy tracked with her half") ~= nil, "a pre-ragdoll copy joins her")
   rag.stop(T.pawn)
 end
+-- An enormous engine impulse is capped at the source, before its delayed push tunnels a floor.
+do
+  rag.stop(T.pawn)
+  R.lay()
+  T.pawn.RagdollInfo = { ImpulseValue = { X = 5000, Y = 0, Z = 0 } }
+  rag.start(T.pawn, E.mesh, "quiet")
+  E.s.sim = true
+  local iv = T.pawn.RagdollInfo.ImpulseValue
+  local l = math.sqrt(iv.X * iv.X + iv.Y * iv.Y + iv.Z * iv.Z)
+  check(l <= 701, string.format("a 50 m/s engine impulse is capped at the source (%.0f cm/s)", l))
+  check(F.find("engine impulse .* capped to") ~= nil, "the source cap logs its bite")
+  rag.stop(T.pawn)
+  T.pawn.RagdollInfo = nil
+end
+-- Tunnelled through: no floor below near but one just above. She is lifted back above it.
+-- (Before the no-floor test: the Kismet object is cached on first use, so the distinguishing mock must come first.)
+do
+  rag.stop(T.pawn)
+  R.lay()
+  for _, n in pairs(R.BODY) do R.V[n] = vec(0, 0, 0); R.W[n] = vec(0, 0, 0) end
+  F.objects["/Script/Engine.Default__KismetSystemLibrary"] = F.obj("KSL2", "KismetSystemLibrary", {
+    LineTraceSingle = function(_, _, from, to, _, _, _, _, hit)
+      if to.Z > from.Z then hit.ImpactPoint = { X = from.X, Y = from.Y, Z = from.Z + 50 }; return true end
+      return false
+    end,
+  })
+  rawset(E.mesh, "K2_SetWorldLocationAndRotation", function() return true end)
+  rawset(E.mesh, "K2_GetComponentRotation", function() return { Pitch = 0, Yaw = 0, Roll = 0 } end)
+  T.ctx.tune.active.settle.enabled = false
+  rag.start(T.pawn, E.mesh, "quiet")
+  E.s.sim = true
+  for _ = 1, 45 do tick() end
+  check(F.find("through the floor") ~= nil, "a sunk pelvis is lifted back above the floor it fell through")
+  rag.stop(T.pawn)
+end
+-- No floor under her at all is unknown, not grounded: she must not settle hung in mid-air.
+do
+  rag.stop(T.pawn)
+  R.lay()
+  for _, n in pairs(R.BODY) do R.V[n] = vec(0, 0, 0) end
+  F.objects["/Script/Engine.Default__KismetSystemLibrary"] = F.obj("KSL", "KismetSystemLibrary", {
+    LineTraceSingle = function() return false end,
+  })
+  T.ctx.tune.active.settle.enabled = true
+  rag.start(T.pawn, E.mesh, "quiet")
+  E.s.sim = true
+  for _ = 1, 90 do tick() end
+  check(F.find("no floor under her") ~= nil, "unknown floor keeps her awake instead of settling mid-air")
+  rag.stop(T.pawn)
+end
 for _, e in ipairs(F.errors) do F.say("hook error: " .. e) end
 check(#F.errors == 0, "no engine simulation errors")
 F.say(fails == 0 and "PASS" or "FAIL")

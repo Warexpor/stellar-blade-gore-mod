@@ -50,6 +50,39 @@ function goreCtx.alive_ask(list)
   if n < #list then log(string.format("held: sbslice answered %d of %d (%s)", n, #list, bits:sub(1, 80))); return nil end
   return true
 end
+function goreCtx.alive(k, single)
+  if not k then return false end
+  if k.dead then return false end
+  if k.frame == goreCtx.frame then return k.alive end
+  if not k.idx then
+    if os.clock() - k.t > (get_tune().keepFresh or 2) then k.dead, k.stale = true, true; return false end
+    if not goreCtx.alive_ask({ k }) then return nil end
+    if not k.alive then k.dead = true; return false end
+    k.asked, k.listed = os.clock(), true
+    goreCtx.heldList[#goreCtx.heldList + 1] = k
+    return true
+  end
+  if single then
+    if not goreCtx.alive_ask({ k }) then return nil end
+    if not k.alive then k.dead = true; return false end
+    if not k.listed then k.listed = true; goreCtx.heldList[#goreCtx.heldList + 1] = k end
+    k.asked = os.clock()
+    return true
+  end
+  local keep, now = {}, os.clock()
+  for _, x in ipairs(goreCtx.heldList) do
+    if not x.dead and (x == k or now - (x.asked or now) < 3) then keep[#keep + 1] = x else x.listed = nil end
+  end
+  if not k.listed then k.listed = true; keep[#keep + 1] = k end
+  goreCtx.heldList = keep
+  for i = 1, #keep, 64 do
+    local part = { table.unpack(keep, i, math.min(i + 63, #keep)) }
+    if not goreCtx.alive_ask(part) then return nil end
+  end
+  for _, x in ipairs(keep) do if x.frame == goreCtx.frame and not x.alive then x.dead = true end end
+  k.asked = now
+  return k.alive
+end
 function goreCtx.held(k, single)
   if not k then return false end
   if k.dead then return false end

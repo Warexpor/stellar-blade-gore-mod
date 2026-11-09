@@ -73,6 +73,8 @@ return {
   cameraBody = true,           --   the point it turns about rides her pelvis, up and down too, every frame (as Customized
                                --   Ragdoll's camera does), till it is flown; false: it slides after her (cameraTrack)
   cameraBodyBone = "upper",    --   which part of her: "upper" (her chest, Spine2) or "pelvis" (Customized Ragdoll's)
+  cameraBodyKey = false,       --   the follow-point hotkey (C) switches it between the two at once, mid-death too
+                                --   (false: the key does nothing)
   cameraMotionBlur = false,    --   the game's motion blur in the death camera's view (false: none; on, the stump caps smeared
                                --   the way the blow went as the camera rode her body)
   cameraBodyRate = 15,         --   how tightly it rides her pelvis, a second (0: rigidly, her ragdoll's shakes and all)
@@ -990,6 +992,10 @@ return {
                                --   ragdoll, 3 heavy accessories; each logs which bodies shake over its first 2 s
     momentum = 1.0,            -- share of her speed before death carried into the fall (0 = drops on the spot)
     momentumMax = 900,         -- cm/s: a dash into a Raven kill no longer starts the fall at a sprint
+    engineImpulseMax = 700,    -- cm/s: the game's own death impulse capped at the source (its delayed push hits after our
+                               --   velocities are cleared, so per-tick caps only trim it after it tunnels a floor). 700 matches the
+                               --   data mod's ImpulseLimitVelocity on her death shows; enormous hits (boss charges, explosions)
+                               --   otherwise throw her mid-air or through the floor. 0 = leave the game's impulse alone.
     push = 1.0,                -- times impact and launch below: how hard her death throws her (0: none of ours)
     impact = 75,               -- cm/s extra push along the killing blow, spread over the upper body (deaths only;
                                -- from the attacker when the game gives no direction)

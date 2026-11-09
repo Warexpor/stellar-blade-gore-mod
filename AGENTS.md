@@ -8,6 +8,10 @@ For Lua/native fixes on Linux, run `bash ue4ss/install.sh`; for changed pak asse
 
 Use `.\windows.ps1` for Windows builds, tests, packaging, and installation; see the Windows development section of README.md for actions and dependencies. The current-user Windows PowerShell execution policy is `RemoteSigned`, so local scripts run without an execution-policy override. For Lua/native fixes use `.\windows.ps1 -Action install`; for changed pak assets also use `.\windows.ps1 -Action build-install`.
 
+## Tooling
+
+- Install whatever tools, SDKs, runtimes or dependencies the job needs without asking for permission. Interested result only: just get it done and report blockers if installation fails.
+
 ## Communication style
 
 - When talking to the user directly: human language always, plain and to the point. No robot lists unless asked. Professional, not gushing: no hype, no cheerleading, no performative excitement. Keep responses short: only the crucial info, no padding.

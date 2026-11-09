@@ -452,6 +452,12 @@ check(select("M_SkullSword") ~= nil, "unfolded: the NPCs back")
 tune.dev = false
 gui.refresh()
 check(not tab("Spawner"), "no Spawner tab with dev off: gated again")
+check(row("spawner.count") == nil and row("spawner.hostile") == nil and row("spawner.infight") == nil, "no spawner settings with dev off")
+local leaked = false
+for _, r in ipairs(gui.ROWS) do
+  if r.call == "enemies.spawn_pick" or r.call == "enemies.remove_spawned" or r.call == "enemies.kill_nearest" then leaked = true end
+end
+check(not leaked, "no spawner buttons with dev off (nothing leaks into Gameplay)")
 tune.dev = true
 gui.refresh()
 check(tab("Spawner"), "the Spawner tab back with dev on")

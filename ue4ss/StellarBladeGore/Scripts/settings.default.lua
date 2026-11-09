@@ -126,6 +126,8 @@ return {
   cameraFlyAfter = 1.5,        --   seconds into her death before WASD / Q/E (or the left stick and triggers) fly it;
                                --   the first press after that lets go of her body
   cameraBodyBone = "upper",    --   which part it follows: "upper" (her upper body) or "pelvis"
+  cameraBodyKey = false,       --   the follow-point hotkey (C) switches it between the two at once, mid-death too
+                                --   (false: the key does nothing; F3 → Camera turns it on)
   cameraTrack = 2.5,           --   (cameraBody off) how closely it slides after her body, on the level, till you fly it (0: it stays put)
   cameraMove = 400,            --   flying speed, cm a second
   -- deathSkip = true,         -- Esc on her death fast forwards to the death screen (parked for now)
