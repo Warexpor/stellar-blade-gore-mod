@@ -307,6 +307,13 @@ end
 local function impact(mesh, g, dir, boost, whole)
   local out = ""
   local k = math.max(tonumber(g.push) or 1, 0)
+  -- The game's delayed impulse and our body launch stack before the next velocity check.
+  -- Bound our added speed at the source even when Death Push is set high.
+  local added = ((boost or g.impact or 350) + (whole and not run.split and (g.launch or 0) or 0)) * k
+  if whole and added > 400 then
+    k = k * 400 / added
+    out = string.format(", death push capped from %.0f to 400 cm/s", added)
+  end
   boost = (boost or g.impact or 350) * k
   if dir and boost > 0 then
     local h = math.sqrt(dir.X * dir.X + dir.Y * dir.Y)
@@ -317,7 +324,7 @@ local function impact(mesh, g, dir, boost, whole)
       for bone, share in pairs(IMPACT) do
         if try(function() mesh:AddImpulse(vec(d.X * boost * share, d.Y * boost * share, d.Z * boost * share), FN[bone], true); return true end) then n = n + 1 end
       end
-      out = string.format(", impact %.0f cm/s on %d bones", boost, n)
+      out = out .. string.format(", impact %.0f cm/s on %d bones", boost, n)
       local l = (whole and not run.split) and (g.launch or 0) * k or 0
       if l > 0 then
         local lu = g.launchUp or 0.3
@@ -1468,6 +1475,44 @@ local function jiggle(pawn, mesh, g)
   return #done > 0 and (", jiggle: " .. table.concat(done, ", ")) or ", jiggle: no breast bodies on her chest"
 end
 
+-- Called as soon as the death is detected, before the deferred ragdoll setup frame.
+function M.cap_engine_impulse(pawn)
+  local g = cfg()
+  if g.enabled == false then return end
+  local cap = (g.engineImpulseMax == nil and 700) or g.engineImpulseMax
+  if not (cap and cap > 0 and valid(pawn)) then return end
+  -- Snapshot the values: UE4SS may return a live struct wrapper, so writing X
+  -- must not change what the fallback reads if a later component write fails.
+  local iv = try(function() local v = pawn.RagdollInfo.ImpulseValue; return vec(v.X, v.Y, v.Z) end)
+  local l = iv and len(iv)
+  if not l or l <= cap then return end
+  local k, ok = cap / l, false
+  local target = vec(iv.X * k, iv.Y * k, iv.Z * k)
+  local function matches()
+    return try(function()
+      local v = pawn.RagdollInfo.ImpulseValue
+      return math.abs(v.X - target.X) < 0.1 and math.abs(v.Y - target.Y) < 0.1 and math.abs(v.Z - target.Z) < 0.1
+    end) == true
+  end
+  ok = try(function() pawn.RagdollInfo.ImpulseValue.X = target.X; return true end) == true
+    and try(function() pawn.RagdollInfo.ImpulseValue.Y = target.Y; return true end) == true
+    and try(function() pawn.RagdollInfo.ImpulseValue.Z = target.Z; return true end) == true
+    and matches()
+  if not ok then
+    ok = try(function()
+      pawn.RagdollInfo.ImpulseValue = target
+      return true
+    end) == true and matches()
+  end
+  if not ok then
+    -- Undo any partial component write so a failed cap cannot change direction.
+    try(function() pawn.RagdollInfo.ImpulseValue.X = iv.X end)
+    try(function() pawn.RagdollInfo.ImpulseValue.Y = iv.Y end)
+    try(function() pawn.RagdollInfo.ImpulseValue.Z = iv.Z end)
+  end
+  log(string.format("engine impulse %.0f cm/s capped to %.0f at the source%s", l, cap, ok and "" or " (write failed: per-tick caps only)"))
+end
+
 function M.start(pawn, mesh, kind, dir)
   local g = cfg()
   if g.enabled == false then return end
@@ -1493,26 +1538,7 @@ function M.start(pawn, mesh, kind, dir)
   try(function() mesh:SetAllPhysicsAngularVelocityInDegrees(vec(0, 0, 0), false) end)
   -- the game's own death impulse is applied after ImpulseDelayTime, past the clearing above, so a huge hit
   -- (a boss charge, an explosion) tunnels a floor before the per-tick caps ever see it. Cap it at the source.
-  do
-    local cap = (g.engineImpulseMax == nil and 700) or g.engineImpulseMax
-    if cap and cap > 0 and valid(pawn) then
-      local iv = try(function() return pawn.RagdollInfo.ImpulseValue end)
-      local l = iv and len(vec(iv.X, iv.Y, iv.Z))
-      if l and l > cap then
-        local k, ok = cap / l, false
-        ok = try(function() pawn.RagdollInfo.ImpulseValue.X = iv.X * k; return true end) == true
-          and try(function() pawn.RagdollInfo.ImpulseValue.Y = iv.Y * k; return true end) == true
-          and try(function() pawn.RagdollInfo.ImpulseValue.Z = iv.Z * k; return true end) == true
-        if not ok then
-          ok = try(function()
-            pawn.RagdollInfo.ImpulseValue = { X = iv.X * k, Y = iv.Y * k, Z = iv.Z * k }
-            return true
-          end) == true
-        end
-        log(string.format("engine impulse %.0f cm/s capped to %.0f at the source%s", l, cap, ok and "" or " (write failed: per-tick caps only)"))
-      end
-    end
-  end
+  M.cap_engine_impulse(pawn)
   -- These snapshots are diagnostics only, never used by the ragdoll or cut mechanics. Reading dozens of
   -- sockets and rotations during every real death adds work to the same setup frame as masses and drives.
   if (ctx.tune.gore or {}).probes == true then

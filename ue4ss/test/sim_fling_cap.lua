@@ -64,6 +64,21 @@ local function find(fn, wanted, seen)
   end
 end
 local split_vel = assert(find(T.G.pump_once, "split_vel"), "animated-split velocity helper reachable")
+local impact = assert(find(rag.start, "impact"), "production impact helper reachable")
+do
+  local impulses = {}
+  local old = rawget(E.mesh, "AddImpulse")
+  rawset(E.mesh, "AddImpulse", function(_, v, bone) impulses[bone:ToString()] = (impulses[bone:ToString()] or 0) + len(v) end)
+  local high = impact(E.mesh, { push = 100, impact = 75, launch = 110, impactUp = 0, launchUp = 0, twist = 0 }, vec(1, 0, 0), nil, true)
+  local peak = 0; for _, v in pairs(impulses) do peak = math.max(peak, v) end
+  check(peak <= 400.01 and high:find("death push capped") ~= nil, "large Death Push is bounded before impulses reach the bodies")
+  impulses = {}
+  local normal = impact(E.mesh, { push = 1, impact = 75, launch = 110, impactUp = 0, launchUp = 0, twist = 0 }, vec(1, 0, 0), nil, true)
+  check(normal:find("death push capped") == nil, "default Death Push remains uncapped")
+  rawset(E.mesh, "AddImpulse", old)
+  rag.stop(T.pawn); rag.start(T.pawn, E.mesh, "quiet"); E.s.sim = true
+  for _ = 1, 20 do tick() end
+end
 local cap = (ctx.tune.gore or {}).splitVelMax or 2000
 local v, n = split_vel({ a = vec(0, 0, 0) }, { a = vec(3000, 0, 0) }, 1, cap)
 check(n == 1 and math.abs(len(v.a) - cap) < 1e-6, "a 30 m/s sampling jump is capped at splitVelMax")
@@ -114,6 +129,41 @@ do
   check(l <= 701, string.format("a 50 m/s engine impulse is capped at the source (%.0f cm/s)", l))
   check(F.find("engine impulse .* capped to") ~= nil, "the source cap logs its bite")
   rag.stop(T.pawn)
+  T.pawn.RagdollInfo = nil
+end
+-- A UE4SS struct wrapper can reject or silently ignore field writes. The whole
+-- struct fallback must use the original vector, including after a partial write.
+do
+  ctx.tune.active.enabled = false
+  T.pawn.RagdollInfo = { ImpulseValue = { X = 5000, Y = 0, Z = 0 } }
+  rag.cap_engine_impulse(T.pawn)
+  check(T.pawn.RagdollInfo.ImpulseValue.X == 5000, "disabling active ragdoll leaves the engine impulse unchanged")
+  ctx.tune.active.enabled = true
+  T.pawn.RagdollInfo = nil
+  local function attempt(fieldWrite)
+    local data = { X = 3000, Y = 4000, Z = 0 }
+    local proxy = setmetatable({}, { __index = function(_, k) return data[k] end,
+      __newindex = function(_, k, v) fieldWrite(data, k, v) end })
+    local info = setmetatable({}, { __index = function(_, k) if k == "ImpulseValue" then return proxy end end,
+      __newindex = function(_, k, v) if k == "ImpulseValue" then data.X, data.Y, data.Z = v.X, v.Y, v.Z end end })
+    T.pawn.RagdollInfo = info
+    rag.cap_engine_impulse(T.pawn)
+    return data
+  end
+  local partial = attempt(function(data, k, v) if k == "Y" then error("field rejected") end; data[k] = v end)
+  check(math.abs(partial.X - 420) < 0.1 and math.abs(partial.Y - 560) < 0.1,
+    "partial struct write falls back with the original direction")
+  local ignored = attempt(function() end)
+  check(math.abs(ignored.X - 420) < 0.1 and math.abs(ignored.Y - 560) < 0.1,
+    "silently ignored field writes fall back to a verified struct write")
+  local data = { X = 3000, Y = 4000, Z = 0 }
+  local proxy = setmetatable({}, { __index = function(_, k) return data[k] end,
+    __newindex = function(_, k, v) if k == "Y" then error("field rejected") end; data[k] = v end })
+  T.pawn.RagdollInfo = setmetatable({}, { __index = function(_, k) if k == "ImpulseValue" then return proxy end end,
+    __newindex = function() error("struct rejected") end })
+  rag.cap_engine_impulse(T.pawn)
+  check(data.X == 3000 and data.Y == 4000 and F.find("engine impulse .*write failed") ~= nil,
+    "failed fallback restores the partially changed vector and reports failure")
   T.pawn.RagdollInfo = nil
 end
 -- Tunnelled through: no floor below near but one just above. She is lifted back above it.

@@ -67,7 +67,17 @@ end
 
 -- handshake with sbslice.dll: hand it the UFunction to repoint, then wait for its answer
 local function native_tick()
-  if native.state == "ready" or native.state == "failed" then return end
+  if native.state == "ready" then return end
+  if native.state == "failed" then
+    -- The helper can load after our timeout (for example with a slow mod manager).
+    -- Its request remains outstanding, so accept its eventual answer without
+    -- repointing the function a second time or hiding a real refusal.
+    if not native.late or os.clock() < (native.lateCheck or 0) then return end
+    native.lateCheck = os.clock() + 1
+    if not file_exists(OK) and not file_exists(ERR) then return end
+    native.state, native.late = "waiting", nil
+    log("sbslice.dll answered after the startup timeout")
+  end
   local ctx = get_ctx()
   local try, valid = get_guards()
   if native.state == "init" then
@@ -109,6 +119,7 @@ local function native_tick()
       and " (this game exe isn't the Steam build sbslice.dll was made for: no cuts, and no outfit physics fix)" or ""))
   elseif native.waited > 150 then
     native.state = "failed"
+    native.late, native.lateCheck = true, os.clock() + 1
     log("sbslice.dll did not answer (is Mods/SBSlice/dlls/main.dll installed, with Mods/SBSlice/enabled.txt or SBSlice : 1 in mods.txt?)")
   end
 end

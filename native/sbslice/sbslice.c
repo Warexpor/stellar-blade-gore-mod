@@ -5485,9 +5485,9 @@ static int object_alive(u64 obj, int index)
 // face's) while the script forgets its cuts (gore.forget), and these records stayed: the next "r" (or a collapse, a
 // hold) wrote into freed memory. Each asset recorded is noted with its GUObjectArray index the first time a command
 // sees it (the frame after its cut, alive: it is being worn), and every command first drops the records of a noted
-// asset no longer alive, writing nothing (its memory may be another object's now). An asset not noted (the object
-// array unreadable, or the asset not alive as first seen) is left as before: written back
-#define MAX_ASSETS 64
+// asset no longer alive, writing nothing (its memory may be another object's now). Never retain an unverified asset.
+// Allow for all records plus the previous pass's entries, which are compacted after checking the current records.
+#define MAX_ASSETS (2 * (MAX_SINKS + MAX_RELAX + MAX_REGROW + MAX_BONEMAP_FIX))
 static struct { u64 sm; int idx; } assets[MAX_ASSETS];
 static int nassets, assets_gone;
 static int objarr_sane(void)
@@ -5496,25 +5496,26 @@ static int objarr_sane(void)
     u64 arr = exe + RVA_GUOBJECTARRAY + GUO_OBJOBJECTS;
     return mem_readable(arr, 0x20) && *(int *)(arr + 0x14) > 0 && mem_readable(*(u64 *)arr, 8);
 }
-// 1 alive or not judged, 0 a noted asset gone (decided once per asset per pass: seen[] holds this pass's answers)
+// 1 verified alive, 0 gone or unverifiable (decided once per asset per pass).
 static int asset_live(u64 sm, u64 *seen, int *live, int *nseen)
 {
-    if (sm < 0x10000) return 1;
+    if (sm < 0x10000) return 0;
     for (int i = 0; i < *nseen; i++) if (seen[i] == sm) return live[i];
-    int k = -1, r = 1;
+    int k = -1, r = 0;
     for (int i = 0; i < nassets; i++) if (assets[i].sm == sm) { k = i; break; }
     if (k >= 0) r = object_alive(sm, assets[k].idx);
     else if (nassets < MAX_ASSETS && mem_readable(sm, 0x10)) {
         int idx = *(int *)(sm + UOBJ_INTERNAL_INDEX);
-        if (object_alive(sm, idx)) { assets[nassets].sm = sm; assets[nassets].idx = idx; nassets++; }
+        if (object_alive(sm, idx)) { assets[nassets].sm = sm; assets[nassets].idx = idx; nassets++; r = 1; }
     }
     if (*nseen < MAX_ASSETS) { seen[*nseen] = sm; live[*nseen] = r; (*nseen)++; }
     return r;
 }
-static void assets_prune(void)
+static int assets_prune(void)
 {
-    if (!objarr_sane()) return;
-    u64 seen[MAX_ASSETS]; int live[MAX_ASSETS], nseen = 0, k = 0, gone = 0;
+    if (!objarr_sane()) return !(nsinks || nrelaxed || nregrown || nbmfix);
+    static u64 seen[MAX_ASSETS]; static int live[MAX_ASSETS];
+    int nseen = 0, k = 0, gone = 0;
     for (int i = 0; i < nsinks; i++) if (asset_live(sinks[i].mesh, seen, live, &nseen)) sinks[k++] = sinks[i]; else gone++;
     nsinks = k; k = 0;
     for (int i = 0; i < nrelaxed; i++) if (asset_live(relaxed[i].mesh, seen, live, &nseen)) relaxed[k++] = relaxed[i]; else gone++;
@@ -5536,6 +5537,7 @@ static void assets_prune(void)
     }
     nassets = k;
     assets_gone += gone;
+    return 1;
 }
 static void alive_cmd(const u64 *f, int k)
 {
@@ -7169,7 +7171,7 @@ static void exec_slice_cmd(void *context, unsigned char *stack, void *result)
         return;
     }
     // (no write into a mesh asset the level took with it: assets_prune)
-    assets_prune();
+    if (!assets_prune()) { skin_result("err object array unavailable"); return; }
     // "H[comp,comp,...]": hold stump seams on their rim bones. No answer file — her tick sends it every frame, and a
     // command's result file is what made per-frame calls stutter. comps still alive; none means every cut
     if (txt[0] == 'H') {

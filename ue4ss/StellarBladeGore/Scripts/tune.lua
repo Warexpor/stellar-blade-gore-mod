@@ -395,6 +395,7 @@ return {
                                --   either. Goes before smash; blades still cut
     lowArm = {                 -- a hit that leaves her HP under a quarter takes an arm off as she fights on
       enabled = false,         --   (once till it is back: it grows back at a camp rest, or at her next life)
+      settledCopy = false,     --   experimental: move the settled arm to a separate mesh
       side = "hit",            --   which: "hit" the side of her the blow landed on (at random when it landed on her
                                --   middle or nothing tells), "left", "right" or "either" (one at random each time)
       below = 0.25,            --   the share of her HP bar under which it goes

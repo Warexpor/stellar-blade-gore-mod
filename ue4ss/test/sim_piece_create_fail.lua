@@ -8,6 +8,7 @@ f:write([[
 local s = dofile("ue4ss/Mods/StellarBladeGore/Scripts/settings.default.lua")
 s.dev = true
 s.gore.lowArm.enabled = true
+s.gore.lowArm.settledCopy = true
 return s
 ]])
 f:close()

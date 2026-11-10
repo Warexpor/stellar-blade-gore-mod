@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.3
+
+Released 10 November 2026.
+
+- Clear a pending test shove when a real death starts and tag it to the run that armed it, so an earlier F7/F6 press with developer keys on can no longer fire inside the next real death. The pending push previously fired on any active ragdoll and stacked test impulse on top of Death Push, matching the report that dev mode on means instant teleport on every kill. Focused death sims pass; needs an in-game retest with dev keys on.
+- Respect `active.enabled = false` when applying the early engine-impulse cap; the earlier guard ran even with active ragdoll disabled.
+- Time the Juggernaut grab fallback with the game's clock when available. The extracted show has its own slow-motion keys, which the mod's slow-motion setting alone does not capture; the old fallback could fire impacts early. The hook and timing still need an in-game test.
+- Verify the engine-impulse cap after writing it, retry with a full vector if component writes fail or are ignored, and preserve the original direction after a partial write. This hardens the teleport mitigation; its effect in game is still unconfirmed.
+- When sbslice answers after its startup timeout, recheck outfits whose physics were prepared without it, completing the native collision and bind-pose work once Eve is out of ragdoll. Previously the late-response recovery left that work cached as complete. Focused simulations cover the transition; the reported missing-gore cause is still unknown.
+- Add a Juggernaut grab fallback keyed to Eve's `Hit_SkullJuggernaut_Beta_Grab` animation. Its three limb-only impacts follow the animation's 1.565, 2.055 and 2.82 second cues, with duplicate hit suppression and interruption guards. The supplied log had no mesh hits or detected grab; the animation callback and real timing still need an in-game test.
+- Allow later recorded blunt pounds during a confirmed grab after HP has reached zero, while the grab still holds her. The lethal hit itself is not repeated and each later hit is consumed once. The supplied Juggernaut log contains neither a detected grab nor mesh-hit callbacks, so this does not establish a fix for that particular recording.
+- Accept a late sbslice startup response after the handshake timeout, instead of leaving gore disabled for the rest of the session. This addresses a possible slow-load failure; the missing-gore report has no matching startup log, so its cause remains unknown.
+- Recheck an outfit's physics when another system swaps it on the same mesh, including when the previous asset was not borrowed. Incomplete assets can then receive the normal fallback; repeated swaps are bounded. Lunaris's supplied body asset lacks six core bodies and the fallback accepts its extracted body list in simulation, but the reported stretching still needs an in-game test.
+- Low-HP arm cuts now leave the settled arm on the original mesh by default, avoiding the separate-copy path while investigating crashes. Three supplied 0.7.1 logs end immediately after that copy is made, but do not prove it caused the crashes. The experimental copy can be re-enabled in Gameplay; with it off the arm may briefly follow animations. Needs an in-game retest.
+- Pressing the disabled camera follow-point key during a death now shows where to enable it. The reported log shows repeated C presses while the setting was off; the key stays off until enabled, so its normal gameplay binding is preserved.
+- Bound the mod's combined death impact and launch at 400 cm/s before applying them, so a high Death Push cannot stack an unbounded extra impulse on the game's delayed throw. Default push is unchanged; whether this prevents the reported air/floor teleports needs in-game testing.
+- Apply the existing engine-impulse cap as soon as a death starts, before the deferred ragdoll setup frame. The old placement could be too late for the game's delayed impulse; it is still also checked at ragdoll setup. Simulated ordering passes, but real game timing needs verification.
+- Keep the post-respawn movement repair active for its intended 20-second window; it previously stopped after 10 seconds and could miss a later movement lock. A focused simulation covers a lock at 12 seconds; the reported camera-only movement still needs an in-game retest.
+- Preserve a deferred killing torso smash until the death even outside a detected grab. Previously a later swing could replace the killing blow and smash a different limb; the Juggernaut report's log shows this exact sequence. Needs an in-game retest; finisher impacts without a detected mesh hit remain under investigation.
+
+- Harden native mesh cleanup against unverified asset addresses: discard records that fail their first lifetime check, and defer native commands while the object array is unavailable and mesh records are outstanding. This addresses a possible freed-memory crash, not a confirmed cause of the recent reports; it needs an in-game retest.
+
 ## 0.7.2
 
 Released 9 November 2026.

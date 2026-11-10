@@ -26,7 +26,7 @@ for _, n in ipairs({ "P_Eve_Dead", "P_Eve_Dead2", "P_Eve_Dead3", "Eve_Dead_Down"
   F.objects["/Game/Art/Show/CH_P_EVE_01/Basic/" .. n .. "." .. n] = F.obj(n, "SBShowData")
 end
 -- Model an outfit whose physics asset must be reattached at death, recreating its bodies.
-local realDofile, remake, runtimeTune, gore = dofile, false, nil, nil
+local realDofile, remake, runtimeTune, gore, impulseAtSetup = dofile, false, nil, nil, nil
 local broken = {}
 E.mesh.BreakConstraint = function(_, _, _, bone) broken[#broken + 1] = tostring(bone) end
 dofile = function(path)
@@ -36,6 +36,8 @@ dofile = function(path)
   if path:match("physfix%.lua$") then
     local start = result.start
     result.start = function(...)
+      local iv = pawn.RagdollInfo and pawn.RagdollInfo.ImpulseValue
+      if iv then impulseAtSetup = math.sqrt(iv.X * iv.X + iv.Y * iv.Y + iv.Z * iv.Z) end
       local r = start(...)
       if remake then E.s.sim = false; result.remakes = (result.remakes or 0) + 1 end
       return r
@@ -82,8 +84,11 @@ if fails > 0 then dump(at) end
 F.run(2, pawn)
 at = mark()
 remake = true
+pawn.RagdollInfo = { ImpulseValue = { X = 5000, Y = 0, Z = 0 } }
 E.s.hp = 0; E.die(true)
 F.run(1, pawn)
+check(impulseAtSetup and impulseAtSetup <= 701, "engine impulse capped before physics setup and deferred ragdoll start")
+pawn.RagdollInfo = nil
 check(F.find("ragdoll: restored simulation after physics asset setup: true", at) ~= nil, "3: physics asset replacement restores the ragdoll")
 check(E.s.sim and not F.find("recover %(ragdoll ended%)", at), "3: death remains active after asset replacement")
 remake = false

@@ -52,6 +52,7 @@ return {
                                -- (blades still cut)
     lowArm = {
       enabled = false,         -- a hit that leaves her HP under a quarter cuts an arm off; she fights on without
+      settledCopy = false,     -- experimental: move the settled arm to a separate mesh
                                -- it (it dissolves back in at a camp rest, or comes back at her next life)
       side = "hit",            -- which arm: "hit" the one on the side the blow landed on, "left", "right" or
                                -- "either" (one at random each time)

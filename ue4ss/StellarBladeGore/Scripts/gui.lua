@@ -161,6 +161,7 @@ M.ROWS = {
   { section = "Gameplay" },
   { key = "holdDown", label = "Stay Down After Knockdown", kind = "bool", help = "When knocked down, Eve stays on the ground until you dodge or jump. Off: she gets up by herself after a second, as in the game." },
   { key = "gore.lowArm.enabled", label = "Lose Arm at Low HP", kind = "bool", help = "A hit that leaves Eve under Arm Comes Off Below of her HP (25% by default) cuts an arm off (Which Arm), and she fights on without it. It dissolves back in when she rests at a camp, or comes back at her next life." },
+  { key = "gore.lowArm.settledCopy", label = "   Settled Arm Copy (Experimental)", kind = "bool", help = "Off by default while a possible crash is investigated. On: a detached arm gets its own mesh once settled, so it stays on the ground during animations. Off: it stays on Eve's mesh and may briefly move with her during some animations." },
   { key = "gore.lowArm.below", label = "   Arm Comes Off Below", kind = "num", min = 0.01, max = 0.9, step = 0.01, pct = true, help = "With Lose Arm at Low HP: the share of her HP a hit has to leave her under for the arm to come off (25%: a quarter). Grows Back With HP waits for at least 1% more than this." },
   { key = "gore.lowArm.side", label = "   Which Arm", kind = "list", values = { "hit", "left", "right", "either" },
     names = { hit = "Side Hit", left = "Left", right = "Right", either = "Either" },
@@ -384,7 +385,7 @@ for _, key in ipairs({ "stains.scale", "stains.splash.enabled", "stains.dirt.ena
   "stains.wash.enabled", "stains.rest", "stains.fade", "stains.test_blood", "stains.test_dirt", "stains.clean" }) do
   M.DEPENDS[key] = { { "stains.enabled", true } }
 end
-for _, key in ipairs({ "gore.lowArm.below", "gore.lowArm.side", "gore.lowArm.noHealGun", "gore.lowArm.noSword",
+for _, key in ipairs({ "gore.lowArm.settledCopy", "gore.lowArm.below", "gore.lowArm.side", "gore.lowArm.noHealGun", "gore.lowArm.noSword",
   "gore.lowArm.notice", "gore.lowArm.healBack" }) do M.DEPENDS[key] = { { "gore.lowArm.enabled", true } } end
 M.DEPENDS["gore.lowArm.notice"] = { { "gore.lowArm.enabled", true }, { "gore.lowArm.noHealGun", true } }
 for _, key in ipairs({ "bosses.hpScale", "bosses.passive", "bosses.struggle", "bosses.face" }) do

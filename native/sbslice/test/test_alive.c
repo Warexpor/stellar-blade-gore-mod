@@ -7,11 +7,12 @@
 // ./test/run.sh alive
 #include "host.h"
 static u64 watched_arr, watched_chunks;
-static int arr_reads, chunk_reads;
+static int arr_reads, chunk_reads, deny_array;
 int mem_readable(u64 p, u64 n) {
     (void)n;
     if (p == watched_arr) arr_reads++;
     if (p == watched_chunks || p == watched_chunks + 8) chunk_reads++;
+    if (deny_array && p == watched_arr) return 0;
     return p >= 0x10000;
 }
 static unsigned char objs[4][0x40];
@@ -81,6 +82,14 @@ int main(void)
     bm_owner = as[1]; tarray_push16((u64)sec2, 9, 255);
     assets_prune(); // (noted: both alive)
     if (nsinks != 2 || nassets != 2) { printf("FAIL prune of live assets: %d sinks, %d noted\n", nsinks, nassets); fails++; }
+    deny_array = 1;
+    if (assets_prune() || nsinks != 2 || nassets != 2) { printf("FAIL unavailable array should defer cleanup\n"); fails++; }
+    deny_array = 0;
+    // An untracked object whose item no longer points at it must never reach restore.
+    static unsigned char unknown[0x400];
+    *(int *)(unknown + UOBJ_INTERNAL_INDEX) = 42;
+    sinks[nsinks].mesh = (u64)unknown; sinks[nsinks].bone = 0; nsinks++;
+    if (!assets_prune() || nsinks != 2 || nassets != 2) { printf("FAIL unverified asset retained\n"); fails++; }
     // asset 2 goes with the level: its item cleared, then its memory taken by another asset at another index
     *(u64 *)(chunk1 + 5 * GUO_ITEM) = 0;
     *(int *)(as[1] + UOBJ_INTERNAL_INDEX) = 40;
@@ -101,7 +110,7 @@ int main(void)
     }
     // (the gone asset's array left as it was: count 1, nothing written back into it)
     if (*(int *)(sec0 + 8) != 0 || *(int *)(sec2 + 8) != 1) { printf("FAIL BoneMap counts %d, %d\n", *(int *)(sec0 + 8), *(int *)(sec2 + 8)); fails++; }
-    if (assets_gone != 4) { printf("FAIL %d records counted gone, want 4\n", assets_gone); fails++; }
+    if (assets_gone != 5) { printf("FAIL %d records counted gone, want 5\n", assets_gone); fails++; }
     printf("%s\n", fails ? "FAIL" : "PASS");
     return fails;
 }

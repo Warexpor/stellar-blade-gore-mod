@@ -14,6 +14,7 @@ s.dev = true
 s.gore = s.gore or {}
 s.gore.lowArm = s.gore.lowArm or {}
 s.gore.lowArm.enabled = true
+s.gore.lowArm.settledCopy = true
 return s
 ]])
 f:close()

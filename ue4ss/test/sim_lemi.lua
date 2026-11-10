@@ -35,6 +35,7 @@ LoadAsset = function(p) if p == COMPLETE then loaded = true; return complete end
 local sk = { PhysicsAsset = own, GetAddress = function() return 0x900 end, GetFName = function() return { ToString = function() return "MESH_LatexNun_Gold" end } end,
   LODInfo = { { bAllowCPUAccess = true } } }
 local override, sets = nil, 0
+local nativeStatus, nativeCalls = "ready", 0
 local mesh = { SkeletalMesh = sk,
   GetPhysicsAsset = function() return override or sk.PhysicsAsset end,
   SetPhysicsAsset = function(_, pa) override = pa; sets = sets + 1 end }
@@ -45,7 +46,7 @@ physfix.init({
   tune = { physfix = { steady = false, weldKinematic = false } },
   may_load = function() return not quiet end,
   cpu_forced = true,
-  gore = { native_state = function() return "ready" end, command = function() return "err" end },
+  gore = { native_state = function() return nativeStatus end, command = function() nativeCalls = nativeCalls + 1; return "err" end },
 })
 local function said(pat) for _, l in ipairs(lines) do if l:find(pat) then return l end end end
 
@@ -89,6 +90,49 @@ check(said("outfit CH_P_EVE_02_Body, physics CH_P_EVE_02_Physics: NOT patched") 
 check(cnsSets == 1, "CNS bodies remade from the fixed asset")
 physfix.check(nil, cnsMesh, false)
 check(cnsSets == 1, "CNS bodies are not remade repeatedly")
+-- Lunaris Matutina's actual body physics asset, extracted from the supplied archive:
+-- it lacks Spine1, Head, both clavicles and both feet.
+local lunaris = asset("0010LUNARIS_PhysicsAsset1", 0x310, {
+  "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine2", "Bip001-Neck",
+  "Bip001-L-UpperArm", "Bip001-L-Forearm", "Bip001-L-Hand",
+  "Bip001-R-UpperArm", "Bip001-R-Forearm", "Bip001-R-Hand",
+  "Bip001-L-Thigh", "Bip001-L-Calf", "Bip001-R-Thigh", "Bip001-R-Calf" })
+local changed = lunaris
+cnsMesh.GetPhysicsAsset = function() return changed end
+cnsMesh.SetPhysicsAsset = function(_, pa) changed = pa end
+physfix.check(nil, cnsMesh, false)
+physfix.check(nil, cnsMesh, false)
+check(changed == complete, "incomplete physics swapped onto the same mesh is rechecked and replaced")
+local lunarisSk = { PhysicsAsset = lunaris, GetAddress = function() return 0x902 end,
+  GetFName = function() return { ToString = function() return "0010LUNARIS" end } end,
+  LODInfo = { { bAllowCPUAccess = true } } }
+local lunarisOverride
+local lunarisMesh = { SkeletalMesh = lunarisSk, GetPhysicsAsset = function() return lunarisOverride or lunarisSk.PhysicsAsset end,
+  SetPhysicsAsset = function(_, pa) lunarisOverride = pa end }
+physfix.check(nil, lunarisMesh, false)
+check(lunarisOverride == complete and lunarisSk.PhysicsAsset == complete,
+  "Lunaris's incomplete physics asset is replaced by the complete one")
+-- A helper that answered after timing out must complete the physics work that
+-- was previously done without its collision table or bind-pose commands.
+local latePa = asset("Late_Physics", 0x320, all)
+local lateSk = { PhysicsAsset = latePa, GetAddress = function() return 0x903 end,
+  GetFName = function() return { ToString = function() return "Late_Outfit" end } end,
+  LODInfo = { { bAllowCPUAccess = true } } }
+local lateSets = 0
+local lateMesh = { SkeletalMesh = lateSk, GetPhysicsAsset = function() return latePa end,
+  SetPhysicsAsset = function() lateSets = lateSets + 1 end }
+nativeStatus = "failed"
+local prior = nativeCalls
+physfix.check(nil, lateMesh, false)
+check(nativeCalls == prior and lateSets == 1, "failed helper: basic physics is fixed without native commands")
+nativeStatus = "ready"
+physfix.check(nil, lateMesh, true)
+check(nativeCalls == prior and lateSets == 1, "late helper does not rebuild bodies during a ragdoll")
+physfix.check(nil, lateMesh, false)
+check(nativeCalls > prior and lateSets == 2, "late helper rechecks the same outfit and performs native physics work")
+local doneCalls = nativeCalls
+physfix.check(nil, lateMesh, false)
+check(nativeCalls == doneCalls and lateSets == 2, "completed late-native repair does not repeat")
 local function joint(b)
   local p = { ConeLimit = { Swing1Motion = 0, Swing2Motion = 0, Swing1LimitDegrees = 45, Swing2LimitDegrees = 45 },
     TwistLimit = { TwistMotion = 0, TwistLimitDegrees = 45 } }

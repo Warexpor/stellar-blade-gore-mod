@@ -38,6 +38,23 @@ hm.lethal_watch(T.pawn, T.E.mesh)
 check(hm.lethal and hm.lethal.roll == "blade" and hm.lethal.kind == "head",
   "real no-blade lethal watcher rolls and retains the head before grab release")
 check(guessed == 0, "a deferred rolled result does not fall through to a later guessed blade")
+-- A torso smash can defer even when no grab was detected. The later death swing must
+-- not replace the killing hit (as in the Juggernaut report).
+local oldSmashKill, killing, laterHit = sw.smash_kill, { loc = { X = 1, Y = 2, Z = 3 } }, { loc = { X = 9, Y = 9, Z = 9 } }
+local replayed
+T.ctx.enemies = { grab_now = function() return nil end }
+sw.rock_blow = function() return killing end
+sw.smash_kill = function(_, _, h)
+  if h.early then return false, "later" end
+  replayed = h; return true
+end
+hm.armed, hm.lethal = true, nil
+hm.lethal_watch(T.pawn, T.E.mesh)
+check(hm.lethal and hm.lethal.held == killing, "deferred torso smash retained without a grab")
+sw.laser_hit = function() return nil end
+T.state.gore_cut(T.pawn, T.E.mesh, laterHit, nil)
+check(replayed == killing, "death replays killing smash instead of later swing")
+sw.smash_kill = oldSmashKill
 debug.setupvalue(hm.lethal_watch, deathHitIndex, originalDeathHit)
 hm.lethal = nil
 T.ctx.enemies, G.wound, T.ctx.tune.gore.death = oldEnemies, oldWound, oldDeath

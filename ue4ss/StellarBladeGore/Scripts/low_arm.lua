@@ -287,6 +287,11 @@ function hm.piece_watch(pawn, mesh)
   if not gore or not gore.hide_pieces then return end
   local h = gore.pieceHid
   if h and not h.baked then hm.still = nil; return end -- photo mode's
+  if hm.lowCut and ((settings().gore or {}).lowArm or {}).settledCopy ~= true then
+    hm.still = nil
+    if h then hm.piece_back("settled arm copy disabled") end
+    return
+  end
   local parts = gore.cut_parts(mesh, true)
   if #parts == 0 then hm.stillFailed = nil end
   local busy = gore.busy() or hm.regrow or hm.ghost

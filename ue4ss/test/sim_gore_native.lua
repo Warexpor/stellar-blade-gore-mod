@@ -50,4 +50,22 @@ response = 'ok'
 tick()
 check(native.state == 'ready' and ctx.cpu_forced == true, 'handshake accepts native readiness and CPU-copy status')
 os.remove(result); os.remove(req); os.remove(okfile)
+native.state, native.waited, native.late = 'init', 0, nil
+tick()
+for _ = 1, 151 do tick() end
+check(native.state == 'failed' and native.late, 'timeout reports failure but keeps the pending request')
+local late = assert(io.open(okfile, 'w')); late:write('cpu copy LOD0 on'); late:close()
+native.lateCheck = 0
+tick()
+check(native.state == 'ready' and not native.late, 'late helper response recovers without restarting')
+os.remove(result); os.remove(req); os.remove(okfile)
+native.state, native.waited, native.late = 'init', 0, nil
+tick()
+for _ = 1, 151 do tick() end
+local errfile = root .. 'sbslice.err'
+local refused = assert(io.open(errfile, 'w')); refused:write('unsupported build'); refused:close()
+native.lateCheck = 0
+tick()
+check(native.state == 'failed' and not native.late, 'late refusal stays failed without retrying a refused hook')
+os.remove(result); os.remove(req); os.remove(okfile); os.remove(errfile)
 print(fails==0 and 'PASS' or 'FAIL')

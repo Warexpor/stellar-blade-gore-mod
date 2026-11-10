@@ -47,6 +47,7 @@ local state = nil      -- { patched, cpu, pa } for the current mesh
 local locks = {}       -- constraint components made for this ragdoll
 local waiting = false  -- logged that an outfit waits for sbslice.dll
 local filledTable = {} -- physics asset address -> true once sbslice.dll filled its collision table
+local fixedWithoutNative, neutralWithoutNative = {}, {}
 local alivePairs = {} -- physics asset address -> the pairs (bone names) it let collide that aren't two main bodies
 
 function M.init(c)
@@ -672,6 +673,12 @@ function M.check(pawn, mesh, live)
   local sk = try(function() return mesh.SkeletalMesh end)
   local addr = valid(sk) and try(function() return sk:GetAddress() end)
   if not addr then return end
+  if not live and addr == seenMesh and state and state.nativeDeferred and dll() == "ready" then
+    local paddr = valid(state.pa) and try(function() return state.pa:GetAddress() end)
+    if paddr and neutralWithoutNative[paddr] then neutralTried[paddr], neutralWithoutNative[paddr] = nil, nil end
+    log("outfit " .. name(sk) .. ": sbslice.dll is available again; rechecking physics")
+    seenMesh, state, M.seen[addr] = nil, nil, nil
+  end
   if addr == seenMesh then
     -- a borrowed asset is the component's own override, which the mesh's own (none) can replace again: gore's undo
     -- and recovery re-make the bodies from the mesh's asset (nineteenth playtest: InnerSuit read no physics asset at
@@ -679,6 +686,18 @@ function M.check(pawn, mesh, live)
     -- at most once in 2 s and 10 times an outfit: another mod that keeps setting its own asset (an outfit or body
     -- mod) had her bodies re-made every tick, 1-2 fps (reported)
     local now = try(function() return mesh:GetPhysicsAsset() end)
+    -- The same mesh can also receive a different asset when the old one was not borrowed.
+    if not live and state and not state.borrowed and valid(state.pa) and valid(now)
+      and try(function() return now:GetAddress() ~= state.pa:GetAddress() end) then
+      M.adopted[addr] = (M.adopted[addr] or 0) + 1
+      if M.adopted[addr] <= 3 then
+        log(string.format("outfit %s changed physics from %s to %s: checking again", name(sk), name(state.pa), name(now)))
+        seenMesh, state, M.seen[addr] = nil, nil, nil
+      elseif M.adopted[addr] == 4 then
+        log(string.format("outfit %s keeps changing physics: left to it", name(sk)))
+      end
+      return
+    end
     if not live and state and state.borrowed and valid(state.pa) and (state.lost or 0) < 10
       and os.clock() - (state.lostAt or -1e9) >= 2
       and not (valid(now) and try(function() return now:GetAddress() == state.pa:GetAddress() end)) then
@@ -813,6 +832,7 @@ function M.check(pawn, mesh, live)
   -- the neutral pose's drives, once an asset (after fix_defaults on an unpatched one: its frames turn there)
   local function neutral_pass()
     if not paddr or neutralTried[paddr] then return "", false end
+    if dll() == "failed" and ctx.tune.active and ctx.tune.active.neutral then neutralWithoutNative[paddr] = true end
     local s, fin, cnt = neutral_drives(pa, mesh, sk)
     if fin then neutralTried[paddr] = true end
     if (cnt or 0) > 0 then neutraled[paddr] = true end
@@ -829,7 +849,8 @@ function M.check(pawn, mesh, live)
   -- A borrowed vanilla asset keeps its normal treatment even when the mesh itself came from CNS.
   local paFull = valid(pa) and (try(function() return pa:GetFullName() end) or "") or ""
   local cnsAsset = paFull:lower():find("/game/cnsrepacked/", 1, true) ~= nil
-  state = { patched = valid(pa) and not cnsAsset and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa, borrowed = borrowed:find("gave it") ~= nil }
+  state = { patched = valid(pa) and not cnsAsset and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa,
+    borrowed = borrowed:find("gave it") ~= nil, nativeDeferred = dll() == "failed" }
   M.seen[addr] = { name = name(sk), state = state }
   -- (the asset's flag; sbslice.dll keeps every skeletal mesh's LOD0 CPU copy whatever it says)
   local forced = ctx and ctx.cpu_forced
@@ -847,7 +868,7 @@ function M.check(pawn, mesh, live)
   -- the flag isn't the whole story: InnerSuit read false and still cut (nineteenth playtest)
   if cpu == false and not forced then note = note .. "; cuts may not read this mesh (a failed cut logs 'no CPU copy')" end
   if not valid(pa) or state.patched then log(what .. note .. (valid(pa) and remake_for(neutral_pass()) or "")); return end
-  if paddr and not fixed[paddr] then
+  if paddr and (not fixed[paddr] or fixedWithoutNative[paddr]) then
     -- the ranges and the collision table need sbslice.dll: it answers within a few seconds of the game starting
     local d = dll()
     if d ~= "ready" and d ~= "failed" then
@@ -856,6 +877,7 @@ function M.check(pawn, mesh, live)
       return
     end
     fixed[paddr] = true
+    fixedWithoutNative[paddr] = d == "failed" or nil
     what = what .. "; " .. fix_defaults(pa, mesh, sk) .. (neutral_pass())
     -- (the ends' turn damping again: fix_defaults set every main body's to angularDamping)
     if steadied[paddr] then steady(pa) end

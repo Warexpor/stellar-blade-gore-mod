@@ -59,6 +59,10 @@ at = mark()
 F.press("C", "")
 F.run(1, pawn)
 check(F.find("follow point pelvis", at) == nil, "off in a death: still nothing switched")
+local notice = io.open("ue4ss/Mods/StellarBladeGore/spawner.cmd", "r")
+local text = notice and notice:read("*a") or ""
+if notice then notice:close() end
+check(text:find("Follow%-point hotkey is off") ~= nil, "off in a death: an on-screen notice explains how to enable it")
 E.respawn(); F.run(20, pawn)
 
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end

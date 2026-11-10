@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.2"
+local VERSION = "0.7.3"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -759,6 +759,7 @@ function screen.wedding_blend(mesh)
 end
 
 local function on_start(pawn, mesh)
+  if rag and rag.cap_engine_impulse then try(function() rag.cap_engine_impulse(pawn) end) end
   local timings, stamp = {}, os.clock()
   local function phase(label)
     local now = os.clock()
@@ -1223,7 +1224,8 @@ local function sandbox_ragdoll()
   try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
   if rag then rag.start(pawn, mesh, "sandbox") end
   -- the push goes in a couple of ticks later, once her bodies simulate (tick)
-  if (tune.impulse or 0) > 0 or (tune.push or 0) > 0 then f7_push = { pawn = pawn, mesh = mesh, n = F7_WAIT } end
+  -- tag it with this run's death number: a pending test shove must never fire inside the next real death
+  if (tune.impulse or 0) > 0 or (tune.push or 0) > 0 then f7_push = { pawn = pawn, mesh = mesh, n = F7_WAIT, death = deaths } end
 end
 
 local function sandbox_recover(why)
@@ -1240,6 +1242,8 @@ local function sandbox_recover(why)
   if gore and not active then gore.cleanup(pawn, mesh) end
   if rag and not active then rag.stop(pawn) end
   if hadPiece then screen.cloth_soon("piece recovered") end
+  -- a pending test shove dies with the test ragdoll: F8 then a real death must not inherit it
+  f7_push, f7_after = nil, nil
   log(why or "F8: recover requested")
   -- a test death that stayed animated (Test: Animated Death's, a cut keeping her fall) has no physics to turn off,
   -- and the tick only ends a death when it does: F8 did nothing (playtest)
@@ -2265,7 +2269,7 @@ function hm.lethal_watch(pawn, mesh)
     -- (her body waits for her death and its ragdoll, smashed there)
     hm.lethal.judged = later ~= "later"
     if done then hm.lethal.cut, hm.lethal.h = true, h; return end
-    if later == "later" then hm.grab_keep(h); return end
+    if later == "later" then hm.grab_keep(h, true); return end
   end
   if hm.lethal.roll ~= "blade" and not (hm.lethal.grab and hm.lethal.roll == "odds") then return end
   -- in a grab, a rolled limb cut fires at the hit instead of after the grab ends: waiting read as the arm
@@ -2301,11 +2305,11 @@ function hm.lethal_watch(pawn, mesh)
   elseif ok then hm.grab_keep(h)
   else log("lethal hit: early cut failed: " .. tostring(err)) end
 end
--- a killing blow in a grab whose cut waits for her death (a split, her head or body): kept for it, as the grab can hold her
--- for longer than death_hit remembers a blow (its later hits would be taken instead). gore.blow carries its plane
+-- Keep a deferred torso smash even without a detected grab; grab cuts can also wait past the original hit.
+-- Later swings must not replace it. gore.blow carries its plane
 -- from her pose at the blow to her pose then (h.pose)
-function hm.grab_keep(h)
-  if not (hm.lethal.grab and h) then return end
+function hm.grab_keep(h, deferredSmash)
+  if not (h and (hm.lethal.grab or deferredSmash)) then return end
   h.early = nil
   hm.lethal.held = h
 end
@@ -2318,12 +2322,18 @@ function hm.grab_pound(pawn, mesh)
   local g = tune.gore or {}
   local s = g.smash or {}
   if not gore or g.enabled == false or s.enabled ~= true or s.grabPounds == false then return end
-  if active or hm.lethal then return end
+  if active then return end
   local en = goreCtx.enemies
-  local grab = en and en.grab_now and en.grab_now()
+  -- Once HP reaches zero grab tracking stops refreshing, but a held finisher can
+  -- still land later pounds before the ragdoll starts. Never replay the lethal hit.
+  local lt = hm.lethal
+  local grab = lt and lt.grab and en and en.grab_holds and en.grab_holds(lt.grab) and lt.grab
+    or not lt and en and en.grab_now and en.grab_now()
   if not grab then return end
   local m = meshHit and os.clock() - meshHit.t <= 0.5 and meshHit or nil
   if not (m and m.loc) then return end
+  if lt and m.t <= lt.t + 0.05 then return end
+  if hm.jugImpact and math.abs(m.t - hm.jugImpact) < 0.3 then hm.poundT = m.t; return end
   if hm.poundT and m.t <= hm.poundT then return end
   if gore.busy() then return end
   hm.poundT = m.t
@@ -2336,6 +2346,11 @@ function hm.grab_pound(pawn, mesh)
   if not ok then log("grab pound: smash failed: " .. tostring(made)); return end
   if made then log(string.format("grab pound: %s's pound smashed a limb", tostring(grab.cls))) end
 end
+
+hm.juggernaut = dofile("ue4ss/Mods/StellarBladeGore/Scripts/juggernaut_finisher.lua")(goreCtx,
+  function() return cachedPawn end, function() return gore end, function() return active end,
+  function() return hm.poundT and os.clock() - hm.poundT < 0.3 end,
+  function(t) hm.jugImpact = t end, try, valid, log)
 
 -- tune.gore.lowArm: a hit that leaves her HP bar under lowArm.below (a quarter) takes an arm off where she stands
 -- (lowArm.side: hit, the side the blow landed on; left, right or either), once till it is back: it grows back out of her shoulder at a camp rest
@@ -2661,13 +2676,13 @@ local function gore_cut(pawn, mesh, h, hit)
     log(string.format("death: the killing cut was made at the hit, %d more of the blow now", gore.release_held()))
     return
   end
-  -- the killing blow of a grab, its cut held for her death (hm.grab_keep): that blow, not the grab's later hits
+  -- The deferred killing blow, not a later swing observed at the death.
   local held = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.held
   if held then
     hm.lethal.held = nil
     h = held
     h.early = nil -- the deferred torso hit is being replayed at the death now
-    log("death: the cut of the killing blow in the grab now")
+    log("death: the deferred killing blow now")
   end
   -- fall damage cuts nothing (no blade in it): a death taken over after a drop (hm.take), or her HP bar at 0 within
   -- LOW_LAND_S of landing from LOW_LAND_CM or more with no hit on her mesh (low_arm's rule: a kill after a jump still
@@ -2899,6 +2914,12 @@ end)
 key_on("cameraBone", function()
   if tune.cameraBodyKey ~= true then
     log(string.format("%s: follow-point hotkey is off (F3 → Camera)", screen.key_name("cameraBone")))
+    -- C is also a normal gameplay key: only show this while the death camera is in use.
+    if active and os.clock() - (screen.cameraKeyNotice or -1e9) >= 2 then
+      screen.cameraKeyNotice = os.clock()
+      local f = io.open("ue4ss/Mods/StellarBladeGore/spawner.cmd", "w")
+      if f then f:write("toast\tFollow-point hotkey is off: enable it in F3 > Camera"); f:close() end
+    end
     return
   end
   if not (camera and camera.toggle_bone) then log("follow camera: no camera"); return end
@@ -2995,6 +3016,14 @@ local function hook_once()
   local bp = "/Game/Art/Character/PC/CH_P_EVE_01/Blueprints/CH_P_EVE_01_Blueprint.CH_P_EVE_01_Blueprint_C:"
   for _, f in ipairs({ "NotifyBP_ReInitActor", "NotifyBP_InitActor", "NotifyBP_SetMesh", "ApplyMeshInfo" }) do
     h(bp .. f, f)
+  end
+  for _, f in ipairs({ "ActorPlayCustomAnimSequence", "ActorPlayCustomAnimName" }) do
+    local path = "/Script/SB.SBCharacter:" .. f
+    local okc, errc = pcall(RegisterHook, path, function(actor, anim)
+      local ok2, e = pcall(hm.juggernaut.start, actor, anim)
+      if not ok2 then log("Juggernaut animation hook error: " .. tostring(e)) end
+    end)
+    log("hook " .. f .. ": " .. (okc and "ok" or tostring(errc)))
   end
   for _, f in ipairs({ "OnPhysicsShapeHit", "OnCollisionOriginBeginOverlap" }) do
     local path = "/Script/SB.SBProjectile:" .. f
@@ -3165,6 +3194,7 @@ goreCtx.death = function(pawn, mesh)
   local c = ragdoll_collision(mesh)
   saved = {}
   on_start(pawn, mesh)
+  f7_push, f7_after = nil, nil
   saved.collision = c
   -- a test ragdoll lies there until F8 (recoverAfter is for deaths)
   saved.manual = true
@@ -3398,6 +3428,7 @@ function hm.alive_watch(pawn, mesh)
   hm.lethal_watch(pawn, mesh)
   tp.mark("lethal")
   hm.grab_pound(pawn, mesh)
+  hm.juggernaut.tick(pawn, mesh)
   tp.mark("grab pound")
   hm.low_arm(pawn, mesh)
   tp.mark("low HP arm")
@@ -3481,7 +3512,8 @@ local function tick()
     if f7_push.n <= 0 then
       local p = f7_push
       f7_push = nil
-      if valid(p.mesh) and active then
+      -- only the run that armed it: a stale test shove never fires in a later real death
+      if valid(p.mesh) and active and p.mesh == mesh and (p.death == nil or p.death == deaths) then
         f7_shove(p.pawn, p.mesh)
         -- the push shows in the bodies' speed only after the next physics step
         f7_after = { mesh = p.mesh, n = 1 }
@@ -3597,7 +3629,7 @@ local function tick()
     anim_fall(pawn, mesh, nil)
     ragdoll_now("F6: struggle test")
     -- (F7's shove, a couple of ticks on once her bodies simulate: she goes down with it instead of folding in place)
-    if (tune.impulse or 0) > 0 or (tune.push or 0) > 0 then f7_push = { pawn = pawn, mesh = mesh, n = F7_WAIT } end
+    if (tune.impulse or 0) > 0 or (tune.push or 0) > 0 then f7_push = { pawn = pawn, mesh = mesh, n = F7_WAIT, death = deaths } end
     if gore and #t.bones > 0 then
       local n = try(function() return gore.slice_bones(pawn, mesh, t.bones, "death") end) or 0
       log(string.format("F6: struggle test: %d of %d cuts started", n, #t.bones))
@@ -3606,6 +3638,8 @@ local function tick()
     after = -1
     saved = {}
     on_start(pawn, mesh)
+    -- a real death never inherits a pending test shove: the death-number check above is the guard, this is the belt
+    f7_push, f7_after = nil, nil
     -- (the mod's own ragdoll for a death with none: her collision put back at its end, as a test ragdoll's)
     saved.takeColl, hm.takeColl = hm.takeColl, nil
     local test = hm.at.on
@@ -3742,7 +3776,7 @@ local function tick()
     end
     after = after + 1
     -- the respawn waits on the player's revive input, so only count down once it happened
-    if respawned and after > AFTER_POLLS then after = -1 end
+    if respawned and after >= math.max(AFTER_POLLS, screen.stuck.WINDOW) then after = -1 end
   elseif not sim then
     local l = try(function() return mesh.RelativeLocation end)
     local r = try(function() return mesh.RelativeRotation end)

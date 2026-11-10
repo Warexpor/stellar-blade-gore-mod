@@ -42,6 +42,23 @@ hm.grab_pound(pawn, E.mesh)
 check(attempts == 1 and seenHit and seenHit.wbone == nil, "living hit processed without treating her hit bone as the attacker's weapon")
 hm.grab_pound(pawn, E.mesh)
 check(attempts == 1, "one mesh hit is processed only once")
+-- HP can reach zero before a finisher releases her; a later distinct pound
+-- must still be accepted while the original grab is actually holding her.
+local grab = { cls = "CH_M_NA_15_Blueprint_C" }
+T.ctx.enemies.grab_holds = function() return true end
+hm.lethal = { t = os.clock(), grab = grab, wasGrab = true }
+F.step(0.1)
+debug.setupvalue(hm.grab_pound, meshHitIndex, { t = os.clock(), loc = v(0, 0, 0) })
+hm.grab_pound(pawn, E.mesh)
+check(attempts == 2, "a later pound in a still-held lethal grab is processed")
+hm.grab_pound(pawn, E.mesh)
+check(attempts == 2, "a later lethal-grab pound is processed once")
+T.ctx.enemies.grab_holds = function() return false end
+F.step(0.1)
+debug.setupvalue(hm.grab_pound, meshHitIndex, { t = os.clock(), loc = v(0, 0, 0) })
+hm.grab_pound(pawn, E.mesh)
+check(attempts == 2, "a pound after the grab releases is ignored")
+hm.lethal = nil
 T.ctx.enemies, G.busy, G.smash, sw.blunt_of = originalEnemies, originalBusy, originalSmash, originalBlunt
 local LIMBS = { "Bip001-L-UpperArm", "Bip001-R-UpperArm", "Bip001-L-Forearm", "Bip001-R-Forearm",
   "Bip001-L-Thigh", "Bip001-R-Thigh", "Bip001-L-Calf", "Bip001-R-Calf" }
