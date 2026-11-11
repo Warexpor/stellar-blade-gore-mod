@@ -146,7 +146,7 @@ function M.early_waits(kind, h)
   return true
 end
 
-function M.blow(pawn, mesh, h, why)
+function M.blow(pawn, mesh, h, why, mute, noCore)
   local n, how = blade_plane(h)
   -- a hit after her death with no plane (a bare hand's swing along the attacker's forward, no attack direction from
   -- the game: "no plane", blood only, playtest): sideways or from the front, as a rolled attack direction would be
@@ -191,7 +191,7 @@ function M.blow(pawn, mesh, h, why)
         blade = c
       end
     end
-    return start(pawn, mesh, at, why, kind, out, plane, blade)
+    return start(pawn, mesh, at, why, kind, out, plane, blade, mute or (h and h.mute), noCore)
   end
   local function vs(v) return v and string.format("(%.2f %.2f %.2f)", v.X, v.Y, v.Z) or "?" end
   if not (n and at) then

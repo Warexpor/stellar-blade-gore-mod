@@ -42,8 +42,8 @@ local ctx = { tune = tune, try = try, valid = valid, log = function(s) logs[#log
   live_chars = function() return chars end, keep = function(o) return { obj = o } end, held = function() return true end,
   newobj = { watch = function() end },
   gore = { busy = function() return false end,
-    enemy_cut = function(owner, obj, mesh, h, kind, face)
-      calls[#calls + 1] = { kind = kind, noTorso = h and h.noTorso == true, plane = h and (h.n or h.dir) ~= nil }
+    enemy_cut = function(owner, obj, mesh, h, kind, face, mute, noCore)
+      calls[#calls + 1] = { kind = kind, noTorso = h and h.noTorso == true, plane = h and (h.n or h.dir) ~= nil, mute = mute, noCore = noCore }
       return nil
     end,
     enemy_hit = function() end, enemy_cuts = function() return 0, false end } }
@@ -59,6 +59,8 @@ for _, c in ipairs(calls) do kinds[#kinds + 1] = c.kind; if c.kind == "torso" th
 check(#calls == 2 and kinds[1] == "limb" and kinds[2] == "head" and not torso,
   "rigged torso roll on a noTorso kind: limb then head tried, never the waist (" .. table.concat(kinds, ",") .. ")")
 check(calls[1] and calls[1].noTorso and calls[1].plane, "the blade attempt carries the noTorso veto")
+check(calls[1] and calls[1].mute == true, "a basic kind passes mute: no cut sound on its death path")
+check(calls[1] and calls[1].noCore == true, "a naytiba kind passes noCore: no metal bone in its stumps")
 local gone = false
 for _, l in ipairs(logs) do if l:find("nothing came off") then gone = true end end
 check(gone, "nothing came off, logged")

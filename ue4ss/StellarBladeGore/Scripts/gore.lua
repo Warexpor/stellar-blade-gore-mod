@@ -1052,9 +1052,11 @@ function M.core(pawn, mesh, o, bone, rides, t, spine)
   mark("stub attach")
   return a
 end
-local function stub(pawn, mesh, o, bone, rides, spine)
+local function stub(pawn, mesh, o, bone, rides, spine, noCore)
   local g = cfg()
   if g.boneStubs == false or not (o and o.z and o.e) then return nil end
+  -- a naytiba's stump is meat only: Tachy's metal bone and tubes (built for Eve) read wrong on monsters
+  if noCore then log(string.format("stump %s: plain meat lid, no metal core (naytiba)", tostring(bone))); return nil end
   -- (Tachy's core, or at the spine her bone alone: the game's GM_Brokenbone, a human bone, is gone from the stumps)
   if M.tachy() then return M.core(pawn, mesh, o, bone, rides, M.tachy(), spine) end
   return nil
@@ -1258,7 +1260,7 @@ local function ok_cut(r) return r:sub(1, 2) == "ok" and (num(r, "seam") or 0) + 
 -- Eve's face: the component in her face slot (MeshInfoList, ESBMesh_Face = 1), else a skeletal mesh child of
 -- the body whose asset is named like a face (Face, or Facial: Raven's, CH_M_NA_53_Facial, as Stellar Blade Play As
 -- puts it on Eve's face component)
-local function face_of(pawn, mesh)
+local function slot_face(pawn)
   local face
   try(function()
     pawn.MeshInfoList:ForEach(function(_, e)
@@ -1266,15 +1268,66 @@ local function face_of(pawn, mesh)
       if not face and info.MeshSlot == 1 and mesh_name(info.MeshComponent) then face = info.MeshComponent end
     end)
   end)
-  if face then return face end
-  try(function()
-    mesh.AttachChildren:ForEach(function(_, e)
-      local c = e:get()
-      local n = mesh_name(c)
-      if not face and n and n:find("Fac[ei]") then face = c end
-    end)
-  end)
   return face
+end
+
+-- a custom head swap's face (CNS, TK_Scarlet_Head: its face mesh on a component of its own, hers hidden or the
+-- slot empty): a visible skeletal mesh named like a face or head (never hair)
+local function face_like(n)
+  return n and (n:find("Fac", 1, true) or (n:find("Head", 1, true) and not n:find("Hair", 1, true))) or false
+end
+-- the custom face found (her mesh addr -> { comp, asset addr }), revalidated each use
+local faceCache = {}
+local function face_search(pawn, mesh)
+  local me = valid(mesh) and addr(mesh)
+  local seen, found = {}, nil
+  local function consider(c)
+    if found or not valid(c) then return end
+    if try(function() return c:IsVisible() end) ~= true then return end
+    if face_like(mesh_name(c)) then found = c end
+  end
+  local function walk(c, depth)
+    local a = valid(c) and depth <= 8 and addr(c)
+    if not a or seen[a] or found then return end
+    seen[a] = true
+    consider(c)
+    local kids = {}
+    try(function() c.AttachChildren:ForEach(function(_, e) kids[#kids + 1] = e:get() end) end)
+    for _, k in ipairs(kids) do walk(k, depth + 1) end
+  end
+  walk(try(function() return pawn.RootComponent end), 0)
+  if not found then walk(mesh, 0) end
+  if found or not me then return found end
+  -- owned by another mod's actor (CNS's ModActor), posed off her body
+  local pa = addr(pawn)
+  for _, c in ipairs(try(function() return FindAllOf("SkeletalMeshComponent") end) or {}) do
+    if found then break end
+    local a = valid(c) and addr(c)
+    if a and not seen[a] then
+      seen[a] = true
+      local o = try(function() return c:GetOwner() end)
+      local m = try(function() return c.MasterPoseComponent:Get() end)
+      local owned = valid(o) and try(function() return o:GetAddress() end) == pa
+      local posed = valid(m) and try(function() return m:GetAddress() end) == me
+      if owned or posed then consider(c) end
+    end
+  end
+  return found
+end
+local function face_of(pawn, mesh)
+  local slot = slot_face(pawn)
+  if slot and try(function() return slot:IsVisible() end) == true then return slot end
+  local ma = valid(mesh) and addr(mesh)
+  local hit = ma and faceCache[ma]
+  if hit and valid(hit.c) and enemy.asset(hit.c) == hit.sm
+    and try(function() return hit.c:IsVisible() end) == true then return hit.c end
+  local found = face_search(pawn, mesh)
+  if found then
+    if ma then faceCache[ma] = { c = found, sm = enemy.asset(found) } end
+    return found
+  end
+  if hit and valid(hit.c) and enemy.asset(hit.c) == hit.sm then return hit.c end
+  return slot
 end
 
 M.face_of = face_of
@@ -1321,6 +1374,15 @@ local function hair_of(pawn)
         if (headwear or onHead) and (m and addr(m) == me or onHead or onNeck) then out[#out + 1] = c; seen[a] = true end
       end
     end) end)
+  end
+  -- a custom head swap (face_of): hidden with the head on a smash, kept on her half in a split
+  local custom = face_of(pawn, body)
+  if valid(custom) then
+    local a = addr(custom)
+    if a and not seen[a] and try(function() return custom:IsVisible() end) == true then
+      out[#out + 1] = custom
+      seen[a] = true
+    end
   end
   return out
 end
@@ -1912,6 +1974,17 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   -- (an enemy's head is on its body mesh: the neck's plane cut alone)
   if faced then
     local fi = valid(face) and try(function() return face:GetBoneIndex(FName(bone)) end)
+    if (not fi or fi < 0) and valid(face) then
+      -- a custom head without her bones (its own skeleton): cut the slot's face instead, as before
+      local slot = slot_face(pawn)
+      if valid(slot) and addr(slot) ~= addr(face) then
+        local sfi = try(function() return slot:GetBoneIndex(FName(bone)) end)
+        if sfi and sfi >= 0 then
+          log(string.format("face %s has no %s, cutting the slot's face instead", name_of(face), tostring(bone)))
+          face, fi = slot, sfi
+        end
+      end
+    end
     if not fi or fi < 0 then log("head skipped: no face mesh with " .. bone); return nil end
     local fs = facecut and try(function() return face:GetBoneIndex(FName(SPLIT_SINK)) end)
     local hm = facecut and try(function() return mesh:GetBoneIndex(FName(bone)) end)
@@ -2214,10 +2287,10 @@ function M.stage_stubs(q, side)
   if cfg().caps ~= false then
     local spine = not (PARTS[q.bone] and PARTS[q.bone].kind == "limb")
     if side == 1 then
-      q.stubs[#q.stubs + 1] = stub(q.pawn, q.mesh, q.ob, q.parent or q.bone, q.rideB, spine)
+      q.stubs[#q.stubs + 1] = stub(q.pawn, q.mesh, q.ob, q.parent or q.bone, q.rideB, spine, q.noCore)
       M.riders(q, q.stubs[#q.stubs], q.rideB)
     else
-      q.pieceStub = stub(q.pawn, q.mesh, q.ol, q.bone, q.rideL, spine)
+      q.pieceStub = stub(q.pawn, q.mesh, q.ol, q.bone, q.rideL, spine, q.noCore)
       q.stubs[#q.stubs + 1] = q.pieceStub
       M.riders(q, q.pieceStub, q.rideL)
     end
@@ -2649,6 +2722,10 @@ local function stage_open(q)
   later[#later + 1] = { n = 0, label = "cut sound", fn = function()
     if not valid(q.pawn) then return end
     local dt = (os.clock() - open_t) * 1000
+    if q.mute then
+      log(string.format("cut sound %s (%s): muted for a basic enemy", open_bone, open_why))
+      return
+    end
     log(string.format("cut sound %s (%s): attempting playback %.0f ms after opening", open_bone, open_why, dt))
     if q.smash then sfx("smash", q.pawn, at, true); return end
     sfx((open_why == "after" or open_bone == "Bip001-Head" or open_bone == "Bip001-Spine1" or open_bone:find("Thigh") or open_bone:find("Calf"))
@@ -3864,7 +3941,7 @@ end
 -- LOD0's weights; bones LOD0 adds aren't posed until the switch went through), then the new weights (uploaded to
 -- the GPU by the render thread), then the collapse that opens the seam (on the game thread, immediately)
 -- kind: "limb" (arm or thigh nearest the hit), "head" or "torso"; tune.gore.bone, when it names a part, wins
-function start(pawn, mesh, hit, why, kind, out, plane, blade)
+function start(pawn, mesh, hit, why, kind, out, plane, blade, mute, noCore)
   local g = cfg()
   if g.enabled == false then return false end
   if native.state ~= "ready" then log(kind .. " skipped (" .. why .. "): sbslice.dll is " .. native.state); return false end
@@ -3888,7 +3965,7 @@ function start(pawn, mesh, hit, why, kind, out, plane, blade)
     face = face, out = out, plane = plane, blade = blade, owner = enemy.cur, bone = M.bone_once, middle = M.splitMiddle,
     smash = M.smash_once and not enemy.cur or nil, fullSmash = M.full_smash_once and not enemy.cur or nil,
     fly = aimed and os.clock() - aimed.t < 1 and aimed.d or nil,
-    quiet = why == "carried" or nil }
+    quiet = why == "carried" or nil, mute = mute or nil, noCore = noCore or nil }
   aimed = nil
   -- the blade's plane and directions in her own frame, so they move with her until the cut is made
   local f = (plane or blade or out) and body_frame(mesh)
@@ -4843,7 +4920,7 @@ dofile("ue4ss/Mods/StellarBladeGore/Scripts/gore_regrow.lua")(M, cfg, load_obj,
 -- a cut on an enemy's corpse: along the blade when the blow gives one (gore.blow, never a split), else kind ("limb",
 -- "head", "torso", or "mark": no cut, a hit mark where it landed); h: { loc, dir, fwd, n, how, push, bone }. Returns
 -- what it started, or nil
-function M.enemy_cut(owner, pawn, mesh, h, kind, faced)
+function M.enemy_cut(owner, pawn, mesh, h, kind, faced, mute, noCore)
   if faced then enemy.faced[owner] = true end
   return enemy.run(owner, function()
     if pending then return nil end
@@ -4852,11 +4929,11 @@ function M.enemy_cut(owner, pawn, mesh, h, kind, faced)
     -- (M.blow knows an enemy is never split; h.noSplit, a body already cut, kept its body cuts along the blade off:
     -- a level swing through its waist rolled the odds)
     if kind ~= "mark" and (h.n or (h.dir and h.fwd)) and h.loc then
-      if M.blow(pawn, mesh, h, "enemy") then return "blade" end
+      if M.blow(pawn, mesh, h, "enemy", mute, noCore) then return "blade" end
       if pending then return nil end
     end
     if kind == "mark" then return M.hit_mark(pawn, mesh, h.loc, h.dir, nil) and "mark" or nil end
-    return start(pawn, mesh, h.loc, "enemy", kind or "limb") and (kind or "limb") or nil
+    return start(pawn, mesh, h.loc, "enemy", kind or "limb", nil, nil, nil, mute, noCore) and (kind or "limb") or nil
   end)
 end
 -- the hit's blood where an enemy was struck, its effects tagged to it (they go with its corpse)
@@ -5109,6 +5186,7 @@ function M.forget(pawn)
   M.held, M.held_sword, M.blocking, M.pieceHid, M.photoHid = {}, nil, nil, nil, nil
   M.sinksHeld = nil
   bleed_logged = false
+  faceCache = {}
   pending, collision_saved, self_saved, copy_watch, limb_watch = nil, nil, nil, nil, nil
   enemy.owned, enemy.cur, enemy.faced, enemy.faded, enemy.shrink = setmetatable({}, { __mode = "k" }), nil, {}, {}, {}
   M.assets.forget()

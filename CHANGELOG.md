@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.4
+
+Released 11 November 2026.
+
+- Basic enemies die silent: the cut's sound no longer plays on their death path, only for boss kinds (sandbox bosses keep it). The cut, blood and pools are unchanged.
+- Enemy cuts start on the death-hit tick instead of waiting for a later tick. The kill was already read from the death hit; only its application lagged a tick behind the fall. When gore is busy the cut still queues for its kill window as before.
+- Kills by other enemies cut too, near or far: a kill was previously only cut within her reach, so spectacle fights like the prologue's stayed whole. Hit forces are now read for every followed enemy and distance no longer gates the cut (the mod's death push stays near-gated). Scripted deaths with no ragdoll still have nothing to cut.
+- Basic-enemy stumps are meat lids without Tachy's metal bone and tubes, which are built for Eve and read wrong on naytibas; angels and bosses keep the metal core.
+- Naytiba hand stabs cut instead of smashing: the Hydra's lunging bites and the TypeC humanoid's hand thrusts read as bare hands with no weapon mesh, so they fell into the blunt bucket and smashed her torso to meat. Both are now claw species (`smash.species`), so even steep-down stabs cut; hammers, brutes, statues, hedgeboars and other blunt-listed monsters still smash.
+- Custom head swaps (CNS, Scarlet Head-CNS) behead and head-smash: the swap's face mesh on its own component, with hers hidden or the slot empty, left the behead cutting the hidden vanilla face (or skipping the head entirely) and the smash hiding nothing visible. Face resolution now prefers a visible face/head-named skeletal mesh on her tree or posed off her body (its ModActor's), cached per body mesh; a custom head without her head bone falls back to the slot's face, as before, and smashes hide it through the same resolution. Covered by a new `custom_head` sim (on-tree, ModActor-owned, foreign-skeleton fallback, smash hide/restore).
+- A broken sword now breaks near the tip instead of mid-blade: the forced window was 0.55-0.68 from the pommel, which left two long sword-like pieces (a small sword beside a normal one). The tip shard reads as debris and the hilt piece as a broken sword.
+
 ## 0.7.3
 
 Released 10 November 2026.

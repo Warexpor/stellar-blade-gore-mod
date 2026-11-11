@@ -816,7 +816,11 @@ local function try_cut(pawn, a, e)
     if r.h then r.h.loc = mv(r.h.loc) end
     r.pel = pel
   end
-  local got = ctx.gore.enemy_cut(a, e.obj, e.mesh, r.h, r.kind, e.kind.face)
+  -- basic enemies die silent: the cut's sound only plays for boss kinds (sandbox bosses keep it).
+  -- naytibas get no metal bone either: Tachy's core is built for Eve and reads wrong on monsters (angels keep it)
+  local mute = e.kind.row and nil or true
+  local noCore = (e.kind.bp or ""):find("/Monster/", 1, true) and true or nil
+  local got = ctx.gore.enemy_cut(a, e.obj, e.mesh, r.h, r.kind, e.kind.face, mute, noCore)
   -- (a corpse hit cuts along her blade or not at all: the fallback took the nearest limb wherever it was, the right
   -- arm off its flying chest for a swing through its cut-off left arm, playtest)
   if not got and not ctx.gore.busy() and r.kind ~= "mark" and not r.blade_only then
@@ -827,7 +831,7 @@ local function try_cut(pawn, a, e)
     local h = { loc = r.loc, push = r.h and r.h.push }
     r.h = nil
     for _, k in ipairs({ "limb", "head", "torso" }) do
-      if not r.tried[k] and not (k == "torso" and e.kind.noTorso) then r.kind = k; got = ctx.gore.enemy_cut(a, e.obj, e.mesh, h, k, e.kind.face); if got then break end; r.tried[k] = true end
+      if not r.tried[k] and not (k == "torso" and e.kind.noTorso) then r.kind = k; got = ctx.gore.enemy_cut(a, e.obj, e.mesh, h, k, e.kind.face, mute, noCore); if got then break end; r.tried[k] = true end
     end
   end
   if got or ctx.gore.busy() then
@@ -1971,7 +1975,9 @@ function M.tick(pawn, mesh, tm)
           local near = her and pel and len(sub(pel, her)) < (g.reach or 2500)
           e.far = not near
           if not e.dead then
-            if near then poll_hit(e) end
+            -- (hit forces update on any hit, hers or another enemy's: read for every followed enemy so a kill
+            -- by another enemy cuts where it landed too, near or far)
+            poll_hit(e)
             if sim and not hidden(e) then
               e.dead, e.t, e.still, e.looks = true, os.clock(), 0, looks(e.mesh)
               local okw, ew = pcall(k.row and mine[c.addr] and drop_boss_weapons or weapons_on_ragdoll, e)
@@ -1983,7 +1989,9 @@ function M.tick(pawn, mesh, tm)
               end
               if k.row and ctx.bosses then ctx.bosses.died(pawn, c.addr, e) end
               if near and pushes then death_push(pawn, e, pel) end
-              local cut_now = cuts and near and math.random() <= (g.cutChance or 1.0)
+              -- kills by other enemies cut too, near or far (the prologue's spectacle fights): the game's own
+              -- throw moves a far corpse, the mod's push stays near-gated
+              local cut_now = cuts and math.random() <= (g.cutChance or 1.0)
               local corpses = 0
               local kept = angelKept ~= nil
               for _, x in pairs(known) do
@@ -1997,6 +2005,9 @@ function M.tick(pawn, mesh, tm)
                 local h = kill_blow(pawn, e)
                 e.want = { t = os.clock(), h = h.loc and h or nil, kind = roll_kind(), loc = h.loc, what = "killed", pel = pel,
                   src = string.format("blow %s at %s", h.src, v3(h.loc)) }
+                -- the cut starts on this tick, on the death hit, not a tick after the fall: when gore is busy
+                -- try_cut leaves e.want queued and a later tick retries it for its kill window as before
+                try_cut(pawn, c.addr, e)
               end
             end
           else

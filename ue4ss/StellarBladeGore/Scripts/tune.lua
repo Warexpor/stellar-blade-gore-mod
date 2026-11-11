@@ -467,6 +467,9 @@ return {
         ["CH_M_NA_42"] = "sickleraven", -- the sickle boss: its blades read as bare hands (no weapon mesh
                                 --   in the weapon slots), so its downward swipes smashed as stomps; they cut
         ["CH_M_NA_26"] = "marionette", -- the Marionette's hair whips read as bare hands (LeftHandHair): they cut
+        ["CH_M_NA_09"] = "claw", -- the Hydra's lunging bites read as bare hands (no weapon mesh in the weapon
+                                 --   slots): they stab, never smash (playtest: a hand-kill torso smash)
+        ["CH_M_NA_11"] = "claw", -- the TypeC humanoid's hand thrusts read the same way: stabs, not fists
       },
     },
     afterHits = {              -- enemy weapon swings cut her again; reported projectile hits can smash her again
@@ -1014,10 +1017,12 @@ return {
       enabled = true,          --   falling on its own
       reach = 80,              --   cm from the hit the blade's plane may cross it (40 missed one 52 cm off, by her thigh)
       ends = 0.08,             --   share of its length at either end that isn't cut (the tip, the pommel)
-      breakAt = { 0.55, 0.68 }, --  the break, along it from the pommel: nearest the hit within these, on the bare blade
+      breakAt = { 0.72, 0.85 }, --  the break, along it from the pommel: nearest the hit within these, on the bare blade
                                --   (at 0.3 it broke through the frame over the grip, both halves looking like a hilted
                                --   sword; at 0.40-0.45, where the frame ends, the blade came off whole, a whole sword
-                               --   beside the hilt). A blocked blow, or one crossing it outside these, breaks it here
+                               --   beside the hilt; at 0.55-0.68 both pieces were long and sword-like, a small sword
+                               --   beside a normal one, playtest). A blocked blow, or one crossing it outside these,
+                               --   breaks it here
       across = 0.6,            --   a plane closer to the sword's length than this (|cos| of its normal to it, 0.6 = 37
                                --   deg) breaks it there too: it sliced it lengthwise, one half the whole sword still
       blockWindow = 0.5,       --   s: a killing blow this soon after her guard was up (guard key, montage or stance) breaks the sword

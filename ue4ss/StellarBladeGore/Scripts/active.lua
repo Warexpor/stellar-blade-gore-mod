@@ -1020,7 +1020,7 @@ function M.weapon_cut(mesh, at, n, blocked)
     -- (a blocked blow always breaks it on the bare blade: its own crossing landed at 0.22, in the frame over the grip;
     -- and so does any blow crossing it off the blade: at 0.40-0.45 the blade came off whole, tip and all, where the
     -- frame ends, and lay beside the hilt as a whole sword, playtest)
-    local br = wc.breakAt or { 0.55, 0.68 }
+    local br = wc.breakAt or { 0.72, 0.85 }
     local off = t and (t < br[1] or t > (br[2] or br[1]))
     if u and (blocked or ((along or off) and reach and reach <= (wc.reach or 80))) then
       do
