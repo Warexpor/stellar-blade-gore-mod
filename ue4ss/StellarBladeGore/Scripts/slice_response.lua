@@ -25,13 +25,13 @@ end
 
 -- the widest of a cut's cap/lid extents (cm), else nil: a cap or lid dozens of cm across is a
 -- drawn-out spike, not an opening (an after-cut on a leg whose lower part was already off elsewhere)
-local function widest(r)
-  local b, l = triple(r, "be", 1), triple(r, "le", 1)
-  if not (b or l) then return nil end
-  local m = 0
-  for _, e in ipairs({ b, l }) do
-    if e then m = math.max(m, math.abs(e.X), math.abs(e.Y), math.abs(e.Z)) end
+local function widest(r, other)
+  local m
+  local function include(e)
+    if e then m = math.max(m or 0, math.abs(e.X), math.abs(e.Y), math.abs(e.Z)) end
   end
+  include(triple(r, "be", 1)); include(triple(r, "le", 1))
+  if other then include(triple(other, "be", 1)); include(triple(other, "le", 1)) end
   return m
 end
 

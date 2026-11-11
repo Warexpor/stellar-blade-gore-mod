@@ -1065,8 +1065,21 @@ local function down_tick()
   -- going at her death) was read by its ActorType and crashed the game (UE4SS reading the freed object's class,
   -- playtest). (Through held, each tick's first check asked again every decorator held in the last 3 s)
   local t0 = os.clock()
-  local batch = {}
-  while #batch < 64 and down.pending[1] and down.pending[1].t <= t0 do batch[#batch + 1] = table.remove(down.pending, 1) end
+  local batch, pending = {}, down.pending
+  local count, total = 0, #pending
+  while count < 64 and count < total and pending[count + 1].t <= t0 do count = count + 1 end
+  if count > 0 then
+    table.move(pending, 1, count, 1, batch)
+    table.move(pending, count + 1, total, 1, pending)
+    for i = total - count + 1, total do pending[i] = nil end
+  end
+  -- Put unprocessed items back ahead of any objects queued by callbacks during the native call.
+  local function restore(first)
+    local q, n = down.pending, #batch - first + 1
+    if n <= 0 then return end
+    table.move(q, 1, #q, n + 1, q)
+    table.move(batch, first, #batch, 1, q)
+  end
   local ks = {}
   for i, x in ipairs(batch) do ks[i] = x.k end
   local ta = os.clock()
@@ -1074,7 +1087,7 @@ local function down_tick()
   local askMs = (os.clock() - ta) * 1000
   if not asked then
     -- (sbslice not up or not answering: the batch again next tick)
-    for i = #batch, 1, -1 do table.insert(down.pending, 1, batch[i]) end
+    restore(1)
     return
   end
   -- (the budget from the answer on: the call alone can take DOWN_MS, and nothing would ever be done)
@@ -1082,7 +1095,7 @@ local function down_tick()
   for i, x in ipairs(batch) do
     if i > 1 and os.clock() - t0 >= DOWN_MS / 1000 then
       -- (the rest next tick, asked again then)
-      for j = #batch, i, -1 do table.insert(down.pending, 1, batch[j]) end
+      restore(i)
       break
     end
     local k = x.k

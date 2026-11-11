@@ -35,7 +35,11 @@ mkdir -p "$PAKS" "$MODS/StellarBladeGore/Scripts" "$MODS/SBSlice/dlls"
 cp "$PAKDIR"/ZZ_StellarBladeGore_P.{utoc,ucas,pak} "$PAKS/"
 # (her death face on its own: Customized Ragdoll users delete it, its pak has one of its own)
 cp "$PAKDIR"/ZZ_StellarBladeGore_Face_P.{utoc,ucas,pak} "$PAKS/"
-cp "$SCRIPTS"/*.lua "$MODS/StellarBladeGore/Scripts/"
+# Never ship a developer's local overrides: extracting an update must preserve player settings.
+for script in "$SCRIPTS"/*.lua; do
+  case ${script##*/} in settings.lua|menu.lua) continue ;; esac
+  cp "$script" "$MODS/StellarBladeGore/Scripts/"
+done
 # (no FText constructor signature: UE4SS calls it as the game starts, and with the Steam overlay on that call
 # closes the game at launch, so the install instructions tell players to disable it; 0.4.1 report)
 "$ROOT/native/sbslice/build.sh" "$CACHE/release/sbslice" >/dev/null

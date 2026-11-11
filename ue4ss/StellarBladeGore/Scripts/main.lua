@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.4"
+local VERSION = "0.7.5"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -58,7 +58,8 @@ local ENEMIES_PATH = "ue4ss/Mods/StellarBladeGore/Scripts/enemies.lua"
 local USMAP_DONE = "ue4ss/Mods/StellarBladeGore/usmap.done"
 
 -- a log of its own each start, the last one kept as .old (it was appended to forever: 19 MB of every session since
--- the install, and a report meant digging for the one that counted). Past lg.max bytes only errors are written
+-- the install, and a report meant digging for the one that counted). Past lg.max bytes only errors/failures are
+-- written, in the file and in the UE4SS.log mirror alike, matched case-insensitively ("fail" covers failed/FAIL).
 local lg
 do
 local previous = io.open(LOG_PATH, "r")
@@ -72,14 +73,19 @@ end
 lg = { fh = io.open(LOG_PATH, rotated and "w" or "a"), bytes = 0, max = 20 * 1024 * 1024 }
 if not rotated then print("[" .. MOD .. "] log rotation failed; appending to preserve the previous session: " .. tostring(rotateError) .. "\n") end
 end
+local function log_is_err(s)
+  local low = s:lower()
+  return low:find("error", 1, true) ~= nil or low:find("fail", 1, true) ~= nil
+end
 local function log(s)
-  local line = string.format("[%s] %s", os.date("%H:%M:%S"), s)
+  if lg.bytes > lg.max and not log_is_err(s) then return end
+  local ms = math.floor((os.clock() % 1) * 1000)
+  local line = string.format("[%s.%03d] %s", os.date("%Y-%m-%d %H:%M:%S"), ms, s)
   print("[" .. MOD .. "] " .. line .. "\n")
   if not lg.fh then return end
-  if lg.bytes > lg.max and not line:find("error", 1, true) then return end
   lg.bytes = lg.bytes + #line + 1
   lg.fh:write(line, "\n")
-  if lg.bytes > lg.max and not lg.full then lg.full = true; lg.fh:write("[log full: only errors from here on]\n") end
+  if lg.bytes > lg.max and not lg.full then lg.full = true; lg.fh:write("[log full: only errors/failures from here on]\n") end
   lg.fh:flush()
 end
 

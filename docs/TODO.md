@@ -1,5 +1,7 @@
 # To do
 
+- Native baseline: enemy waist tests for CH_M_NA_05, CH_M_NA_05_Var01 and CH_M_NA_31 fail with respectively 2, 2 and 5 additional visible stretched triangles when the upper body is flung. Investigate before using these cases to judge cutter optimization; in-game appearance is unknown.
+
 ## 0.7.0: next in-game checks
 
 - Retest death cuts and smashes for stutter. The latest changes retain late asset-preload retries and spread smash chunks; native cut work and cold asset spawns may still hitch. Compare new log timings with the November 5 playtest.

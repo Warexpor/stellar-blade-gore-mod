@@ -447,8 +447,6 @@ return {
       splash = false,          --   the game's meat splash effect (NS_A_MeatSplash) on top of the hit blood
       burst = true,            --   short scaled blood burst; no cinematic smoke/sheets
       burstScale = 1,          --   blood burst size follows remaining flesh (0-2, capped at 0.825 size)
-      limbBleedScale = 0.8,    --   smaller surviving stump bleed for smashed arms and legs
-      bleedTimeScale = 0.84,   --   smash stump bleeding lasts 84% of the ordinary cut duration
       -- material = "...",     --   optional override. Default: the actual cut seam's material instance, including
       --                            its colour/roughness; without a cap, the same seam material setup. false:
       --                            the meshes' own effect materials

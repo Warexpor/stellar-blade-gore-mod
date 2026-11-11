@@ -54,6 +54,17 @@ now=12; M.heal_marks(0.7)
 check(spawned[2].destroyed and M.marks()==0, 'expired fade destroys mark')
 M.hit_mark({},mesh,v(5,0,5),nil,nil); M.clear_marks()
 check(spawned[3].destroyed and M.marks()==0, 'recovery clears remaining marks')
+local asset = {GetAddress=function() return 77 end, GetFName=function() return {ToString=function() return 'outfit' end} end}
+local function replacement(address)
+  return {SkeletalMesh=asset, bReceivesDecals=false, GetAddress=function() return address end,
+    GetBoneName=mesh.GetBoneName, GetNumMaterials=function() return 0 end,
+    SetReceivesDecals=function(self,on) self.bReceivesDecals=on end}
+end
+local first, second = replacement(124), replacement(125)
+M.hit_mark({},first,v(5,0,5),nil,nil)
+M.hit_mark({},second,v(5,0,5),nil,nil)
+check(first.bReceivesDecals and second.bReceivesDecals, 'each replacement component enables decals even when the outfit was already logged')
+M.clear_marks()
 native.state='init'
 check(not M.hit_mark({},mesh,v(5,0,5),nil,nil) and M.marks()==0, 'unready native bridge cannot create a mark')
 os.clock=clock

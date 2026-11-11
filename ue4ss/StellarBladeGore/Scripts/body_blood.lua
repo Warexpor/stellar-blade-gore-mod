@@ -61,16 +61,22 @@ local function restore(pawn)
   if not M.blood_restore then return end
   local _, valid = get_guards()
   if not valid(pawn) then return end
+  local now = os.clock()
+  if now < (M.blood_restore_at or 0) then return end
   local from, mpc = M.blood_restore, load_obj(MPC_DIRTY)
-  M.blood_restore = nil
-  if mpc then
-    local restored = {}
-    for k, v in pairs(from) do if v and mpc_set(pawn, mpc, k, v) then restored[#restored + 1] = string.format("%s %s", k, tostring(v)) end end
+  local restored, pending = {}, {}
+  for k, v in pairs(from) do
+    if v and mpc and mpc_set(pawn, mpc, k, v) then restored[#restored + 1] = string.format("%s %s", k, tostring(v))
+    else pending[k] = v end
+  end
+  M.blood_restore = next(pending) and pending or nil
+  M.blood_restore_at = M.blood_restore and (now + 1) or nil
+  if #restored > 0 then
     table.sort(restored)
     log("body blood: put back on the new Eve: " .. table.concat(restored, ", "))
   end
 end
 return { up = blood_up, tick = blood_tick, down = blood_down, restore = restore,
   clear = function() body_blood = nil end,
-  forget = function() M.blood_restore = body_blood and body_blood.from or M.blood_restore; body_blood = nil end }
+  forget = function() M.blood_restore = body_blood and body_blood.from or M.blood_restore; M.blood_restore_at = nil; body_blood = nil end }
 end

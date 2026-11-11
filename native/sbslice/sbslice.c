@@ -1724,7 +1724,9 @@ static unsigned char *cut_scratch(int k, u64 bytes)
     if (scratch_mem[k]) mem_free(scratch_mem[k]);
     scratch_len[k] = 0;
     // (room to grow: the next mesh may be a little bigger)
-    u64 len = bytes + bytes / 4;
+    // Reuse clears whole u64s, so the allocation must cover the rounded-up
+    // final word even for a tiny skeleton/section scratch request.
+    u64 len = (bytes + bytes / 4 + 7) & ~7ull;
     scratch_mem[k] = mem_alloc(len);
     if (scratch_mem[k]) scratch_len[k] = len;
     return scratch_mem[k];
@@ -1858,6 +1860,10 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     float *refpose = *(float **)(c.sm + SM_REF_BONE_POSE);
     if (*(int *)(c.sm + SM_REF_BONE_POSE + 8) != c.nb) refpose = 0;
     int nb = c.nb, nv = c.nv;
+    // Several fixed-size bone arrays are populated before the split-specific
+    // logic below. Refuse oversized skeletons before any of those accesses.
+    if (nb > MAX_BONES) { skin_result("err too many bones"); return; }
+    if (!c.binfo) { skin_result("err no skeleton"); return; }
     if (b <= 0 || b >= nb || !c.refinv || *(int *)(c.sm + SM_REF_BASES_INV + 8) != nb) { skin_result("err bad bone"); return; }
     if (mode < MODE_CUT || mode > MODE_SIDE || mode == 3) { skin_result("err bad mode"); return; }
     if (forced_sink >= nb || forced_sink < 0) { skin_result("err bad sink"); return; }
@@ -2042,7 +2048,6 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     // a split half: the limbs that go with the other half and the ones that stay (subtrees of Lua's roots), and what
     // kept skin lets go of ("limb" here): those limbs and every helper past the plane (the other half's sinks)
     static unsigned char onplane[MAX_BONES], dropbone[MAX_BONES];
-    if (nb > MAX_BONES) { skin_result("err too many bones"); return; }
     static unsigned char spsub[MAX_BONES], spfree[MAX_BONES];
     for (int i = 0; i < nb; i++) { rootof[i] = -1; gonebone[i] = keepbone[i] = btype[i] = onplane[i] = dropbone[i] = 0; keep_to[i] = -1; spfree[i] = 0; }
     keep_to_on = 0;
@@ -4905,13 +4910,14 @@ static void vanish_cmd(u64 comp, int lod, int keep, const u64 *roots, int nr)
             sh++;
         }
         hidden += sh; kept += sk; stuck += ss;
-        if (ss && !sk && mo - mats < (int)sizeof mats - 8) {
+        if (ss && !sk && mo - mats < (int)sizeof mats - 24) {
             if (mo != mats) *mo++ = ',';
             mo = put_int(mo, *(unsigned short *)(sec + SEC_MATERIAL));
             *mo++ = '/';
             mo = put_int(mo, s);
         }
     }
+    *mo = 0;
     if (kv) mem_free(kv);
     tarray arr = { w, nv, nv };
     ((set_override_fn)(exe + RVA_SET_SKIN_WEIGHT_OVERRIDE))(comp, lod, &arr);

@@ -67,7 +67,7 @@ function M.icon_tex(path)
   M.missingIcons[path] = true
   return nil
 end
--- rows: a tab (section), a setting (bool, num with min/max/step, list of values with their names), or a button
+-- rows: a tab (section), a setting (bool, num with min/step and optional max, list of values with their names), or a button
 M.ROWS = {
   { section = "Gore" },
   { key = "gore.enabled", label = "Cuts and Blood", kind = "bool", help = "Master switch for all cuts, stumps and blood, on Eve and on enemies. Off: deaths are plain ragdolls." },
@@ -121,7 +121,7 @@ M.ROWS = {
   { key = "convulse.neck.enabled", label = "   Neck Movement", kind = "bool", help = "Her head strains to lift or turn, shakes with the effort, drops back, then jerks a few times. Not once she is beheaded." },
   { key = "deathMoves", label = "Death Struggle", kind = "bool", help = "On by default. After a ragdoll death with a limb cut off, or cut across the waist, she struggles on the floor over her last seconds: a hand on the stump or going out to it, trying to sit up or crawl, then dies (after a waist cut her upper body clutches the wound and crawls). Her arms also swing in her last movements. Off: her body lies still (her face and breathing still move with Post-Death Movement). Each move is logged (struggle: lines)." },
   { key = "struggle.strength", label = "   Struggle Strength", kind = "num", min = 0.25, max = 3, step = 0.25, unit = "x", help = "With Death Struggle on: how hard she moves in it (1: default)." },
-  { key = "struggle.length", label = "   Struggle Length", kind = "num", min = 0.5, max = 3, step = 0.25, unit = "x", help = "With Death Struggle on: how long it lasts before she dies (1: 5-8 s, 2: twice that)." },
+  { key = "struggle.length", label = "   Struggle Length", kind = "num", min = 0.5, step = 0.25, unit = "x", help = "With Death Struggle on: how long it lasts before she dies (1: 5-8 s, 2: twice that). No upper limit." },
   { key = "struggle.rise.alone", label = "   Sit Up Uncut", kind = "num", min = 0, max = 1, step = 0.05, pct = true, help = "With Death Struggle on: the share of ragdoll deaths with nothing cut off in which she still tries to sit up or prop herself up before dying (0: those lie still)." },
   { key = "convulse.armSwing.enabled", label = "   Arm Swings", kind = "bool", help = "With Death Struggle on: her arms lift and drop, or make a crawl's stroke, now and then in her last movements (also beheaded or split). Off: only the struggle moves them." },
   { key = "active.animated", label = "Animated Death Falls", kind = "bool", help = "Standing and light-hit deaths play Eve's own fall animation and hold its end pose; cut pieces still fall by physics. Heavy hits, explosions, mid-air deaths and splits are ragdolls, and so is every death with Cuts and Blood off. Off: every death is a full ragdoll." },
@@ -1299,7 +1299,10 @@ local function step(dir)
     for i, x in ipairs(row.values) do if x == v then k = i end end
     v = row.values[(k - 1 + dir) % #row.values + 1]
   else
-    v = math.max(row.min, math.min(row.max, (tonumber(v) or row.min) + dir * row.step))
+    local nv = (tonumber(v) or row.min) + dir * row.step
+    -- (a num row without max is uncapped above: Struggle Length has no upper limit)
+    if row.max ~= nil then nv = math.min(row.max, nv) end
+    v = math.max(row.min, nv)
     v = math.floor(v / row.step + 0.5) * row.step
     if row.step >= 1 then v = math.floor(v + 0.5) end
     -- (whole percents stored clean: 0.27, not 0.27000000000000002)

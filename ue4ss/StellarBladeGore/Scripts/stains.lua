@@ -36,11 +36,13 @@ local function write(pawn, now)
     kml, mpc = obj(KML), obj(MPC)
     if not (kml and mpc) then st.retry = now + 1 end
   end
-  try(function() pawn.BloodValue = st.blood; pawn.DirtValue = st.dirt end)
+  local wrotePawn = try(function() pawn.BloodValue = st.blood; pawn.DirtValue = st.dirt; return true end)
   if kml and mpc then
-    try(function() kml:SetScalarParameterValue(pawn, mpc, FName("BloodOffset"), st.blood) end)
-    try(function() kml:SetScalarParameterValue(pawn, mpc, FName("DirtOffset"), st.dirt) end)
-    return true
+    local blood = try(function() kml:SetScalarParameterValue(pawn, mpc, FName("BloodOffset"), st.blood); return true end)
+    local dirt = try(function() kml:SetScalarParameterValue(pawn, mpc, FName("DirtOffset"), st.dirt); return true end)
+    local ok = wrotePawn == true and blood == true and dirt == true
+    if not ok then st.retry = now + 1 end
+    return ok
   end
   return false
 end
@@ -190,9 +192,10 @@ function M.tick(pawn, mesh, dead)
     -- Off never owns the collection. Only a transition out of the enabled feature clears its own values.
     if st.active then
       st.blood, st.dirt, st.goalB, st.goalD = 0, 0, 0, 0
-      write(pawn, now)
-      st.active = false
-      st.writtenB, st.writtenD = nil, nil
+      if write(pawn, now) then
+        st.active = false
+        st.writtenB, st.writtenD = nil, nil
+      end
     end
     st.pct, st.others, st.hitIndex, st.hitSeen = nil, {}, nil, nil
     return
@@ -225,7 +228,8 @@ function M.tick(pawn, mesh, dead)
   local bpBlood = try(function() return pawn.BloodValue end)
   local bpDirt = try(function() return pawn.DirtValue end)
   if st.writtenB ~= st.blood or st.writtenD ~= st.dirt or bpBlood ~= st.blood or bpDirt ~= st.dirt then
-    if write(pawn, now) then st.writtenB, st.writtenD = st.blood, st.dirt end
+    if write(pawn, now) then st.writtenB, st.writtenD = st.blood, st.dirt
+    else st.writtenB, st.writtenD = nil, nil end
   end
   local finish = os.clock()
   if (finish - start) * 1000 >= ((ctx.tune.gore or {}).slowMs or 15) then

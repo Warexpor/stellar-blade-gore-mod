@@ -68,6 +68,15 @@ static int gm_owns(const void *p) { for (int i = 0; i < ngm; i++) if (gm_out[i] 
 
 int main(void)
 {
+    // A reused one-byte request clears one whole word. It must have been
+    // allocated at that size even when the growth allowance rounds to zero.
+    int scratchbad = 0;
+    for (u64 n = 1; n <= 7; n++) {
+        if (scratch_mem[1]) mem_free(scratch_mem[1]);
+        scratch_mem[1] = 0; scratch_len[1] = 0;
+        if (!cut_scratch(1, n) || scratch_len[1] < 8 || !cut_scratch(1, n)) scratchbad = 1;
+    }
+    printf("small reused scratch allocations: %s\n", scratchbad ? "FAIL" : "ok");
     void *m = mmap(0, 0x7100000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) { perror("mmap"); return 1; }
     exe = (u64)m;
@@ -121,6 +130,17 @@ int main(void)
     sw[SW_VARIABLE] = 0; *(u32 *)(sw + SW_MAX_INFLUENCES) = 4; sw[SW_16BIT_INDEX] = 0; *(u64 *)(sw + SW_DATA) = (u64)vw; *(int *)(sw + SW_NUM_VERTICES) = NV;
 
     float pw[3] = { 0, 0, 57 }, nw[3] = { 0, 0, -1 };
+    *(int *)(sm + SM_REF_BONE_INFO + 8) = MAX_BONES + 1;
+    *(int *)(sm + SM_REF_BASES_INV + 8) = MAX_BONES + 1;
+    skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1);
+    int skeletonbad = strcmp(lastres, "err too many bones") != 0 || override_w != 0;
+    *(int *)(sm + SM_REF_BONE_INFO + 8) = NB;
+    *(int *)(sm + SM_REF_BASES_INV + 8) = NB;
+    *(u64 *)(sm + SM_REF_BONE_INFO) = 0;
+    skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1);
+    skeletonbad |= strcmp(lastres, "err no skeleton") != 0 || override_w != 0;
+    *(u64 *)(sm + SM_REF_BONE_INFO) = (u64)binfo;
+    printf("oversized and missing skeletons refused before cut: %s\n", skeletonbad ? "FAIL" : "ok");
     skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1);
     printf("%s\n", lastres);
     int pending = refinv[THIGH_HELP * 16] == 1;
@@ -198,6 +218,19 @@ int main(void)
         override_w = cutw;
     }
     int r1 = skin_restore(0);
+    // With no collapsed sink, a wholly hidden section must be reported exactly
+    // so Lua can hide it. Exercise the real response, including its terminator.
+    {
+        skin_info *saved = override_w;
+        u64 root = ROOT;
+        vanish_cmd((u64)comp_buf, 0, 0, &root, 1);
+        const char *mats = strstr(lastres, " mats ");
+        int correct = mats && strcmp(mats, " mats 0/0") == 0;
+        printf("vanish no sink reports whole section: %s\n", correct ? "ok" : "FAIL");
+        vanbad |= !correct;
+        free(override_w);
+        override_w = saved;
+    }
     // the regrow's hand-off (gore.ghost_release, main.lua hm.ghost_tick): the copy (keep 1) fades out for 0.6 s after
     // the cut is undone under it. With no bone free of every BoneMap (this mesh has none) its hidden side falls back on
     // the cut's collapsed sinks, so a restore of them under the copy shows that side again (playtest: her whole body
@@ -589,7 +622,7 @@ int main(void)
         cur_idx = idx; cur_nidx = &nidx;
     }
     int fitbad = modebad || corebad || np + 1 < 20 || strap || fa < 5.7f || fa > 6.3f || fb < 3.7f || fb > 4.3f || fcx < 0.8f || fcx > 1.2f;
-    int fail = fitbad || vanbad || ghostbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
+    int fail = scratchbad || skeletonbad || fitbad || vanbad || ghostbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
     printf("%s\n", fail ? "FAIL" : "PASS");
     return fail;
 }

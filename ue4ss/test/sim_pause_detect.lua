@@ -38,4 +38,13 @@ check(tick(0.05, 0.0025) == false, "slowed x0.05, clock on pace: not paused")
 -- ...but a truly stopped clock still is
 tick(0.05, 0.0025)
 check(tick(0.05, 0) == true, "slowed x0.05, clock stopped: paused")
+-- A mesh can lack a primary animation instance but still have a post-process Blueprint.
+local oldFind, oldHook = StaticFindObject, RegisterHook
+local found, hooked = {}, {}
+StaticFindObject = function(path) found[#found + 1] = path; return {} end
+RegisterHook = function(path) hooked[#hooked + 1] = path end
+local post = { GetClass = function() return { GetFullName = function() return "Class /Game/Post.Post_C" end } end }
+screen.head_hook({ GetAnimInstance = function() return nil end, GetPostProcessInstance = function() return post end })
+check(hooked[1] == "/Game/Post.Post_C:BlueprintUpdateAnimation", "post-process update hooked when primary instance is absent")
+StaticFindObject, RegisterHook = oldFind, oldHook
 print(fails == 0 and "PASS" or "FAIL")

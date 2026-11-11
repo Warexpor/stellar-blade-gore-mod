@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.7.5
+
+- Boss touches now drop a freed boss before any read: a boss destroyed and recreated around a defeat and revive (Scarlet) left per-tick AI, HP and bar reads running on the freed actor, and `valid()` itself can fault there. A frame-scoped native liveness check drops it first at no extra cost. Covered by a new freed-boss sim case that fails without the fix; in-game revive still needs verification.
+
+- Full optimization audit complete: every executable source and build script reviewed once. No further safe behavior-preserving optimization with a proven benefit was found; per-tick work is already gated, staged cuts/pools/deferred work are intentional hitch spreading, and the remaining native cutter hotspots need harness bit-compare plus appearance checks. All fallbacks stay. See `docs/PERFORMANCE_AUDIT.md` and `docs/AUDIT_COVERAGE.md`.
+
+- The native cutter now rejects oversized or missing skeleton metadata before accessing fixed-size bone arrays. Focused synthetic and real-mesh cut checks pass; actual modded-mesh behavior still needs in-game verification.
+
+- Reused native scratch buffers now reserve complete machine words, preventing a small allocation from being cleared past its end. The focused native unit, weapon, arm, head and split checks pass; game behavior remains unverified.
+
+- Regrowth?s native fallback now terminates and bounds its material-section response when it cannot hide a section with a sink. The synthetic fallback and real-mesh arm/regrowth checks pass; in-game regrowth remains to be verified.
+
+- Blood and Dirt retries failed skin-collection writes, including cleanup when the feature is switched off. Focused simulations cover partial failures and recovery; actual game timing remains unverified.
+
+- Cut caches now follow a mesh when its physics asset is replaced, so they rebuild body and sink lists rather than reusing the previous asset?s lists. Focused simulations cover replacement; in-game geometry remains to be checked.
+
+- World changes now discard cached bone trees and assembled cut commands keyed by old asset addresses. Focused cache and reload simulations pass; the rebuilt caches still need an in-game check.
+
+- Cut sink exclusions now cache separate rules for unfaced enemies and player-style meshes sharing the same asset. Focused simulations cover both cache orders; appearance still needs in-game verification.
+
+- Living-hit marks now enable decal reception on each replacement mesh component, even when its outfit asset was seen before. `hit_marks` and `stains` simulations pass; in-game appearance needs verification.
+
+- The optional fewer-GC setting now leaves an engine value alone if its original cannot be read, and retries incomplete changes or restoration. Focused `perf_probe` simulation covers partial failure; game behavior still needs verification.
+
+- Vanilla asset cache now tracks outfit selection and local retoc patches, so changing either rebuilds cached mesh and physics data. `check-build` completed and verified every patched asset.
+
+- Release packaging now excludes local `settings.lua` and `menu.lua`, even if present in the source tree, to preserve players? overrides during updates. A local archive test passed.
+
+- Object-watch status now requires a confirmed native registration, so a failed or truncated reconfiguration does not suppress laser reseeding on a later world change. Focused simulations pass; real-game behavior remains unverified.
+
+- After a world change, saved skin-blood values survive a temporary collection or setter failure and retry at most once a second. Focused simulations pass; actual loading behavior needs in-game verification.
+
+- Enemy knockdown-check backlogs now shift once per batch instead of once per node. FIFO order, native-failure retries and the per-tick budget are retained. Synthetic queue and focused simulations pass; in-game impact is unmeasured.
+
+- Procedural cap generation clamps negative squared radii caused by rounded opening normals, preventing invalid vertex coordinates in that edge case. Geometry simulations pass; appearance in game needs verification.
+
+- Lifetime requests from large attachment lists are split at the native 64-object limit, so cloth and photo collision snapshots can be restored on unusually component-heavy outfits. Failed batches still fail closed. Focused simulations pass; real outfits need in-game verification.
+
+- Photo-mode detached-head updates now try the post-process animation Blueprint when the primary animation instance is absent. The cut-stretch diagnostic also considers lid-only responses and compares body and face extents. Focused simulations pass; the photo-mode behavior needs in-game verification.
+
+Released 11 November 2026.
+
+- A missing death face now reuses the compatibility search for its diagnostic instead of scanning all skeletal mesh components twice. The search and retry on failure remain intact; the in-game timing benefit is unmeasured.
+- Slow external mesh-copy refreshes now log their duration and the pending cut stage, to identify overlap before changing cut scheduling. Copy and cut timing is unchanged.
+- Lifetime batches skip objects already checked in the same frame, avoiding repeated native checks while retaining the existing frame-scoped guard. The in-game impact is unmeasured.
+- Split seam bleeds now respect No Blood Bursts: with `gore.noBursts` on, a split stays dry like cuts and smashes do, instead of bleeding along the seam anyway. Previously only the split's hit-flash was gated.
+- Removed the inert `smash.limbBleedScale` / `smash.bleedTimeScale` knobs, which were never read and made stump-bleed tuning confusing; smashed stumps bleed at the ordinary cut size and duration. Technical notes corrected to match.
+- Foreign-skeleton custom heads no longer stretch the neck thin on beheading: when the visible face lacks Eve's head bone and the slot face is cut instead, the neck lid now uses the body's rim rather than the hidden slot face's rim. Covered by the existing `custom_head` sim.
+- Struggle Length (F3 → Death) is now uncapped above, on a report that 3x still feels short (1x is 5-8 s). The menu stepping treats a num row without max as no upper limit.
+- Hardened the post-smash spawn window (meat chunks, blood bursts, splats) with the strict object-lifetime check: two supplied Brute-fight logs each end in a hard crash a frame or two after an upper-arm smash, with no Lua error, so the cause is unconfirmed from the mod log alone. If the target is already gone the remaining spawns are now skipped with a log line instead of touching it; healthy sessions behave as before. A UE4SS.log with the crash stack (or a dump) would confirm whether this was the freed-object class or game-side.
+- Logging: past the 20 MB cap the file and the UE4SS.log mirror keep errors/failures case-insensitively (`fail` covers failed/FAIL; previously only lowercase `error` survived, so `failed` lines were dropped), timestamps carry date plus milliseconds for ordering, and over-cap non-error lines return before formatting/printing. Per-line flush stays for crash diagnostics; no log schema change, so sim `F.find` patterns are unaffected.
+
 ## 0.7.4
 
 Released 11 November 2026.

@@ -594,6 +594,14 @@ end
 
 function M.tick(pawn)
   local now = os.clock()
+  -- A destroyed boss stays listed until the next GC, and valid() itself can fault on a freed object, so the
+  -- per-tick AI, HP and bar touches below must never run on one (a boss destroyed and recreated around a
+  -- defeat and revive crashed the game with only this mod installed, 0.7.4). The frame-scoped native check
+  -- costs nothing when already validated; unknown (no native) keeps the old valid() path.
+  if ctx.alive then
+    for a, x in pairs(live) do local k = x.e and x.e.k; if k and ctx.alive(k) == false then M.gone(a) end end
+    for a, d in pairs(dead) do local k = d.e and d.e.k; if k and ctx.alive(k) == false then M.gone(a) end end
+  end
   for row, k in pairs(keeps) do
     if k.orphanRetry and now >= k.orphanRetry then
       k.orphanRetry = now + 5

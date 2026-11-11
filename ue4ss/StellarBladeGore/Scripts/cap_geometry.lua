@@ -9,7 +9,7 @@ return function(o, k)
   c = scale(c, 1 / n)
   local z = o.z
   local r = 0
-  for _, q in ipairs(o.p) do local d = sub(q, c); r = r + math.sqrt(dot(d, d) - dot(d, z) ^ 2) end
+  for _, q in ipairs(o.p) do local d = sub(q, c); r = r + math.sqrt(math.max(dot(d, d) - dot(d, z) ^ 2, 0)) end
   r = r / n
   -- the lid bulges out a little
   local dome = math.min(math.max(r * 0.18, 0.4), 1.8)

@@ -1200,15 +1200,18 @@ local LIMB_ROOTS, nosink_list, limbs_list, limb_root, bodies_of, nocarry_list =
 -- limbs: true (a torso cut: every limb, and the drivers), a bone name (a limb or head cut: every limb but the one it
 -- is on), nil; driven: the drivers too (a split: its point sinks on driven helpers followed the limbs it lets go,
 -- cones out of both halves, playtest); after: the drivers that follow the limbs a split half lets go (M.side_drivers)
--- the "n" command's list portion per mesh asset and cut shape: every input (nosink, limb, nocarry, bodies, driven,
--- after) is a per-asset property that never changes, so reassembling the deduped string on every cut is wasted Lua on
+-- the "n" command's list portion per mesh and physics asset, owner policy and cut shape: reassembling the
+-- deduped string on every cut is wasted Lua on
 -- a cut frame (5 ms of it on a death's head cut, playtest). The component's own address stays in the command itself.
 -- (on M: the chunk is at Lua's 200 locals)
 M.nosink_cmd = M.nosink_cmd or {}
 local function send_nosink(comp, limbs, driven, after)
   local sm = try(function() return comp.SkeletalMesh end)
-  local key = valid(sm) and addr(sm)
-    and (addr(sm) .. "|" .. tostring(limbs) .. "|" .. tostring(driven) .. "|" .. (enemy.cur and "e" or "h") .. "|" .. tostring(after))
+  local pa = ctx.physics_of and try(function() return ctx.physics_of(comp) end)
+  local sa, paAddr = valid(sm) and addr(sm), valid(pa) and addr(pa)
+  local key = sa and paAddr
+    and (sa .. "|" .. paAddr .. "|" .. tostring(limbs) .. "|" .. tostring(driven) .. "|"
+      .. (enemy.cur and (enemy.faced[enemy.cur] and "f" or "e") or "h") .. "|" .. tostring(after))
   local suffix = key and M.nosink_cmd[key]
   if not suffix then
     local s = nosink_list(comp)
@@ -1972,6 +1975,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
   -- the head took the face's whole neck along, down to her collar
   local fr
   -- (an enemy's head is on its body mesh: the neck's plane cut alone)
+  local faceFallback = false
   if faced then
     local fi = valid(face) and try(function() return face:GetBoneIndex(FName(bone)) end)
     if (not fi or fi < 0) and valid(face) then
@@ -1982,6 +1986,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
         if sfi and sfi >= 0 then
           log(string.format("face %s has no %s, cutting the slot's face instead", name_of(face), tostring(bone)))
           face, fi = slot, sfi
+          faceFallback = true
         end
       end
     end
@@ -2087,7 +2092,7 @@ local function cut_limb(pawn, mesh, bone, why, blow, face, blade)
       end
     end
   end
-  return { at = at, n = n, result = r, face = fr and face, face_result = fr, facecut = facecut, kept = kept, detached = {}, chains = chains }
+  return { at = at, n = n, result = r, face = fr and face, face_result = fr, facecut = facecut, faceFallback = faceFallback, kept = kept, detached = {}, chains = chains }
 end
 function M.stage_chains(q)
   local c = table.remove(q.c.chains, 1)
@@ -2156,8 +2161,9 @@ local function stage_cut(q)
   end
   -- a cut face's neck closes the stump too: the face's rim, unless the body's goes all round her neck and is wider
   -- (a high collar, CH_P_EVE_10). On CH_P_EVE_30 the body ends under the plane, on CH_P_EVE_29 its collar only
-  -- reaches round the back (10 of 16 directions)
-  local fb = q.c.facecut and opening(q.c.face_result, "b")
+  -- reaches round the back (10 of 16 directions). A fallback slot face (foreign-skeleton custom head) keeps the
+  -- body's rim instead, because the hidden slot rim never matched the visible neck and stretched it thin.
+  local fb = q.c.facecut and not q.c.faceFallback and opening(q.c.face_result, "b")
   local function wide(o) return o and math.max(o.e.X, o.e.Y) or 0 end
   local function round(r)
     local most = 0
@@ -2168,7 +2174,7 @@ local function stage_cut(q)
   -- a cap or lid dozens of cm across is a drawn-out spike, not an opening: logged so the session log
   -- shows it (a thigh after-cut on a leg whose calf was already off built a 228 cm lid). The geometry
   -- itself is the DLL's; nothing is changed here
-  local wideCut = widest and (widest(q.c.result) or widest(q.c.face_result or ""))
+  local wideCut = widest and widest(q.c.result, q.c.face_result)
   if wideCut and wideCut > 40 then
     log(string.format("cut stretch: %s (%s) is %.0f cm across", q.bone, q.why or "?", wideCut))
   end
@@ -3760,7 +3766,9 @@ local function stage_split_open(q)
     if g.noBursts ~= true then niagara(FX.hit, q.pawn, nil, q.hit or at, false) end
     M.splat(q.pawn, at)
     -- bleeding along the seam: from the chest and neck lids of each half
+    -- (noBursts keeps splits dry like cuts, because fresh stumps stay dry then)
     local left = math.floor((g.bleedTime or 2.5) / TICK_S + 0.5)
+    if g.noBursts ~= true then
     for _, c in ipairs(q.caps) do
       if valid(c.actor) and c.kind ~= "spine" and (q.plane or c.whole or c.ride == "Bip001-Spine2" or c.ride == "Bip001-Neck" or c.ride == "Bip001-Spine") then
         local qq, cap = { pawn = q.pawn, mesh = c.comp }, c
@@ -3768,6 +3776,7 @@ local function stage_split_open(q)
           if valid(qq.mesh) then bleed_from(qq, cap.actor, cap.o, cap.ride, left) end
         end }
       end
+    end
     end
     for _, comp in ipairs({ q.mesh, q.body2 }) do
       track(q.pawn, function()
@@ -5191,6 +5200,7 @@ function M.forget(pawn)
   enemy.owned, enemy.cur, enemy.faced, enemy.faded, enemy.shrink = setmetatable({}, { __mode = "k" }), nil, {}, {}, {}
   M.assets.forget()
   bone_lists.clear()
+  M.nosink_cmd = {}
   -- a collection's values live in the old world, which is gone with them
   -- (but the collection itself outlives her: the respawned Eve kept the death's blood all over her skin, reported.
   -- Its values from before the death are put back through the new one, on her first tick)

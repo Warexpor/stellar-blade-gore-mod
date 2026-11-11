@@ -183,8 +183,26 @@ rawset(oldCollection, "__freed", true)
 F.objects["/Game/Art/FX/MPC/MPC_PCDirtyOffset.MPC_PCDirtyOffset"] = newCollection
 S.add(0.2, 0, "collection reload"); run(0.3)
 check(lastCollection == newCollection, "material collection is reacquired after unload with the same pawn")
--- Toggle off releases ownership instead of continually zeroing the game's collection.
+-- A failed native write must be retried even if the Blueprint values already match.
+local kml = F.objects["/Script/Engine.Default__KismetMaterialLibrary"]
+local realWrite = kml.SetScalarParameterValue
+local failWrites = true
+rawset(kml, "SetScalarParameterValue", function(self, world, collection, name, value)
+  if failWrites and tostring(name) == "DirtOffset" then error("simulated collection write failure") end
+  return realWrite(self, world, collection, name, value)
+end)
+S.add(0, 0.3, "failed write"); run(1)
+check(state.writtenD == nil and values.DirtOffset ~= state.dirt, "failed collection write remains pending")
+failWrites = false; run(1.2)
+check(close(values.DirtOffset, state.dirt), "collection write retries after recovery")
+-- Toggle off retries a partial restore, then releases ownership.
+failWrites = true
 c.enabled=false; run(0.2)
+check(state.active and values.DirtOffset > 0, "failed off transition retains cleanup work")
+failWrites = false; run(1.2)
+check(not state.active and close(values.BloodOffset,0) and close(values.DirtOffset,0), "off transition retries both offsets")
+rawset(kml, "SetScalarParameterValue", realWrite)
+-- Once off, it leaves the game's own values alone.
 values.BloodOffset,values.DirtOffset=0.19,0.21
 run(1)
 check(values.BloodOffset==0.19 and values.DirtOffset==0.21, "feature off leaves native values alone")

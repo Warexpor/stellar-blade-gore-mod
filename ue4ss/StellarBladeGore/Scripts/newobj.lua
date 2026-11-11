@@ -12,7 +12,7 @@ local CDO, FIELD_OWNER, FIELD = "/Script/SB.Default__SBCheatManager", "/Script/E
 local PER_TICK = 200 -- at most this many a tick (a level's worth of widgets queued while she didn't tick)
 local watchers = {} -- { path, fn, cls }
 -- mode: nil till decided, "native" (sbslice), "lua" (NotifyOnNewObject), "off"
-local st = { mode = nil, dirty = false, cdo = nil, statusAt = 0, dropped = 0 }
+local st = { mode = nil, dirty = false, cdo = nil, statusAt = 0, dropped = 0, registered = {} }
 
 local function lua_watch(w)
   local ok, err = pcall(NotifyOnNewObject, w.path, w.fn)
@@ -21,6 +21,8 @@ end
 
 -- the watched classes to sbslice: the field's address, a child/parent pair (its SuperStruct offset), the classes
 local function setup()
+  -- Until registration succeeds, callers must not assume a class is watched.
+  st.registered = {}
   local g = ctx.gore
   local cdo = try(function() return StaticFindObject(CDO) end)
   local owner = try(function() return StaticFindObject(FIELD_OWNER) end)
@@ -30,13 +32,19 @@ local function setup()
     try(function() owner:ForEachProperty(function(p) if p:GetFName():ToString() == FIELD then off = p:GetOffset_Internal() end end) end)
   end
   if not (valid(cdo) and valid(child) and off) then return "no " .. (not valid(cdo) and CDO or not off and FIELD or "cheat manager class") end
-  local cls, missing = {}, {}
+  local cls, missing, paths = {}, {}, {}
   for _, w in ipairs(watchers) do
     w.cls = w.cls or try(function() return StaticFindObject(w.path) end)
-    if valid(w.cls) then cls[#cls + 1] = string.format("%x", w.cls:GetAddress()) else missing[#missing + 1] = w.path end
+    if valid(w.cls) then cls[#cls + 1] = string.format("%x", w.cls:GetAddress()); paths[#paths + 1] = w.path
+    else missing[#missing + 1] = w.path end
   end
   local r = g.command(string.format("O%x,%x,%x,%s", cdo:GetAddress() + off, child:GetAddress(), owner:GetAddress(), table.concat(cls, ",")))
   if not r:match("^ok") then return r end
+  -- The helper can silently omit unreadable classes or cap the list. If its
+  -- count differs, no individual class is confirmed, so polling remains safe.
+  if tonumber(r:match("^ok watching (%d+)")) == #cls then
+    for _, path in ipairs(paths) do st.registered[path] = true end
+  end
   st.cdo = cdo
   log("watched as they are made (sbslice.dll): " .. r .. (#missing > 0 and ("; no class " .. table.concat(missing, ", ")) or ""))
   return nil
@@ -115,8 +123,7 @@ function M.mode() return st.mode end
 function M.watched(path)
   if st.mode == "lua" then return true end
   if st.mode ~= "native" then return false end
-  for _, w in ipairs(watchers) do if w.path == path and valid(w.cls) then return true end end
-  return false
+  return st.registered[path] == true
 end
 
 function M.init(c)

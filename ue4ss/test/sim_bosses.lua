@@ -105,6 +105,7 @@ local logs = {}
 local tune = dofile("ue4ss/Mods/StellarBladeGore/Scripts/tune.lua")
 tune.bosses.enabled = true
 local kills = {}
+local deadKeys = {}
 local ctx = { tune = tune, log = function(s) logs[#logs + 1] = s; print("  | " .. s) end,
   try = function(f) local ok, r = pcall(f); if ok then return r end end, valid = function(x) return x ~= nil and x ~= false end,
   gore = { command = command, native_state = function() return "ready" end, enemy_off = function() return {} end },
@@ -112,7 +113,9 @@ local ctx = { tune = tune, log = function(s) logs[#logs + 1] = s; print("  | " .
   new_face = function()
     return { start = function() logs[#logs + 1] = "face started" end, tick = function() end, stop = function() end }
   end,
-  rag = { MASS = {} } }
+  rag = { MASS = {} },
+  -- freed-object probe: keys marked dead read as gone, everything else unknown (the old valid() path)
+  alive = function(k) if deadKeys[k] then return false end return nil end }
 local B = dofile("ue4ss/Mods/StellarBladeGore/Scripts/bosses.lua")
 B.init(ctx)
 local kinds = {}
@@ -358,6 +361,31 @@ for r, v in pairs(effBefore) do
 end
 check(effSame and has("their phases' floors back as the game has them %(none of yours left%): 23 of 23 rows"),
   "none left: the EffectTable's floors put back as the game had them")
+
+-- a boss destroyed and recreated around a defeat (its actor freed): the native check reads it as gone before
+-- any touch, so the per-tick AI, HP and bar reads never run on the freed object
+local function nvb() local n = 0; for _, c in ipairs(cmds) do if c:sub(1, 2) == "vb" then n = n + 1 end end return n end
+local fmk = {}
+local fmm = F.obj("FreedBossMesh", "SkeletalMeshComponent")
+local fobj = F.obj("CH_M_NA_53_Blueprint_C_9", "CH_M_NA_53_Blueprint_C", { Mesh = fmm })
+fobj.K2_GetActorLocation = function() return { X = 300, Y = 0, Z = 0 } end
+local fe = { obj = fobj, mesh = fmm, kind = kinds.raven, k = fmk }
+B.adopted(0xf9ed, fe, true)
+local fe2m = F.obj("FreedBossMesh2", "SkeletalMeshComponent")
+local fe2o = F.obj("CH_M_NA_53_Blueprint_C_10", "CH_M_NA_53_Blueprint_C", { Mesh = fe2m })
+fe2o.K2_GetActorLocation = function() return { X = 300, Y = 0, Z = 0 } end
+local fk2 = {}
+local fe2 = { obj = fe2o, mesh = fe2m, kind = kinds.raven, k = fk2 }
+B.adopted(0xf9ee, fe2, true)
+B.died(pawn, 0xf9ee, fe2)
+deadKeys[fmk], deadKeys[fk2] = true, true
+fobj.K2_GetActorLocation = function() error("touched a freed boss") end
+fe2o.K2_GetActorLocation = function() error("touched a freed boss") end
+local k1, vb0 = #kills, nvb()
+B._live()[0xf9ed].hpAt, B._live()[0xf9ed].hpTries = 0, 0
+for _ = 1, 5 do F.t = F.t + 0.3; B.tick(pawn) end
+check(B._live()[0xf9ed] == nil and B._dead()[0xf9ee] == nil and #kills == k1 and nvb() == vb0,
+  "a freed boss: dropped from live and dead without a touch, no HP read")
 
 -- Naked Tachy (Nexus 3183): her body mesh pointing at a physics asset the game doesn't have (none loads): the game's
 -- own put back as she is adopted; a vanilla one's left as it is

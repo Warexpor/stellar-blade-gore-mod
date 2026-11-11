@@ -23,7 +23,13 @@ function M.pump()
   local copiesDue = cfg().enabled ~= false and #cuts > 0 and not M.pumping
     and (os.clock() >= M.copies.next or next(M.copies.dirty) ~= nil)
   if cfg().enabled ~= false and #cuts > 0 and not M.pumping then
+    local copyStart = copiesDue and os.clock()
     local ok, err = pcall(M.copies_flush)
+    local copyMs = copyStart and (os.clock() - copyStart) * 1000
+    if copyMs and copyMs >= (cfg().slowMs or 15) then
+      log(string.format("copy refresh took %.0f ms (%d cuts, pending stage %s)", copyMs, #cuts,
+        pending and tostring(pending.stage) or "none"))
+    end
     if not ok then log("copies: " .. tostring(err)) end
     later, bleeds, cuts, queued, pending = get_queues()
   end

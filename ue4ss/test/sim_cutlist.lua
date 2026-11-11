@@ -40,9 +40,65 @@ local function mesh(bones, bodies)
   end
   local setups = {}
   for _, n in ipairs(bodies or {}) do setups[#setups + 1] = { BoneName = FName(n) } end
-  m.__pa = { SkeletalBodySetups = { ForEach = function(_, f) for i, s in ipairs(setups) do f(i, { get = function() return s end }) end end } }
+  m.__pa = { GetAddress = function() return ad + 0x100 end, SkeletalBodySetups = { ForEach = function(_, f) for i, s in ipairs(setups) do f(i, { get = function() return s end }) end end } }
   return m
 end
+-- Exercise the assembled native command cache as well as the underlying list cache.
+local function findclosure(fn, wanted, seen)
+  seen = seen or {}
+  if type(fn) ~= "function" or seen[fn] then return nil end
+  seen[fn] = true
+  for i = 1, 200 do
+    local name, value = debug.getupvalue(fn, i)
+    if not name then break end
+    if name == wanted then return value end
+    if name ~= "_ENV" and type(value) == "function" then
+      local found = findclosure(value, wanted, seen)
+      if found then return found end
+    end
+  end
+end
+local send
+for _, fn in pairs(M) do send = findclosure(fn, "send_nosink"); if send then break end end
+if send then
+  local enemy, ci, oldCommand
+  for i = 1, 200 do
+    local n, value = debug.getupvalue(send, i)
+    if not n then break end
+    if n == "enemy" then enemy = value end
+    if n == "command" then ci, oldCommand = i, value end
+  end
+  local commands = {}
+  local sm = mesh({ {"Root"}, {"Bip001-Head", "Root"}, {"Ab_Helper", "Root"} }, {"Bip001-Head"})
+  if enemy and ci then
+    debug.setupvalue(send, ci, function(command) commands[#commands + 1] = command; return "ok" end)
+    enemy.cur = "unfaced"; send(sm)
+    check(next(M.nosink_cmd) ~= nil, "valid physics asset enables assembled-command caching")
+    enemy.cur = "faced"; enemy.faced.faced = true; send(sm)
+    check(commands[1] and commands[2] and commands[1] ~= commands[2],
+      "assembled sink commands distinguish faced and unfaced enemies sharing a mesh")
+    M.nosink_cmd, commands = {}, {}
+    enemy.cur = "faced"; send(sm)
+    enemy.cur = "unfaced"; send(sm)
+    check(commands[1] and commands[2] and commands[1] ~= commands[2],
+      "assembled sink commands distinguish the reverse cache order")
+    local oldPa = sm.__pa
+    local replacement = mesh({ {"Root"}, {"Bip001-Head", "Root"}, {"Ab_Helper", "Root"} }, {"Ab_Helper"})
+    M.nosink_cmd, commands = {}, {}
+    enemy.cur = nil; send(sm)
+    sm.__pa = replacement.__pa; send(sm)
+    check(commands[1] and commands[2] and commands[1] ~= commands[2],
+      "assembled sink commands follow a replacement physics asset")
+    sm.__pa = oldPa
+    enemy.cur, enemy.faced.faced = nil, nil
+    debug.setupvalue(send, ci, oldCommand)
+  else check(false, "assembled sink cache test can inspect its dependencies") end
+else check(false, "assembled sink cache test can locate its builder") end
+
+M.nosink_cmd["old-world-sentinel"] = "obsolete"
+local forgot, forgetErr = pcall(M.forget, nil)
+check(forgot and not M.nosink_cmd["old-world-sentinel"], "world cleanup drops assembled cut commands" .. (forgot and "" or ": " .. tostring(forgetErr)))
+
 -- the old engine loop, as the reference
 local function ref_skip(m, top, limb)
   local try = function(f) local ok, r = pcall(f); if ok then return r end end

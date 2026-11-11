@@ -56,7 +56,8 @@ function dface.others(pawn, face, need)
   -- face went on her body). Only then: FindAllOf walks every object (35-50 ms), a hitch on each death 0.3 s in
   if #out > 0 or not need then return out end
   local pa = addr(pawn)
-  for _, c in ipairs(try(function() return FindAllOf("SkeletalMeshComponent") end) or {}) do
+  local all = try(function() return FindAllOf("SkeletalMeshComponent") end)
+  for _, c in ipairs(all or {}) do
     local a = addr(c)
     if a and not seen[a] and dface.hers(pawn, c, pa) then
       seen[a] = true
@@ -64,7 +65,7 @@ function dface.others(pawn, face, need)
       for _, l in ipairs(LIDS) do if set[l] then out[#out + 1] = c; break end end
     end
   end
-  return out
+  return out, all
 end
 -- one she owns, or posed off her body (its master pose her mesh)
 function dface.hers(pawn, c, pa)
@@ -75,10 +76,10 @@ function dface.hers(pawn, c, pa)
   return valid(m) and valid(body) and try(function() return m:GetAddress() == body:GetAddress() end) == true
 end
 -- what she wears, when no face with the morphs is found: each skeletal mesh she owns, its asset, morph count, shown
-function dface.dump(pawn)
+function dface.dump(pawn, all)
   local pa = try(function() return pawn:GetAddress() end)
   local out = {}
-  for _, c in ipairs(try(function() return FindAllOf("SkeletalMeshComponent") end) or {}) do
+  for _, c in ipairs(all or try(function() return FindAllOf("SkeletalMeshComponent") end) or {}) do
     if dface.hers(pawn, c, pa) then
       local o = try(function() return c:GetOwner() end)
       local _, n = dface.names(c)
@@ -98,14 +99,14 @@ function dface.start(pawn, mesh, why, hold)
   -- another face on her (dface.others); one of them in the lead when the face slot's has none of the morphs
   local function lids(st) return st.upLid_down_L or st.eyeBlinkLeft end
   -- (the wide search only when her own face can't show it: none of the morphs, or hidden)
-  local others = dface.others(pawn, face, not lids(set) or try(function() return face:IsVisible() end) == false)
+  local others, scanned = dface.others(pawn, face, not lids(set) or try(function() return face:IsVisible() end) == false)
   if not lids(set) and #others > 0 then
     face = table.remove(others, 1)
     set, n = dface.names(face)
   end
   if not lids(set) and not dface.dumped then
     dface.dumped = true
-    dface.dump(pawn)
+    dface.dump(pawn, scanned)
   end
   -- the mood: by weight, never the one before while there's another (Page Up: the next in turn)
   local moods, mood = df.moods or {}, nil

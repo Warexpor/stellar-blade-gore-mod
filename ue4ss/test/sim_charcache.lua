@@ -75,6 +75,48 @@ ctx.frame = ctx.frame + 1
 ctx.alive_ask = function(list) list[1].alive = false; list[1].frame = ctx.frame; return true end
 check(not ctx.held(wk, true) and wk.dead, "single widget validation rejects a stale object")
 ctx.alive_ask = realAsk
+-- A character batch may validate some guards before another retained object is checked in the same frame.
+-- The later batch must ask only for unchecked guards, for both guard entry points.
+for _, method in ipairs({ 'alive', 'held' }) do
+  local a = assert(ctx.keep(F.obj('batch first ' .. method, 'UserWidget')))
+  local b = assert(ctx.keep(F.obj('batch second ' .. method, 'UserWidget')))
+  ctx.frame = ctx.frame + 1
+  check(ctx.held(a, true) and ctx.held(b, true), method .. ': both guards indexed')
+  ctx.frame = ctx.frame + 1
+  check(ctx.held(a, true), method .. ': first guard checked this frame')
+  local sent = {}
+  ctx.alive_ask = function(list)
+    for _, k in ipairs(list) do sent[k] = (sent[k] or 0) + 1 end
+    return realAsk(list)
+  end
+  check(ctx[method](b) and sent[b] == 1 and sent[a] == nil,
+    method .. ': batch checks the new guard without repeating the same-frame guard')
+  ctx.alive_ask = realAsk
+end
+-- Direct callers such as photo and cloth collision restoration can have more than 64 components.
+local many = {}
+for i = 1, 130 do many[i] = assert(ctx.keep(F.obj('many guards ' .. i, 'UserWidget'))) end
+ctx.frame = ctx.frame + 1
+local batchStart = #F.cmds
+local asked = ctx.alive_ask(many)
+local sizes = {}
+for i = batchStart + 1, #F.cmds do
+  local s = F.cmds[i].s
+  if s:sub(1, 1) == 'G' then sizes[#sizes + 1] = (select(2, s:gsub(',', ',')) + 1) // 2 end
+end
+local allAlive = true
+for _, k in ipairs(many) do if not k.alive or k.frame ~= ctx.frame then allAlive = false end end
+check(asked and allAlive and #sizes == 3 and sizes[1] == 64 and sizes[2] == 64 and sizes[3] == 2,
+  'direct lifetime request validates all 130 objects in bounded batches')
+local realCommand, ncommands = ctx.gore.command, 0
+ctx.gore.command = function()
+  ncommands = ncommands + 1
+  return ncommands == 1 and ('ok ' .. string.rep('1', 64)) or 'err unavailable'
+end
+ctx.frame = ctx.frame + 1
+check(ctx.alive_ask(many) == nil and ncommands == 2 and many[65].frame ~= ctx.frame,
+  'failed later batch returns failure and does not mark unchecked objects alive')
+ctx.gore.command = realCommand
 local function newpoll() ctx.frame = ctx.frame + 1; ctx.poll = ctx.poll + 1 end
 newpoll()
 local chars = ctx.live_chars()

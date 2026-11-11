@@ -154,7 +154,8 @@ function screen.head_hook(mesh)
   if hd.hooked or hd.tried then return end
   hd.tried = true
   local paths = {}
-  for _, inst in ipairs({ try(function() return mesh:GetAnimInstance() end), try(function() return mesh:GetPostProcessInstance() end) }) do
+  for _, inst in ipairs({ try(function() return mesh:GetAnimInstance() end) or false,
+    try(function() return mesh:GetPostProcessInstance() end) or false }) do
     local full = valid(inst) and try(function() return inst:GetClass():GetFullName() end)
     local path = full and full:match("^%S+%s+(.+)$")
     if path then paths[#paths + 1] = path .. ":BlueprintUpdateAnimation" end

@@ -141,7 +141,7 @@ mod_of() { awk -v p="$1" '$2 == p { m = $1 } END { if (m) print m }' "$SRC/mods.
 # in it) only changes with the game, the other mods, the mappings, the tools or the outfits job, so it is kept
 # between builds under that key; only the patched side is rebuilt.
 KEY=$( { stat -L -c '%n %s %Y' "$SRC"/*.utoc "$SRC"/*.ucas; cat "$SRC/mods.txt"; md5sum "$SB_USMAP" "$ROOT/assetkit/sbtool/Program.cs" \
-  "$ROOT/assetkit/meshtool/Program.cs"; echo "$RETOC_REV $UASSETAPI_REV"
+  "$ROOT/assetkit/meshtool/Program.cs" "$ROOT/assetkit/outfits.py" "$ROOT"/assetkit/patches/retoc-*.patch; echo "$RETOC_REV $UASSETAPI_REV"
   python3 -c 'import json,sys; j=json.load(open(sys.argv[1])).get("outfits", {}); print({k: j.get(k) for k in ("enabled", "table", "skeleton", "only", "skip")})' "$SPEC"
 } | md5sum | cut -d' ' -f1)
 if [[ $(cat "$W/vanilla.key" 2>/dev/null) != "$KEY" ]]; then

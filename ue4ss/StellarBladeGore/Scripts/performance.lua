@@ -19,7 +19,7 @@ end
 -- misses, a GC pass has run (a find is a hash lookup, the freed object is never read). Each frame hitch says whether
 -- one ran in its frame, and the minute's line how many ran and how many hitches had one: half-second game-thread
 -- stalls with no disk or memory pressure were seen in vanilla too, and GC is the suspect (gc = { path, n, runs, hit })
-screen.gc = { n = 0, runs = 0, hit = 0 }
+screen.gc = { n = 0, runs = 0, hit = 0, tuned = false }
 screen.GC_S = 0.25
 function screen.gc_ran(now_too)
   local g = screen.gc
@@ -69,21 +69,30 @@ screen.GC_CVARS = { "s.ForceGCAfterLevelStreamedOut", "s.ContinuouslyIncremental
 function screen.gc_tune()
   local want = get_tune().fewerGC == true
   local g = screen.gc
-  if (g.tuned or false) == want then return end
+  if g.tuned ~= nil and g.tuned == want then return end
   local pawn = get_pawn()
   local ksl = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
   if not (valid(pawn) and valid(ksl)) then return end
   g.was = g.was or {}
-  local out = {}
+  local out, complete = {}, true
   for _, cv in ipairs(screen.GC_CVARS) do
     local cur = try(function() return ksl:GetConsoleVariableIntValue(cv) end)
-    if want and g.was[cv] == nil then g.was[cv] = cur or 1 end
-    local to = want and 0 or (g.was[cv] or 1)
-    local ok = screen.console(pawn, string.format("%s %d", cv, to))
-    local now = try(function() return ksl:GetConsoleVariableIntValue(cv) end)
-    out[#out + 1] = string.format("%s %s -> %s%s", cv, tostring(cur), tostring(now), ok and "" or " (not run)")
+    -- Never overwrite an unknown original: it could not be restored safely.
+    if want and g.was[cv] == nil and cur ~= nil then g.was[cv] = cur end
+    local to = want and (g.was[cv] ~= nil and 0 or nil) or g.was[cv]
+    if to ~= nil then
+      local ok = screen.console(pawn, string.format("%s %d", cv, to))
+      local now = try(function() return ksl:GetConsoleVariableIntValue(cv) end)
+      if not ok or now ~= to then complete = false
+      elseif not want then g.was[cv] = nil end
+      out[#out + 1] = string.format("%s %s -> %s%s", cv, tostring(cur), tostring(now), ok and "" or " (not run)")
+    elseif want then
+      complete = false
+      out[#out + 1] = cv .. " original unavailable (unchanged)"
+    end
   end
-  g.tuned = want
+  -- Partial writes must be retried, including after the option is switched off.
+  if complete then g.tuned = want else g.tuned = nil end
   log(string.format("garbage collection: %s: %s", want and "fewer passes" or "the game's own passes", table.concat(out, ", ")))
 end
 function screen.perf_flush()

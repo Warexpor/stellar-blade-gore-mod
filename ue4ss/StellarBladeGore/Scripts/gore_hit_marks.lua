@@ -100,10 +100,12 @@ function M.hit_mark(pawn, mesh, at, dir, pre)
   -- decals skip a material whose MaterialDecalResponse is None, 0)
   local sk = try(function() return mesh.SkeletalMesh end)
   local ska = valid(sk) and try(function() return sk:GetAddress() end)
+  -- This flag belongs to the component, not the skeletal asset. A replacement
+  -- mesh can use an already-logged asset while still having decals disabled.
+  local rd = try(function() return mesh.bReceivesDecals end)
+  if rd == false then try(function() mesh:SetReceivesDecals(true) end) end
   if ska and not M.decal_seen[ska] then
     M.decal_seen[ska] = true
-    local rd = try(function() return mesh.bReceivesDecals end)
-    if rd == false then try(function() mesh:SetReceivesDecals(true) end) end
     local ms = {}
     for i = 0, (try(function() return mesh:GetNumMaterials() end) or 0) - 1 do
       local m = try(function() return mesh:GetMaterial(i) end)

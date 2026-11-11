@@ -39,4 +39,30 @@ tune.fewerGC = false
 screen.gc_tune()
 check(cvs["s.ForceGCAfterLevelStreamedOut"] == 2 and cvs["s.ContinuouslyIncrementalGCWhileLevelsPendingPurge"] == 1,
   "disabling fewer GC restores each original engine option")
+-- A missing original must not be replaced with a guessed value. A failed write must
+-- remain recoverable even when the player switches the option off before a retry.
+local originalRead, originalConsole = ksl.GetConsoleVariableIntValue, screen.console
+local missing = "s.ForceGCAfterLevelStreamedOut"
+ksl.GetConsoleVariableIntValue = function(self, key) if key == missing then error("unavailable") end; return originalRead(self, key) end
+tune.fewerGC = true
+screen.gc_tune()
+check(cvs[missing] == 2 and screen.gc.tuned == nil, "unknown original is left untouched and remains retryable")
+ksl.GetConsoleVariableIntValue = originalRead
+screen.console = function(p, command) if command:find(missing, 1, true) then return false end; return originalConsole(p, command) end
+screen.gc_tune()
+check(cvs[missing] == 2 and screen.gc.tuned == nil, "failed application remains retryable")
+screen.console = originalConsole
+tune.fewerGC = false
+screen.gc_tune()
+check(cvs[missing] == 2 and cvs["s.ContinuouslyIncrementalGCWhileLevelsPendingPurge"] == 1,
+  "turning off after partial application restores known originals")
+tune.fewerGC = true
+screen.gc_tune()
+screen.console = function(p, command) if command:find(missing, 1, true) then return false end; return originalConsole(p, command) end
+tune.fewerGC = false
+screen.gc_tune()
+check(cvs[missing] == 0 and screen.gc.tuned == nil, "failed restoration keeps the original for retry")
+screen.console = originalConsole
+screen.gc_tune()
+check(cvs[missing] == 2 and screen.gc.tuned == false, "later restoration retries and succeeds")
 print(fails == 0 and "PASS" or "FAIL")

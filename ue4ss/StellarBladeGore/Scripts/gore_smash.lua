@@ -7,6 +7,24 @@ local load_obj, set_cap_material, mark, pick, track = d.load_obj, d.set_cap_mate
 local function try(...) local f = d.guards(); return f(...) end
 local function valid(...) local _, f = d.guards(); return f(...) end
 local function v3(...) return d.v3()(...) end
+-- Strict liveness for the post-smash spawn window (chunks, bursts, splats run ticks after the cut): valid()
+-- is IsValid via pcall, which can't catch a freed-object access violation and can read true on a reused
+-- address (0.3.0, 0.7.2). The GUObjectArray check never touches the object. True only when definitely
+-- gone; anything unknown (no native, odd guard) reads as alive, so healthy sessions behave as before.
+local function targetGone(pawn, mesh)
+  local cx = d.ctx and d.ctx() or nil
+  if not (cx and cx.keep and cx.alive) then return false end
+  for _, o in ipairs({ pawn, mesh }) do
+    if o ~= nil then
+      local okK, k = pcall(cx.keep, o)
+      if okK and k and k.addr and k.t then
+        local okA, r = pcall(cx.alive, k)
+        if okA and r == false then return true end
+      end
+    end
+  end
+  return false
+end
 -- h: the killing blow (main.lua's death_hit: loc, push/dir). True when the smash started; false, "later" for her body
 -- at the lethal hit (it needs her ragdoll: smashed at the death instead)
 function M.smash(pawn, mesh, h, why)
@@ -138,9 +156,10 @@ function M.smashed.back()
   return n
 end
 -- One scaled burst per part: its spatial size follows remaining flesh, including prior missing children.
-function M.smashed.blood(pawn, at, profile)
+function M.smashed.blood(pawn, at, profile, mesh)
   local s = cfg().smash or {}
   if cfg().noBursts == true then return end
+  if targetGone(pawn, mesh) then log("smash: blood burst skipped, target gone"); return end
   local amount = (profile.blood or 0) * M.smashed.number(s.burstScale, 1, 0, 2)
   if amount <= 0 then return end
   local size = math.min(0.825, 0.825 * math.sqrt(amount / 36))
@@ -308,6 +327,10 @@ function M.smashed.out(q)
   mark("smash setup")
   local function batch()
     if not valid(pawn) then return end
+    if targetGone(pawn, mesh) then
+      log(string.format("smash chunks: %s gone, dropping %d", q.bone, left))
+      return
+    end
     -- Start with the first available mesh; add more varieties as they load, one lookup per tick.
     -- Waiting for all of them left a visible gap between the smash and its first meat pieces.
     if meshNext <= #meshPaths then
@@ -388,7 +411,7 @@ function M.smashed.out(q)
   if cfg().blood ~= false then
     if s.burst ~= false then
       d.later()[#d.later() + 1] = { n = 1, label = "smash blood burst", fn = function()
-        if valid(pawn) and cfg().blood ~= false then M.smashed.blood(pawn, at, profile) end
+        if valid(pawn) and cfg().blood ~= false then M.smashed.blood(pawn, at, profile, mesh) end
       end }
       if q.fullSmash then
         d.later()[#d.later() + 1] = { n = 3, label = "smash hit blood", fn = function()
@@ -412,14 +435,14 @@ function M.smashed.out(q)
     end
     mark("smash burst queued")
     d.later()[#d.later() + 1] = { n = 4, label = "smash hit blood", fn = function()
-      if not valid(pawn) or cfg().blood == false then return end
+      if not valid(pawn) or cfg().blood == false or targetGone(pawn, mesh) then return end
       if s.splash == true then niagara(s.fx or M.SMASH_FX, pawn, nil, at, false, nil, nil, true) end
       local hitScale = math.min(0.825, 0.825 * math.sqrt(math.max(0, profile.blood or 0) / 36))
       if hitScale > 0 then niagara(FX.hit, pawn, nil, at, false, nil, vec(hitScale, hitScale, hitScale), true) end
     end }
   end
   if cfg().blood ~= false and not q.fullSmash then
-    d.later()[#d.later() + 1] = { n = 5, label = "smash splat", fn = function() if valid(pawn) and cfg().blood ~= false then M.splat(pawn, at) end end }
+    d.later()[#d.later() + 1] = { n = 5, label = "smash splat", fn = function() if valid(pawn) and cfg().blood ~= false and not targetGone(pawn, mesh) then M.splat(pawn, at) end end }
   end
   log(string.format("smash: %s gone (%d bones hidden, %d parts riding it hidden)", q.bone, nb, nv))
 end

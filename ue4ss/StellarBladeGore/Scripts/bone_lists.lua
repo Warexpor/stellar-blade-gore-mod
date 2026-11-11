@@ -50,6 +50,9 @@ local nosink_cache = {}
 local function nosink_list(comp)
   local sm = try(function() return comp.SkeletalMesh end)
   local key = valid(sm) and addr(sm)
+  -- An enemy without a separate face may use Ab_ helpers as sinks. The same
+  -- mesh asset can also be used by the player or a faced character.
+  if key then key = tostring(key) .. ((enemy.cur and not enemy.faced[enemy.cur]) and "/unfaced" or "/faced") end
   if key and nosink_cache[key] then return nosink_cache[key] end
   local t = M.bone_tree(comp)
   local n = t and t.n or 0
@@ -114,15 +117,21 @@ end
 -- with the cut one's matrix. Nor a bone with a physics body of its own: it swings on its own constraint in a ragdoll
 -- (a calf's stub went on Ab-L-Hip, the hip's jiggle body, and would have bounced with it)
 local nocarry_cache = {}
+local function physics_key(comp)
+  local sm = try(function() return comp.SkeletalMesh end)
+  local pa = get_ctx().physics_of and try(function() return get_ctx().physics_of(comp) end)
+  local sk = valid(sm) and addr(sm)
+  local pk = valid(pa) and addr(pa)
+  return sk and pk and (tostring(sk) .. "/" .. tostring(pk)) or nil, pa
+end
 -- her bones with a physics body (by index; sent after fffe in "n": a cut's sinks ride the body its stump rides, and a
 -- limb's seam closes in the opening's middle). An enemy's too: without them its seams closed on helpers 40-50 cm off
 -- the cut, sheets of skin out of every opening (playtest: stretched faces on enemies)
 local function bodies_of(comp)
-  local sm = try(function() return comp.SkeletalMesh end)
-  local key = valid(sm) and (addr(sm) .. "b")
+  local base, pa = physics_key(comp)
+  local key = base and (base .. "b")
   if key and nocarry_cache[key] then return nocarry_cache[key] end
   local out = {}
-  local pa = get_ctx().physics_of and try(function() return get_ctx().physics_of(comp) end)
   if valid(pa) then
     try(function() pa.SkeletalBodySetups:ForEach(function(_, e)
       local bs = e:get()
@@ -135,8 +144,8 @@ local function bodies_of(comp)
   return out
 end
 local function nocarry_list(comp)
-  local sm = try(function() return comp.SkeletalMesh end)
-  local key = valid(sm) and (addr(sm) .. (enemy.cur and "e" or ""))
+  local base = physics_key(comp)
+  local key = base and (base .. (enemy.cur and "e" or "h"))
   if key and nocarry_cache[key] then return nocarry_cache[key] end
   local t = not enemy.cur and M.bone_tree(comp)
   local n = try(function() return comp:GetNumBones() end) or 0
@@ -225,6 +234,6 @@ end
 return {
   roots = LIMB_ROOTS, nosink = nosink_list, limbs = limbs_list, root = limb_root,
   bodies = bodies_of, nocarry = nocarry_list,
-  clear = function() nosink_cache, nocarry_cache, limbs_cache = {}, {}, {} end,
+  clear = function() nosink_cache, nocarry_cache, limbs_cache, M.trees = {}, {}, {}, {} end,
 }
 end

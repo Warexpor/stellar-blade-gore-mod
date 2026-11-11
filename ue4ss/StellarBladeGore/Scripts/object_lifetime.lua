@@ -21,6 +21,14 @@ function goreCtx.keep(o)
 end
 -- one "G" for the listed held objects; nil when sbslice isn't up
 function goreCtx.alive_ask(list)
+  -- The native G command accepts at most 64 objects. Some callers pass entire
+  -- attachment lists, which can exceed that limit on heavily modded outfits.
+  if #list > 64 then
+    for i = 1, #list, 64 do
+      if not goreCtx.alive_ask({ table.unpack(list, i, math.min(i + 63, #list)) }) then return nil end
+    end
+    return true
+  end
   local g = goreCtx.gore
   if not (g and g.native_ready and g.native_ready()) then return nil end
   local f = {}
@@ -75,8 +83,11 @@ function goreCtx.alive(k, single)
   end
   if not k.listed then k.listed = true; keep[#keep + 1] = k end
   goreCtx.heldList = keep
-  for i = 1, #keep, 64 do
-    local part = { table.unpack(keep, i, math.min(i + 63, #keep)) }
+  -- Another guard or the character walk may already have checked some entries this frame.
+  local unchecked = {}
+  for _, x in ipairs(keep) do if x.frame ~= goreCtx.frame then unchecked[#unchecked + 1] = x end end
+  for i = 1, #unchecked, 64 do
+    local part = { table.unpack(unchecked, i, math.min(i + 63, #unchecked)) }
     if not goreCtx.alive_ask(part) then return nil end
   end
   for _, x in ipairs(keep) do if x.frame == goreCtx.frame and not x.alive then x.dead = true end end
@@ -113,8 +124,10 @@ function goreCtx.held(k, single)
   end
   if not k.listed then k.listed = true; keep[#keep + 1] = k end
   goreCtx.heldList = keep
-  for i = 1, #keep, 64 do
-    local part = { table.unpack(keep, i, math.min(i + 63, #keep)) }
+  local unchecked = {}
+  for _, x in ipairs(keep) do if x.frame ~= goreCtx.frame then unchecked[#unchecked + 1] = x end end
+  for i = 1, #unchecked, 64 do
+    local part = { table.unpack(unchecked, i, math.min(i + 63, #unchecked)) }
     if not goreCtx.alive_ask(part) then return false end
   end
   for _, x in ipairs(keep) do if x.frame == goreCtx.frame and not x.alive then x.dead = true end end
