@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.5"
+local VERSION = "0.7.6"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -777,6 +777,7 @@ local function on_start(pawn, mesh)
   screen.cloth_give_back()
   log("ragdoll state at start: " .. ragdoll_state(pawn))
   screen.reset()
+  screen.clear_camp_rest()
   phase("screen")
   -- her voice for any death: a cry as she dies, nothing after (gore.lua, tune.gore.voice)
   if gore then try(function() gore.voice_death(pawn, mesh) end) end
@@ -1492,6 +1493,7 @@ local function live_chars()
   return out
 end
 goreCtx.live_chars = live_chars
+function goreCtx.grab_character(ad) return chars[ad] end
 -- a live_chars entry's actor location, else nil: read at most once a poll however many watches ask (her watches, the
 -- enemies' part and the poll each run on a frame of their own, and each read every character again). One past
 -- CHAR_FAR cm from her is read again only once it could have come within that, at CHAR_RUN cm/s, her own way since
@@ -1610,7 +1612,8 @@ end
 -- she lives: its weapon bones (by name, else its hands) are sampled every tick for the last swingWindow seconds. At
 -- death the fastest stretch of the fastest bone is the swing, and the plane it sweeps (the arc through three samples,
 -- else the swing and the enemy's forward) is the blade's.
-local SWING_NAMES = { "weapon", "blade", "sword", "knife", "claw", "axe", "spear", "lance", "scythe", "wp", "hand" }
+local SWING_NAMES = { "weapon", "blade", "sword", "knife", "claw", "axe", "spear", "lance", "scythe", "wp",
+  "hand", "fist", "foot", "toe", "knee", "elbow" }
 -- (several are followed, the nearest swingFollow, each with its own trail: following only the nearest, its trail
 -- started over each time another came nearer, and among a pack of them the killing swing went unseen, playtest)
 function sw.state() return { addr = nil, actor = nil, mesh = nil, bones = nil, who = nil, hist = {} } end
@@ -1712,7 +1715,8 @@ function sw.explosion_hit(pawn, mesh)
   log("death: explosion death show on Eve, blunt smash at " .. v3(at))
   return { t = os.clock(), loc = at, push = push, dir = push, blast = true, src = "explosion death show" }
 end
-local function death_hit(pawn, mesh)
+-- The lethal watch already checked projectile evidence and sampled the swing. False means it found no swing.
+local function death_hit(pawn, mesh, sampledSwing)
   local g = tune.gore or {}
   -- her pose noted with the swing sample nearest time t (within 0.1 s), and how long ago that was
   local function pose_at(t)
@@ -1722,7 +1726,8 @@ local function death_hit(pawn, mesh)
     end
     if best and math.abs(best.t - t) < 0.1 then return best.pose, os.clock() - best.t end
   end
-  local projectile = sw.explosion_hit(pawn, mesh) or sw.rock_blow(mesh) or sw.projectile_hit() or sw.death_projectile(mesh)
+  local projectile = sampledSwing == nil and
+    (sw.explosion_hit(pawn, mesh) or sw.rock_blow(mesh) or sw.projectile_hit() or sw.death_projectile(mesh))
   if projectile then return projectile end
   local h = last_hit(g.hitWindow or 0.6)
   if h and h.dir and h.fwd then
@@ -1733,7 +1738,7 @@ local function death_hit(pawn, mesh)
   local m = meshHit and os.clock() - meshHit.t <= (g.meshHitWindow or 1.0) and meshHit or nil
   local a = attacker(pawn, mesh)
   local push = (m and m.push) or (a and a.push)
-  local ws = weapon_swing(mesh)
+  local ws = sampledSwing == nil and weapon_swing(mesh) or sampledSwing
   if ws then
     -- where the swept plane crosses her: the mesh's hit, else the part of her nearest it and the weapon
     local loc, bone, off = m and m.loc, m and m.bone, nil
@@ -1822,7 +1827,7 @@ local function death_hit(pawn, mesh)
   if m then pose, pose_ago = pose_at(m.t) end
   return { t = os.clock(), loc = loc, dir = dir, fwd = fwd, push = push, attack_dir = 0, src = from, made = true,
     stomp = above and true or nil, group = h and h.group, show = h and h.show, bone = bone,
-    attacker = a and a.name, attackerClass = a and a.cls, pose = pose, pose_ago = pose_ago }
+    attacker = a and a.name, attackerClass = a and a.cls, pose = pose, pose_ago = pose_ago, impact = m and m.loc and m.push ~= nil }
 end
 
 -- Attack classification reads the current settings, tracked swing and gore module.
@@ -2169,7 +2174,7 @@ function hm.lethal_watch(pawn, mesh)
     if lt.grab then
       local most = ((tune.enemies or {}).grab or {}).most or 6
       local long = os.clock() - lt.grab.t0 >= most
-      if not long and en and en.grab_holds(lt.grab) then return end
+      if not long and en and en.grab_holds(lt.grab, pawn, mesh) then return end
       log(string.format("lethal hit: %s's grab over after %.1f s (%s): her death now", lt.grab.cls,
         os.clock() - lt.grab.t0, long and string.format("waited the most, %s s", most) or lt.grab.mont and "its montage ended" or "it let go of her"))
       lt.grab, lt.t = nil, os.clock() - 0.15
@@ -2182,21 +2187,22 @@ function hm.lethal_watch(pawn, mesh)
     -- Alive at 1 HP the watch goes on: a death later on the same bar is still found)
     local mm = try(function() return pawn.CharacterMovement.MovementMode end)
     local swim = mm == 4
-    local proof = mm == 0 and "her movement off" or hm.dead_proof(lt.t)
+    local mn = hm.montage(mesh)
+    local hazard = mn and (mn:find("P_Eve_Dead_Laser", 1, true) or mn:find("P_Eve_Dead_Falling", 1, true))
+    local proof = hazard and mn or mm == 0 and "her movement off" or hm.dead_proof(lt.t)
     if not proof then
       if not lt.alive and hm.landAny and math.abs(lt.t - hm.landAny.t) < 1.5 then
         lt.alive = true
         log(string.format("lethal hit: her HP bar at 0 as she landed from a %.0f cm drop, her movement on (mode %s), "
           .. "the death screen not playing: alive at 1 HP so far, watched on", hm.landAny.drop, tostring(mm)))
       end
-    elseif death_screen() then
+    elseif hazard or death_screen() then
       lt.missed = true
       local now = os.clock()
       local land = hm.landAny and (math.abs(lt.t - hm.landAny.t) < 1.5 or now - hm.landAny.t < 1.5) and hm.landAny
       local dm = hm.deadMsg and now - hm.deadMsg.t < 3 and hm.deadMsg
-      local fall = land or (dm and hm.FALL_FX[dm.effect or -1])
+      local fall = land or (dm and hm.FALL_FX[dm.effect or -1]) or (hazard and mn:find("Dead_Falling", 1, true))
       local a = tune.active or {}
-      local mn = hm.montage(mesh)
       local what = string.format("%s, %s, playing %s", land and string.format("%.0f cm drop %.1f s before", land.drop,
         now - land.t) or "no drop", dm and hm.dead_what(dm) or "no death broadcast", mn or "no montage")
       -- any other death without a ragdoll is taken over too (0.5.0 report: enemy attacks went straight to the death
@@ -2204,13 +2210,14 @@ function hm.lethal_watch(pawn, mesh)
       -- (still falling, no landing: the level's kill volumes, Custom4's Dead_Empty, warp her back to safe ground)
       -- A lethal physical hit while airborne is not evidence of a kill volume. Keep the game's
       -- named scripted deaths, but let the normal no-show fallback handle a confirmed hit.
-      local scripted = mn and hm.scripted(mn) or not fall and mm == 3 and not lt.airHit and "falling, a kill volume" or nil
+      local scripted = mn and hm.scripted(mn)
+        or not hazard and not fall and mm == 3 and not lt.airHit and "falling, a kill volume" or nil
       local takes = a.enabled ~= false and not swim and not scripted
         and (not fall or a.fallRagdoll ~= false)
       if takes then
         hm.take = { why = string.format("%s: %s", fall and "fall damage" or "no ragdoll from its show", what), t = now,
           fall = fall and true or nil }
-        log(string.format("death: the death screen up %.2f s after her HP bar hit 0 (%s) and no ragdoll (%s): the "
+        log(string.format("death: confirmed %.2f s after her HP bar hit 0 (%s) and no ragdoll (%s): the "
           .. "mod's own ragdoll instead", now - lt.t, proof, what))
       else
         log(string.format("death NOT seen: the death screen is up %.1f s after her HP bar hit 0 (%s) and she never "
@@ -2235,17 +2242,19 @@ function hm.lethal_watch(pawn, mesh)
   if ws and ws.part and ws.pose and ws.pose[ws.part] then at = ws.pose[ws.part].t or at end
   hm.lethal.at = at
   -- (the blow seen: a blunt one crunches, a blade slices)
-  local h = sw.explosion_hit(pawn, mesh) or sw.rock_blow(mesh) or sw.projectile_hit() or sw.death_projectile(mesh) or (ws and death_hit(pawn, mesh))
+  local h = sw.explosion_hit(pawn, mesh) or sw.rock_blow(mesh) or sw.projectile_hit() or sw.death_projectile(mesh)
+    or ((ws or (m and ((g.smash or {}).enabled == true or g.bluntRagdoll == true))) and death_hit(pawn, mesh, ws or false))
   if h and h.blast then hm.lethal.blast = h; at = h.loc; hm.lethal.at = at end
   if h and h.projectile then hm.lethal.projectile = h; at = h.loc; hm.lethal.at = at end
-  local blunt = h and not h.made and sw.blunt_of(h)
+  local blunt = h and (not h.made or h.impact) and sw.blunt_of(h)
   if at then gore.wound(pawn, mesh, at, blunt and "crunch" or nil) end
   log(string.format("lethal hit: her HP bar at 0, the wound %s", at and ("at " .. v3(at) .. (ws and ws.part and (" (" .. ws.part .. ")") or "")) or "nowhere (no blade seen)"))
   -- (what the enemies near her play: a grab's montage named in the log)
-  local gb = en and en.grab_now and en.grab_now()
+  local gb = en and ((en.grab_attached and en.grab_attached(pawn)) or (en.grab_now and en.grab_now()))
   if en and en.near_montages then log("lethal hit: near her: " .. tostring(select(2, pcall(en.near_montages, pawn)))) end
   if gb then
-    hm.lethal.grab = { obj = gb.obj, mont = gb.mont, cls = gb.cls, t0 = os.clock() }
+    hm.lethal.grab = gb
+    gb.t0 = os.clock()
     hm.lethal.wasGrab = true
     -- (no montage: the grab lasts while its hand stays on her, enemies.grab_holds). The cut comes now as below, a
     -- limb falling off her while it holds her; her head, body and ragdoll and a split wait for it to let go
@@ -2253,7 +2262,7 @@ function hm.lethal_watch(pawn, mesh)
       gb.cls, gb.mn, gb.how, gb.last - gb.since))
   end
   -- gore.bluntRagdoll: a blunt killing blow cuts nothing, the death is a plain ragdoll (gore_cut)
-  if g.bluntRagdoll == true and h and not h.made then
+  if g.bluntRagdoll == true and h and (not h.made or h.impact) then
     local b, how = sw.blunt_of(h, true)
     if b then
       log("lethal hit: the blow is blunt (" .. how .. "): no cut, a plain ragdoll (bluntRagdoll)")
@@ -2268,12 +2277,13 @@ function hm.lethal_watch(pawn, mesh)
   hm.lethal.near = gore.near_odds(mesh, h, at)
   hm.lethal.roll = hm.death_roll(ws ~= nil, hm.lethal.near)
   -- a blunt blow seen smashes the part it landed on instead, whatever the roll (blunt_of)
-  if h and not h.made then
+  if h and (not h.made or h.impact) then
     h.early = true
+    h.grab = hm.lethal.grab and true or nil
     if h.push or h.dir then gore.aim(h.push or h.dir) end
     local done, later = sw.smash_kill(pawn, mesh, h, "death")
+    h.early, h.grab = nil, nil
     -- (her body waits for her death and its ragdoll, smashed there)
-    hm.lethal.judged = later ~= "later"
     if done then hm.lethal.cut, hm.lethal.h = true, h; return end
     if later == "later" then hm.grab_keep(h, true); return end
   end
@@ -2298,7 +2308,7 @@ function hm.lethal_watch(pawn, mesh)
   end
   if hm.lethal.kind then return end -- the grab's rolled result is already chosen, not a later guessed blade
   if hm.lethal.roll ~= "blade" then return end
-  h = h or death_hit(pawn, mesh)
+  h = h or death_hit(pawn, mesh, ws or false)
   if not (h and not h.made and (h.n or (h.dir and h.fwd))) then return end
   h.early = true
   -- (in a grab her head and body cuts wait too, as a split does: the finisher still poses her neck and waist)
@@ -2306,7 +2316,7 @@ function hm.lethal_watch(pawn, mesh)
   local fly = h.push or h.dir
   if fly then gore.aim(fly) end
   local ok, err = pcall(gore.blow, pawn, mesh, h, "death")
-  h.grab = nil
+  h.early, h.grab = nil, nil
   if ok and err then hm.lethal.cut, hm.lethal.h = true, h
   elseif ok then hm.grab_keep(h)
   else log("lethal hit: early cut failed: " .. tostring(err)) end
@@ -2333,7 +2343,7 @@ function hm.grab_pound(pawn, mesh)
   -- Once HP reaches zero grab tracking stops refreshing, but a held finisher can
   -- still land later pounds before the ragdoll starts. Never replay the lethal hit.
   local lt = hm.lethal
-  local grab = lt and lt.grab and en and en.grab_holds and en.grab_holds(lt.grab) and lt.grab
+  local grab = lt and lt.grab and en and en.grab_holds and en.grab_holds(lt.grab, pawn, mesh) and lt.grab
     or not lt and en and en.grab_now and en.grab_now()
   if not grab then return end
   local m = meshHit and os.clock() - meshHit.t <= 0.5 and meshHit or nil
@@ -2476,10 +2486,31 @@ goreCtx.mesh_hit = function() return meshHit end
 -- within the last seconds. Grab deaths skip the animated fall and the legs-on fall path, so
 -- the finisher's posing can't pull a separated half back onto her.
 goreCtx.grabDeath = function()
+  if hm.grabReleasedAt and os.clock() - hm.grabReleasedAt < 10 then return true end
   if hm.lethal and hm.lethal.wasGrab and os.clock() - hm.lethal.t < 10 then return true end
   local en = goreCtx.enemies
   local ok, grab = pcall(function() return en and en.grab_now and en.grab_now() end)
   if ok and grab then return true end
+  return false
+end
+-- The game's ragdoll key can fire before a finisher releases Eve. Delay our setup and cuts until the grab is over.
+function hm.wait_grab(pawn, mesh)
+  local en = goreCtx.enemies
+  if not (en and en.grab_holds) then return false end
+  local wait = hm.simGrab
+  if not wait then
+    local lethalGrab = hm.lethal and hm.lethal.grab
+    local attached = en.grab_attached and en.grab_attached(pawn)
+    local grab = attached or lethalGrab or (en.grab_now and en.grab_now())
+    if not grab then return false end
+    local started = lethalGrab and lethalGrab.addr == grab.addr and lethalGrab.t0
+    wait = { grab = grab, since = started or grab.t0 or os.clock() }
+    hm.simGrab = wait
+  end
+  local now = os.clock()
+  local most = ((tune.enemies or {}).grab or {}).most or 6
+  if now - wait.since < most and en.grab_holds(wait.grab, pawn, mesh) then return true end
+  hm.simGrab, hm.grabReleasedAt = nil, now
   return false
 end
 
@@ -2708,7 +2739,7 @@ local function gore_cut(pawn, mesh, h, hit)
   if g.bluntRagdoll == true then
     local lb = hm.lethal and os.clock() - hm.lethal.t < 5 and hm.lethal.blunt
     local b, how = lb, "judged at the lethal hit"
-    if not lb and h and (not h.made or h.stomp) then b, how = sw.blunt_of(h, true) end
+    if not lb and h and (not h.made or h.impact or h.stomp) then b, how = sw.blunt_of(h, true) end
     if b then
       log("death: the blow is blunt (" .. how .. "): no cut, a plain ragdoll (bluntRagdoll)")
       ah.blunt = true
@@ -3345,7 +3376,7 @@ hm.CARRY_HP, hm.CARRY_FULL_S = 0.02, 60
 function hm.carry_note(pawn, mesh)
   -- (not while a carry is under way: the new level's HP bar reads full till the game sets it, and that full bar was
   -- taken for hers, sim)
-  if not gore or hm.regrow or hm.ghost or hm.carry then return end
+  if not gore or hm.restHeal or hm.regrow or hm.ghost or hm.carry or hm.lethal then return end
   local parts = gore.cut_parts(mesh)
   if #parts == 0 then hm.carryParts = nil; return end
   hm.carryParts = parts
@@ -3409,6 +3440,7 @@ end
 function hm.alive_watch(pawn, mesh)
   -- (each part marked: a 417 ms tick logged as "swing" was none of track_swing's, which logs its own over slowMs)
   if gore and gore.decals_back then gore.decals_back("she plays") end
+  hm.simGrab, hm.grabReleasedAt = nil, nil
   hm.carry_tick(pawn, mesh)
   hm.carry_note(pawn, mesh)
   tp.mark("carry")
@@ -3436,10 +3468,10 @@ function hm.alive_watch(pawn, mesh)
   hm.grab_pound(pawn, mesh)
   hm.juggernaut.tick(pawn, mesh)
   tp.mark("grab pound")
-  hm.low_arm(pawn, mesh)
-  tp.mark("low HP arm")
   hm.rest_watch(pawn, mesh)
   tp.mark("regrow")
+  hm.low_arm(pawn, mesh)
+  tp.mark("low HP arm")
   hm.piece_watch(pawn, mesh)
   tp.mark("piece")
   hm.yaw, hm.yawT = try(function() return pawn:K2_GetActorRotation().Yaw end), os.clock()
@@ -3495,7 +3527,7 @@ local function tick()
   local sim = simulating()
 
   tp.mark("find")
-  try(function() screen.probe(pawn) end)
+  try(function() screen.probe(pawn, sim and not active and hm.simGrab ~= nil) end)
   tp.mark("death screen")
   if goreCtx.tables then goreCtx.tables.tick() end
   -- (marked on their own: three unmarked calls sat in the next segment, hiding a 600 ms tick's cost)
@@ -3505,7 +3537,7 @@ local function tick()
   screen.held.tick()
   tp.mark("held")
   -- (the enemies' part runs half a poll later, on a frame of its own: game_tick)
-  if goreCtx.enemies then screen.enemiesDue = { pawn = pawn, mesh = mesh } end
+  if goreCtx.enemies then screen.enemiesDue = true end
   if gore then
     gore.tick(pawn, tp.mark)
     tp.mark("gore")
@@ -3564,7 +3596,7 @@ local function tick()
   if active then hm.swap_watch(pawn, mesh, true) end
   if not sim and not active then
     -- (her watches while she plays run a third of a poll later, on a frame of their own: game_tick)
-    screen.aliveDue = { pawn = pawn, mesh = mesh }
+    screen.aliveDue = true
   elseif active and ((tune.gore or {}).afterHits or {}).enabled ~= false and (tune.gore or {}).enabled ~= false
     and os.clock() >= (screen.photoAfter or 0) then
     track_swing(pawn, mesh)
@@ -3641,6 +3673,14 @@ local function tick()
       log(string.format("F6: struggle test: %d of %d cuts started", n, #t.bones))
     end
   elseif sim and not active then
+    local wasWaiting = hm.simGrab ~= nil
+    if hm.wait_grab(pawn, mesh) then
+      if not wasWaiting then
+        screen.reset()
+        try(function() screen.revive(0, true) end)
+      end
+      return
+    end
     after = -1
     saved = {}
     on_start(pawn, mesh)
@@ -3655,6 +3695,7 @@ local function tick()
       saved.manual, forceFall = true, "own"
       log(string.format("Test: Animated Death: %s's ragdoll key %.1f s in, no cut", test.what, os.clock() - test.t))
     end
+    if not test then try(function() screen.revive(0) end) end
     tp.mark("death start")
     -- slow motion highlights the damage from here; the test ragdolls sit out (slow_start checks)
     slow_start(pawn)
@@ -3866,7 +3907,12 @@ end
 -- pawn: the new Eve
 local function forget_world(pawn)
   -- (her alive cuts go on into the new level: a death's reload takes none)
-  hm.carry_take(active)
+  hm.carry_take(active or hm.restHeal ~= nil)
+  hm.rest_clear()
+  hm.lowLast, hm.lowPend = nil, nil
+  hm.lethal, hm.armed, hm.take, hm.barLast, hm.barT = nil, false, nil, nil, nil
+  hm.simGrab, hm.grabReleasedAt = nil, nil
+  hm.land, hm.landAny, hm.airTop, hm.airT = nil, nil, nil, nil
   active, polls, after, respawned, lastRecover = false, 0, -1, false, -100
   saved, hits, pending, animDeath = {}, {}, {}, nil
   rel.loc, rel.rot = nil, nil
@@ -3887,9 +3933,7 @@ local function forget_world(pawn)
   screen.allow_photo(false, "level reloaded")
   screen.photoOn, screen.frozenMesh, screen.frozenHair, screen.watchFreeze, screen.photoW = false, nil, nil, false, nil
   screen.clock, screen.stopped, screen.uvClean = nil, nil, nil
-  -- her watches and the enemies' part, queued by the old one's last poll for a frame after it with her pawn and
-  -- mesh: run on the new one's first tick, asking the freed old pawn crashed the game (quit to the main menu with her
-  -- alive, playtest; a death's reload had none queued). And F7's push, and the dev watch, held the old pawn too
+  -- Queued watch phases belong to the old pawn's last poll. The dev watch and F7 push also belong to that pawn.
   screen.aliveDue, screen.enemiesDue, screen.watch, f7_push = nil, nil, nil, nil
   -- a held death (Shift+F4) or a hidden HUD went with the old level: none carried into the new one
   screen.frozen, screen.hudHid, screen.hudMaster, screen.hpBack, screen.photoTook = false, nil, nil, 0, nil
@@ -3897,7 +3941,8 @@ local function forget_world(pawn)
   screen.unhide, screen.unhideSig = nil, nil
   -- A reload can destroy the old UI before the new pawn ticks. Drop every transient revive-screen reference
   -- without reading it: the normal inactive-screen path would otherwise touch held/ghost widgets from the old world.
-  screen.introLook, screen.fade, screen.rv = nil, nil, {}
+  screen.introLook, screen.fade, screen.rv, screen.youDieAt = nil, nil, {}, nil
+  dead_hud.scans, dead_hud.found = 0, nil
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
   goreCtx.quietUntil = math.max(goreCtx.quietUntil, os.clock() + 5)
   slow_stop("the level reloaded")
@@ -4099,12 +4144,13 @@ local function game_tick(ctx)
   local ad = screen.aliveDue
   if ad and now >= nextTick - POLL_MS * 2 / 3000 then
     screen.aliveDue = nil
-    if not screen.photoOn and not active and valid(ad.pawn) and valid(ad.mesh)
-      and try(function() return ad.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true then
+    local pawn = cachedPawn
+    local mesh = not screen.photoOn and not active and try(function() return pawn.Mesh end)
+    if valid(mesh) and try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end) ~= true then
       for i = #tp, 1, -1 do tp[i] = nil end
       now = os.clock()
       tp.t = now
-      local ok, err = xpcall(hm.alive_watch, debug and debug.traceback or tostring, ad.pawn, ad.mesh)
+      local ok, err = xpcall(hm.alive_watch, debug and debug.traceback or tostring, pawn, mesh)
       if not ok then log("her watches: " .. tostring(err)) end
       local ms = (os.clock() - now) * 1000
       screen.cost.pollMs = screen.cost.pollMs + ms
@@ -4118,11 +4164,13 @@ local function game_tick(ctx)
   local ed = screen.enemiesDue
   if ed and now >= nextTick - POLL_MS / 3000 then
     screen.enemiesDue = nil
-    if not screen.photoOn and valid(ed.pawn) and valid(ed.mesh) then
+    local pawn = cachedPawn
+    local mesh = not screen.photoOn and try(function() return pawn.Mesh end)
+    if valid(mesh) then
       for i = #tp, 1, -1 do tp[i] = nil end
       now = os.clock()
       tp.t = now
-      local ok, err = pcall(goreCtx.enemies.tick, ed.pawn, ed.mesh, tp.mark)
+      local ok, err = pcall(goreCtx.enemies.tick, pawn, mesh, tp.mark)
       if not ok then log("enemies: " .. tostring(err)) end
       tp.mark("enemies")
       local ms = (os.clock() - now) * 1000

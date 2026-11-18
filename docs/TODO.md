@@ -1,6 +1,6 @@
 # To do
 
-- Native baseline: enemy waist tests for CH_M_NA_05, CH_M_NA_05_Var01 and CH_M_NA_31 fail with respectively 2, 2 and 5 additional visible stretched triangles when the upper body is flung. Investigate before using these cases to judge cutter optimization; in-game appearance is unknown.
+- Playtest the centered waist seam on CH_M_NA_05 and CH_M_NA_05_Var01. The previous cut stretched two seam triangles on each in the offline flung-body test.
 
 ## 0.7.0: next in-game checks
 

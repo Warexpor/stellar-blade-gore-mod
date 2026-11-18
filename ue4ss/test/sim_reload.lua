@@ -145,6 +145,11 @@ F.run(9, pawn)
 E.s.hp = 0.7
 F.run(1, pawn)
 check(F.find("carried: her HP bar set to 0%.700, not her 0%.300: a save loaded, the parts back", r2) ~= nil, "her HP bar set to another value: the arm back")
+local r3 = mark()
+pawn.IsBattle = function() return false end
+E.s.hp = 0.2
+F.run(2, pawn)
+check(not F.find("arm cut off", r3), "a health-bar drop without a hit outside battle does not cut an arm")
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

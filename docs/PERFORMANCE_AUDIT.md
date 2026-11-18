@@ -15,7 +15,7 @@ Focused Lua simulations for these changes passed, as recorded in the technical n
 1. Capture one normal session with character-heavy combat, a death with cuts, and any normally used external mesh-copy/head mods. Compare the 0.7.5 slow-tick, character-position, lifetime and cut-stage lines; the copy-refresh line appears only at the configured slow threshold. One session can cover these together. The available older 0.7.4 log showed character-position work around 27–32 ms for 29–30 candidates and 52–126 ms for 51; guard batches 37–55 ms for 30 guards; and individual cut/opening stages around 22–27 ms. Those numbers are historical, not a measurement of the current build.
 2. If lifetime or character-position work still dominates, measure calls and candidate counts before changing the refresh or distance policy (`main.lua` around `live_chars` and `char_at`; `object_lifetime.lua`). Longer caches could miss a new enemy, teleport or killing blow, and a stale UE object can crash the game. A smaller candidate set or combining already-required calls is worth evaluating only with those cases covered.
 3. If the new copy-refresh timing overlaps a slow cut, investigate incremental synchronization (`gore_copies.lua`, `gore_scheduler.lua`). Preserve the current cut's copy synchronization and re-entry/recovery behavior: simply postponing it can reveal stretched geometry. If it is not slow, leave scheduling alone.
-4. Investigate the existing native real-mesh enemy-waist failures documented in `TODO.md`: CH_M_NA_05, CH_M_NA_05_Var01 and CH_M_NA_31 gain 2, 2 and 5 visible stretched triangles respectively in the harness's flung-upper-body case. These were reproduced before native changes; appearance in game is unknown. Fixing or measuring them is separate from asserting an optimization caused them.
+4. Playtest the waist seam on both CH_M_NA_05 variants after the 0.7.6 rim-centering fix. The harness also confirmed that the five CH_M_NA_31 shoulder triangles move identically before and after the cut.
 
 ## Other opportunities and reasons for restraint
 
@@ -55,3 +55,17 @@ Native rim classification (`core_classify`) scans all rim points 40 times per po
 ## Closing verdict (all sources reviewed)
 
 The coordinators (`main.lua`, `gore.lua`, `active.lua`), gameplay logic (`enemies.lua`, `bosses.lua`, `struggle.lua`, `blade_decision.lua`, `tables.lua`, `glass.lua`, `gore_smash.lua`), and build tooling were reviewed for safe wins. No further behavior-preserving optimization with a proven in-game benefit was found: per-tick loops are already gated and single-read, staged cuts/pools/deferred work are intentional hitch spreading, and the remaining native hotspots (seam centroids, island tally, sink scans, `core_classify`, band/ride selection) need bit-for-bit harness comparison plus game appearance checks before any change. The listed fallbacks (lifetime guards, copy sync, staged-cut rollback, preload retries, search fallbacks, exact restores) stay as they are. Further work should follow measured hot paths from one representative session, not more static passes.
+
+## 0.7.6 release check
+
+The lethal-hit fallback now reuses the swing and projectile probes. `death_evidence` counts one swing probe and one explosion probe when the fallback runs on a measured mesh impact. The scheduled living and enemy phases also avoid per-poll tables holding old mesh references. Grab release checks query just the attacker when its lifetime result is unavailable for the frame.
+
+Unarmed tracking can make more socket reads when a character has spare tracking slots. The default caps remain three followed enemies and eight bones per enemy. Delay and On Press move a missing-widget scan to death onset or the start of a confirmed grab wait, so that scan can still contribute to a death-frame hitch. The Lua simulations measure decision paths and call counts. Game frame times for 0.7.6 remain unmeasured.
+
+The asset build contains the same 27 core packages as 0.7.5. Both containers were decoded against the current game's global script-object store and all 54 resulting asset files matched byte for byte. The face container also matched before decoding.
+
+The native address test now checks a separate expected offset table for the installed Steam executable, identified by PE timestamp and image size. It checks both startup and a forced search. The release runner reports address failures and continues collecting the other native results.
+
+Both CH_M_NA_05 variants gained two stretched triangles because their broad rim admitted a side helper as the waist seam's collapse point. Round torso seams now use the existing rim-center calculation even when the cut supplies no physics bodies. The waist harness applies the production seam anchors after posing. It checks the same triangles on uncut skin in both poses and removes the stretch delta only when all three vertices move identically. This accounts for five CH_M_NA_31 shoulder triangles. The two CH_M_NA_05 cases still fail with the old cutter under the corrected test.
+
+The final native suite passed, including the address check, all 196 real-mesh cases and physics parity on 71 assets.

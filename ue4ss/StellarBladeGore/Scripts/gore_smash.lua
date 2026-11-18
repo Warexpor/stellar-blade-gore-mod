@@ -26,7 +26,7 @@ local function targetGone(pawn, mesh)
   return false
 end
 -- h: the killing blow (main.lua's death_hit: loc, push/dir). True when the smash started; false, "later" for her body
--- at the lethal hit (it needs her ragdoll: smashed at the death instead)
+-- at the lethal hit (it needs her ragdoll), or her head during a grab
 function M.smash(pawn, mesh, h, why)
   local s = cfg().smash or {}
   local grabPound = h and h.grabPound or nil
@@ -60,8 +60,8 @@ function M.smash(pawn, mesh, h, why)
     .. (pose and h.pose_ago and string.format(" (on her pose %.2f s before)", h.pose_ago) or "")) end
   if not bone then log("smash (" .. why .. "): nothing left to smash"); return false end
   if why == "after" and d and d > 55 + impactRadius then log(string.format("smash (after): nearest surviving part is %.0f cm away", d)); return false end
-  if kind == "torso" and h and h.early then
-    log("smash (" .. why .. "): her body, at her death")
+  if h and h.early and (kind == "torso" or (kind == "head" and h.grab)) then
+    log("smash (" .. why .. "): " .. (kind == "head" and "her head after the grab" or "her body, at her death"))
     return false, "later"
   end
   full = full and kind == "torso"

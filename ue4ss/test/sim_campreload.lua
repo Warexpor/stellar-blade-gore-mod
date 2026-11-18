@@ -49,7 +49,7 @@ local player = F.obj("SequencePlayer", "LevelSequencePlayer", {
 F.classes.LevelSequenceActor = { F.obj("Interaction_Camp_Chair_Actor", "LevelSequenceActor", { SequencePlayer = player }) }
 local rest = mark()
 E.s.mode = 0
-F.run(6, pawn)
+F.run(6.5, pawn)
 check(F.find("dissolving back in over", rest) ~= nil, "the arm dissolving back in")
 
 -- mid dissolve, the level reloads (the rest's zone reset): the old Eve freed, a new one wearing the same asset

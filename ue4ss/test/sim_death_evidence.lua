@@ -5,8 +5,8 @@ local sw,hm,death_hit,cut=T.state.sw,T.state.hm,T.state.death_hit,T.state.gore_c
 local print,fails=F.say,0
 local function check(ok,s) print((ok and 'ok   ' or 'FAIL ')..s); if not ok then fails=fails+1 end end
 local function up(fn,want,value)
-  for i=1,100 do local n=debug.getupvalue(fn,i); if not n then break end
-    if n==want then debug.setupvalue(fn,i,value); return end end
+  for i=1,100 do local n, old=debug.getupvalue(fn,i); if not n then break end
+    if n==want then debug.setupvalue(fn,i,value); return old end end
   error('missing upvalue '..want)
 end
 sw.drop()
@@ -40,5 +40,37 @@ check(latest and latest.skill==2 and latest.bone=='Bip001-L-UpperArm',
   'the second hit 50 ms into the pre-ragdoll animation supplies the death blade')
 F.step(0.61,pawn)
 check(not death_hit(pawn,E.mesh),'a skill hit older than the 0.6-second window cannot shape a later death')
+local oldBlunt, oldSmash, oldRock = sw.blunt_of, sw.smash_kill, sw.rock_blow
+local oldGlass = T.ctx.glass
+T.ctx.glass = { bar_pct = function() return 0 end }
+local swings, explosions = 0, 0
+local oldSwing = up(hm.lethal_watch,'weapon_swing',function() swings=swings+1 end)
+local oldExplosion = sw.explosion_hit
+sw.explosion_hit = function() explosions=explosions+1 end
+local oldMeshHit = up(death_hit,'meshHit',{t=F.t,loc=chest,bone='Bip001-Spine1',push=v(0,0,-1000)})
+local oldCutAtHit = T.ctx.tune.gore.cutAtHit
+T.ctx.tune.gore.cutAtHit = false
+hm.lethal, hm.armed = nil, true
+hm.lethal_watch(pawn,E.mesh)
+check(swings==1 and explosions==1,'the lethal mesh-hit fallback reuses swing and projectile checks')
+T.ctx.tune.gore.cutAtHit = oldCutAtHit
+sw.explosion_hit = oldExplosion
+up(hm.lethal_watch,'weapon_swing',oldSwing)
+up(death_hit,'meshHit',oldMeshHit)
+local early, final = {loc=chest}, {loc=chest, wbone='HammerEnd'}
+local tried
+sw.rock_blow = function() return early end
+sw.blunt_of = function() return false end
+sw.smash_kill = function(_, _, evidence)
+  tried = evidence
+  return evidence == final
+end
+hm.lethal, hm.armed = nil, true
+hm.lethal_watch(pawn,E.mesh)
+check(tried == early,'the lethal watch tries the first evidence')
+check(not early.early,'a failed early attempt clears the flag on shared hit evidence')
+cut(pawn,E.mesh,final)
+check(tried == final,'an inconclusive early smash still tries the final hit evidence')
+sw.blunt_of, sw.smash_kill, sw.rock_blow, T.ctx.glass = oldBlunt, oldSmash, oldRock, oldGlass
 check(#F.errors==0,'no fake engine errors')
 print(fails==0 and 'PASS' or 'FAIL')

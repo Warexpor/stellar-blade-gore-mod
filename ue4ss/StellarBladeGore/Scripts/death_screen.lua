@@ -94,12 +94,12 @@ end
 screen.rv = {}
 screen.SHOWN_S, screen.GONE_S = 1.5, 0.75
 local REVIVE_WAIT = 2.5
-function screen.revive(t)
+function screen.revive(t, grabWaiting)
   local tune = get_tune()
   local rv = screen.rv
   screen.intro_look()
   screen.fade_in()
-  if not get_active() or get_manual() then
+  if not (get_active() or grabWaiting) or (get_manual() and not grabWaiting) then
     for f, vis in pairs(rv.held or {}) do
       local w = vis and dead_hud.get(f)
       if w then try(function() w:SetVisibility(vis); w:SetIsEnabled(true) end) end
@@ -113,17 +113,16 @@ function screen.revive(t)
     log(string.format("revive screen: made %.1f s into the death: %s", t, dead_hud.made))
   end
   local on = false
+  local hiding = screen.hiding(t)
   for _, f in ipairs({ "w", "rv" }) do
-    -- (the death screen looked for by class from 3 s in when not caught as it was made: the fall's first
-    -- seconds are busy with the cuts, and a scan walks the whole object array (~30 ms). The screen fades in at
-    -- about 7 s, so holding it from 3 s still catches it before it shows (at once when held by Shift+F4).
-    -- The revive item's is made in the death, always caught)
-    local w = dead_hud.get(f, f == "w" and (t >= 3 or screen.frozen))
+    -- Some finishers open the death screen immediately. Search once at death onset when holding it, with
+    -- the later lookup still available if the widget has yet to be made.
+    local w = dead_hud.get(f, f == "w" and (t >= 3 or (hiding and "early")), grabWaiting)
     if w then
       local vis = try(function() return w:GetVisibility() end) or 1 -- 1 collapsed, 2 hidden
       local up = vis ~= 1 and vis ~= 2 and try(function() return w:IsVisible() end) ~= false
       rv.held = rv.held or {}
-      if screen.hiding(t) then
+      if hiding then
         if up then
           if not rv.held[f] then
             rv.held[f] = vis
@@ -254,7 +253,7 @@ function screen.intro_look()
   walk(try(function() return w.WidgetTree.RootWidget end), 0)
   L.line[#L.line + 1] = string.format("%.2f=%.1f", try(function() return w:GetAnimationCurrentTime(a) end) or -1, sum)
 end
-function screen.probe(pawn)
+function screen.probe(pawn, grabWaiting)
   local active, manual, elapsed = get_active(), get_manual(), get_elapsed()
   screen.n = screen.n + 1
   -- (its parts timed for the slow tick's line: "death screen" was 13-28 ms of slow ticks, playtest)
@@ -265,7 +264,7 @@ function screen.probe(pawn)
   -- (asked while new: a kept object's index is read at its first check, within keepFresh s of being made)
   if dead_hud.w and not dead_hud.w.idx then dead_hud.get("w") end
   if dead_hud.rv and not dead_hud.rv.idx then dead_hud.get("rv") end
-  try(function() screen.revive(elapsed) end)
+  try(function() screen.revive(grabWaiting and 0 or elapsed, grabWaiting) end)
   mk("death screen: revive")
   -- (in a death not before 1 s in: registering them took 166 ms, in the frame the killing blow's cut landed,
   -- playtest; while she plays they're tried too, see the tick)

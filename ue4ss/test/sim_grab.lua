@@ -13,8 +13,13 @@ local logs = {}
 local tune = dofile("ue4ss/Mods/StellarBladeGore/Scripts/tune.lua")
 local chars = {}
 local ctx = { tune = tune, log = function(s) logs[#logs + 1] = s; print("  | " .. s) end,
-  try = function(f) local ok, r = pcall(f); if ok then return r end end, valid = function(x) return x ~= nil and x ~= false end,
-  live_chars = function() return chars end }
+  try = function(f) local ok, r = pcall(f); if ok then return r end end,
+  valid = function(x)
+    if type(x) == "table" and x.__freed then error("freed grabber touched") end
+    return x ~= nil and x ~= false
+  end,
+  live_chars = function() return chars end, held = function(k) return not k.obj.__freed end,
+  grab_character = function(ad) if chars[1] and chars[1].addr == ad then return chars[1] end end }
 local E = dofile("ue4ss/Mods/StellarBladeGore/Scripts/enemies.lua")
 E.init(ctx)
 local function has(pat) for _, l in ipairs(logs) do if l:find(pat) then return true end end return false end
@@ -44,9 +49,15 @@ rmesh.GetAnimInstance = function()
 end
 local raven = F.obj("CH_M_NA_53_Blueprint_C_1", "CH_M_NA_53_Blueprint_C", { Mesh = rmesh })
 raven.K2_GetActorLocation = function() return { X = 58, Y = 0, Z = 100 } end
-chars[1] = { obj = raven, addr = raven:GetAddress(), cls = "CH_M_NA_53_Blueprint_C" }
+chars[1] = { obj = raven, addr = raven:GetAddress(), cls = "CH_M_NA_53_Blueprint_C", k = { obj = raven } }
 
 local function run(s) local t1 = F.t + s; while F.t < t1 do F.t = F.t + 0.1; E.grab_tick(pawn, herMesh) end end
+parent = raven
+local direct = E.grab_attached(pawn)
+check(direct and direct.addr == chars[1].addr and E.grab_holds(direct, pawn, herMesh),
+  "direct attachment identifies a grab before the first watch sample")
+parent = nil
+check(E.grab_attached(pawn) == nil, "a nearby character alone is not an attachment")
 
 -- a swing passing through her: no grab
 hand = { X = 5, Y = 0, Z = 155 }
@@ -62,14 +73,14 @@ local g = E.grab_now()
 check(g ~= nil and g.mont == nil and has("grab: CH_M_NA_53_Blueprint_C has her: Bip001%-R%-Hand on her Bip001%-Neck"),
   "Raven's hand on her neck 0.6 s, no montage: a grab")
 -- (her death: the tick stops, the grab is asked whether it still holds)
-check(E.grab_holds(g), "its hand still on her: it holds")
+check(E.grab_holds(g, pawn, herMesh), "its hand still on her: it holds")
 hand = { X = 30, Y = 0, Z = 160 }
-check(E.grab_holds(g), "her body swaying in its grip (30 cm): it holds")
+check(E.grab_holds(g, pawn, herMesh), "her body swaying in its grip (30 cm): it holds")
 hand = { X = 300, Y = 0, Z = 150 }
-check(not E.grab_holds(g), "its hand off her: let go")
+check(not E.grab_holds(g, pawn, herMesh), "its hand off her: let go")
 -- attached to it
 parent = raven
-check(E.grab_holds(g), "her attached to it: it holds")
+check(E.grab_holds(g, pawn, herMesh), "her attached to it: it holds")
 parent = nil
 
 -- with a montage: it lasts while the montage plays, the hand off her between hits
@@ -77,11 +88,13 @@ montage = F.obj("AM_Raven_Grab", "AnimMontage")
 hand = { X = 8, Y = 0, Z = 158 }
 run(0.6)
 g = E.grab_now()
-check(g ~= nil and g.mont == montage, "a grab with a montage")
+check(g ~= nil and g.mont == montage:GetAddress(), "a grab records the montage address")
 hand = { X = 300, Y = 0, Z = 150 }
-check(E.grab_holds(g), "its hand off her between hits, the montage on: it holds")
+check(E.grab_holds(g, pawn, herMesh), "its hand off her between hits, the montage on: it holds")
 montage = nil
-check(not E.grab_holds(g), "its montage over: let go")
+check(not E.grab_holds(g, pawn, herMesh), "its montage over: let go")
+raven.__freed = true
+check(not E.grab_holds(g, pawn, herMesh), "a freed grabber is dropped before inspecting its montage")
 
 check(#F.errors == 0, "no errors (" .. table.concat(F.errors, "; ") .. ")")
 print(fails == 0 and "PASS" or "FAIL")
