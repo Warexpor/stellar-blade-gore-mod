@@ -138,6 +138,9 @@ check(not sw.smash_kill(pawn, E.mesh, { attacker = "Gorilla_1" }, "death") and c
 g.enabled = true
 -- The early torso path must defer, then replay the same hit at death without retaining h.early.
 G.smash = smash
+local grabHeadHit = { t = F.t, loc = head, attacker = "Gorilla_1", early = true, grab = true }
+local headDone, headWait = sw.smash_kill(pawn, E.mesh, grabHeadHit, "death")
+check(not headDone and headWait == "later", "a blunt head hit in a grab waits for release")
 local h = { t = F.t, loc = E.bone("Bip001-Spine2"), attacker = "Gorilla_1", early = true }
 local done, wait = sw.smash_kill(pawn, E.mesh, h, "death")
 check(not done and wait == "later", "torso hit deferred until death")

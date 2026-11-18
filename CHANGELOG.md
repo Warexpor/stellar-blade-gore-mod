@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.6
+
+- Camp limb restoration waits one second after the rest is detected and uses the current Eve and outfit. Standing up keeps the restore queued. Death or a level reload clears it, and a completed rest no longer carries the healing cut into the next level. Thanks to cishicidi for testing the delay with modded outfits.
+- Level transitions clear the previous pawn's low-health and lethal-hit observations. A health drop alone during the new level's first five seconds, or outside battle, can't start a new low-health arm cut.
+- Grab tracking checks the attacker's registry entry before inspecting its montage. Direct attachment to a tracked attacker counts immediately, even if the game starts ragdoll physics before the first hand-contact sample. Death setup waits for release up to the existing timeout, and Delay or On Press keeps the HUD hidden during that wait. Lethal blunt head hits also wait. Deferred living and enemy watches read Eve's current mesh when they run.
+- Delay and On Press look for an immediately opened death widget as soon as the mod takes the death. Recognized laser and falling death montages can start the existing no-ragdoll fallback before the widget appears.
+- Blunt Smash can use measured mesh-hit evidence without a weapon swing, tracks more unarmed strike bones, and retries classification at death when an early attempt made no cut. The lethal hit reuses the swing and projectile checks it has already run.
+- Round waist openings collapse their seam toward the rim center. This fixes the two CH_M_NA_05 mesh variants that stretched at the seam as the upper body moved in the real-mesh harness.
+
 ## 0.7.5
 
 - Boss touches now drop a freed boss before any read: a boss destroyed and recreated around a defeat and revive (Scarlet) left per-tick AI, HP and bar reads running on the freed actor, and `valid()` itself can fault there. A frame-scoped native liveness check drops it first at no extra cost. Covered by a new freed-boss sim case that fails without the fix; in-game revive still needs verification.

@@ -343,6 +343,7 @@ hm.REST_SEQ = "Camp_Restore"
 -- it both times), or as she gets up (Interaction_Camp_Chair_End). The game's save and zone reset were hooked on its
 -- network controller first: never called through anything hookable (playtest), and the sequence's name read "?"
 hm.CHAIR_SEQ, hm.CHAIR_END = "Interaction_Camp_Chair", "Interaction_Camp_Chair_End"
+hm.REST_HEAL_DELAY = 1
 function hm.rest_seq()
   local seen = {}
   for _, a in ipairs(try(function() return FindAllOf("LevelSequenceActor") end) or {}) do
@@ -360,18 +361,40 @@ function hm.rest_seq()
   return false, seen
 end
 goreCtx.rest_seq = hm.rest_seq
+function hm.rest_clear()
+  hm.restAt, hm.restSeat, hm.restChair, hm.restHeal = nil, false, nil, nil
+  hm.restPct, hm.restSeqAt, hm.restSeqSeen = nil, nil, nil
+end
+screen.clear_camp_rest = hm.rest_clear
+function hm.rest_queue(now, why)
+  hm.restHeal = { at = now + hm.REST_HEAL_DELAY, why = why }
+  hm.restAt, hm.restChair = nil, nil
+  -- The rest may reload the level before the delay expires. Its healed limb should stay whole there.
+  hm.carryParts, hm.carryBar, hm.carry = nil, nil, nil
+end
 function hm.rest_watch(pawn, mesh)
   local gore, tune = get_gore(), settings()
-  -- (not in photo mode or a pause: photo mode stops her movement too, and the pieces sit on their copy)
-  if not gore or (tune.gore or {}).enabled == false or hm.regrow or hm.ghost or gore.busy()
-    or (gore.pieceHid and not gore.pieceHid.baked) or screen.photoLive
+  if not gore or (tune.gore or {}).enabled == false then hm.rest_clear(); return end
+  -- Photo mode stops her movement too, and the pieces sit on their copy.
+  if hm.regrow or hm.ghost or (gore.pieceHid and not gore.pieceHid.baked) or screen.photoLive
     or screen.vtPhoto or screen.frozenMesh then
-    hm.restAt, hm.restSeat = nil, false
+    if not hm.restHeal then hm.rest_clear() end
     return
   end
   local parts = gore.cut_parts(mesh)
-  if #parts == 0 then hm.restAt, hm.restSeat = nil, false; return end
+  if #parts == 0 then
+    if not gore.busy() then hm.rest_clear() end
+    return
+  end
   local now = os.clock()
+  local heal = hm.restHeal
+  if heal then
+    if now < heal.at or gore.busy() or hm.lethal then return end
+    hm.rest_clear()
+    hm.parts_back(pawn, mesh, heal.why)
+    return
+  end
+  if hm.lethal then return end
   local seated = try(function() return pawn.CharacterMovement.MovementMode end) == 0
     and try(function() return pawn:IsBattle() end) ~= true
   local pct = goreCtx.glass and goreCtx.glass.bar_pct(false)
@@ -385,19 +408,17 @@ function hm.rest_watch(pawn, mesh)
   end
   hm.restSeat = seated
   local la = (tune.gore or {}).lowArm or {}
-  if not hm.restAt or now - hm.restAt > (la.restWindow or 20) then return end
+  if not hm.restAt or now - hm.restAt > (la.restWindow or 20) then hm.rest_clear(); return end
   -- at the camp's chair restDelay s, or up from it
   local ch = hm.restChair
   if ch and (ch.up or now - ch.t >= (la.restDelay or 5)) then
-    hm.restAt, hm.restChair = nil, nil
-    hm.parts_back(pawn, mesh, ch.up and "a camp rest (up from the camp's chair)"
+    hm.rest_queue(now, ch.up and "a camp rest (up from the camp's chair)"
       or string.format("a camp rest (%.0f s at the camp's chair)", now - ch.t))
     return
   end
   -- her heal: the bar under full as she sat, full now
   if pct and pct >= 0.99 and hm.restPct and hm.restPct < 0.99 then
-    hm.restAt = nil
-    hm.parts_back(pawn, mesh, string.format("a camp rest (her HP bar %.3f -> %.3f)", hm.restPct, pct))
+    hm.rest_queue(now, string.format("a camp rest (her HP bar %.3f -> %.3f)", hm.restPct, pct))
     return
   end
   if now < (hm.restSeqAt or 0) then return end
@@ -410,8 +431,7 @@ function hm.rest_watch(pawn, mesh)
     if n == hm.CHAIR_END then hm.restChair = hm.restChair or { t = now }; hm.restChair.up = true end
   end
   if not rest then return end
-  hm.restAt = nil
-  hm.parts_back(pawn, mesh, "a camp rest (" .. hm.REST_SEQ .. " playing)")
+  hm.rest_queue(now, "a camp rest (" .. hm.REST_SEQ .. " playing)")
 end
 -- her death's end, a load (recover): the arm back with every other cut, the blocks off (the game's own respawn may
 -- clear them first: a take-off of none is no change)
@@ -419,7 +439,8 @@ function screen.low_reset(pawn, why)
   if hm.regrow then hm.grow_stop(why) end
   if hm.ghost then hm.ghost_stop("back at once: " .. why) end
   if hm.lowCut or hm.lowBlock then log("low HP arm: " .. why .. ": back") end
-  hm.lowCut, hm.restAt, hm.lowLast, hm.lowPend = false, nil, nil, nil
+  hm.rest_clear()
+  hm.lowCut, hm.lowLast, hm.lowPend = false, nil, nil
   if hm.lowBlock then hm.low_block(pawn, false, why) end
 end
 function hm.low_arm(pawn, mesh)
@@ -482,7 +503,8 @@ function hm.low_arm(pawn, mesh)
     -- (and only once the bar was under it since the cut, the cut done: the test keys cut at full HP, and the arm and
     -- her sword were back the same tick, the dissolve begun on a cut still opening, on the wrong vertices; playtest)
     if pct < at and not syncing then hm.lowUnder = true end
-    if la.healBack == true and not syncing and pct >= at and hm.lowUnder and now - (hm.lowT or 0) > 3 and not gore.busy() then
+    if la.healBack == true and not (hm.restHeal or hm.restChair) and not syncing
+      and pct >= at and hm.lowUnder and now - (hm.lowT or 0) > 3 and not gore.busy() then
       hm.parts_back(pawn, mesh, string.format("her HP bar back at %.3f (healBack, %.2f)", pct, at))
     -- (undone by something else: a lethal hit she lived through, F8. Not while the cut still opens)
     elseif now - (hm.lowT or 0) > 3 and not gore.busy() and not gore.has_cut(mesh, hm.LOW_BONES[hm.lowSide]) then
@@ -518,6 +540,8 @@ function hm.low_arm(pawn, mesh)
   -- mesh (the game's physical hit reaction) is the landing's damage. Any other drop is a blow: the physical hit
   -- reaction alone missed most of them (ranged hits, grabs, explosions; Nexus: under 70% it came off now and then)
   local struck = meshHit and meshHit.t >= p.t0 - hm.LOW_HIT_S
+  if not struck and ((goreCtx.levelAt and p.t0 < goreCtx.levelAt + 5)
+    or try(function() return pawn:IsBattle() end) == false) then return end
   local land = hm.landAny
   if not struck and land and math.abs(land.t - p.t0) < hm.LOW_LAND_S then
     log(string.format("low HP arm: her HP bar %.3f -> %.3f as she landed from a %.0f cm drop, no hit on her mesh: fall damage, not cut",

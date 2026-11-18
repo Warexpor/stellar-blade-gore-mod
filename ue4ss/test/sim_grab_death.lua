@@ -98,5 +98,20 @@ hm.lethal = { t = os.clock(), wasGrab = true }
 check(decide(T.pawn, T.E.mesh, nil) == false and T.E.s.sim, "marked grab death leaves physics on")
 hm.lethal = nil
 check(decide(T.pawn, T.E.mesh, nil) == true, "same marked show animates without a grab")
+local holding = true
+local grab = { cls = "Enemy" }
+T.ctx.tune.deathScreen = "key"
+T.ctx.enemies.grab_now = function() return nil end
+T.ctx.enemies.grab_attached = function(pawn) return holding and pawn == T.pawn and grab or nil end
+T.ctx.enemies.grab_holds = function(g, pawn, mesh) return holding and g == grab and pawn == T.pawn and mesh == T.E.mesh end
+local start = #F.log_lines() + 1
+T.E.die(true)
+F.run(0.3, T.pawn)
+check(not F.find("ragdoll state at start", start), "an engine ragdoll key during the grab cannot start our death setup")
+check(T.E.deadScreen.__w.vis == 1, "On Press holds the defeat widget while an immediate grab is still attached")
+holding = false
+F.run(0.3, T.pawn)
+check(F.find("ragdoll state at start", start) and T.ctx.grabDeath(), "release starts the death with grab-specific ragdoll rules")
+check(T.E.deadScreen.__w.vis == 1, "the defeat widget stays hidden across grab release and death setup")
 check(#F.errors == 0, "no errors (" .. table.concat(F.errors, "; ") .. ")")
 print(fails == 0 and "PASS" or "FAIL")

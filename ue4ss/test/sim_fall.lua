@@ -179,6 +179,16 @@ next_life()
 
 -- 8: a scripted death (the desert's sand hole) with no ragdoll: the game's
 at = mark()
+MONT = "P_Eve_Dead_Laser"
+E.s.hp = 0
+F.run(0.35, pawn)
+check(E.s.sim and F.find("death: taken over .*playing P_Eve_Dead_Laser", at),
+  "a named laser death without a ragdoll is handled before its HUD appears")
+MONT = nil
+next_life()
+
+-- A scripted death (the desert's sand hole) still uses the game's special sequence.
+at = mark()
 MONT = "P_Eve_Dead_DesertHole"
 E.s.hp = 0
 F.run(0.2, pawn)

@@ -70,7 +70,10 @@ local actor = F.obj("Interaction_Camp_Chair_Actor", "LevelSequenceActor", { Sequ
 F.classes.LevelSequenceActor = { actor }
 local rest = mark()
 E.s.mode = 0
-F.run(6, pawn)
+F.run(5.5, pawn)
+check(F.find("dissolving back in over", rest) == nil, "camp restore waits through the transition")
+seqPlaying, E.s.mode = false, 1
+F.run(1, pawn)
 check(F.find("regrow: a camp rest", rest) ~= nil, "a camp rest seen at the chair")
 local l = F.find("dissolving back in over", rest)
 check(l ~= nil, "the arm dissolving back in")

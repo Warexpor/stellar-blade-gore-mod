@@ -6,13 +6,14 @@ local dead_hud = { scans = 0 }
 -- One made while a level loads (her tick waits 2 s on a new level) went stale unchecked, and Shift+F4's hold never
 -- found the screen (playtest): in a death, one missing is looked for once by its class (find)
 dead_hud.CLASS = { w = "WB_MainHUD_Dead_C", rv = "WB_MainHUD_ResurrectionItem_C" }
-function dead_hud.get(f, find)
+function dead_hud.get(f, find, grabWaiting)
   local k = dead_hud[f]
   if k and goreCtx.held(k, true) then return k.obj end
   dead_hud[f] = nil
-  if not (find and get_active()) or (dead_hud.found or {})[f] then return end
+  local search = find == "early" and (f .. ":early") or f
+  if not (find and (get_active() or grabWaiting)) or (dead_hud.found or {})[search] then return end
   dead_hud.found = dead_hud.found or {}
-  dead_hud.found[f] = true
+  dead_hud.found[search] = true
   for _, x in ipairs(try(function() return FindAllOf(dead_hud.CLASS[f]) end) or {}) do
     if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then
       dead_hud[f] = goreCtx.keep(x)

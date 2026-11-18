@@ -3138,12 +3138,12 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
         // stuck out through its cap as a cone). Then the origin moved along the normal to SINK_IN inside. A limb cut's
         // seam goes to the opening's centre, SINK_IN inside: from a sink off to the side (a groin helper for a cut
         // near the knee) the skin round the opening was drawn out to the sink as a sheet. Only with her bodies sent
-        // (a limb or the head: a waist cut's upper body flies off, and its seam drawn to the middle of the opening
-        // took the legs' skin along)
+        // for limb cuts and for a round torso opening. On broad monster rigs a side helper can be inside the
+        // rim's maximum radius yet leave the torso seam stretched at its edge as the shoulders move.
         sinks[nsinks].at[0] = sinks[nsinks].at[1] = sinks[nsinks].at[2] = 0;
         // (a borrowed bone that will follow the master's bone "remap": its point in that bone's frame)
         const float *t = bone == forced_sink && remap >= 0 && remap < c.nspace ? c.space + (u64)remap * 12 : pose_of(&c, bone);
-        if (t && mode == MODE_CUT && sa.gov) {
+        if (t && mode == MODE_CUT && (sa.gov || (stump && round_p && nrim[sd] >= 3))) {
             float in = (i & 1) ? SINK_IN : -SINK_IN;
             // (the rim's own middle on this side, all its sections, not the plane point: on a thigh the suit's big
             // triangles left its rim 3.4 cm in from the plane and the bone 6 cm off its middle, so the seam's point,

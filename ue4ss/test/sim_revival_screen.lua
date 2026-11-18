@@ -19,8 +19,13 @@ rawset(gs, "PlaySound2D", function(_, _, sound) if sound == cue then sounds = so
 assert(pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua"))
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil)); F.run(16, pawn)
 E.s.hp = 0; F.run(0.2, pawn)
-E.die(true); F.run(3, pawn)
+local newObject = F.new_object
+F.new_object = function() end
+E.die(true)
+F.new_object = newObject
+F.run(0.2, pawn)
 local w = E.deadScreen
+local initiallyHidden = w.__w.vis == 1
 rawset(w, "GetAnimationCurrentTime", function() return 0.1 end)
 rawset(w, "SetAnimationCurrentTime", function() end)
 local cls = w:GetClass()
@@ -28,6 +33,7 @@ cls.Animations:ForEach(function(_, e) rawset(e:get(), "GetEndTime", function() r
 F.press("F4", "SHIFT"); F.run(1, pawn)
 local failures = 0
 local function check(ok, message) out((ok and "ok   " or "FAIL ") .. message); if not ok then failures = failures + 1 end end
+check(initiallyHidden, "On Press holds an immediate death widget even if the creation watch missed it")
 check(sounds == 1, "skipped intro plays the game's defeat sound once")
 F.fire("/Game/Art/UI/Widget/HUD/WB_MainHUD_Dead.WB_MainHUD_Dead_C:FinishPressAnimation")
 E.s.mode = 0 -- the game has not completed its respawn; the death screen and empty bar are still present

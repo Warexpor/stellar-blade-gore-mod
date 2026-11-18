@@ -66,9 +66,12 @@ fi
 # the engine's addresses looked for on the real exe (resolve_addresses), as on another game build
 if on addr; then
   clang -O1 -g -w -o "$OUT-addr" test_addr.c
-  r=$("$OUT-addr" | tail -1)
-  echo "addr: $r"
-  [[ $r == PASS ]] || { "$OUT-addr" | grep FAIL; fail=1; }
+  if r=$("$OUT-addr" 2>&1) && [[ $(tail -1 <<< "$r") == PASS ]]; then
+    echo "addr: PASS"
+  else
+    echo "$r"
+    fail=1
+  fi
 fi
 # the held objects' liveness check (G) on a made-up object array
 if on alive; then

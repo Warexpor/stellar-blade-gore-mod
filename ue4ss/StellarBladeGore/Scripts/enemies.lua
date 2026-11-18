@@ -2125,7 +2125,6 @@ function M.grab_tick(pawn, mesh)
   grab.next = now + GRAB_EVERY
   local at0 = bone_loc(mesh, GRAB_HER[1])
   if not at0 then return end
-  grab.pawn, grab.mesh = pawn, mesh
   local me = addr(pawn)
   local root = try(function() return pawn.RootComponent end)
   local parent = valid(root) and addr(try(function() return root:GetAttachParentActor() end))
@@ -2148,8 +2147,11 @@ function M.grab_tick(pawn, mesh)
         if touch or g then m, mid, mn = montage_of(o) end
         mn = mn or "no montage"
         if touch then
-          if not g or g.mn ~= mn then g = { since = now, mn = mn, obj = o, cls = ch.cls, addr = ch.addr }; grab.on[ch.addr] = g end
-          g.last, g.mont, g.how = now, m, touch .. (bone and string.format(" on her %s (%.0f cm)", bone, d) or "")
+          if not g or g.k ~= ch.k or g.mn ~= mn then
+            g = { since = now, mn = mn, obj = o, cls = ch.cls, addr = ch.addr, k = ch.k }
+            grab.on[ch.addr] = g
+          end
+          g.last, g.mont, g.how = now, addr(m), touch .. (bone and string.format(" on her %s (%.0f cm)", bone, d) or "")
           seen[ch.addr] = true
           if not g.said and g.last - g.since >= (c.hold or 0.4) then
             g.said = true
@@ -2174,19 +2176,30 @@ function M.grab_now()
   end
   return best
 end
+-- A direct attachment identifies the grabber even before hand contact has lasted long enough to count.
+function M.grab_attached(pawn)
+  if (cfg().grab or {}).enabled == false or not ctx.grab_character then return end
+  local root = try(function() return pawn.RootComponent end)
+  local ad = valid(root) and addr(try(function() return root:GetAttachParentActor() end))
+  local ch = ad and ctx.grab_character(ad)
+  if not ch or (ctx.ignored and ctx.ignored(ch.cls)) or (ctx.bosses and ctx.bosses.is_passive(ad))
+    or not ctx.held(ch.k, true) then return end
+  local mont, _, mn = montage_of(ch.obj)
+  local now = os.clock()
+  return { obj = ch.obj, addr = ad, k = ch.k, cls = ch.cls, mont = addr(mont),
+    mn = mn or "no montage", how = "attached", last = now, since = now }
+end
 -- the grab still on: its montage still playing on it; without one, her still attached to it or its hand on her
 -- (a little further than it took: her body sways in its grip)
-function M.grab_holds(g)
-  if not (g and valid(g.obj)) then return false end
+function M.grab_holds(g, pawn, mesh)
+  if not (g and g.k and ctx.held(g.k, true)) then return false end
+  local root = try(function() return pawn.RootComponent end)
+  if valid(root) and addr(try(function() return root:GetAttachParentActor() end)) == g.addr then return true end
   if g.mont then
     local m, ai = montage_of(g.obj)
-    if not m or m ~= g.mont then return false end
+    if not m or addr(m) ~= g.mont then return false end
     return try(function() return ai:Montage_IsPlaying(m) end) ~= false
   end
-  local pawn, mesh = grab.pawn, grab.mesh
-  if not (valid(pawn) and valid(mesh)) then return false end
-  local root = try(function() return pawn.RootComponent end)
-  if valid(root) and addr(try(function() return root:GetAttachParentActor() end)) == addr(g.obj) then return true end
   return hand_on(g.obj, mesh, ((cfg().grab or {}).reach or 40) * 1.5) ~= nil
 end
 -- the montages the enemies near her play, for the log (what a grab's is called)
@@ -2469,7 +2482,7 @@ function M.forget()
     log(string.format("after death: the level reloaded while it was on: %s decision nodes put back", ok and tostring(back) or ("? (" .. tostring(back) .. ")")))
   end
   aft.keys, aft.tasks, aft.undo, aft.sets, aft.overSince, aft.deferUntil, aft.deferTicks = {}, nil, nil, 0, nil, nil, nil
-  grab.on, grab.pawn, grab.mesh = {}, nil, nil
+  grab.on, grab.next = {}, 0
   aft.sw, aft.swings, aft.near, aft.anims, aft.scan, aft.loaded, aft.checked = {}, 0, nil, {}, nil, nil, nil
   down.done, down.next, down.pending = {}, 0, {}
   for row in pairs(hos.rows) do hostile_unpatch(row, "level reloaded") end
