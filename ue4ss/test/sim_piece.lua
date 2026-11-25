@@ -65,6 +65,8 @@ F.run(1, pawn)
 check(F.find("back on her mesh.*her death", at) ~= nil, "2: back on her mesh at her death")
 check(E.hiddenBones[ARM] == nil, "2: its bones shown on her again")
 check(copy and copy.__dead, "2: the copy destroyed")
+check(F.find("cut piece " .. ARM:gsub("%-", "%%-") .. ":", at) ~= nil,
+  "2: the arm detached before death is included in ragdoll collision setup")
 -- (sbslice told it is gone before it went, her sinks kept: "y" made it a co-owner of them)
 local xs = copy and string.format("x%x,0,1", copy:GetAddress())
 local told = false

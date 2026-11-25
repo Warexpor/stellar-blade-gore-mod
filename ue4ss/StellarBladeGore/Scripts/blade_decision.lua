@@ -155,6 +155,11 @@ function M.blow(pawn, mesh, h, why, mute, noCore)
     if n then how = how .. " (rolled: no plane of its own)" end
   end
   local at = h.loc
+  local function vs(v) return v and string.format("(%.2f %.2f %.2f)", v.X, v.Y, v.Z) or "?" end
+  if not (n and at) then
+    log(string.format("blade (%s): no plane from dir %s fwd %s attack %s", why, vs(h.dir), vs(h.fwd), tostring(h.attack_dir)))
+    return false
+  end
   -- her pose as the blow landed (h.pose, from main.lua's swing samples): the blade is judged against it, not a frame
   -- into her death, when the death show had swung her arms on (an arm raised to block kept, the body behind it cut).
   -- What is chosen is then moved with its bone to where that bone is now (go): a limb's cut along its own bone, the
@@ -192,11 +197,6 @@ function M.blow(pawn, mesh, h, why, mute, noCore)
       end
     end
     return start(pawn, mesh, at, why, kind, out, plane, blade, mute or (h and h.mute), noCore)
-  end
-  local function vs(v) return v and string.format("(%.2f %.2f %.2f)", v.X, v.Y, v.Z) or "?" end
-  if not (n and at) then
-    log(string.format("blade (%s): no plane from dir %s fwd %s attack %s", why, vs(h.dir), vs(h.fwd), tostring(h.attack_dir)))
-    return false
   end
   -- her sword, when the blade went through it (active.lua's weapon_cut: a blow she blocked with it, playtest); at
   -- the hit (h.early) once her death comes (M.release_held), she is still holding it

@@ -38,7 +38,9 @@ create(M, {native=native,cfg=function() return config end,log=function() end,loa
   vec=v,sub=sub,add=add,scale=scale,len=len,norm=norm,dot=dot,cross=cross,
   bone_loc=function(_,b) return positions[b] end, command=function() calls=calls+1; return reply end,
   triple=response.triple,num=response.num,pick=function(t) return t[1] end,niagara=function() end,FX={hit='hit'},MARK_AT={part},
-  guards=function() return try,valid,function() return 'position' end end})
+  guards=function() return try,valid,function() return 'position' end end,
+  hold=function(actor) return {obj=actor} end,
+  held=function(held) return valid(held.obj) end})
 local fails=0
 local function check(ok,msg) print((ok and 'ok   ' or 'FAIL ')..msg); if not ok then fails=fails+1 end end
 local q = M.skin_query(mesh,v(5,0,5),nil,40)
@@ -65,6 +67,34 @@ M.hit_mark({},first,v(5,0,5),nil,nil)
 M.hit_mark({},second,v(5,0,5),nil,nil)
 check(first.bReceivesDecals and second.bReceivesDecals, 'each replacement component enables decals even when the outfit was already logged')
 M.clear_marks()
+
+local scar
+function M.cap_mat() return "test material" end
+function gs:BeginDeferredActorSpawnFromClass()
+  scar = {
+    AddComponentByClass = function() return {
+      CreateMeshSection_LinearColor = function(_, _, vertices, indices)
+        assert(#vertices == 21 and #indices > 0)
+        scar.section = true
+      end,
+      SetMaterial = function() end,
+    } end,
+    K2_AttachToComponent = function(_, _, bone) scar.bone = bone; return true end,
+    SetActorScale3D = function(_, scale) scar.scale = scale.X end,
+    K2_DestroyActor = function() scar.destroyed = true end,
+  }
+  return scar
+end
+function gs:FinishSpawningActor(actor) return actor end
+config.hitMarks.scarMesh = true
+check(M.hit_mark({},mesh,v(5,0,5),v(0,0,1),0.8) and scar.section and scar.bone == 'ride' and M.marks() == 1,
+  'scar renders geometry and attaches it to the bone')
+M.heal_marks(0.7); M.heal_marks(0.8)
+now = now + 0.5
+M.heal_marks(0.8)
+check(scar.scale and scar.scale < 1, 'healing shrinks a procedural scar')
+M.clear_marks()
+check(scar.destroyed and M.marks() == 0, 'recovery destroys the procedural scar actor')
 native.state='init'
 check(not M.hit_mark({},mesh,v(5,0,5),nil,nil) and M.marks()==0, 'unready native bridge cannot create a mark')
 os.clock=clock

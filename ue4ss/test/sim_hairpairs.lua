@@ -48,23 +48,26 @@ check(nL == 1, "the vanilla pairs read once (" .. nL .. ")")
 -- Head contacts must be enabled only when the shapes are initially separated.
 FName = F.fname
 local testBodies = {}
-for _, b in ipairs({ "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand" }) do
+for _, b in ipairs({ "Bip001-Head", "Bip001-L-Hand", "Bip001-R-Hand", "Bip001-L-UpperArm", "Ab-L-Breast" }) do
   testBodies[#testBodies + 1] = { BoneName = F.fname(b) }
 end
 local testPa = { GetAddress = function() return 0x6000 end,
   SkeletalBodySetups = { ForEach = function(_, cb) for i, b in ipairs(testBodies) do cb(i, { get = function() return b end }) end end } }
 local points = { ["Bip001-Head"] = { X=0, Y=0, Z=0 }, ["Bip001-L-Hand"] = { X=50, Y=0, Z=0 },
-  ["Bip001-R-Hand"] = { X=0, Y=0, Z=0 } }
+  ["Bip001-R-Hand"] = { X=0, Y=0, Z=0 }, ["Bip001-L-UpperArm"] = { X=50, Y=0, Z=0 },
+  ["Ab-L-Breast"] = { X=0, Y=0, Z=0 } }
 local mesh = { GetSocketLocation = function(_, b) return points[tostring(b)] end }
 physfix.init({ try = function(f) local ok, r = pcall(f); if ok then return r end end, valid = function(o) return o ~= nil end,
   tune = { physfix = {} }, gore = { native_state = function() return "ready" end,
     command = function(s) sent[#sent+1] = s; return "ok table" end } })
 local pairs = physfix.arm_collision(mesh, testPa)
-local foundLeft, foundRight = false, false
+local foundLeft, foundRight, foundUpper = false, false, false
 for _, p in ipairs(pairs) do
   if p[1] == "Bip001-L-Hand" and p[2] == "Bip001-Head" then foundLeft = true end
   if p[1] == "Bip001-R-Hand" and p[2] == "Bip001-Head" then foundRight = true end
+  if p[1] == "Bip001-L-UpperArm" and p[2] == "Ab-L-Breast" then foundUpper = true end
 end
 check(foundLeft, "separated hand and head collide")
 check(not foundRight, "overlapping hand and head are left out")
+check(foundUpper, "upper arm can collide against the chest's front body when separated")
 print(fails == 0 and "PASS" or "FAIL")

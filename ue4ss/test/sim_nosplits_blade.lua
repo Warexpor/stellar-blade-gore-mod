@@ -28,6 +28,9 @@ check(count == 1 and not split and #parts == 1 and parts[1] == "Bip001-Spine1",
   "after-death hit produces a torso cut without a split")
 G.cleanup(pawn, E.mesh)
 check(G.cuts_on(E.mesh) == 0, "recovery clears the after-death cut")
+local okMissing, missing = pcall(G.blow, pawn, E.mesh, { loc = E.bone("Bip001-Spine1"), pose = {} }, "death")
+check(okMissing and missing == false and F.find("blade %(death%): no plane") ~= nil,
+  "recorded pose with no usable plane returns false for the death fallback")
 G.slice_bone(pawn, E.mesh, "Bip001-L-UpperArm", nil, "after")
 for _ = 1, 60 do F.step(1/60); G.tick(pawn); G.pump() end
 check(G.cuts_on(E.mesh) == 1, "limb cut completes first")

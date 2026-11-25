@@ -6,6 +6,7 @@
 -- picked. Push (sim_push.lua, PUSH set): on her back, her right arm off alive and her left at her death (only one
 -- comes off alive), heels shoving her
 local PUSH = rawget(_G, "PUSH") == true
+local CRAWL_AWAY = rawget(_G, "CRAWL_AWAY") == true
 local F = require("fake")
 local E = require("eve")
 local R = require("rag")
@@ -28,6 +29,12 @@ s.gore.death = { limb = 100, head = 0, torso = 0, split = 0, moreLimbs = 0 }
 s.gore.bone = ]] .. string.format("%q", PUSH and "Bip001-L-UpperArm" or "Bip001-L-Thigh") .. [[
 s.struggle = s.struggle or {}
 s.struggle.weights = { clutch = 0, reach = 0, turn = 0, crawl = 3, rise = 0, prop = 0, push = 3, curl = 0, lie = 0 }
+]] .. (CRAWL_AWAY and [[
+s.gore.sliceOnDeath = false
+s.gore.smash.enabled = false
+s.struggle.crawl = { enabled = true }
+s.convulse = { enabled = false }
+]] or "") .. [[
 return s
 ]])
 f:close()
@@ -52,10 +59,12 @@ local function lines(from, pat)
   return out
 end
 
-E.s.hp = 0.3
-F.run(0.5, pawn)
-F.press("F8", "ALT")
-F.run(3, pawn)
+if not CRAWL_AWAY then
+  E.s.hp = 0.3
+  F.run(0.5, pawn)
+  F.press("F8", "ALT")
+  F.run(3, pawn)
+end
 
 local d0 = mark()
 E.s.hp = 0
@@ -73,6 +82,10 @@ for _, x in ipairs(sg) do
 end
 check(n > 0, string.format("%s: %d played out", PUSH and "pushing" or "crawling", n))
 check(held > 0.2, string.format("a limb planted and %s for %.1f s in all", PUSH and "driving" or "pulling", held))
+if CRAWL_AWAY then
+  check(F.find("no limb cut: crawls away", d0) and F.find("head lifted", d0), "an uncut face-down death starts the new head-lift crawl")
+  check((R.top["Bip001-Neck"] or 0) > 1, "the new crawl steers the neck")
+end
 -- (headward: +X, her head's way as she lies; along the floor: no up or down in it)
 local sum = { X = 0, Y = 0, Z = 0 }
 for _, b in ipairs({ "Bip001-Pelvis", "Bip001-Spine", "Bip001-Spine1", "Bip001-Spine2" }) do

@@ -321,20 +321,6 @@ local function parent_bone(mesh, b)
   return p ~= "None" and p or nil
 end
 local function addr(o) return try(function() return o:GetAddress() end) end
--- Simulated cloth can bypass cut skin weights; use the skinned form for this outfit until recovery.
-M.weddingCloth = {}
-function M.wedding_cloth(mesh)
-  local full = try(function() return mesh.SkeletalMesh:GetFullName() end) or ""
-  if not full:lower():find("/game/cnsrepacked/5a2518e03d16a0cd/", 1, true) then return end
-  local a = addr(mesh)
-  if not a or M.weddingCloth[a] then return end
-  local v = try(function() return mesh.ClothBlendWeight end)
-  if type(v) ~= "number" then log("wedding cloth: blend weight unreadable"); return end
-  if try(function() mesh.ClothBlendWeight = 0; return true end) then
-    M.weddingCloth[a] = { mesh = mesh, old = v, asset = addr(try(function() return mesh.SkeletalMesh end)) }
-    log("wedding cloth: using skinned clothing after cut")
-  end
-end
 -- the mesh asset's name, or nil: a component without a mesh hands Lua a null object, and UE4SS's GetFName on one
 -- crashes the game (pcall can't catch an access violation), so check it first
 local function mesh_name(comp)
@@ -344,6 +330,40 @@ end
 local function name_of(comp) return mesh_name(comp) or "?" end
 -- a component's mesh asset (its address): an enemy's sinks are put back per asset
 function enemy.asset(comp) local m = valid(comp) and try(function() return comp.SkeletalMesh end); return valid(m) and addr(m) or nil end
+
+-- Cloth simulation bypasses cut weights. Let clothing on the modified mesh follow its skinned bones until recovery.
+M.cutCloth = {}
+function M.skin_cut_cloth(mesh)
+  if cfg().clothSkinned == false or not valid(mesh) then return end
+  local asset = try(function() return mesh.SkeletalMesh end)
+  local sa = valid(asset) and addr(asset)
+  local a = sa and addr(mesh)
+  if not a or M.cutCloth[a] then return end
+  local count = try(function() return asset.MeshClothingAssets:GetArrayNum() end)
+  if type(count) ~= "number" then
+    -- Keep the wedding dress workaround on builds that cannot expose the array.
+    local path = try(function() return asset:GetFullName() end) or ""
+    if not path:lower():find("/game/cnsrepacked/5a2518e03d16a0cd/", 1, true) then return end
+  elseif count == 0 then return end
+  local weight = try(function() return mesh.ClothBlendWeight end)
+  if type(weight) ~= "number" or weight <= 0 then return end
+  local held = ctx.keep(mesh)
+  if not ctx.alive(held) then return end
+  if try(function() mesh.ClothBlendWeight = 0; return true end) then
+    M.cutCloth[a] = { held = held, weight = weight, asset = sa }
+    log("cut cloth: using skinned clothing on " .. name_of(mesh))
+  end
+end
+function M.restore_cut_cloth(a, snapshot)
+  local held = snapshot.held
+  if ctx.alive_ask({ held }) and held.alive and valid(held.obj) then
+    try(function()
+      if held.obj.ClothBlendWeight == 0 then held.obj.ClothBlendWeight = snapshot.weight end
+    end)
+  end
+  M.cutCloth[a] = nil
+end
+
 local function already_cut(mesh, bone)
   local a = addr(mesh)
   for _, c in ipairs(cuts) do
@@ -2134,7 +2154,10 @@ local function stage_cut(q)
     if q.c then q.bone = b; break end
   end
   if not q.c then log("nothing cut (" .. q.why .. ")"); return false end
-  M.wedding_cloth(q.mesh)
+  if not enemy.cur then
+    M.skin_cut_cloth(q.mesh)
+    if q.c.face then M.skin_cut_cloth(q.c.face) end
+  end
   -- Snapshot remaining flesh before this cut itself enters the gone-part list.
   if q.smash then
     q.smashProfile = M.smashed.profile(q.mesh, q.bone)
@@ -4081,11 +4104,8 @@ end
 -- body's (a waist cut: its split's copy holds the other half, and a second split made a second one), returned second
 function M.swapped(mesh, forget)
   local a, out, olds, kept, quiet = addr(mesh), {}, {}, {}, {}
-  local wc = a and M.weddingCloth[a]
-  if wc and wc.asset ~= addr(try(function() return mesh.SkeletalMesh end)) then
-    try(function() mesh.ClothBlendWeight = wc.old end)
-    M.weddingCloth[a] = nil
-  end
+  local cloth = a and M.cutCloth[a]
+  if cloth and cloth.asset ~= enemy.asset(mesh) then M.restore_cut_cloth(a, cloth) end
   for i = #cuts, 1, -1 do
     local c = cuts[i]
     if c.addr == a and PARTS[c.bone] and not c.smashed and not enemy.owned[c] and c.sm and enemy.asset(mesh) ~= c.sm then
@@ -4190,11 +4210,14 @@ function M.split_on(mesh)
 end
 
 -- the parts cut off this mesh so far (a limb, the head, her upper body), by their root bone. lying: only the ones
--- that lie somewhere as a piece (not one carried over a level change, hidden on her: its piece stayed in the old one)
-function M.cut_parts(mesh, lying)
+-- that lie somewhere as a piece (not one carried over a level change, hidden on her: its piece stayed in the old one).
+-- opened: exclude the pending cut until its constraint has been broken.
+function M.cut_parts(mesh, lying, opened)
   local a, out = addr(mesh), {}
   for _, c in ipairs(cuts) do
-    if c.addr == a and PARTS[c.bone] and not c.smashed and not (lying and c.quiet) then out[#out + 1] = c.bone end
+    if c.addr == a and PARTS[c.bone] and not c.smashed and not (lying and c.quiet) and (not opened or c.opened) then
+      out[#out + 1] = c.bone
+    end
   end
   return out
 end
@@ -4457,6 +4480,11 @@ dofile("ue4ss/Mods/StellarBladeGore/Scripts/gore_hit_marks.lua")(M, {
   vec = vec, sub = sub, add = add, scale = scale, len = len, norm = norm, dot = dot, cross = cross,
   bone_loc = bone_loc, command = command, triple = triple, num = num, pick = pick, niagara = niagara, FX = FX, MARK_AT = MARK_AT,
   guards = function() return try, valid, v3 end,
+  hold = function(actor)
+    local held = ctx.keep(actor)
+    return ctx.alive(held) and held or nil
+  end,
+  held = function(held) return ctx.held(held) end,
 })
 
 -- ---- the killing blow as a blade ----
@@ -4885,10 +4913,7 @@ local function aside(l)
 end
 local function merge(l, more) for _, x in ipairs(more) do l[#l + 1] = x end end
 function M.cleanup(pawn, mesh)
-  for a, c in pairs(M.weddingCloth) do
-    if valid(c.mesh) and addr(c.mesh) == a then try(function() c.mesh.ClothBlendWeight = c.old end) end
-  end
-  M.weddingCloth = {}
+  for a, snapshot in pairs(M.cutCloth) do M.restore_cut_cloth(a, snapshot) end
   M.clear_marks()
   -- (a piece lying on its copy back on her first: its bones stayed hidden on her, the regrown arm unseen)
   if M.pieceHid then M.hide_pieces(nil, nil, false) end
@@ -5163,7 +5188,7 @@ function M.state() return native.state end
 function M.forget(pawn)
   M.outfit_forget()
   headwearMoved = {}
-  M.weddingCloth = {}
+  M.cutCloth = {}
   M.stubs = {}
   local wears = {}
   if pawn and native.state == "ready" then

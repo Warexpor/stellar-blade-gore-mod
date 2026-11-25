@@ -16,7 +16,9 @@ local function command(s)
   return 'ok'
 end
 M.ARM_CUTS={arm=true}; M.rig=function() return true end; M.her_break=function(_,s) return s end
-M.copy_break=function(_,s) return s end; M.wedding_cloth=function() end; M.snap=function() return {} end
+local skinned = {}
+M.copy_break=function(_,s) return s end; M.skin_cut_cloth=function(mesh) skinned[#skinned + 1] = mesh end
+M.snap=function() return {} end
 local prep,cut=create(M,{cfg=function() return settings end,addr=addr,face_of=function() end,clone_of=function() return clone end,
   log=function() end,bone_loc=function() return v(0,0,1) end,spine_break=function() return nil end,
   split_plane=function() return v(0,0,0),v(1,0,0),'test' end,body_frame=function() end,from_body=function() end,
@@ -35,10 +37,13 @@ check(not prep(q()), 'preparation rejects a previous non-arm cut')
 cuts={{mesh=body,addr=100,bone='arm'}}; commands={}; copyOk=false
 local a=q(); check(prep(a) and not cut(a), 'copy failure aborts the split after an earlier arm cut')
 check(#cuts==1 and commands[#commands]:sub(1,1)=='R', 'failed copy restores saved weights without adding split records')
+check(#skinned == 0, 'failed copy leaves cloth simulated')
 cuts={}; commands={}; copyOk=true; sideResponses={'ok verts=100 vanished=40 unsunk=0 seam=1','ok verts=100 vanished=60 unsunk=0 seam=1'}
 local b=q(); check(prep(b) and cut(b) and #cuts==2 and b.cut1~=nil, 'first half records both cuts and hands work to the next stage')
 check(M.stage_split_copy(b) and b.cut1==nil and b.r1 and b.r2, 'valid second half completes the cut handoff')
+check(#skinned == 2 and skinned[1] == body and skinned[2] == clone, 'successful split skins clothing on both halves')
 cuts={}; commands={}; sideResponses={'ok verts=100 vanished=0 unsunk=0 seam=1','ok verts=100 vanished=99 unsunk=0 seam=1'}
 local c=q(); prep(c); cut(c)
 check(not M.stage_split_copy(c) and c.degenerate, 'tiny remaining half is rejected as degenerate')
+check(#skinned == 2, 'degenerate split leaves cloth simulated')
 print(fails==0 and 'PASS' or 'FAIL')
