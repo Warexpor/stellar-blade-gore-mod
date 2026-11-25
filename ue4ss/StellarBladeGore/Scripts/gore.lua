@@ -4480,6 +4480,11 @@ dofile("ue4ss/Mods/StellarBladeGore/Scripts/gore_hit_marks.lua")(M, {
   vec = vec, sub = sub, add = add, scale = scale, len = len, norm = norm, dot = dot, cross = cross,
   bone_loc = bone_loc, command = command, triple = triple, num = num, pick = pick, niagara = niagara, FX = FX, MARK_AT = MARK_AT,
   guards = function() return try, valid, v3 end,
+  hold = function(actor)
+    local held = ctx.keep(actor)
+    return ctx.alive(held) and held or nil
+  end,
+  held = function(held) return ctx.held(held) end,
 })
 
 -- ---- the killing blow as a blade ----

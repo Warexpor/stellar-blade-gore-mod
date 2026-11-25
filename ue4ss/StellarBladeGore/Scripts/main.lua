@@ -301,7 +301,8 @@ do
   -- of its own, Stellar Blade Play As: gore.lua sees who she looks like by her meshes)
   -- Customized Ragdoll (Nexus 3884) support: its death camera over the mod's ragdoll (goreCtx.customrag)
   -- blood and dirt on her, the game's own switched back on (goreCtx.stains, tune.stains)
-  for _, m in ipairs({ { "bosses", "bosses.lua" }, { "customrag", "customrag.lua" }, { "stains", "stains.lua" } }) do
+  for _, m in ipairs({ { "bosses", "bosses.lua" }, { "customrag", "customrag.lua" }, { "stains", "stains.lua" },
+    { "deathFluid", "death_fluid.lua" } }) do
     local okm, mod = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/" .. m[2])
     if okm and type(mod) == "table" then
       goreCtx[m[1]] = mod
@@ -927,6 +928,7 @@ end
 -- put the mesh back into normal animated gameplay state
 local function recover(pawn, mesh, why)
   local cap = try(function() return pawn.CapsuleComponent end)
+  if goreCtx.deathFluid then goreCtx.deathFluid.clear("recovery") end
   -- the muscle tone's drives hold the current bodies, which gore's cleanup recreates: release them first
   if rag then try(function() rag.stop(pawn) end) end
   if gore then try(function() gore.cleanup(pawn, mesh) end) end
@@ -2451,12 +2453,26 @@ end
 -- slash runs along the attacker's fastest bone's motion (a weapon) if it moved in the last 0.3 s, else the hit's push
 local function hit_marks(pawn, mesh)
   local g = tune.gore or {}
-  if not gore or g.enabled == false or (g.hitMarks or {}).enabled == false then hm.q = {}; return end
+  local marks = g.hitMarks or {}
+  if not gore then return end
+  if g.enabled == false or marks.enabled == false then
+    hm.q, hm.pct = {}, nil
+    if gore.marks() > 0 then gore.clear_marks() end
+    return
+  end
   local now = os.clock()
   if now >= hm.nextBar and goreCtx.glass then
     hm.nextBar = now + 0.25
     -- the HUD is looked for (35 ms) only once a mark is waiting to heal; else only a widget already found is read
     local pct = goreCtx.glass.bar_pct(gore.marks() == 0)
+    local before = hm.pct
+    if marks.scarMesh and before and pct and pct < before - 0.005 and #hm.q == 0 and now >= (hm.nextScar or 0) then
+      local swing = weapon_swing(mesh)
+      if swing and swing.at and swing.part and swing.part_d and swing.part_d <= (marks.reach or 40) then
+        hm.q[1] = { due = now + 0.1, loc = swing.at, push = swing.dir, pre = before }
+        hm.nextScar = now + 0.5
+      end
+    end
     if pct then hm.pct = pct end
     if gore.marks() > 0 then gore.heal_marks(pct) end
   end
@@ -2467,7 +2483,7 @@ local function hit_marks(pawn, mesh)
   if now - q.due > 1 then return end
   -- a hit that took nothing off her bar (a guard, a parry) leaves no mark (tune.gore.hitMarks.needDamage)
   local pct = goreCtx.glass and goreCtx.glass.bar_pct(true)
-  if q.pre and pct and pct > q.pre - 0.001 and (g.hitMarks or {}).needDamage ~= false then
+  if q.pre and pct and pct > q.pre - 0.001 and marks.needDamage ~= false then
     log(string.format("hit mark skipped: her HP bar didn't drop (%.3f before, %.3f now)", q.pre, pct))
     return
   end
@@ -3552,6 +3568,10 @@ local function tick()
     -- steps below too)
     if not sim and animDeath == nil and active then sim = simulating() end
   end
+  if goreCtx.deathFluid and active and not saved.manual then
+    try(function() goreCtx.deathFluid.tick(pawn, mesh, true) end)
+    tp.mark("death fluid")
+  end
   if f7_push then
     f7_push.n = f7_push.n - 1
     if f7_push.n <= 0 then
@@ -3982,6 +4002,7 @@ local function forget_world(pawn)
   if goreCtx.bosses then goreCtx.bosses.forget() end
   if goreCtx.glass then goreCtx.glass.forget() end
   if goreCtx.stains then goreCtx.stains.forget() end
+  if goreCtx.deathFluid then goreCtx.deathFluid.forget() end
   if rag then rag.forget() end
   if goreCtx.convulse then goreCtx.convulse.forget() end
   if goreCtx.struggle then goreCtx.struggle.forget() end

@@ -5,9 +5,8 @@
 return {
   gore = {
     enabled = true,            -- false: no cuts and no blood at all
-    -- hitMarks = {              (parked for now)
-    --   enabled = true,          -- a hit she lives through leaves a slash of blood on her skin (healing fades it)
-    -- },
+    hitMarks = { enabled = false },  -- Healing fades scars left by surviving hits.
+    deathFluid = { enabled = false }, -- Incontinence after death, with a stream and puddle.
     death = {                  -- relative odds of what her death does when the blow doesn't decide it
       limb = 42,               --   an arm or leg off
       head = 25,               --   beheaded

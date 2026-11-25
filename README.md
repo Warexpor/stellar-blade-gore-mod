@@ -7,6 +7,8 @@ When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can 
 
 Release **0.7.8**. See the [changelog](CHANGELOG.md).
 
+The new effects are opt-in. In F3, **Blood and Dirt** has **Hit Scars** and **Incontinence After Death**. **Death** has **Crawl Away** under Death Struggle.
+
 <!-- install -->
 ## Install
 

@@ -539,10 +539,9 @@ return {
                                -- leaning blow put her chin under the head bone's plane, and a slice of it stayed on
                                -- the neck); false = the plane stays at headAt
     jawDrop = 3,               --   at most this many cm down; past it the plane leans back toward her head's own axis
-    hitMarks = {               -- a hit she lives through leaves a slash of blood on her skin (no cut): a decal
-      enabled = false,         --   on the skin where it landed (the DLL finds it), along the swing, riding that skin's
-                               --   bone. F10 puts one on a part at random. false = living hits leave nothing (parked
-                               --   for now: off, and out of settings.lua and the README)
+    hitMarks = {               -- living hits leave a short scar along the swing, attached to the nearest bone
+      enabled = false,         --   opt in under Blood and Dirt in F3
+      scarMesh = true,         --   follow the mesh surface using geometry, with a decal fallback
       delay = 0.25,            --   s after the hit (a killing blow's hit gets the death cut instead)
       needDamage = true,       --   only a hit that took HP off her bar (a guarded or parried one leaves none)
       length = 14,             --   cm long (a forearm's or calf's shorter: it stays on the part's curve)
@@ -554,6 +553,13 @@ return {
                                --   before its hit (all go when she recovers or respawns)
       blood = true,            --   the hit's blood burst on the mark
       reach = 40,              --   cm the hit may be from her nearest part
+    },
+    deathFluid = {
+      enabled = false,         --   opt-in incontinence effect after her hips settle
+      delay = 2,               --   s after death at the soonest
+      spray = 2.5,             --   s the stream runs (0: puddle only)
+      size = 24,               --   puddle width in cm
+      tint = "dark",           --   dark, amber, yellow, pale, or custom
     },
     voice = {                  -- her own death cry (Eve's action-voice recordings) the moment she dies, nothing after
       enabled = true,          --   false: the game's own death voice only
@@ -802,6 +808,13 @@ return {
                                --   (0: limp, as they flopped about before)
     reachMax = 0.88,           -- share of a limb's length its end is sent out to at most: the elbow or knee always a
                                --   little bent (0.97 reached with her arms straight as a mannequin's, playtest)
+    crawl = {
+      enabled = false,         -- prioritize a head-lift crawl when she comes to rest face down with a whole arm
+      distance = 3,            -- metres, stopping early if blocked or exhausted
+      speed = 75,              -- cm/s peak headward movement during a pull
+      accel = 2200,            -- cm/s^2 maximum body acceleration during a pull
+      animated = true,         -- transition a face-down animated death to the ragdoll for the crawl
+    },
     drag = {                   -- a hand or foot planted and pulling (crawl, heels, scrabbling knees) moves her torso
       enabled = true,          --   along the floor up to speed cm/s, accel cm/s^2 at most: the floor's grip. Without
       speed = 28,              --   it every stroke swept the air and she stayed put (playtest)

@@ -445,8 +445,8 @@ end
 -- cm/s, never slowed. Her limbs only turn against her own body, and a hand on the floor has too little weight on it to
 -- grip: the crawl's and the heels' strokes swept the air and she stayed where she was (playtest). This is the grip
 -- the floor would give, while a stroke presses it
-local function drag(mesh, dir, k, dt)
-  local c = sub_cfg("drag")
+local function drag(mesh, dir, k, dt, crawl)
+  local c = crawl or sub_cfg("drag")
   if c.enabled == false or not dir or k <= 0 then return end
   local want, cap = (c.speed or 35) * math.min(k, 1.2), (c.accel or 250) * k * dt
   local wb = st.plan and st.plan.waist
@@ -513,6 +513,14 @@ end
 -- ---- what she has: limbs on, stumps, the pieces cut off her ----
 -- (alone: the roll for a plan of sit-up tries only, made already: an animated fall's, before her bodies simulated,
 -- when every limb read as off her)
+local function crawl_pose(mesh)
+  local c = sub_cfg("crawl")
+  if c.enabled ~= true or st.test then return false end
+  local f = frame(mesh)
+  local r = f and roll_of(f)
+  return r and math.abs(r) > 140
+end
+
 local function pick(mesh, alone)
   local g = ctx.gore
   if torso_smashed(mesh) then return nil, "upper body smashed" end
@@ -546,6 +554,7 @@ local function pick(mesh, alone)
     return { arms = arms, legs = {}, stumps = stumps, wound = waist, waist = waist }
   end
   if #stumps == 0 then
+    if #arms > 0 and crawl_pose(mesh) then return { crawlOnly = true, arms = arms, legs = legs, stumps = stumps } end
     if alone == nil then alone = st.alone or math.random() < (sub_cfg("rise").alone or 0.5) end
     if alone then return { alone = true, arms = arms, legs = legs, stumps = stumps } end
     return nil, "no limb cut"
@@ -751,16 +760,24 @@ ACT.crawl = {
     a.dur = range(sub_cfg("acts").crawl, { 2.5, 4 }) / st.pace
     a.T = rnd(1.6, 2.2) / st.pace
     a.from, a.drag0 = body_at(st.mesh), st.dragT or 0
-    return string.format("crawling, %s", #st.plan.arms > 1 and "both arms" or (side_name(st.plan.arms[1]) .. " arm"))
+    a.directed = st.crawlTarget and not st.crawlDone
+    a.last, a.distance = a.from, 0
+    return string.format("crawling, %s%s", #st.plan.arms > 1 and "both arms" or (side_name(st.plan.arms[1]) .. " arm"),
+      a.directed and ", head lifted" or "")
   end,
   tick = function(a, f, k, dt)
     local mesh = st.mesh
     local r = roll_of(f) or 180
     if math.abs(r) < 110 then return true end -- (rolled off her front)
     local away = scale(f.front, -1) -- (up off the floor: face down her front is the floor)
+    if a.directed then
+      -- Lift the head and upper chest as the hands pull, using the same joint limits as the other acts.
+      servo(mesh, P .. "Neck", norm(add(f.up, scale(away, 0.7))), k, dt)
+      servo(mesh, P .. "Spine2", norm(add(f.up, scale(away, 0.25))), k * 0.5, dt)
+    end
     for i, h in ipairs(st.plan.arms) do
       local L, sh = limb_len(mesh, h, "arm")
-      if L then
+      if L and (not a.directed or whole(mesh, h, ARM)) then
         local x = (a.t / a.T + (i - 1) * 0.5) % 1
         local ahead = sum(sh, scale(f.up, 0.8 * L), scale(out(f, h), 0.15 * L))
         local pulled = sum(sh, scale(f.up, -0.1 * L), scale(out(f, h), 0.3 * L), scale(f.front, 4))
@@ -774,7 +791,22 @@ ACT.crawl = {
       end
     end
     -- (a hand planted and pulling back drags her towards it)
-    if a.pull then drag(mesh, headward(f), k, dt) end
+    local direction = headward(f)
+    if a.pull then drag(mesh, direction, k, dt, a.directed and sub_cfg("crawl") or nil) end
+    if a.directed then
+      local here = body_at(mesh)
+      if here and a.last and direction then
+        local progress = dot(sub(here, a.last), direction)
+        if progress > 0 and progress <= 250 * dt then
+          a.distance, st.crawled = a.distance + progress, st.crawled + progress
+        end
+      end
+      a.last = here
+      if st.crawled >= st.crawlTarget then
+        st.crawlDone = true
+        return true
+      end
+    end
     a.pull = nil
     scrabble(mesh, f, st.plan.legs, (a.t / (a.T * 1.3)) % 1, k * 0.8, dt)
     roll(mesh, f, (r > 0 and 1 or -1) * 180, k * 0.5, dt)
@@ -782,6 +814,10 @@ ACT.crawl = {
   end,
   done = function(a)
     local p = body_at(st.mesh)
+    if a.directed then
+      st.crawlStuck = a.distance < 8 and (st.crawlStuck + 1) or 0
+      st.crawlDone = st.crawlDone or st.crawlStuck >= 2
+    end
     return string.format("dragged herself %.0f cm (pulling for %.1f s)", p and a.from and len(sub(p, a.from)) or -1,
       (st.dragT or 0) - (a.drag0 or 0))
   end,
@@ -943,6 +979,8 @@ local function choose(f, v)
   local back, down = math.abs(r) < 60, math.abs(r) > 120
   local w = sub_cfg("weights")
   local arms, legs = #s.arms > 0, #s.legs > 0
+  if arms and st.crawlTarget and not st.crawlDone and math.abs(r) > 140 then return "crawl" end
+  if s.crawlOnly then return "lie" end
   -- (sitting up takes what she has: not once she has faded below rise.least)
   local tries = st.tries < (st.triesMax or 0) and v >= (sub_cfg("rise").least or 0.4)
   local opts = {}
@@ -1080,7 +1118,7 @@ function M.start(pawn, mesh)
   -- (main.lua's F6 struggle test: on whatever deathMoves says, its plan sit-up only when it has no cut)
   local test = ctx.struggle_test
   if not test and (cfg().enabled == false or ctx.tune.deathMoves == false) then return end
-  st = { pawn = pawn, mesh = mesh, t = 0, last = os.clock(), acc = 0, alone = test and test.alone or nil }
+  st = { pawn = pawn, mesh = mesh, t = 0, last = os.clock(), acc = 0, alone = test and test.alone or nil, test = test }
 end
 
 local function begin(mesh, plan)
@@ -1089,6 +1127,11 @@ local function begin(mesh, plan)
   local tt = cfg().time or { 5, 8 }
   st.plan, st.began, st.t = plan, true, 0
   st.total = rnd(tt[1], tt[2] or tt[1]) * math.max(cfg().length or 1, 0.1)
+  if #plan.arms > 0 and not plan.waist and crawl_pose(mesh) then
+    st.crawlTarget = clamp(tonumber(sub_cfg("crawl").distance) or 3, 0.5, 10) * 100
+    st.crawled, st.crawlStuck = 0, 0
+    if plan.crawlOnly then st.total = math.max(st.total, 22) end
+  end
   st.legClock = { L = { next = rnd(0.2, 0.8) }, R = { next = rnd(0.5, 1.3) } }
   st.pulses, st.reflexAt, st.reflexes, st.draws, st.tries = {}, {}, 0, 0, 0
   st.trace, st.hold, st.step, st.kept, st.keptN, st.err, st.errN = {}, {}, 0, 0, 0, 0, 0
@@ -1104,7 +1147,7 @@ local function begin(mesh, plan)
   local arms = {}
   for _, h in ipairs(plan.arms) do arms[#arms + 1] = side_name(h) end
   log(string.format("%s, %s arm%s and %d leg%s on, for %.1f s, lying at %.0f deg (0 on her back, 180 face down)",
-    plan.alone and "no limb cut: tries to sit up only" or ("stumps: " .. table.concat((function()
+    plan.crawlOnly and "no limb cut: crawls away" or plan.alone and "no limb cut: tries to sit up only" or ("stumps: " .. table.concat((function()
       local o = {}; for _, x in ipairs(plan.stumps) do o[#o + 1] = wound_name(x) end; return o end)(), ", ")),
     #arms > 0 and table.concat(arms, " and ") or "no", #arms == 1 and "" or "s", #plan.legs, #plan.legs == 1 and "" or "s",
     st.total, r or -1))
@@ -1168,6 +1211,9 @@ local function step(mesh, dt)
     end
     if cfg().log ~= false then log(string.format("%.1f s: %s over: %s%s", st.t, a.name, line ~= "" and (line .. "; ") or "", how)) end
     st.act, st.lastAct = nil, a.name
+    if st.plan.crawlOnly and a.name == "crawl" and st.crawlDone then
+      st.total = math.min(st.total, st.t + 2.5)
+    end
     if a.name == "turn" and not a.over then st.dimmed = true end
     if st.plan.alone then st.nextTry = st.t + rnd(2.0, 4.0) end
   end
@@ -1195,7 +1241,12 @@ function M.tick(paused)
       st.quietTried = true
       local plan, why = pick(mesh)
       if not plan then st.done = true; log("none: " .. why .. " (an animated death)"); return end
-      if cfg().animated == false or not ctx.ragdoll_quiet then st.done = true; log("none: an animated death (struggle.animated off)"); return end
+      local allowCrawl = plan.crawlOnly and sub_cfg("crawl").animated ~= false
+      if (cfg().animated == false and not allowCrawl) or not ctx.ragdoll_quiet then
+        st.done = true
+        log("none: an animated death (struggle.animated off)")
+        return
+      end
       st.plan0 = plan
       log("her animated fall has come to rest: going limp as she lies, to struggle")
       ctx.ragdoll_quiet("to struggle")
@@ -1235,6 +1286,7 @@ function M.tick(paused)
     local plan, why = pick(mesh, false)
     if not plan then st.done = true; log("stopped after waist cut: " .. why); return end
     st.plan, st.act, st.pulses, st.hold, st.trace = plan, nil, {}, {}, {}
+    st.crawlTarget = nil
     st.start = body_at(mesh)
     log("waist cut during struggle: continuing on the upper body")
   end
