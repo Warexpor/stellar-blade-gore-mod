@@ -4168,6 +4168,10 @@ end
 function M.splitting() return pending ~= nil and pending.kind == "split" end
 -- a cut is opening or queued (a new one now would be skipped)
 function M.busy() return pending ~= nil or #queued > 0 end
+function M.cut_opening() return pending ~= nil end
+function M.enemy_cut_current(owner)
+  return not (owner and ctx.enemies and ctx.enemies.cut_target and ctx.enemies.cut_target(owner) == false)
+end
 -- the cuts made on this mesh so far, and whether one of them split her
 function M.cuts_on(mesh)
   local a, n, split = addr(mesh), 0, false

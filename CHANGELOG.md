@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.7
+
+- With No Sword Without It enabled, Eve's sword stays blocked until the right arm's regrowth effect finishes. Previously the sword could be swung during the dissolve. The regrowth simulation checks the gate timing. In-game animation still needs verification.
+- Delayed and On Press can find death and Resurrection Item widgets inside the active HUD when object creation notifications miss them. The simulation covers widgets that appear after the initial lookup. The reported encounters and UE4SS forks still need in-game verification.
+- Eve's killing cut waits up to one second for a cut already opening, so a brief overlap no longer drops her cut. Deferred death setup and cutting use her current mesh, and the animated pose hold checks whether the original mesh is still alive before releasing it.
+- Staged enemy cuts drop their work when a tracked corpse or its mesh goes away. The native cutter rejects invalid reference-skeleton parent chains before applying a cut. These guard failure paths on enemy kills and custom outfits. The reported crashes still need logs or an in-game reproduction.
+- Documented how to disable UE4SS hot reload when Ctrl+R for changing ammunition freezes the game.
+
 ## 0.7.6
 
 - Camp limb restoration waits one second after the rest is detected and uses the current Eve and outfit. Standing up keeps the restore queued. Death or a level reload clears it, and a completed rest no longer carries the healing cut into the next level. Thanks to cishicidi for testing the delay with modded outfits.

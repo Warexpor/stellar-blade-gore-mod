@@ -10,15 +10,25 @@ F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 rewe
 F.sbslice.f = "ok photo shield 1"
 local R = require("rag")
 R.install(F, E); F.world = R.step
+local hudDeath
+F.classes.WB_MainHUD_Master_C = { F.obj("WB_MainHUD_Master_C_0", "WB_MainHUD_Master_C", {
+  GetWidgetFromName = function(_, name) if tostring(name) == "WB_MainHUD_Dead" then return hudDeath end end,
+}) }
 assert(pcall(dofile, DIR .. "main.lua"))
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil)); F.run(16, pawn)
 local fails = 0
 local function check(c, message) out((c and "ok   " or "FAIL ") .. message); if not c then fails = fails + 1 end end
 E.s.hp = 0; F.run(0.2, pawn)
 local diedAt = os.clock()
+local notify = F.new_object
+F.new_object = function() end
 E.die(true)
+F.new_object = notify
+F.classes.WB_MainHUD_Dead_C = nil
+F.run(0.3, pawn)
+hudDeath = E.deadScreen
 while os.clock() - diedAt < 0.5 do F.run(0.2, pawn) end
-check(F.find("held hidden") ~= nil, "the death screen is held hidden at once")
+check(hudDeath.__w.vis == 1 and F.find("held hidden") ~= nil, "Delay holds a late death widget missed by the creation watch")
 local w = E.deadScreen
 check(w ~= nil, "the death screen widget exists")
 local visReads = 0

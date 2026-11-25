@@ -141,6 +141,11 @@ int main(void)
     skeletonbad |= strcmp(lastres, "err no skeleton") != 0 || override_w != 0;
     *(u64 *)(sm + SM_REF_BONE_INFO) = (u64)binfo;
     printf("oversized and missing skeletons refused before cut: %s\n", skeletonbad ? "FAIL" : "ok");
+    *(int *)(binfo + THIGH * 0xc + 8) = THIGH;
+    skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1);
+    int topologybad = strcmp(lastres, "err bad skeleton parent") != 0 || override_w != 0;
+    *(int *)(binfo + THIGH * 0xc + 8) = parent[THIGH];
+    printf("cyclic skeleton refused before cut: %s\n", topologybad ? "FAIL" : "ok");
     skin_cut((u64)comp_buf, 0, THIGH, pw, nw, MODE_CUT, 0, 0, -1);
     printf("%s\n", lastres);
     int pending = refinv[THIGH_HELP * 16] == 1;
@@ -622,7 +627,7 @@ int main(void)
         cur_idx = idx; cur_nidx = &nidx;
     }
     int fitbad = modebad || corebad || np + 1 < 20 || strap || fa < 5.7f || fa > 6.3f || fb < 3.7f || fb > 4.3f || fcx < 0.8f || fcx > 1.2f;
-    int fail = scratchbad || skeletonbad || fitbad || vanbad || ghostbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
+    int fail = scratchbad || skeletonbad || topologybad || fitbad || vanbad || ghostbad || !pending || bad || spanning || badsum || r1 != 2 || refinv[THIGH_HELP * 16] != 1;
     printf("%s\n", fail ? "FAIL" : "PASS");
     return fail;
 }

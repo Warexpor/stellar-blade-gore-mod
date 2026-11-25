@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.6"
+local VERSION = "0.7.7"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -145,7 +145,7 @@ goreCtx.reload_tune, goreCtx.version = load_tune, VERSION
 goreCtx.base_tune = base_tune
 
 local gore, rag, physfix = nil, nil, nil
--- an animated death (see animated_death below): { pawn, mesh, push } while her own fall plays, nil otherwise
+-- an animated death (see animated_death below): the pawn and hit evidence while her own fall plays
 local animDeath = nil
 -- one of the data mod's falls is playing: it holds its last frame for 120 s (the game's dead pose snapped in when it
 -- ended 0.9 s after the fall), so recovery stops it, or a test death (F5) left her lying there
@@ -157,13 +157,16 @@ local heldShow = false
 goreCtx.pose = { held = nil }
 function goreCtx.pose.hold(mesh)
   if (tune.active or {}).deathFreeze == false or not valid(mesh) then return end
-  if try(function() mesh.bNoSkeletonUpdate = true; return true end) then goreCtx.pose.held = { mesh = mesh, t = os.clock() } end
+  local k = goreCtx.keep(mesh)
+  if k and goreCtx.held(k, true) and try(function() mesh.bNoSkeletonUpdate = true; return true end) then
+    goreCtx.pose.held = { k = k, t = os.clock() }
+  end
 end
 function goreCtx.pose.free(why)
   local f = goreCtx.pose.held
   if not f then return end
   goreCtx.pose.held = nil
-  if valid(f.mesh) then try(function() f.mesh.bNoSkeletonUpdate = false end) end
+  if goreCtx.held(f.k, true) then try(function() f.k.obj.bNoSkeletonUpdate = false end) end
   log(string.format("death: her pose let go after %.0f ms (%s)", (os.clock() - f.t) * 1000, why))
 end
 -- quiet: from her fall's end pose, as she lies (struggle.lua, maimed): no blow, no momentum, she just goes limp
@@ -172,15 +175,17 @@ local function ragdoll_now(why, quiet)
   if not a then return end
   animDeath = nil
   goreCtx.pose.free("ragdoll: " .. why)
+  local mesh = try(function() return a.pawn.Mesh end)
+  if not valid(mesh) then return end
   if goreCtx.convulse then try(function() goreCtx.convulse.to_ragdoll() end) end
-  try(function() a.mesh:SetSimulatePhysics(true) end)
-  try(function() a.mesh:SetAllBodiesSimulatePhysics(true) end)
-  try(function() a.mesh:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
-  try(function() a.mesh:WakeAllRigidBodies() end)
+  try(function() mesh:SetSimulatePhysics(true) end)
+  try(function() mesh:SetAllBodiesSimulatePhysics(true) end)
+  try(function() mesh:SetAllBodiesBelowSimulatePhysics(FName("Bip001"), true, true) end)
+  try(function() mesh:WakeAllRigidBodies() end)
   log(string.format("animated death: ragdoll after all (%s), pelvis simulating %s", why,
-    tostring(try(function() return a.mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
+    tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
   if rag then
-    if quiet then rag.start(a.pawn, a.mesh, "quiet") else rag.start(a.pawn, a.mesh, "death", a.push) end
+    if quiet then rag.start(a.pawn, mesh, "quiet") else rag.start(a.pawn, mesh, "death", a.push) end
   end
 end
 goreCtx.log, goreCtx.try, goreCtx.valid, goreCtx.v3, goreCtx.vlog = log, try, valid, v3, lg.v
@@ -3202,7 +3207,7 @@ end
 -- her fall plays on as the death (the show's own, or one of DEATH_FALLS over it)
 anim_fall = function(pawn, mesh, push)
   local a = tune.active or {}
-  animDeath = { pawn = pawn, mesh = mesh, push = push, z0 = try(function() return mesh:K2_GetComponentLocation().Z end),
+  animDeath = { pawn = pawn, push = push, z0 = try(function() return mesh:K2_GetComponentLocation().Z end),
     p0 = try(function() return mesh:GetSocketLocation(FName("Bip001-Pelvis")) end) }
   log(string.format("death: animated fall, physics off (pelvis simulating %s)",
     tostring(try(function() return mesh:IsSimulatingPhysics(FName("Bip001-Pelvis")) end))))
@@ -3737,16 +3742,16 @@ local function tick()
     tp.mark("fall")
     -- Capture the hit now; ragdoll setup and cut selection each get a separate frame.
     local deathNumber = deaths
-    pending[#pending + 1] = function()
-      if not (active and deaths == deathNumber and valid(mesh)) then return end
-      if not animated and rag then
-        local started = os.clock()
-        rag.start(pawn, mesh, "death", h and h.push)
-        local ms = (os.clock() - started) * 1000
-        if ms >= ((tune.gore or {}).slowMs or 15) then log(string.format("death ragdoll setup: %.0f ms (a frame of its own)", ms)) end
+    local cutDeadline = os.clock() + 1
+    local function finish_cut()
+      if not (active and deaths == deathNumber) then return end
+      -- A cut already opening (for example, on an enemy killed in the same exchange) owns the cutter briefly.
+      if not test and gore and gore.cut_opening() and os.clock() < cutDeadline then
+        pending[#pending + 1] = finish_cut
+        return
       end
-      pending[#pending + 1] = function()
-      if not (active and deaths == deathNumber and valid(mesh)) then return end
+      local mesh = try(function() return pawn.Mesh end)
+      if not valid(mesh) then return end
       local t0 = os.clock()
       local ok, err = true, nil
       if gore then gore.prof_begin() end
@@ -3760,7 +3765,17 @@ local function tick()
       if ms >= ((tune.gore or {}).slowMs or 15) then
         log(string.format("death cut: %.0f ms (a frame of its own)%s", ms, steps ~= "" and ": " .. steps or ""))
       end
+    end
+    pending[#pending + 1] = function()
+      if not (active and deaths == deathNumber) then return end
+      local mesh = try(function() return pawn.Mesh end)
+      if not animated and rag and valid(mesh) then
+        local started = os.clock()
+        rag.start(pawn, mesh, "death", h and h.push)
+        local ms = (os.clock() - started) * 1000
+        if ms >= ((tune.gore or {}).slowMs or 15) then log(string.format("death ragdoll setup: %.0f ms (a frame of its own)", ms)) end
       end
+      pending[#pending + 1] = finish_cut
     end
   elseif not sim and active and animDeath and polls <= 45 and (try(function() return pawn.CharacterMovement:IsFalling() end)
     or (animDeath.z0 or -1e9) - (try(function() return mesh:K2_GetComponentLocation().Z end) or -1e9) > 25) then
@@ -3915,6 +3930,7 @@ local function forget_world(pawn)
   hm.land, hm.landAny, hm.airTop, hm.airT = nil, nil, nil, nil
   active, polls, after, respawned, lastRecover = false, 0, -1, false, -100
   saved, hits, pending, animDeath = {}, {}, {}, nil
+  goreCtx.pose.held = nil
   rel.loc, rel.rot = nil, nil
   meshHit, meshKey, sw.rockLast, sw.projectileLast, hm.deadMsg = nil, nil, nil, nil, nil
   sw.projectileVolley = nil
@@ -3943,6 +3959,7 @@ local function forget_world(pawn)
   -- without reading it: the normal inactive-screen path would otherwise touch held/ghost widgets from the old world.
   screen.introLook, screen.fade, screen.rv, screen.youDieAt = nil, nil, {}, nil
   dead_hud.scans, dead_hud.found = 0, nil
+  dead_hud.masterAt = nil
   -- the new level may still be streaming in: nothing from the pak for a few seconds more
   goreCtx.quietUntil = math.max(goreCtx.quietUntil, os.clock() + 5)
   slow_stop("the level reloaded")

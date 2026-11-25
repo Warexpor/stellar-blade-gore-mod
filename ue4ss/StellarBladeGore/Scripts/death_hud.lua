@@ -71,11 +71,7 @@ function screen.hud(t)
     if not (valid(m) and tostring(try(function() return m:GetClass():GetFName():ToString() end)) == "WB_MainHUD_Master_C") then m = nil end
   end
   if not m and screen.hudMaster and goreCtx.held(screen.hudMaster) then m = screen.hudMaster.obj end
-  if not m then
-    for _, x in ipairs(try(function() return FindAllOf("WB_MainHUD_Master_C") end) or {}) do
-      if valid(x) and not tostring(try(function() return x:GetFName():ToString() end)):find("^Default__") then m = x end
-    end
-  end
+  if not m then m = dead_hud.find_master() end
   local k = m and goreCtx.keep(m)
   -- (its index read now, while it is surely alive: held reads it only within keepFresh s of keep)
   if not (k and goreCtx.held(k)) then screen.hudHid = { master = k or {}, list = {} }; log("HUD: no WB_MainHUD_Master, left up"); return end

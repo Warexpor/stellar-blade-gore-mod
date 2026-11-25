@@ -83,13 +83,19 @@ function M.pump_once()
     if (M.queue_gap or 0) > 0 then M.queue_gap = M.queue_gap - 1; return end
     M.queue_gap = cfg().queueGap or 1
     local nx = table.remove(queued, 1)
-    local ok, err = pcall(enemy.run, owner_of(nx), nx)
-    if not ok then log("next cut of the blow failed: " .. tostring(err)) end
+    local owner = owner_of(nx)
+    if M.enemy_cut_current(owner) then
+      local ok, err = pcall(enemy.run, owner, nx)
+      if not ok then log("next cut of the blow failed: " .. tostring(err)) end
+    end
   end
   local q = get_pending()
   if not q then return end
   local _, valid = get_guards()
-  if not valid(q.mesh) then set_pending(nil); return end
+  if not M.enemy_cut_current(q.owner) or not valid(q.mesh) then
+    if get_pending() == q then set_pending(nil) end
+    return
+  end
   if q.wait > 0 then q.wait = q.wait - 1; return end
   -- and the next stage in the same frame while the stages so far left room (under half of stageBudgetMs): a cut's
   -- six stages a frame each, the piece came off 32-63 ms after the blow (playtest). Never past the cut itself or a

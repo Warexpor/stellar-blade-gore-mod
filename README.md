@@ -5,7 +5,7 @@ The F3 Spawner (Experimental, Developer Keys on) lists every CharacterTable row 
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Release **0.7.6**. See the [changelog](CHANGELOG.md).
+Release **0.7.7**. See the [changelog](CHANGELOG.md).
 
 <!-- install -->
 ## Install
@@ -14,17 +14,18 @@ You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **Th
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
    **Check the signature even if UE4SS was already installed:** in `SB/Binaries/Win64/ue4ss/UE4SS_Signatures`, rename `FText_Constructor.lua` to `dFText_Constructor.lua` if present. The linked UE4SS archive enables it, and it can close the game at startup. If `dFText_Constructor.lua` already exists, move the enabled file to a backup outside this directory instead of overwriting it. Other UE4SS mods may depend on this signature; check their instructions if they stop working.
-2. **This mod.** Extract `StellarBladeGore-0.7.6.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.7.7.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.7.6`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.7.7`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - Game closes at startup: check the FText signature in step 1; `UE4SS.log` may end with `Crashed calling FText constructor`.
+- Ctrl+R freezes the game when changing ammo: close the game, set `EnableHotReloadSystem = 0` under `[General]` in `SB/Binaries/Win64/ue4ss/UE4SS-settings.ini`, and relaunch. UE4SS uses Ctrl+R to reload mods while this option is enabled.
 - No log at all: UE4SS isn't loading. `dwmapi.dll` must sit right next to `SB-Win64-Shipping.exe` (not in a `UE4SS_v3.1.0-6` folder), and on Linux the launch option must be set.
 - The log has no `sbslice.dll ready`: `ue4ss/Mods/SBSlice` is missing, or lacks its `enabled.txt` or `dlls/main.dll`.
 - Your antivirus deleted `SBSlice/dlls/main.dll`: a false positive (a few scanners' machine-learning guesses, not a known threat; the source is in this repo and the DLL is built from it). Restore it from quarantine and add an exclusion for the `ue4ss/Mods/SBSlice` folder, or extract it from the zip again after adding the exclusion.
@@ -70,7 +71,7 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.lowArm.below` | `0.25` | The share of her HP (25%) a hit has to leave her under for the arm to come off. F3 → Gameplay → Arm Comes Off Below, in 1% steps. |
 | `gore.lowArm.noHealGun` | `true` | While her left arm is off she can't use heal items or shoot the gun (both need her left hand). F3 → Gameplay → No Heals or Gun Without It. |
 | `gore.lowArm.notice` | `true` | With `noHealGun`: pressing her aim or heal key while the arm is off shows the game's own "Cannot use right now." notice, with its sound. F3 → Gameplay → 'Cannot Use' Notice. |
-| `gore.lowArm.noSword` | `true` | While her right arm is off she can't use her sword: the game's own swordless stance (as where her sword is taken from her), the sword folded away. Dodges, the gun and heals still work; no lock-on or drone scan meanwhile. F3 → Gameplay → No Sword Without It. |
+| `gore.lowArm.noSword` | `true` | Eve can't use her sword while her right arm is off or growing back. The game's swordless stance folds the sword away. Dodges, the gun and heals still work. Lock-on and drone scan are disabled. F3 → Gameplay → No Sword Without It. |
 | `gore.lowArm.healBack` | `false` | The arm also grows back once her HP is back at `healAt` (0.9), however she healed (gear that restores HP on kills or over time), and at least 1% over `below`. F3 → Gameplay → Grows Back With HP, Grows Back At (1% steps). |
 | `gore.lowArm.effect` | `true` | A part cut off her alive (that arm, F9's) dissolves back in with a glow when it comes back. Off: it is back at once, with no effect. F3 → Gameplay → Regrow Effect. |
 | `gore.throw` | 250 | How fast a cut-off piece flies off, cm a second (`0`: it just drops). |

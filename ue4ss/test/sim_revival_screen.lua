@@ -16,6 +16,13 @@ local gs = F.obj("Default__GameplayStatics", "GameplayStatics")
 F.objects["/Script/Engine.Default__GameplayStatics"] = gs
 local sounds = 0
 rawset(gs, "PlaySound2D", function(_, _, sound) if sound == cue then sounds = sounds + 1 end end)
+local hudChildren = {}
+local hud = F.obj("WB_MainHUD_Master_C_0", "WB_MainHUD_Master_C", {
+  GetWidgetFromName = function(_, name) return hudChildren[tostring(name)] end,
+  IsInViewport = function() return true end,
+})
+local oldHud = F.obj("WB_MainHUD_Master_C_1", "WB_MainHUD_Master_C")
+F.classes.WB_MainHUD_Master_C = { oldHud, hud } -- Both predate the creation watch.
 assert(pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua"))
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil)); F.run(16, pawn)
 E.s.hp = 0; F.run(0.2, pawn)
@@ -46,5 +53,25 @@ check(hidden[2] == false and pawn.bHidden == false, "the actor becomes visible a
 E.respawn(); F.run(2, pawn)
 E.s.hp = 0; F.run(0.2, pawn); E.die(false); F.run(1, pawn)
 check(F.find("death: taken over") ~= nil and E.s.sim, "a new death without a ragdoll is still taken over")
+E.respawn(); F.run(2, pawn)
+E.s.hp = 0; F.run(0.2, pawn)
+F.new_object = function() end
+E.die(true)
+F.new_object = newObject
+local lateDeath = E.deadScreen
+F.classes.WB_MainHUD_Dead_C = nil
+F.run(0.4, pawn) -- Both initial lookups have missed the widgets.
+local reviveVisibility, reviveEnabled = 4, true
+hudChildren.WB_MainHUD_Dead = lateDeath
+hudChildren.WB_MainHUD_ResurrectionItem = F.obj("WB_MainHUD_ResurrectionItem", "WB_MainHUD_ResurrectionItem_C", {
+  GetVisibility = function() return reviveVisibility end,
+  SetVisibility = function(_, vis) reviveVisibility = vis end,
+  SetIsEnabled = function(_, enabled) reviveEnabled = enabled end,
+})
+F.run(0.25, pawn)
+check(lateDeath.__w.vis == 1, "On Press holds a late death widget from the HUD before the later object scan")
+check(reviveVisibility == 1 and not reviveEnabled, "On Press also holds a missed resurrection widget from the HUD")
+F.press("F4", "SHIFT"); F.run(0.3, pawn)
+check(lateDeath.__w.vis == 4 and reviveVisibility == 4 and reviveEnabled, "Hold the Death releases both HUD widgets")
 check(#F.errors == 0 and not F.find("tick error"), "no hook or tick errors")
 out(failures == 0 and "PASS" or "FAIL")

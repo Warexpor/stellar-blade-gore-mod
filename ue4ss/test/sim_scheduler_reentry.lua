@@ -28,4 +28,26 @@ check(called and accepted, 'bleed callback queues a cut')
 check(resumed == 1, 'scheduler observes and advances the newly queued cut after the callback')
 G.cleanup(pawn, E.mesh)
 check(not G.busy(), 'cleanup cancels the reentrant cut')
+
+local mesh = F.obj('EnemyMesh', 'SkeletalMeshComponent', {
+  SkeletalMesh = E.mesh.SkeletalMesh,
+  GetSocketLocation = E.mesh.GetSocketLocation,
+  GetBoneIndex = E.mesh.GetBoneIndex,
+  IsSimulatingPhysics = function() return true end,
+  GetNumMaterials = function() return 0 end,
+})
+local cls = 'CH_M_NA_26_Blueprint_C'
+local enemy = F.obj('Target', cls, { Mesh = mesh, bActorIsBeingDestroyed = false, bHidden = false })
+local ctx = T.ctx
+local owner = enemy:GetAddress()
+ctx.live_chars = function() return {{ obj = enemy, addr = owner, cls = cls, k = ctx.keep(enemy) }} end
+ctx.tune.enemies.cutChance = 1
+ctx.enemies.tick(pawn, E.mesh)
+local _, opening = G.enemy_cuts(owner)
+check(opening, 'an enemy kill starts a staged cut')
+enemy.Mesh = F.obj('ReplacementMesh', 'SkeletalMeshComponent')
+mesh.__dead, mesh.__freed = true, true
+G.pump_once()
+check(not G.busy(), 'the scheduler drops the old cut when the enemy mesh is replaced')
+check(#F.errors == 0, 'the scheduler never asks the freed enemy mesh if it is valid')
 F.say(fails == 0 and 'PASS' or 'FAIL')

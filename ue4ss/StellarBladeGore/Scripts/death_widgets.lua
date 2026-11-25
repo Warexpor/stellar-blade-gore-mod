@@ -6,12 +6,37 @@ local dead_hud = { scans = 0 }
 -- One made while a level loads (her tick waits 2 s on a new level) went stale unchecked, and Shift+F4's hold never
 -- found the screen (playtest): in a death, one missing is looked for once by its class (find)
 dead_hud.CLASS = { w = "WB_MainHUD_Dead_C", rv = "WB_MainHUD_ResurrectionItem_C" }
+local hudClass = "WB_MainHUD_Master_C"
+local hudNames = { w = "WB_MainHUD_Dead", rv = "WB_MainHUD_ResurrectionItem" }
+function dead_hud.find_master()
+  local master
+  for _, m in ipairs(try(function() return FindAllOf(hudClass) end) or {}) do
+    if valid(m) and not tostring(try(function() return m:GetFName():ToString() end)):find("^Default__") then
+      master = m
+      if try(function() return m:IsInViewport() end) == true then break end
+    end
+  end
+  local k = master and goreCtx.keep(master)
+  if k and goreCtx.held(k, true) then screen.hudMaster = k; return master end
+end
 function dead_hud.get(f, find, grabWaiting)
   local k = dead_hud[f]
   if k and goreCtx.held(k, true) then return k.obj end
   dead_hud[f] = nil
+  if not (find and (get_active() or grabWaiting)) then return end
+  -- A missed or late notification can leave the widget discoverable in the live HUD tree.
+  local master = screen.hudMaster
+  if master and not goreCtx.held(master, true) then screen.hudMaster, master = nil, nil end
+  if master then
+    local w = try(function() return master.obj:GetWidgetFromName(FName(hudNames[f])) end)
+    if valid(w) and try(function() return w:GetClass():GetFName():ToString() end) == dead_hud.CLASS[f] then
+      k = goreCtx.keep(w)
+      if k and goreCtx.held(k, true) then dead_hud[f] = k; return w end
+    end
+  end
+  if find == "hud" then return end
   local search = find == "early" and (f .. ":early") or f
-  if not (find and (get_active() or grabWaiting)) or (dead_hud.found or {})[search] then return end
+  if (dead_hud.found or {})[search] then return end
   dead_hud.found = dead_hud.found or {}
   dead_hud.found[search] = true
   for _, x in ipairs(try(function() return FindAllOf(dead_hud.CLASS[f]) end) or {}) do
@@ -28,10 +53,11 @@ screen.late[#screen.late + 1] = function()
   goreCtx.newobj.watch("/Script/UMG.UserWidget", function(o)
     -- (any time: the death screen may be made in the frame she dies, before the mod's tick knows it)
     local cls = try(function() return o:GetClass():GetFName():ToString() end)
-    if (cls == "WB_MainHUD_Dead_C" or cls == "WB_MainHUD_ResurrectionItem_C")
+    if (cls == dead_hud.CLASS.w or cls == dead_hud.CLASS.rv or cls == hudClass)
       and tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then return end
-    if cls == "WB_MainHUD_Dead_C" then dead_hud.w = goreCtx.keep(o)
-    elseif cls == "WB_MainHUD_ResurrectionItem_C" then dead_hud.rv = goreCtx.keep(o)
+    if cls == dead_hud.CLASS.w then dead_hud.w = goreCtx.keep(o)
+    elseif cls == dead_hud.CLASS.rv then dead_hud.rv = goreCtx.keep(o)
+    elseif cls == hudClass then screen.hudMaster = goreCtx.keep(o)
     elseif cls == "WB_MainHUD_PlayerInfo_C" and goreCtx.glass and goreCtx.glass.hud_made
       and not tostring(try(function() return o:GetFName():ToString() end)):find("^Default__") then
       goreCtx.glass.hud_made(o)

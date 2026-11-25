@@ -140,7 +140,7 @@ function hm.low_notice(pawn)
 end
 -- the parts grown back out of her (sbslice Z on every asset of hers with a part's bones: her body, an outfit's sleeve
 -- or glove, her face and hair for a head), over lowArm.regrow s; each tick while they grow
-function hm.low_regrow(pawn, mesh, T, parts)
+function hm.low_regrow(pawn, mesh, T, parts, holdSword)
   local comps = {}
   local cand = { mesh }
   try(function()
@@ -163,7 +163,7 @@ function hm.low_regrow(pawn, mesh, T, parts)
     end
   end
   if #comps == 0 then log("regrow: nothing of hers has the parts' bones: back at once"); return end
-  hm.regrow = { t0 = os.clock(), T = T, comps = comps }
+  hm.regrow = { t0 = os.clock(), T = T, comps = comps, holdSword = holdSword }
   log(string.format("regrow: %s growing back over %.1f s (%d meshes)", table.concat(parts, ", "), T, #comps))
   hm.grow_tick()
 end
@@ -234,15 +234,18 @@ function hm.ghost_stop(why)
     ok and "" or (", cleanup: " .. tostring(err))))
 end
 -- every part cut off her alive back: dissolving in (lowArm.dissolve.time s), else grown back (lowArm.regrow s) or at
--- once, the arm's blocks off
+-- once. The sword stays blocked until any right-arm regrowth effect finishes.
 function hm.parts_back(pawn, mesh, why)
   local gore, tune = get_gore(), settings()
   local la = (tune.gore or {}).lowArm or {}
   -- (not while a cut still opens: its pieces aren't off yet, and the dissolve's copy took the wrong vertices, off
   -- where the arm was; the rest's sequence and the HP bar are read again next time)
   if gore.busy() then return end
-  if hm.lowCut or hm.lowBlock then hm.lowCut = false; hm.low_block(pawn, false, why) end
   local parts = gore.cut_parts(mesh)
+  local fx = la.effect ~= false
+  local holdSword = fx and #parts > 0 and hm.lowCut and hm.lowSide == "right"
+  hm.lowCut = false
+  if not holdSword and hm.lowBlock then hm.low_block(pawn, false, why) end
   if #parts == 0 then return end
   -- (back for good: nothing carried into a new level. hm.carry_note stops noting while they grow back, so a camp
   -- rest's level reload took the parts noted before it and cut them again on the new Eve, mid regrow)
@@ -250,22 +253,21 @@ function hm.parts_back(pawn, mesh, why)
   -- (its bodies stop simulating onto her pose, on her mesh: not on its copy)
   hm.piece_back("it grows back")
   log(string.format("regrow: %s: %s back", why, table.concat(parts, ", ")))
-  -- (lowArm.effect false, F3's Regrow Effect: back at once)
-  local fx = la.effect ~= false
   local d = la.dissolve
   local T = type(d) == "table" and tonumber(d.time) or (d == false and 0) or 3
   if fx and T > 0 then
     local ok, g, err = pcall(gore.ghost_begin, pawn, mesh, parts)
     if ok and g then
       local F = type(d) == "table" and tonumber(d.fade) or hm.GHOST_FADE_S
-      hm.ghost = { g = g, t0 = os.clock(), T = T, F = F, pawn = pawn, mesh = mesh, parts = parts }
+      hm.ghost = { g = g, t0 = os.clock(), T = T, F = F, pawn = pawn, mesh = mesh, parts = parts, holdSword = holdSword }
       log(string.format("regrow: %s dissolving back in over %.1f s", table.concat(parts, ", "), T))
       return
     end
     log("regrow: no dissolve (" .. tostring(ok and err or g) .. "): grown back instead")
   end
   try(function() gore.cleanup(pawn, mesh) end)
-  if fx and (la.regrow or 1.5) > 0 then hm.low_regrow(pawn, mesh, la.regrow or 1.5, parts) end
+  if fx and (la.regrow or 1.5) > 0 then hm.low_regrow(pawn, mesh, la.regrow or 1.5, parts, holdSword) end
+  if holdSword and not hm.regrow and hm.lowBlock then hm.low_block(pawn, false, why) end
 end
 -- a limb cut off her alive goes onto a copy of her mesh once it has lain still hm.STILL_S s (gore.hide_pieces, as
 -- photo mode does), its bones hidden on her: grabbing a ladder, from the ground or in the air, drew her mesh on her
@@ -460,12 +462,15 @@ function hm.low_arm(pawn, mesh)
     return
   end
   local now = os.clock()
-  -- the blocks follow the menu's switch while the arm is off
+  -- The blocks follow the menu switches through limb loss and right-arm regrowth.
+  local regrow = hm.ghost or hm.regrow
+  local restricted = hm.lowCut or (regrow and regrow.holdSword)
   local right = hm.lowSide == "right"
-  local block = hm.lowCut and (right and la.noSword ~= false or not right and la.noHealGun ~= false)
-  if block and not hm.lowBlock then hm.low_block(pawn, true, "her " .. hm.lowSide .. " arm is off")
+  local block = restricted and (right and la.noSword ~= false or not right and la.noHealGun ~= false)
+  if block and not hm.lowBlock then
+    hm.low_block(pawn, true, hm.lowCut and ("her " .. hm.lowSide .. " arm is off") or "her right arm is growing back")
   elseif not block and hm.lowBlock then
-    hm.low_block(pawn, false, hm.lowCut and (right and "No Sword off" or "No Heals or Gun off") or "the arm is back")
+    hm.low_block(pawn, false, restricted and (right and "No Sword off" or "No Heals or Gun off") or "the arm is back")
   end
   if hm.lowBlock and not hm.lowBlock.sword then hm.low_notice(pawn) end
   if not goreCtx.glass then return end

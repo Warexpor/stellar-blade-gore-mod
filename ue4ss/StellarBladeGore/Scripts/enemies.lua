@@ -759,6 +759,27 @@ local function gone(a, e, how, why)
   if e.cut then log(string.format("%s %x %s: its gore removed", e.kind.alias, a, why)) end
 end
 
+local function current_mesh(e)
+  local mesh = try(function() return e.obj.Mesh end)
+  return mesh and addr(mesh) == addr(e.mesh) and valid(mesh)
+end
+
+-- Cut stages run between enemy polls. Recheck the owner before touching its cached mesh.
+function M.cut_target(owner)
+  local e = known[owner]
+  if not e then return end
+  if ctx.alive and ctx.alive(e.k) == false then
+    gone(owner, e, "vanished", "gone during its cut")
+  elseif dying(e.obj) then
+    gone(owner, e, "destroyed", "destroyed during its cut")
+  elseif not current_mesh(e) then
+    gone(owner, e, "destroyed", "lost its mesh during its cut")
+  else
+    return true
+  end
+  return false
+end
+
 -- buried: dead angels kept on the ground (tune.enemies.keepAngelBodies): the N_AirborneSquad row's
 -- DespawnTimeAfterDeath held long while one lies, put back exactly after. Kept cut angels don't count at
 -- maxCorpses (they're meant to stay; live ones may pinch near their helpers meanwhile).
@@ -908,7 +929,7 @@ function M.kill_nearest(pawn)
   if not her then return end
   local best, bd, ba
   for a, e in pairs(known) do
-    local p = not e.dead and ctx.held(e.k) and valid(e.mesh) and bone_loc(e.mesh, "Bip001-Pelvis")
+    local p = not e.dead and ctx.held(e.k) and current_mesh(e) and bone_loc(e.mesh, "Bip001-Pelvis")
     local d = p and len(sub(p, her))
     if d and d < (cfg().reach or 2500) and (not bd or d < bd) then best, bd, ba = e, d, a end
   end
@@ -1974,7 +1995,7 @@ function M.tick(pawn, mesh, tm)
         e.lookAt = now
         if try(function() return e.obj.bActorIsBeingDestroyed end) ~= false then
           gone(c.addr, e, "destroyed", "destroyed")
-        elseif not valid(e.mesh) then
+        elseif not current_mesh(e) then
           gone(c.addr, e, "destroyed", "lost its mesh")
         else
           local sim = simulating(e)
