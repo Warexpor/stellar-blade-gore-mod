@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.8
+
+- Simulated clothing on a cut body mesh follows its cut weights instead of stretching across the opening. This also applies to both halves of a successful split and restores the cloth blend on recovery.
+- Ragdoll setup can restore a missing outfit physics asset. Upper arms can collide with the front of the chest when their physics bodies start apart. Detached limbs from earlier cuts get their collision pairs when the ragdoll starts.
+- A hit with a recorded pose but no usable blade plane now falls back cleanly instead of interrupting the death cut.
+- Thanks to troubling for contributing the fixes this release builds on.
+
 ## 0.7.7
 
 - With No Sword Without It enabled, Eve's sword stays blocked until the right arm's regrowth effect finishes. Previously the sword could be swung during the dissolve. The regrowth simulation checks the gate timing. In-game animation still needs verification.

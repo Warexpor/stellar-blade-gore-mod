@@ -105,6 +105,37 @@ screen.cloth_tick(pawn)
 check(screen.cloth and screen.cloth.i == 1 and scans == 0, "pending cloth reset waits while piece is off")
 gore.cut_parts, screen.cloth_scene = cut_parts, scene
 screen.cloth, screen.autoF8 = nil, nil
+gore.tick(pawn)
+F.step(1 / 60, pawn)
+gore.tick(pawn)
+assert(gore.native_ready(), "native liveness needs the simulated helper")
+
+local function cloth_asset(name, count)
+  return F.obj(name, "SkeletalMesh", { MeshClothingAssets = { GetArrayNum = function() return count end } })
+end
+local skirt = F.obj("ModdedSkirt", "SkeletalMeshComponent", {
+  SkeletalMesh = cloth_asset("SkirtAsset", 1), ClothBlendWeight = 0.75,
+})
+local rigid = F.obj("RigidMesh", "SkeletalMeshComponent", {
+  SkeletalMesh = cloth_asset("RigidAsset", 0), ClothBlendWeight = 1,
+})
+gore.skin_cut_cloth(rigid)
+check(rigid.ClothBlendWeight == 1, "mesh without cloth stays unchanged")
+gore.skin_cut_cloth(skirt)
+gore.skin_cut_cloth(skirt)
+check(skirt.ClothBlendWeight == 0, "cloth on a previously unknown outfit switches to skinned weights")
+skirt.SkeletalMesh = cloth_asset("ReplacementSkirt", 1)
+gore.swapped(skirt)
+check(skirt.ClothBlendWeight == 0.75, "outfit replacement restores the original weight once")
+gore.skin_cut_cloth(skirt)
+gore.cleanup(pawn, E.mesh)
+check(skirt.ClothBlendWeight == 0.75, "recovery restores cloth on the current outfit")
+gore.skin_cut_cloth(skirt)
+skirt.__freed = true
+F.run(0.1, pawn)
+gore.cleanup(pawn, E.mesh)
+check(skirt.ClothBlendWeight == 0, "recovery skips freed clothing components")
+
 for _, e in ipairs(F.errors) do print("hook error: " .. e) end
 local te = F.find("tick error")
 if te then print("tick error in the log: " .. te) end

@@ -647,16 +647,24 @@ end
 M.fix_asset = fix_defaults -- (test/run.sh phys runs it on the vanilla outfits)
 M.neutral_drives = neutral_drives -- (and this after it)
 
--- her mesh's physics asset: the component's, else the mesh's, else the one given to this mesh here. A null
--- UObject comes back from UE4SS as an invalid wrapper, which is truthy, so `a() or b()` never reached b().
+local function cached_physics()
+  if not state or not state.pa then return nil end
+  if ctx.held then
+    return ctx.held(state.paHandle) and state.pa or nil
+  end
+  return valid(state.pa) and state.pa or nil
+end
+
+-- A null UObject is a truthy wrapper. Check the component, the mesh asset, then the cache for that same mesh.
 function M.asset(mesh)
   local pa = try(function() return mesh:GetPhysicsAsset() end)
   if valid(pa) then return pa end
-  pa = try(function() return mesh.SkeletalMesh.PhysicsAsset end)
+  local sk = try(function() return mesh.SkeletalMesh end)
+  if not valid(sk) then return nil end
+  pa = try(function() return sk.PhysicsAsset end)
   if valid(pa) then return pa end
-  local addr = try(function() return mesh.SkeletalMesh:GetAddress() end)
-  if state and state.borrowed and addr and addr == seenMesh and valid(state.pa) then return state.pa end
-  return nil
+  local addr = try(function() return sk:GetAddress() end)
+  return addr and addr == seenMesh and cached_physics() or nil
 end
 
 -- her bodies re-made (SetPhysicsAsset): main.lua sets her ponytail's cloth up again after it (ctx.on_remade)
@@ -741,7 +749,7 @@ function M.check(pawn, mesh, live)
     seenMesh, state = addr, back.state
     return
   end
-  seenMesh = addr
+  seenMesh, state = addr, nil
   local pa = M.asset(mesh)
   local cpu = cpu_access(sk)
   local borrowed = ""
@@ -849,8 +857,12 @@ function M.check(pawn, mesh, live)
   -- A borrowed vanilla asset keeps its normal treatment even when the mesh itself came from CNS.
   local paFull = valid(pa) and (try(function() return pa:GetFullName() end) or "") or ""
   local cnsAsset = paFull:lower():find("/game/cnsrepacked/", 1, true) ~= nil
-  state = { patched = valid(pa) and not cnsAsset and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa,
+  state = { patched = valid(pa) and not cnsAsset and not fixed[paddr or 0] and patched(pa), cpu = cpu, pa = pa, paAddr = paddr,
     borrowed = borrowed:find("gave it") ~= nil, nativeDeferred = dll() == "failed" }
+  if paddr and ctx.keep and dll() == "ready" then
+    local held = ctx.keep(pa)
+    if ctx.alive(held) then state.paHandle = held end
+  end
   M.seen[addr] = { name = name(sk), state = state }
   -- (the asset's flag; sbslice.dll keeps every skeletal mesh's LOD0 CPU copy whatever it says)
   local forced = ctx and ctx.cpu_forced
@@ -923,22 +935,30 @@ end
 -- ragdoll start: lock the loose bodies of an unpatched asset to the body above them
 function M.start(pawn, mesh)
   M.check(pawn, mesh, true)
-  -- an asset we gave her that the component no longer reads (check leaves it alone while she lives): on her now,
-  -- before her bodies simulate
-  if cfg().enabled ~= false and state and state.borrowed and valid(state.pa) then
-    local now = try(function() return mesh:GetPhysicsAsset() end)
-    if not (valid(now) and try(function() return now:GetAddress() == state.pa:GetAddress() end)) then
-      local ok = try(function() mesh:SetPhysicsAsset(state.pa, true); return true end)
+  local sk = try(function() return mesh.SkeletalMesh end)
+  if cfg().enabled == false or not state or not valid(sk)
+    or try(function() return sk:GetAddress() end) ~= seenMesh then return "" end
+
+  -- Reapply a missing asset before simulation, including an outfit's own asset. Honor a live replacement.
+  local now = try(function() return mesh:GetPhysicsAsset() end)
+  local pa = valid(now) and now or M.asset(mesh)
+  if state.borrowed and valid(now) and try(function() return now:GetAddress() end) ~= state.paAddr then
+    pa = cached_physics() or pa
+  end
+  if valid(pa) then
+    local same = valid(now) and try(function() return now:GetAddress() == pa:GetAddress() end)
+    if not same and (state.borrowed or not valid(now)) then
+      local ok = try(function() mesh:SetPhysicsAsset(pa, true); return true end)
       log(string.format("her physics asset was %s at her death: %s %s", valid(now) and name(now) or "none",
-        ok and "gave her" or "could NOT give her", name(state.pa)))
+        ok and "gave her" or "could NOT give her", name(pa)))
       remade(ok)
     end
   end
-  if cfg().enabled == false or cfg().lockLoose == false or not state or state.patched or not valid(state.pa) then return "" end
+  if cfg().lockLoose == false or state.patched or not valid(pa) then return "" end
   local cls = try(function() return StaticFindObject("/Script/Engine.PhysicsConstraintComponent") end)
   if not valid(cls) then return "no PhysicsConstraintComponent class" end
   local done = {}
-  for _, l in ipairs(M.loose_bodies(state.pa, mesh)) do
+  for _, l in ipairs(M.loose_bodies(pa, mesh)) do
     local b, up = l[1], l[2]
     local at = try(function() return mesh:GetSocketLocation(FName(b)) end)
     local pc = at and try(function()
@@ -1158,13 +1178,12 @@ function M.arm_collision(mesh, pa)
     for _, a in ipairs({ "Bip001-L-Thigh", "Bip001-L-Calf", "Bip001-L-Foot" }) do
       for _, b in ipairs({ "Bip001-R-Thigh", "Bip001-R-Calf", "Bip001-R-Foot" }) do cand[#cand + 1] = { a, b } end
     end
-    -- her forearms and hands against her breasts' bodies (they collide with nothing of hers otherwise, and the
-    -- spine's capsule doesn't reach that far forward: her hands sank into her chest)
+    -- The spine's capsule does not reach the front of the chest. Add upper-arm contacts as well as hands and forearms.
     if g.breastCollision ~= false then
       for _, bs in ipairs(bodies_of(pa)) do
         local b = try(function() return bs.BoneName:ToString() end) or ""
         if b:find("Breast") then
-          for _, a in ipairs({ "Bip001-L-Forearm", "Bip001-L-Hand", "Bip001-R-Forearm", "Bip001-R-Hand" }) do cand[#cand + 1] = { a, b } end
+          for _, a in ipairs(ARM_BONES) do cand[#cand + 1] = { a, b } end
         end
       end
     end

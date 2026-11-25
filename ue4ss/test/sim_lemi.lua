@@ -90,6 +90,19 @@ check(said("outfit CH_P_EVE_02_Body, physics CH_P_EVE_02_Physics: NOT patched") 
 check(cnsSets == 1, "CNS bodies remade from the fixed asset")
 physfix.check(nil, cnsMesh, false)
 check(cnsSets == 1, "CNS bodies are not remade repeatedly")
+local livePa = cns
+cnsMesh.GetPhysicsAsset = function() return livePa end
+cnsMesh.SetPhysicsAsset = function(_, pa) livePa = pa; cnsSets = cnsSets + 1 end
+livePa, cnsSk.PhysicsAsset = nil, nil
+check(physfix.asset(cnsMesh) == cns, "cached outfit-owned physics is found when both live reads are empty")
+physfix.start(nil, cnsMesh)
+check(livePa == cns and cnsSets == 2, "ragdoll start reapplies missing outfit-owned physics once")
+physfix.start(nil, cnsMesh)
+check(cnsSets == 2, "ragdoll start leaves an already assigned asset alone")
+cnsSk.PhysicsAsset = cns
+livePa = complete
+physfix.start(nil, cnsMesh)
+check(livePa == complete and cnsSets == 2, "ragdoll start respects a live replacement for outfit-owned physics")
 -- Lunaris Matutina's actual body physics asset, extracted from the supplied archive:
 -- it lacks Spine1, Head, both clavicles and both feet.
 local lunaris = asset("0010LUNARIS_PhysicsAsset1", 0x310, {

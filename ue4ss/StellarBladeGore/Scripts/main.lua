@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.7"
+local VERSION = "0.7.8"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -848,6 +848,8 @@ local function on_start(pawn, mesh)
       try(function() mesh:SetCollisionResponseToChannel(CH.PhysicsBody, BLOCK) end)
       goreCtx.arm_pairs = arms
     end
+    local pieces = gore and gore.cut_parts(mesh, true, true) or {}
+    if #pieces > 0 then try(function() goreCtx.piece_collision(mesh, pieces) end) end
   end
   phase("collision pairs")
   if armsWhy then log("arms: " .. armsWhy) end

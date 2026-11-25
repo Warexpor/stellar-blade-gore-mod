@@ -101,7 +101,7 @@ rawset(mesh, "ClothBlendWeight", 0.7)
 at = mark()
 check(F.press("F9", ""), "F9 cut bound")
 F.run(2, pawn)
-check(rawget(mesh, "ClothBlendWeight") == 0 and F.find("wedding cloth: using skinned clothing after cut", at) ~= nil,
+check(rawget(mesh, "ClothBlendWeight") == 0 and F.find("cut cloth: using skinned clothing on CNS_Test", at) ~= nil,
   "a cut switches wedding cloth to skinned form")
 F.press("F8", "")
 F.run(1, pawn)

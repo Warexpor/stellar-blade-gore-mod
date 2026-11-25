@@ -1,5 +1,11 @@
 # Stellar Blade Gore Mod: technical notes
 
+## 0.7.8 outfit and cut fixes
+
+Player cuts switch a modified skeletal mesh to skinned cloth when its asset exposes clothing entries. Both split halves switch after the native cuts pass validation. The cloth blend is restored on recovery or when the body component changes outfits, with a lifetime check before accessing a retained component. The existing wedding dress path also works when the clothing array is unreadable. Set `gore.clothSkinned = false` in `settings.lua` to keep cloth simulation. Garments that use their own mesh and span a cut still need a separate geometry fix.
+
+Ragdoll setup uses the outfit's current physics asset or falls back to the cached asset for that same skeletal mesh after checking its lifetime. The existing collision table includes separated upper arms against the front of the chest and adds pairs for already-detached parts at ragdoll start. Blade decisions return through the existing fallback when hit data has a pose but no usable plane. The Lua simulations cover these code paths. The appearance on individual outfits and the game's physics still need in-game verification.
+
 Weapon-trail pruning now shifts retained samples once per update, preserving the existing expiry rule, 240-sample cap, order and history table. The `swing_history` simulation compares pruning with the previous algorithm; the in-game timing impact remains unverified. Watch the existing slow `swing: following` trail timings during playtests.
 
 Angel despawn holds retain the original row value if restoration fails. A failed restore on level reload has no remaining enemy keeper, so `bosses.tick` retries it every five seconds until it succeeds or the table changes; a new keeper can adopt the pending hold (`sim_angel_keep`).

@@ -97,8 +97,6 @@ local function stage_split_cut(q)
   d.add_cut({ mesh = q.mesh, addr = addr(q.mesh), bone = "split", saved = saved or nil, copy = saved and addr(q.body2) or nil,
     sm = enemy.asset(q.mesh) })
   d.add_cut({ mesh = q.body2, addr = addr(q.body2), bone = "split copy", sm = enemy.asset(q.body2) })
-  M.wedding_cloth(q.mesh)
-  M.wedding_cloth(q.body2)
   -- each half keeps the limbs on its side whole and lets the others go; the halves share the mesh's sinks, and each
   -- half's skin lets go of every helper past the plane, so the other half's sinks never pull on it (q.gone1, q.gone2:
   -- limb_sides, above)
@@ -157,6 +155,8 @@ function M.stage_split_copy(q)
     q.degenerate = true
     return false
   end
+  M.skin_cut_cloth(q.mesh)
+  M.skin_cut_cloth(q.body2)
   -- (the lids the next tick: with them the split held one frame 200 ms, twenty-ninth playtest)
   q.caps, q.r1, q.r2 = {}, r1, r2
   return true

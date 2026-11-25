@@ -489,6 +489,7 @@ return {
     },
     hitWindow = 0.6,           -- seconds before death the game's last hit on her still counts as the killing blow
     splitPush = 140,           -- cm/s the halves get away from each other (300 flung them apart, fifteenth playtest)
+    clothSkinned = true,      -- use skinned cloth on cut meshes so the cloth follows the cut weights
     splitVelMax = 2000,        -- cm/s fastest one animated frame may give a body when the halves open: a socket read
                               --   mid-cut jumped metres in a frame (93 m/s) and the halves left the map; over this is
                               --   a sampling glitch, capped
@@ -746,7 +747,7 @@ return {
                                --   legs with each other (an arm went through her body in the ragdoll); a pair whose
                                --   bodies' shapes are within armGap cm
                                --   of each other as she goes limp is left out (overlapping bodies fling apart)
-    breastCollision = true,    --   and her forearms and hands with her breasts' bodies (her hands sank into her chest)
+    breastCollision = true,    --   and her upper arms, forearms and hands with the front of her chest
     armGap = 2,
     pieceCollision = true,     --   and a cut-off arm, leg or head with the rest of her (it fell through her); the pairs
                                --   touching where she is cut are left out, as armGap
