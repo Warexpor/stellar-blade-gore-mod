@@ -35,7 +35,21 @@ f:close()
 -- the cut's answers, as the game's log showed them (sbslice "c", a stage's "C", the photo shield "f")
 F.sbslice.c = "ok verts=62882 mode=0 limb=7912 seam=138 vanished=0 unsunk=0 reweighted=3786 stuck=0 watched=114 far=23.5 sinks=100,85 new=2 sinkmoved=2 held=2 active=928/0 cyc=192/85/0 pieces=5"
 F.sbslice.f = "ok photo shield 1"
+local swordBlocked, swordReturns = false, 0
+local dofile0 = dofile
+dofile = function(path, ...)
+  local result = dofile0(path, ...)
+  if path:match("/tables%.lua$") then
+    result.sword_gate = function(on)
+      swordBlocked = on
+      if not on then swordReturns = swordReturns + 1 end
+      return "ok"
+    end
+  end
+  return result
+end
 local ok, err = pcall(dofile, "ue4ss/Mods/StellarBladeGore/Scripts/main.lua")
+dofile = dofile0
 if not ok then print("FAIL: main.lua didn't load: " .. tostring(err)); return end
 F.fire("/Script/Engine.PlayerController:ClientRestart", F.param(nil))
 F.run(16, pawn)
@@ -56,6 +70,7 @@ F.run(0.5, pawn)
 check(F.press("F8", "ALT"), "Alt+F8 bound")
 F.run(3, pawn)
 check(F.find("her right arm cut off", at) ~= nil, "Alt+F8: her right arm cut off")
+check(swordBlocked, "the right-arm cut blocks the sword")
 
 -- the camp rest: she sits (movement none), the camp chair's sequence plays, 5 s later the rest's restore
 local seqPlaying = true
@@ -86,12 +101,16 @@ check(copy and copy.sectionHidden['0:2'] and copy.sectionHidden['1:2'] and not c
 -- (on her as she walks: only placed where her mesh was, it stood there while she walked off, reported)
 check(copy and copy.parent == E.mesh and copy.attachRules[1] == 2, "the copy attached to her mesh, snapped onto it")
 local samples = {}
+local swordBlockedThroughout = true
 for _ = 1, 4 * 60 do
   F.step(1 / 60, pawn)
+  if copy and not copy.__dead and not swordBlocked then swordBlockedThroughout = false end
   local p = copy and copy.mids[1] and copy.mids[1].p or {}
   samples[#samples + 1] = { t = F.t, d = p.Dissolve, m = p.Morph, g = p.EmissiveBright, dead = copy and copy.__dead }
 end
 check(F.find("dissolved in after", rest) ~= nil, "dissolved in")
+check(swordBlockedThroughout, "the sword stays blocked through the dissolve and fade")
+check(not swordBlocked and swordReturns == 1, "the sword is restored once when regrowth finishes")
 -- the order: the cut undone under the copy (sbslice "x", her weights), the copy destroyed, then the sinks back ("r")
 local undo, gone, rs = nil, nil, {}
 for i = e0 + 1, #F.events do
@@ -132,6 +151,7 @@ end
 check(fade >= 30, string.format("%d frames of fade", fade))
 check(ripple == 0, "no ripple or glow in the fade")
 check(mono, "its Dissolve only rises")
+check(#F.errors == 0 and not F.find("tick error"), "no hook or tick errors")
 if fails > 0 then
   for i = e0 + 1, #F.events do print(string.format("  %.3f %s", F.events[i].t, F.events[i].what)) end
   dump(rest, "regrow")

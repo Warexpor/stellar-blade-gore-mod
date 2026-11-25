@@ -20,8 +20,7 @@ local state = { active = true, manual = false, tune = {} }
 local ctx = { keep = function(o) return { obj = o } end, held = function(k) return k and k.obj ~= nil end }
 local screen = {}
 local function try(fn) local ok, v = pcall(fn); if ok then return v end end
-local dead_hud = { get = function() return nil end }
-FindAllOf = function() return { master } end
+local dead_hud = { get = function() return nil end, find_master = function() return master end }
 install(screen, ctx, dead_hud, function(o) return o ~= nil end, try, function() end,
   function() return state.active end, function() return state.manual end, function() return state.tune end)
 screen.hud(0.9)

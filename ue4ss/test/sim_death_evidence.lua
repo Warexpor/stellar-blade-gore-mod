@@ -72,5 +72,20 @@ check(not early.early,'a failed early attempt clears the flag on shared hit evid
 cut(pawn,E.mesh,final)
 check(tried == final,'an inconclusive early smash still tries the final hit evidence')
 sw.blunt_of, sw.smash_kill, sw.rock_blow, T.ctx.glass = oldBlunt, oldSmash, oldRock, oldGlass
+
+-- A real death can arrive while a previous cut is still opening.
+hm.lethal = nil
+local settings = T.ctx.tune.gore
+settings.smash.enabled, settings.woundAtHit, settings.bladeFollow = false, false, 0
+settings.death = { limb = 0, head = 100, torso = 0, split = 0, moreLimbs = 0 }
+settings.oddsNear = { enabled = false }
+local advance = G.pump_once
+G.pump_once = function() end
+check(G.slice_bone(pawn, E.mesh, 'Bip001-L-UpperArm', nil, 'test') and G.busy(), 'a previous cut is opening')
+E.s.hp = 0; E.die(true); F.run(0.25, pawn)
+G.pump_once = advance
+F.run(2, pawn)
+check(G.has_cut(E.mesh, 'Bip001-L-UpperArm') and G.has_cut(E.mesh, 'Bip001-Head'),
+  'the killing cut runs after the previous cut finishes')
 check(#F.errors==0,'no fake engine errors')
 print(fails==0 and 'PASS' or 'FAIL')

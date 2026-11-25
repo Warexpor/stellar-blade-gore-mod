@@ -117,7 +117,8 @@ function screen.revive(t, grabWaiting)
   for _, f in ipairs({ "w", "rv" }) do
     -- Some finishers open the death screen immediately. Search once at death onset when holding it, with
     -- the later lookup still available if the widget has yet to be made.
-    local w = dead_hud.get(f, f == "w" and (t >= 3 or (hiding and "early")), grabWaiting)
+    local find = f == "w" and (t >= 3 or (hiding and "early")) or (hiding and "hud")
+    local w = dead_hud.get(f, find, grabWaiting)
     if w then
       local vis = try(function() return w:GetVisibility() end) or 1 -- 1 collapsed, 2 hidden
       local up = vis ~= 1 and vis ~= 2 and try(function() return w:IsVisible() end) ~= false
@@ -264,6 +265,15 @@ function screen.probe(pawn, grabWaiting)
   -- (asked while new: a kept object's index is read at its first check, within keepFresh s of being made)
   if dead_hud.w and not dead_hud.w.idx then dead_hud.get("w") end
   if dead_hud.rv and not dead_hud.rv.idx then dead_hud.get("rv") end
+  if screen.hudMaster and not screen.hudMaster.idx and not goreCtx.held(screen.hudMaster, true) then screen.hudMaster = nil end
+  -- The HUD can predate the watcher. Look it up while Eve is alive, away from cut-opening work.
+  local tune = get_tune()
+  local now = os.clock()
+  if not active and not grabWaiting and not screen.hudMaster and (tune.deathScreen ~= "game" or tune.hideHud ~= false)
+    and now >= (dead_hud.masterAt or 0) and goreCtx.gore and goreCtx.gore.native_ready() then
+    dead_hud.masterAt = now + 10
+    dead_hud.find_master()
+  end
   try(function() screen.revive(grabWaiting and 0 or elapsed, grabWaiting) end)
   mk("death screen: revive")
   -- (in a death not before 1 s in: registering them took 166 ms, in the frame the killing blow's cut landed,

@@ -1865,6 +1865,12 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     if (nb > MAX_BONES) { skin_result("err too many bones"); return; }
     if (!c.binfo) { skin_result("err no skeleton"); return; }
     if (b <= 0 || b >= nb || !c.refinv || *(int *)(c.sm + SM_REF_BASES_INV + 8) != nb) { skin_result("err bad bone"); return; }
+    // Descendant flags and ancestor walks rely on the reference skeleton's parent-first order.
+    if (parent_of(&c, 0) != -1) { skin_result("err bad skeleton parent"); return; }
+    for (int i = 1; i < nb; i++) {
+        int p = parent_of(&c, i);
+        if (p < 0 || p >= i) { skin_result("err bad skeleton parent"); return; }
+    }
     if (mode < MODE_CUT || mode > MODE_SIDE || mode == 3) { skin_result("err bad mode"); return; }
     if (forced_sink >= nb || forced_sink < 0) { skin_result("err bad sink"); return; }
     sink_table(&c); // (till the new sinks are recorded, below)
