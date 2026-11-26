@@ -1118,7 +1118,8 @@ function M.start(pawn, mesh)
   -- (main.lua's F6 struggle test: on whatever deathMoves says, its plan sit-up only when it has no cut)
   local test = ctx.struggle_test
   if not test and (cfg().enabled == false or ctx.tune.deathMoves == false) then return end
-  st = { pawn = pawn, mesh = mesh, t = 0, last = os.clock(), acc = 0, alone = test and test.alone or nil, test = test }
+  st = { pawn = pawn, mesh = mesh, meshAddr = try(function() return mesh:GetAddress() end),
+    t = 0, last = os.clock(), acc = 0, alone = test and test.alone or nil, test = test }
 end
 
 local function begin(mesh, plan)
@@ -1231,6 +1232,9 @@ function M.tick(paused)
   local r = rag()
   local v = r and r.view()
   local mesh = st.mesh
+  -- Animated falls re-read pawn.Mesh when they switch to physics. UE4SS can return a fresh wrapper.
+  local sameMesh = v and (v.mesh == mesh or (st.meshAddr and st.meshAddr ~= 0
+    and try(function() return v.mesh:GetAddress() end) == st.meshAddr))
   if not st.began then
     st.wait = (st.wait or 0) + dt
     if ctx.animated and ctx.animated() then
@@ -1252,7 +1256,7 @@ function M.tick(paused)
       ctx.ragdoll_quiet("to struggle")
       return
     end
-    if not (v and v.mesh == mesh) then return end
+    if not sameMesh then return end
     -- (never in the air: startMax counts from her landing, so a fall off a ledge starts it once she is down)
     if r.aloft_now and r.aloft_now() > (cfg().air or 40) then
       if not st.airSaid then st.airSaid = true; log(string.format("waits: she is %.0f cm over the floor", r.aloft_now())) end
@@ -1275,7 +1279,7 @@ function M.tick(paused)
     end
     begin(mesh, plan)
   end
-  if not (v and v.mesh == mesh) then
+  if not sameMesh then
     st.done = true
     log(string.format("stopped after %.1f s: her ragdoll ended", st.t))
     return
