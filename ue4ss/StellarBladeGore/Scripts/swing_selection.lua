@@ -1,11 +1,12 @@
 -- Select the weapon sweep that best explains a hit. Settings and object guards remain live.
 return function(settings, held, try, vof, SWING_AT, sub, dot, dist, len, unit, cross, log, get_scale)
 local function scale() local s = get_scale and get_scale() or 1; return (s and s > 0) and s or 1 end
-return function(swing, mesh)
+return function(swing, mesh, scarReach)
   local g = settings().gore or {}
   local h = swing.hist
+  local window = g.swingWindow or 0.6
   -- an old trail (the enemy gone, or a death that started without it) is no swing
-  if #h < 3 or os.clock() - h[#h].t > (g.swingWindow or 0.6) or not held(swing.k) then return nil end
+  if #h < 3 or os.clock() - h[#h].t > window or not held(swing.k) then return nil end
   local fwd = try(function() return vof(swing.actor:GetActorForwardVector()) end)
   -- a weapon mesh's blade: the step (fast enough) whose sweep went through her, the plane through the blade line along
   -- its motion. The fastest step alone was the pull-back after a blocked blow: its plane passed 52 cm beside her, was
@@ -46,7 +47,7 @@ return function(swing, mesh)
   local minv, pull, full, now, gts = g.swingMinSpeed or 300, g.swingSpeedPull or 30, g.swingSpeedFull or 9000, os.clock(), scale()
   for i = 2, #h do
     local dt = (h[i].t - h[i - 1].t) * gts
-    if dt > 1e-3 and h[i].w and h[i - 1].w then
+    if dt > 1e-3 and h[i].w and h[i - 1].w and (not scarReach or now - h[i].t <= window) then
       for k, e in pairs(h[i].w) do
         local o = h[i - 1].w[k]
         if o then
@@ -85,11 +86,13 @@ return function(swing, mesh)
                 + (g.swingAgeCost or 60) * (now - h[i].t) * gts
               if not closest or nd < closest then closest = nd end
               local c = { speed = v, i = i, k = k, sc = sc, d = nd, at = near, part = part, away = away }
-              if not perw[k] or sc < perw[k].sc then perw[k] = c end
-              if not bw or sc < bw.sc then
-                if bw and bw.part ~= part then second = bw end
-                bw = c
-              elseif bw.part ~= part and (not second or sc < second.sc) then second = c end
+              if not scarReach or nd <= scarReach then
+                if not perw[k] or sc < perw[k].sc then perw[k] = c end
+                if not bw or sc < bw.sc then
+                  if bw and bw.part ~= part then second = bw end
+                  bw = c
+                elseif bw.part ~= part and (not second or sc < second.sc) then second = c end
+              end
             end
           elseif v >= minv and (not bw or v > bw.speed) then
             bw = { speed = v, i = i, k = k }
@@ -101,7 +104,7 @@ return function(swing, mesh)
   -- a blade that never came near her (its nearest step swept swingMiss cm off every part of her) didn't make the
   -- blow: its plane, put through her, took a standing Eve's shin with a 433 cm weapon 59 cm off her (playtest). The
   -- death goes on with a made-up blow (the weapon's bones would only miss her wider)
-  if closest and closest > (g.swingMiss or 45) then
+  if not scarReach and closest and closest > (g.swingMiss or 45) then
     log(string.format("swing: %d fast steps of %s's blade, the nearest %.0f cm from her: it missed her, not its plane",
       steps, tostring(swing.who), closest))
     return nil
@@ -109,7 +112,7 @@ return function(swing, mesh)
   if bw and bw.speed >= minv then
     local e, o = h[bw.i].w[bw.k], h[bw.i - 1].w[bw.k]
     local m1 = bw.at or { X = (e.a.X + e.b.X) / 2, Y = (e.a.Y + e.b.Y) / 2, Z = (e.a.Z + e.b.Z) / 2 }
-    if bw.d then
+    if bw.d and not scarReach then
       log(string.format("swing: step %.2f s before of %d fast ones, its blade %.0f cm from her %s%s at %.0f cm/s (fastest %.0f)",
         os.clock() - h[bw.i].t, steps, bw.d, tostring(bw.part), bw.away and ", moving away from it" or "", bw.speed, fastest or 0)
         .. (second and string.format("; next best %.2f s before, %.0f cm from her %s at %.0f cm/s", os.clock() - h[second.i].t,
@@ -124,8 +127,12 @@ return function(swing, mesh)
       local blade = unit(sub(e.b, e.a))
       local c = dir and blade and cross(blade, dir)
       if c and len(c) > 0.3 then return dir, unit(c) end
+      if scarReach then return dir end
     end
     local dir, n = plane(bw)
+    if scarReach then
+      return { at = bw.at, dir = dir, score = bw.d + (now - h[bw.i].t) * (g.swingAgeCost or 60) }
+    end
     if n then
       local w = swing.weapons[bw.k]
       -- the other weapon's best step, when it swept another part of her within swingMiss (a cross slash with two
@@ -165,6 +172,34 @@ return function(swing, mesh)
     local o = h[j].origin
     if p and o then return { X = p.X - o.X, Y = p.Y - o.Y, Z = p.Z - o.Z } end
     return p
+  end
+  -- A living hit already has a health drop. A recent contact supplies its position and direction;
+  -- a claw, fist or thrust needs no plane for the cut selector.
+  if scarReach then
+    local contact
+    for i = #h, 2, -1 do
+      local a, b = h[i - 1], h[i]
+      local age = now - b.t
+      if age > window then break end
+      local dt = (b.t - a.t) * gts
+      if dt > 1e-3 then
+        for k = 1, #swing.bones do
+          local p, q = rel(i - 1, k), rel(i, k)
+          if p and q and dist(p, q) / dt >= minv then
+            local targets = parts_by_step[i]
+            if not targets then targets = parts(b); parts_by_step[i] = targets end
+            for _, target in ipairs(targets) do
+              local at, d = seg_near(target[1], a.p[k], b.p[k])
+              local score = d + age * (g.swingAgeCost or 60)
+              if d <= scarReach and (not contact or score < contact.score) then
+                contact = { at = at, dir = unit(sub(q, p)), score = score }
+              end
+            end
+          end
+        end
+      end
+    end
+    return contact
   end
   local best
   for i = 2, #h do

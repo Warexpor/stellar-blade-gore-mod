@@ -1,5 +1,13 @@
 # Stellar Blade Gore Mod: technical notes
 
+## 0.7.9 F3 startup, blood pools and Hit Scars
+
+The SBSlice handshake runs before the gore master switch in the gore tick because the settings UI uses it for FText and object guards. An F3 press during the handshake queues an open. The menu renders and verifies that its widget is in the viewport before holding player input. World pause requires a successful readback of Eve's tick-while-paused flag. Failed opens leave input and pause alone and log the stage reached. The original freeze still needs an in-game retest.
+
+With `gore.enabled = false` and `gore.uncutPool = true`, the existing death-ragdoll settling path starts a pelvis tracker with drips disabled. The pool uses the usual material, floor checks, growth and cleanup. The opt-in is independent of `gore.pool` and `gore.blood`, which still govern the usual gore effects. The `uncut_pool` simulation covers opening F3 with cuts off, a failed viewport attach, the pause check, and growing and clearing a pool after switching it on through F3.
+
+Hit Scars is parked while its in-game appearance is reviewed. The F3 row and default setting are commented out, and the settings loader keeps the feature off after applying saved preferences. The retained HP-drop fallback accepts a recent, nearby claw or limb sweep when the game supplies no hit position. The `scar_hits` simulation verifies the parked setting and enables the fallback in memory to keep testing it.
+
 ## 0.7.8 outfit and cut fixes
 
 Player cuts switch a modified skeletal mesh to skinned cloth when its asset exposes clothing entries. Both split halves switch after the native cuts pass validation. The cloth blend is restored on recovery or when the body component changes outfits, with a lifetime check before accessing a retained component. The existing wedding dress path also works when the clothing array is unreadable. Set `gore.clothSkinned = false` in `settings.lua` to keep cloth simulation. Garments that use their own mesh and span a cut still need a separate geometry fix.

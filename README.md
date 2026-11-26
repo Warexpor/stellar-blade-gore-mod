@@ -5,9 +5,9 @@ The F3 Spawner (Experimental, Developer Keys on) lists every CharacterTable row 
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Release **0.7.8**. See the [changelog](CHANGELOG.md).
+Release **0.7.9**. See the [changelog](CHANGELOG.md).
 
-The new effects are opt-in. In F3, **Blood and Dirt** has **Hit Scars** and **Incontinence After Death**. **Death** has **Crawl Away** under Death Struggle.
+The new effects are opt-in. In F3, **Blood and Dirt** has **Incontinence After Death** and **Blood Pool With Cuts Off**. **Death** has **Crawl Away** under Death Struggle.
 
 <!-- install -->
 ## Install
@@ -16,14 +16,14 @@ You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **Th
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
    **Check the signature even if UE4SS was already installed:** in `SB/Binaries/Win64/ue4ss/UE4SS_Signatures`, rename `FText_Constructor.lua` to `dFText_Constructor.lua` if present. The linked UE4SS archive enables it, and it can close the game at startup. If `dFText_Constructor.lua` already exists, move the enabled file to a backup outside this directory instead of overwriting it. Other UE4SS mods may depend on this signature; check their instructions if they stop working.
-2. **This mod.** Extract `StellarBladeGore-0.7.8.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.7.9.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.7.8`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.7.9`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - Game closes at startup: check the FText signature in step 1; `UE4SS.log` may end with `Crashed calling FText constructor`.
@@ -49,7 +49,8 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 
 | Setting | Default | What it does |
 |---|---|---|
-| `gore.enabled` | `true` | All cuts and blood. |
+| `gore.enabled` | `true` | Cuts and their blood effects. |
+| `gore.uncutPool` | `false` | Blood Pool With Cuts Off in F3 → Blood and Dirt. A ground pool grows under Eve's intact death ragdoll with Cuts and Blood off. |
 <!-- | `gore.hitMarks.enabled` | `true` | Slashes of blood from hits she survives. | -->
 | `gore.death` | 42 / 25 / 15 / 18 | Odds of a limb, a beheading, a cut across her body (under the bust, leaning a little at random) or a split down the middle (running a little diagonally), when the blow doesn't decide. All split (`0` for the rest) splits every death; otherwise a blade seen decides first (`bladeFollow`). |
 | `gore.noSplits` | `false` | `true`: she is never split top to bottom, by any blow, roll or hit after her death (No Vertical Splits in the menu); a blade down her length becomes a beheading or waist cut according to where it struck (with normal follow-up cuts), and the split share of `gore.death` goes to the others. |

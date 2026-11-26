@@ -4,8 +4,9 @@
 -- Anything here overrides the same key in tune.lua (the full list of knobs, for tinkering).
 return {
   gore = {
-    enabled = true,            -- false: no cuts and no blood at all
-    hitMarks = { enabled = false },  -- Healing fades scars left by surviving hits.
+    enabled = true,            -- false: disables cuts and their blood effects
+    uncutPool = false,         -- blood pool under Eve's ragdoll when cuts are off
+    -- hitMarks = { enabled = false },  -- Parked. Healing fades scars left by surviving hits.
     deathFluid = { enabled = false }, -- Incontinence after death, with a stream and puddle.
     death = {                  -- relative odds of what her death does when the blow doesn't decide it
       limb = 42,               --   an arm or leg off

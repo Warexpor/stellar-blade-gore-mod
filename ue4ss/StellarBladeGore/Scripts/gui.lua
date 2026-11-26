@@ -1,6 +1,6 @@
 -- The in-game settings menu (tune.menuKey F3, or tune.menuPad on the controller): plain UMG widgets made here at
 -- runtime in the look of the game's own settings screen (its fonts, colours and layout; nothing in the pak). The
--- world goes on while it is open (it was slowed to a stop: asked not to be); her moving and looking are held. Q/E (LB/RB) switch the tab, Up/Down (or the D-pad) picks a row, < >
+-- menu holds Eve's input and can pause the world. Q/E (LB/RB) switch the tab, Up/Down (or the D-pad) picks a row, < >
 -- (or the D-pad) changes it, R / Y (Triangle) puts the tab back to settings.lua, Enter / A presses a button, Backspace / B or the key again closes it. A change applies at once; on
 -- closing, the changed values are saved to menu.lua (path = value), which wins over settings.lua, and the settings
 -- are read again (the enemies' and the death table's are made over from them). "Reset to settings.lua" deletes it.
@@ -70,7 +70,7 @@ end
 -- rows: a tab (section), a setting (bool, num with min/step and optional max, list of values with their names), or a button
 M.ROWS = {
   { section = "Gore" },
-  { key = "gore.enabled", label = "Cuts and Blood", kind = "bool", help = "Master switch for all cuts, stumps and blood, on Eve and on enemies. Off: deaths are plain ragdolls." },
+  { key = "gore.enabled", label = "Cuts and Blood", kind = "bool", help = "Turns cuts, stumps and their blood effects on for Eve and enemies. Off: deaths use intact ragdolls." },
   { key = "gore.noBursts", label = "No Blood Bursts", kind = "bool", help = "Off by default. On: fresh stumps stay dry, no spurting blood out of cuts, splits or smashes. Floor splats, drips and pools stay as they are." },
   { key = "gore.death.limb", label = "Limb Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the arm or leg nearest the hit comes off." },
   { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the head comes off." },
@@ -148,7 +148,8 @@ M.ROWS = {
   { key = "enemies.push", label = "Extra Death Push", kind = "num", min = 0, max = 1000, step = 50, unit = " cm/s", help = "Speed added to every enemy death along the blow, slightly upward, on top of Death Throw (0: none). Works with Enemy Gore off too." },
   { key = "enemies.forceGrabs", label = "Always Grab Attacks (Experimental)", kind = "bool", help = "Off by default, being tested. Only enemies that have a grab-QTE attack of their own are affected. Those always attack with it: a close attack or a lunging one plays its tree's own grab instead of its attack, so every attack up close comes out a grab-QTE move. Enemies with no grab skill, and dodges, get-ups, guards, ranged shots and beams, stay as they are." },
   { section = "Blood and Dirt" },
-  { key = "gore.hitMarks.enabled", label = "Hit Scars (Experimental)", kind = "bool", help = "Hits Eve survives can leave a visible scar. Healing fades the scar. Recovery clears it." },
+  { key = "gore.uncutPool", label = "Blood Pool With Cuts Off", kind = "bool", help = "With Cuts and Blood off, a blood pool grows on the ground under Eve after her ragdoll settles." },
+  -- Parked: { key = "gore.hitMarks.enabled", label = "Hit Scars (Experimental)", kind = "bool", help = "Hits Eve survives can leave a visible scar. Healing fades the scar. Recovery clears it." },
   { key = "gore.deathFluid.enabled", label = "Incontinence After Death (Experimental)", kind = "bool", help = "After Eve dies and settles, a short stream forms a puddle under her. Recovery clears the effect." },
   { key = "gore.deathFluid.spray", label = "   Stream Duration", kind = "num", min = 0, max = 6, step = 0.5, unit = " s", help = "How long the stream lasts. Set it to zero for a puddle alone." },
   { key = "stains.enabled", label = "Blood and Dirt (Experimental)", kind = "bool", help = "Experimental, off by default. Restores the game's unused blood and dirt mechanic: it builds on Eve as she takes damage or nearby enemies are hit, and clears with healing or swimming. Works best with the Skin Suit and exposed skin on some outfits; many outfits do not fully support it." },
@@ -375,7 +376,8 @@ M.DEPENDS = {
   ["struggle.rise.alone"] = { { "deathMoves", true } }, ["convulse.armSwing.enabled"] = { { "deathMoves", true } },
   ["struggle.crawl.enabled"] = { { "deathMoves", true } },
   ["struggle.crawl.distance"] = { { "deathMoves", true }, { "struggle.crawl.enabled", true } },
-  ["gore.hitMarks.enabled"] = { { "gore.enabled", true } },
+  ["gore.uncutPool"] = { { "gore.enabled", false } },
+  -- ["gore.hitMarks.enabled"] = { { "gore.enabled", true } },
   ["gore.deathFluid.enabled"] = { { "gore.enabled", true } },
   ["gore.deathFluid.spray"] = { { "gore.enabled", true }, { "gore.deathFluid.enabled", true } },
   ["gore.headRagdollChance"] = { { "active.animated", true }, { "gore.headRagdoll", false } },
@@ -577,6 +579,7 @@ function M.prune()
   if not ok or type(m) ~= "table" then return end
   local known = {}
   for _, r in ipairs(M.ALL or M.ROWS) do if r.key then known[r.key] = true end end
+  known["gore.hitMarks.enabled"] = true -- keep the saved preference while Hit Scars is parked
   local kept, gone = {}, {}
   for k, v in pairs(m) do
     if type(k) == "string" and (known[k] or k == "spawner.collapsed" or k:find("^keys%.")) then kept[k] = v else gone[#gone + 1] = tostring(k) end
@@ -1022,9 +1025,6 @@ local function build()
   end
   make_keys()
   ui.rekey = make_keys
-  stage("on screen")
-  try(function() w:SetVisibility(3) end) -- not hit-testable: clicks reach the game's input, read in M.tick
-  w:AddToViewport(960)
   return ui
 end
 
@@ -1167,17 +1167,21 @@ local function pause(pawn, on)
       -- the mouse: its cursor shown, free of the viewport's capture (game and UI), the clicks still read as keys
       s.paused.cursor = try(function() return pc.bShowMouseCursor end)
       try(function() pc.bShowMouseCursor = true end)
-      local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+      local wbl = try(function() return StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary") end)
       if valid(wbl) then try(function() wbl:SetInputMode_GameAndUIEx(pc, nil, 0, false) end) end
     end
     -- the world stopped under it (tune.menuPause): the game paused, her actor ticking through it (the menu runs on her
     -- tick, and the mod's own work waits too: main.lua's game_tick runs only the menu meanwhile). A pause already on
     -- (the game's own) is left to the game
-    if ctx.tune.menuPause ~= false and valid(pawn) and try(function() return gs:IsGamePaused(pawn) end) ~= true then
+    if ctx.tune.menuPause ~= false and valid(pawn) and try(function() return gs:IsGamePaused(pawn) end) == false then
       s.paused.tick = try(function() return pawn.PrimaryActorTick.bTickEvenWhenPaused end)
-      try(function() pawn:SetTickableWhenPaused(true) end)
-      s.paused.world = try(function() return gs:SetGamePaused(pawn, true) end) == true
-      if not s.paused.world then try(function() pawn:SetTickableWhenPaused(s.paused.tick == true) end) end
+      if s.paused.tick ~= nil then
+        if not s.paused.tick then try(function() pawn:SetTickableWhenPaused(true) end) end
+        if try(function() return pawn.PrimaryActorTick.bTickEvenWhenPaused end) == true then
+          s.paused.world = try(function() return gs:SetGamePaused(pawn, true) end) == true
+        end
+        if not s.paused.world and not s.paused.tick then try(function() pawn:SetTickableWhenPaused(false) end) end
+      end
       log("menu: the game " .. (s.paused.world and "paused" or "didn't pause"))
     end
   elseif not on and s.paused then
@@ -1188,7 +1192,7 @@ local function pause(pawn, on)
       try(function() p.pc:ResetIgnoreLookInput() end)
       if valid(pawn) then try(function() pawn:EnableInput(p.pc) end) end
       try(function() p.pc.bShowMouseCursor = p.cursor == true end)
-      local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+      local wbl = try(function() return StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary") end)
       if valid(wbl) then try(function() wbl:SetInputMode_GameOnly(p.pc) end) end
     end
     if p.world then
@@ -1199,47 +1203,68 @@ local function pause(pawn, on)
 end
 -- the game paused by the menu (main.lua's game_tick runs only the menu then)
 function M.pausing() return M.state.open and M.state.paused ~= nil and M.state.paused.world == true end
+local function waiting_for_text()
+  local g = ctx.gore
+  local state = g and g.native_state and g.native_state()
+  return state == "init" or state == "waiting"
+end
+
+local function show_menu(reuse)
+  log("menu: making it: first draw")
+  render()
+  log("menu: making it: on screen")
+  local w = M.state.ui.w
+  w:SetVisibility(3) -- clicks reach the game's input, read in M.tick
+  if not reuse then w:AddToViewport(960) end
+  if not w:IsInViewport() then error("widget did not enter the viewport", 0) end
+end
+
 function M.open(pawn)
   local s = M.state
   if s.open then return end
-  local ok = s.ui and valid(s.ui.w) and try(function() return s.ui.w:IsInViewport() end)
-  -- (made again for a menu key rebound since: its Exit hint)
-  if ok and ctx.keys and s.ui.menuKey ~= ctx.keys.binding("menu") then
-    try(function() s.ui.w:RemoveFromParent() end)
-    ok = false
-  end
-  if not ok and not text_by() then
-    log("menu: not made: sbslice.dll can't set its text, and UE4SS didn't find the game's FText constructor "
-      .. "(UE4SS.log: \"Failed to find FText::FText\"); settings.lua works as ever")
+  if waiting_for_text() then
+    if not s.pending then log("menu: waiting for SBSlice startup") end
+    s.pending = true
     return
   end
+  s.pending = nil
+  log("menu: opening")
+  local ok, err = pcall(function()
+    local gs, pc = controller(pawn)
+    if not (valid(gs) and valid(pc)) then error("no player controller", 0) end
+    if ctx.reload_tune then ctx.reload_tune() end
+    M.refresh()
+    local reuse = s.ui and valid(s.ui.w) and s.ui.w:IsInViewport()
+    if reuse and ctx.keys and s.ui.menuKey ~= ctx.keys.binding("menu") then
+      s.ui.w:RemoveFromParent()
+      reuse = false
+    end
+    if not reuse then
+      s.ui = nil
+      if not text_by() then
+        error("no usable FText constructor (see SBSlice startup and FText messages in UE4SS.log)", 0)
+      end
+      s.ui = build()
+    else
+      -- Icons missing at build may have been loaded by the game since.
+      local missed = {}
+      for path in pairs(M.missingIcons) do missed[#missed + 1] = path end
+      local found = false
+      for _, path in ipairs(missed) do if M.icon_tex(path) then found = true end end
+      if found then s.ui.rekey() end
+    end
+    if not selectable(s.sel) then s.sel = 2 end
+    show_menu(reuse)
+  end)
   if not ok then
-    local built, ui = pcall(build)
-    if not built then log("menu: couldn't be made: " .. tostring(ui)); return end
-    s.ui = ui
-  else
-    try(function() s.ui.w:SetVisibility(3) end)
+    if s.ui and valid(s.ui.w) then try(function() s.ui.w:RemoveFromParent() end) end
+    s.ui = nil
+    log("menu: couldn't open: " .. tostring(err))
+    return
   end
   s.open, s.held, s.changed, s.swallow = true, {}, {}, true
-  -- (settings.lua read again: a hand edit shows here and applies without a restart, as the old Reload Settings key did)
-  if ctx.reload_tune then ctx.reload_tune() end
-  M.refresh()
-  -- icons missing at build can be in memory now (the game loads its hints on demand): look again,
-  -- rebuilding the key hints if one turned up
-  do
-    local missed = {}
-    for path in pairs(M.missingIcons) do missed[#missed + 1] = path end
-    local found = false
-    for _, path in ipairs(missed) do if M.icon_tex(path) then found = true end end
-    if found and s.ui and s.ui.rekey then
-      log("menu: key icons now in memory since build, hints made again")
-      s.ui.rekey()
-    end
-  end
-  if not selectable(s.sel) then s.sel = 2 end
+  s.tickAt = os.clock()
   pause(pawn, true)
-  log("menu: making it: first draw")
-  render()
   log("menu: opened")
 end
 local function capture_end()
@@ -1271,6 +1296,11 @@ function M.toggle(pawn, pad)
   local now = os.clock()
   if now - M.state.toggled < 0.3 then return end
   M.state.toggled = now
+  if M.state.pending then
+    M.state.pending = nil
+    log("menu: cancelled the pending open")
+    return
+  end
   if not M.state.open then M.state.pad = pad == true end
   if M.state.open then M.close(pawn) else M.open(pawn) end
 end
@@ -1301,7 +1331,8 @@ local function step(dir)
   local row = M.ROWS[s.sel]
   if row and row.kind == "group" then toggle_group(row); render(); return end
   if not row or not row.key or row.kind == "key" or row.kind == "pad" then return end
-  local v = get(row.key)
+  local previous = get(row.key)
+  local v = previous
   if row.kind == "bool" then v = not (v == true)
   elseif row.kind == "list" then
     if #row.values == 0 then return end
@@ -1319,20 +1350,30 @@ local function step(dir)
     if row.pct then v = math.floor(v * 100 + 0.5) / 100 end
   end
   set(row.key, v)
-  s.changed[row.key] = true
   if row.key == "dev" or row.key == "menuGrouped" then M.refresh() end
   -- (another language: the menu made again, in its strings and fonts)
   if row.key == "language" then
-    if s.ui and valid(s.ui.w) then try(function() s.ui.w:RemoveFromParent() end) end
-    local built, ui = pcall(build)
-    -- (once more on a failure: a font that didn't take is left for the game's the second time)
-    if not built then
-      log("menu: couldn't be made again: " .. tostring(ui) .. ", trying once more")
-      built, ui = pcall(build)
+    local old = s.ui
+    local function redraw()
+      s.ui = build()
+      show_menu(false)
     end
-    s.ui = built and ui or nil
-    if not built then log("menu: couldn't be made again: " .. tostring(ui)) end
+    for _ = 1, 2 do
+      s.ui = nil
+      local ok, err = pcall(redraw)
+      if ok then
+        if old and valid(old.w) then try(function() old.w:RemoveFromParent() end) end
+        s.changed[row.key] = true
+        return
+      end
+      if s.ui and valid(s.ui.w) then try(function() s.ui.w:RemoveFromParent() end) end
+      log("menu: couldn't rebuild for the new language: " .. tostring(err))
+    end
+    s.ui = old
+    set(row.key, previous)
+    return
   end
+  s.changed[row.key] = true
   -- (a row whose change shows at once on what is already out: its function on gore)
   if row.apply and ctx.gore and ctx.gore[row.apply] then
     local ok, err = pcall(ctx.gore[row.apply])
@@ -1503,6 +1544,7 @@ M.FG_S = 0.1
 function M.tick(pawn)
   local s = M.state
   s.tickAt = os.clock()
+  if s.pending and not waiting_for_text() then M.open(pawn) end
   -- (main.lua's watchdog unpaused the game: her tick had stopped under the menu's pause)
   if s.unstuck then
     s.unstuck = nil

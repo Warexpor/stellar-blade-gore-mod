@@ -117,7 +117,8 @@ end
 -- follow one opening: where(t) gives its live position (nil once it is gone)
 local function track(pawn, where, bone, comp, radius, noDrips)
   local g = cfg()
-  if g.blood == false or g.pool == false then return end
+  if not (bone == "body" and g.enabled == false and g.uncutPool == true)
+    and (g.blood == false or g.pool == false) then return end
   shield(comp)
   M.poolSerial = (M.poolSerial or 0) + 1
   local entry = { pawn = pawn, where = where, rmax = (radius or pool_radius(bone)) * (g.poolScale or 1), t = 0,

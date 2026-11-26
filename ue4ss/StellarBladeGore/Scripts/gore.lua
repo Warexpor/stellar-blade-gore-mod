@@ -4569,10 +4569,17 @@ dofile("ue4ss/Mods/StellarBladeGore/Scripts/gore_watch.lua")(M, {
 
 -- tm: main.lua's slow tick marker (each part's time, when the tick is slow)
 function M.tick(pawn, tm)
-  if cfg().enabled == false then return end
+  -- F3 text and object guards use SBSlice even when cuts are disabled.
+  native_tick()
+  if cfg().enabled == false then
+    if cfg().uncutPool == true then
+      pools_tick()
+      if tm then tm("gore pools") end
+    end
+    return
+  end
   if (ctx.tune.stains or {}).enabled == true then M.bodyBlood.clear(); M.blood_restore = nil end
   tm = tm or function() end
-  native_tick()
   M.lod_guard()
   M.bodyBlood.restore(pawn)
   M.bodyBlood.tick()
@@ -4733,11 +4740,17 @@ end
 
 -- once the body has settled, leave a pool under it
 function M.on_settled(pawn, mesh)
-  if cfg().enabled == false or cfg().pool == false then return end
+  local g = cfg()
+  local cutsOff = g.enabled == false
+  if cutsOff then
+    if g.uncutPool ~= true then return end
+  elseif g.pool == false or g.blood == false then
+    return
+  end
   if M.full_smash_active(mesh) then return end
   -- A small stump, stray splat or chunk pool does not replace the main-body pool.
   -- An existing torso-sized opening already supplies it, so avoid stacking another large decal there.
-  local bodyRadius = pool_radius("body") * (cfg().poolScale or 1)
+  local bodyRadius = pool_radius("body") * (g.poolScale or 1)
   for _, k in ipairs(trackers) do
     if k.pawn == pawn and k.bone ~= "smash chunk" and k.rmax >= bodyRadius then shield(mesh); return end
   end
@@ -4747,7 +4760,7 @@ function M.on_settled(pawn, mesh)
   track(pawn, function()
     local l = valid(mesh) and bone_loc(mesh, "Bip001-Pelvis")
     return l and vec(l.X, l.Y, l.Z) or nil
-  end, "body", mesh)
+  end, "body", mesh, nil, cutsOff)
 end
 
 -- a split that didn't come off: its weights, copies and caps go, the earlier cuts stay
