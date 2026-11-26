@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.9
+
+- Added **Blood Pool With Cuts Off** under F3 → Blood and Dirt. It is off by default and lets a ground pool grow under Eve's intact death ragdoll.
+- SBSlice now starts with **Cuts and Blood** off, so F3 can still draw its text. F3 waits for startup when needed and pauses only after the menu draws, enters the viewport and verifies that Eve can tick through the pause. Still needs an in-game retest for the reported freeze.
+- Parked **Hit Scars** after playtesting. Its F3 toggle is hidden and saved opt-ins are inactive. The scar code, including the claw and limb fallback, is retained.
+
 ## 0.7.8
 
 - Added three experimental F3 options adapted from troubling's contribution. Hit Scars gives surviving hits a surface-following scar that fades with healing. Incontinence After Death adds a stream and puddle once Eve settles. Crawl Away lets her lift her head and crawl after a face-down death if she has an intact arm. Each option starts off.

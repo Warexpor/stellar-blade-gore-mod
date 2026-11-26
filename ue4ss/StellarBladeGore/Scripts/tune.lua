@@ -540,7 +540,7 @@ return {
                                -- the neck); false = the plane stays at headAt
     jawDrop = 3,               --   at most this many cm down; past it the plane leans back toward her head's own axis
     hitMarks = {               -- living hits leave a short scar along the swing, attached to the nearest bone
-      enabled = false,         --   opt in under Blood and Dirt in F3
+      enabled = false,         --   parked; settings_manager keeps saved overrides inactive
       scarMesh = true,         --   follow the mesh surface using geometry, with a decal fallback
       delay = 0.25,            --   s after the hit (a killing blow's hit gets the death cut instead)
       needDamage = true,       --   only a hit that took HP off her bar (a guarded or parried one leaves none)
@@ -714,6 +714,7 @@ return {
     splatLife = 30,            --   s the splat under a hit she lives through stays (a death's stay till she is up)
     pool = true,               -- floor blood: a cut's openings (F9, F11 too) drip while they move and pool where they rest
                                -- (without a cut: one pool begins under the body after 0.5 s)
+    uncutPool = false,         -- an independent ground pool for Eve's death ragdoll with gore.enabled off
     poolScale = 0.85,          --   pool size multiplier (15% smaller than the base radii)
     poolGrow = 4,              --   growth timescale in seconds (63% of its size after this long)
     poolTime = 12,             --   seconds each opening is followed

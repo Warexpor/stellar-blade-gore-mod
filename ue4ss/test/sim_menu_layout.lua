@@ -6,11 +6,19 @@ local defaults=dofile(dir.."settings.default.lua")
 local menu=dofile(dir.."gui.lua")
 local fails=0
 local function check(ok,what) F.say((ok and "ok   " or "FAIL ")..what); if not ok then fails=fails+1 end end
+local saved = 'return { ["gore.hitMarks.enabled"] = true }'
+local menuFile = assert(io.open(menu.PATH, "w"))
+menuFile:write(saved)
+menuFile:close()
 menu.init({tune=tune, log=function() end, try=function(f) local ok,v=pcall(f); if ok then return v end end, valid=function(o) return o~=nil end})
+menuFile = io.open(menu.PATH, "r")
+check(menuFile and menuFile:read("a") == saved, "opening the GUI keeps the saved Hit Scars preference")
+if menuFile then menuFile:close() end
 local function index(key)
   for i,r in ipairs(menu.ROWS) do if r.key==key or r.call==key then return i,r end end
 end
 local function row(key) local _,r=index(key); assert(r,key); return r end
+check(index("gore.hitMarks.enabled") == nil, "parked Hit Scars is hidden in F3")
 check(tune.gore.smash.enabled and defaults.gore.smash.enabled and not defaults.gore.smash.always,
   "shipped blunt smash enabled and Smash Every Death disabled")
 check(index("gore.smash.enabled")==index("gore.enabled")+1,"grouped layout places blunt smash near the master")

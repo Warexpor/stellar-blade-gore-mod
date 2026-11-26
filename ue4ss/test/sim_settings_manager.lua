@@ -6,7 +6,8 @@ local function read(path) local f=assert(io.open(path,"r")); local s=f:read("*a"
 put(paths.tune, "return { dev=false, gore={ volume=1, blood=true, channels={3,4} } }\n")
 local defaults="return { gore={ volume=2, blood=false } }\n"
 put(paths.default, defaults)
-put(paths.menu, 'return { ["gore.volume"]=3, ["gore.channels.2"]=9 }\n')
+local menu = 'return { ["gore.volume"]=3, ["gore.channels.2"]=9, ["gore.hitMarks.enabled"]=true }\n'
+put(paths.menu, menu)
 local reloads, redos, current = 0, 0, nil
 local ctx = { enemies={reload=function() reloads=reloads+1 end}, tables={redo_dead=function() redos=redos+1 end} }
 local logs={}
@@ -18,6 +19,7 @@ load()
 check(read(paths.settings)==defaults, "first load creates player settings from defaults")
 check(current.gore.volume==3 and current.gore.blood==false and current.gore.channels[1]==3 and current.gore.channels[2]==9,
   "menu overrides player settings over base tuning, including numeric paths")
+check(current.gore.hitMarks.enabled == false and read(paths.menu) == menu, "parked Hit Scars ignores and preserves the saved menu setting")
 local initial=base()
 check(initial.gore.volume==2 and initial.gore.channels[2]==4, "menu reset baseline excludes menu overrides")
 local custom="return { gore={ volume=5, blood=true } }\n"

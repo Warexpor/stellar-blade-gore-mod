@@ -41,6 +41,11 @@ local function load_tune()
       -- (a broken menu.lua dropped every menu change without a word)
       log("menu.lua failed, the menu's changes not applied: " .. tostring(m))
     end
+    -- Hit Scars is parked. Preserve saved preferences while keeping it off in play.
+    if type(t.gore) == "table" then
+      if type(t.gore.hitMarks) ~= "table" then t.gore.hitMarks = {} end
+      t.gore.hitMarks.enabled = false
+    end
     t.dev = t.dev == true
     set_tune(t)
     goreCtx.tune = t

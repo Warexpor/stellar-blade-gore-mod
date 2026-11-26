@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.8"
+local VERSION = "0.7.9"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -1692,14 +1692,14 @@ sw.of = dofile("ue4ss/Mods/StellarBladeGore/Scripts/swing_selection.lua")(
 
 -- the killing swing among the enemies followed: the blade that swept nearest her (its weapon meshes), else the
 -- fastest weapon bone. It becomes `swing` (who, its trail, the poses noted with it) for the death
-local function weapon_swing(mesh)
+local function weapon_swing(mesh, scarReach)
   local best, bs, sc
   for _, S in ipairs(sw.list) do
-    local ws = sw.of(S, mesh)
-    local x = ws and (ws.part_d or (1e6 - (ws.speed or 0)))
+    local ws = sw.of(S, mesh, scarReach)
+    local x = ws and (ws.score or ws.part_d or (1e6 - (ws.speed or 0)))
     if x and (not sc or x < sc) then best, bs, sc = ws, S, x end
   end
-  if bs then
+  if bs and not scarReach then
     if #sw.list > 1 then
       log(string.format("swing: %d enemies followed, the blow is %s's%s", #sw.list, tostring(bs.who),
         best.part_d and string.format(" (its blade %.0f cm from her)", best.part_d) or ""))
@@ -2463,14 +2463,16 @@ local function hit_marks(pawn, mesh)
   local now = os.clock()
   if now >= hm.nextBar and goreCtx.glass then
     hm.nextBar = now + 0.25
-    -- the HUD is looked for (35 ms) only once a mark is waiting to heal; else only a widget already found is read
+    -- Look for the HUD only while a mark is waiting to heal. The other HP watches supply the cached bar while alive.
     local pct = goreCtx.glass.bar_pct(gore.marks() == 0)
     local before = hm.pct
-    if marks.scarMesh and before and pct and pct < before - 0.005 and #hm.q == 0 and now >= (hm.nextScar or 0) then
-      local swing = weapon_swing(mesh)
-      if swing and swing.at and swing.part and swing.part_d and swing.part_d <= (marks.reach or 40) then
-        hm.q[1] = { due = now + 0.1, loc = swing.at, push = swing.dir, pre = before }
-        hm.nextScar = now + 0.5
+    if before and pct and pct > 0.0005 and pct < before - 0.005 and #hm.q == 0 and now >= (hm.nextScar or 0) then
+      hm.nextScar = now + 0.5
+      local contact = weapon_swing(mesh, marks.reach or 40)
+      if contact then
+        hm.q[1] = { due = now + 0.1, loc = contact.at, push = contact.dir, pre = before, swept = true }
+      else
+        log(string.format("hit mark skipped: HP %.3f -> %.3f, no nearby swing", before, pct))
       end
     end
     if pct then hm.pct = pct end
@@ -2483,13 +2485,14 @@ local function hit_marks(pawn, mesh)
   if now - q.due > 1 then return end
   -- a hit that took nothing off her bar (a guard, a parry) leaves no mark (tune.gore.hitMarks.needDamage)
   local pct = goreCtx.glass and goreCtx.glass.bar_pct(true)
+  if pct and pct <= 0.0005 then return end
   if q.pre and pct and pct > q.pre - 0.001 and marks.needDamage ~= false then
     log(string.format("hit mark skipped: her HP bar didn't drop (%.3f before, %.3f now)", q.pre, pct))
     return
   end
   local dir
   local hist = swing.hist
-  if swing.bones and #hist >= 2 and now - hist[#hist].t < 0.3 then
+  if not q.swept and swing.bones and #hist >= 2 and now - hist[#hist].t < 0.3 then
     local a, b = hist[#hist - 1], hist[#hist]
     local bv
     for i = 1, #swing.bones do
@@ -3710,6 +3713,7 @@ local function tick()
     end
     after = -1
     saved = {}
+    hm.q, hm.pct, hm.nextScar = {}, nil, nil
     on_start(pawn, mesh)
     -- a real death never inherits a pending test shove: the death-number check above is the guard, this is the belt
     f7_push, f7_after = nil, nil
