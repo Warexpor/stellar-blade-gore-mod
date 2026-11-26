@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.10
+
+- Fixed Death Struggle and Crawl Away failing to start when a cut turns an animated fall into a ragdoll. The struggle now recognizes the same body mesh after UE4SS returns a fresh wrapper. The regression is covered by the `struggle_handoff` simulation and needs an in-game retest.
+
 ## 0.7.9
 
 - Added **Blood Pool With Cuts Off** under F3 → Blood and Dirt. It is off by default and lets a ground pool grow under Eve's intact death ragdoll.

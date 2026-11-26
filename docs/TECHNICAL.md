@@ -1,5 +1,9 @@
 # Stellar Blade Gore Mod: technical notes
 
+## 0.7.10 death struggle after animated falls
+
+The animated-to-ragdoll handoff re-reads the pawn's mesh so it can use the current component. On the Stellar Blade UE4SS build, the read can return a different Lua wrapper for the same component. Struggle now matches the ragdoll against the mesh's Unreal address at start and while running. The `struggle_handoff` simulation reproduces the wrapper change on a fatal limb cut and checks that the struggle starts and a face-down body can use Crawl Away. The actual movement still needs an in-game check.
+
 ## 0.7.9 F3 startup, blood pools and Hit Scars
 
 The SBSlice handshake runs before the gore master switch in the gore tick because the settings UI uses it for FText and object guards. An F3 press during the handshake queues an open. The menu renders and verifies that its widget is in the viewport before holding player input. World pause requires a successful readback of Eve's tick-while-paused flag. Failed opens leave input and pause alone and log the stage reached. The original freeze still needs an in-game retest.

@@ -6,7 +6,8 @@
 -- picked. Push (sim_push.lua, PUSH set): on her back, her right arm off alive and her left at her death (only one
 -- comes off alive), heels shoving her
 local PUSH = rawget(_G, "PUSH") == true
-local CRAWL_AWAY = rawget(_G, "CRAWL_AWAY") == true
+local HANDOFF = rawget(_G, "CRAWL_HANDOFF") == true
+local CRAWL_AWAY = HANDOFF or rawget(_G, "CRAWL_AWAY") == true
 local F = require("fake")
 local E = require("eve")
 local R = require("rag")
@@ -34,6 +35,9 @@ s.gore.sliceOnDeath = false
 s.gore.smash.enabled = false
 s.struggle.crawl = { enabled = true }
 s.convulse = { enabled = false }
+]] or "") .. (HANDOFF and [[
+s.gore.sliceOnDeath = true
+s.gore.armRagdoll = true
 ]] or "") .. [[
 return s
 ]])
@@ -67,6 +71,25 @@ if not CRAWL_AWAY then
 end
 
 local d0 = mark()
+local refreshedMesh
+if HANDOFF then
+  pawn.RagdollInfo = { ImpulseLimitVelocity = 701 }
+  F.world = function(dt)
+    R.step(dt)
+    if E.s.dead and not E.s.sim and not refreshedMesh then
+      -- Re-reading pawn.Mesh after the fall can yield new Lua userdata for the same component.
+      refreshedMesh = setmetatable({}, {
+        __index = function(_, key)
+          local value = E.mesh[key]
+          if type(value) == "function" then return function(_, ...) return value(E.mesh, ...) end end
+          return value
+        end,
+        __newindex = E.mesh,
+      })
+      pawn.Mesh = refreshedMesh
+    end
+  end
+end
 E.s.hp = 0
 E.die(true)
 F.run(18, pawn)
@@ -83,7 +106,14 @@ end
 check(n > 0, string.format("%s: %d played out", PUSH and "pushing" or "crawling", n))
 check(held > 0.2, string.format("a limb planted and %s for %.1f s in all", PUSH and "driving" or "pulling", held))
 if CRAWL_AWAY then
-  check(F.find("no limb cut: crawls away", d0) and F.find("head lifted", d0), "an uncut face-down death starts the new head-lift crawl")
+  if HANDOFF then
+    check(refreshedMesh and refreshedMesh ~= E.mesh and refreshedMesh:GetAddress() == E.mesh:GetAddress(),
+      "the animation handoff re-reads the same component through another wrapper")
+    check(F.find("animated death: ragdoll after all", d0), "the severed limb converts the animated fall to a ragdoll")
+    check(F.find("struggle: stumps:", d0) and F.find("head lifted", d0), "Death Struggle and Crawl Away start after the cut")
+  else
+    check(F.find("no limb cut: crawls away", d0) and F.find("head lifted", d0), "an uncut face-down death starts the new head-lift crawl")
+  end
   check((R.top["Bip001-Neck"] or 0) > 1, "the new crawl steers the neck")
 end
 -- (headward: +X, her head's way as she lies; along the floor: no up or down in it)
