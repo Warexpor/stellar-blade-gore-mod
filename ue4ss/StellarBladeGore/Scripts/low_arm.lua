@@ -298,7 +298,7 @@ function hm.piece_watch(pawn, mesh)
   if #parts == 0 then hm.stillFailed = nil end
   local busy = gore.busy() or hm.regrow or hm.ghost
   if h then
-    local same = valid(h.mesh) and h.mesh:GetAddress() == mesh:GetAddress() and #parts == #h.roots
+    local same = h.meshAddr == mesh:GetAddress() and #parts == #h.roots
     if busy or not same then hm.piece_back(busy and "a cut or a regrow" or "her cut parts changed") end
     return
   end

@@ -447,6 +447,17 @@ int main(void)
                 printf("piece pose (read %d): %s, calf z %.1f / %.1f (drawn %.1f)\n", rdb, lastres, d0[CALF * 12 + 6], d1[CALF * 12 + 6], bonez[CALF]);
                 pbad |= strncmp(lastres, "ok piece", 8) || d0[CALF * 12 + 6] != bonez[CALF] || d1[CALF * 12 + 6] != bonez[CALF];
             }
+            d0[CALF * 12 + 6] = -1;
+            *(int *)(comp2 + SC_SPACE_BASES + 0x18) = NB - 1;
+            piece_pose((u64)comp_buf, (u64)comp2, roots, 1);
+            pbad |= strcmp(lastres, "err pose buffers differ") || d0[CALF * 12 + 6] != -1;
+            *(int *)(comp2 + SC_SPACE_BASES + 0x18) = NB;
+            int *parent = (int *)(*(u64 *)(sm + SM_REF_BONE_INFO) + CALF * 0xc + 8);
+            int saved_parent = *parent;
+            *parent = NB;
+            piece_pose((u64)comp_buf, (u64)comp2, roots, 1);
+            pbad |= strcmp(lastres, "err bad skeleton parent") || d0[CALF * 12 + 6] != -1;
+            *parent = saved_parent;
             *(u64 *)(comp_buf + SC_SPACE_BASES) = (u64)space; *(u64 *)(comp_buf + SC_SPACE_BASES + 0x10) = (u64)space;
             *(int *)(comp_buf + SC_SPACE_READ) = 0;
             modebad |= pbad;

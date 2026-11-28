@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.11
+
+- Stay Down After Knockdown waits for the game to recognize the held-down effect before rerouting knockdowns. It reports missing links and retries a failed write. Missing optional animation and projectile hooks are skipped.
+- Hardened settled-limb copies against invalid pose data and stale components. The opt-in low-HP arm copy keeps the visible limb in place once it settles, while collision stays on the original mesh. Cleanup retries failed skin-weight release before destroying the copy. The reported post-cut crashes still need an in-game reproduction.
+- Added **Apply Balanced Cut Preset** under F3 → Gore. It makes all four death cut types available and mixes up blunt smash targets.
+- **Blood and Dirt** and **Add Blood** now work with **Cuts and Blood** off.
+- **Incontinence After Death** uses a paler translucent material and a short downward seep into an uneven puddle. Added a separate opt-in **Lactation After Death** effect. Both start on the front of the body.
+- Beheading and head smashes now produce stronger bursts of silent leg spasms.
+
 ## 0.7.10
 
 - Fixed Death Struggle and Crawl Away failing to start when a cut turns an animated fall into a ragdoll. The struggle now recognizes the same body mesh after UE4SS returns a fresh wrapper. The regression is covered by the `struggle_handoff` simulation and needs an in-game retest.

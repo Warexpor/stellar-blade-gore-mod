@@ -4,14 +4,17 @@ local function v(x, y, z) return { X = x, Y = y, Z = z } end
 local positions = {
   ["Bip001-Pelvis"] = v(0, 0, 15),
   ["Bip001-Spine"] = v(15, 0, 17),
-  ["Bip001-L-Thigh"] = v(0, -8, 14), ["Bip001-R-Thigh"] = v(0, 8, 14),
-  ["Bip001-L-Calf"] = v(-25, -8, 10), ["Bip001-R-Calf"] = v(-25, 8, 10),
+  ["Bip001-Spine1"] = v(20, 0, 15), ["Bip001-Spine2"] = v(30, 0, 15),
+  ["Bip001-L-Clavicle"] = v(30, 8, 15), ["Bip001-R-Clavicle"] = v(30, -8, 15),
+  ["Bip001-L-Thigh"] = v(0, 8, 14), ["Bip001-R-Thigh"] = v(0, -8, 14),
+  ["Bip001-L-Calf"] = v(-25, 8, 10), ["Bip001-R-Calf"] = v(-25, -8, 10),
 }
 local mesh = F.obj("Eve", "SkeletalMeshComponent", { GetSocketLocation = function(_, bone) return positions[tostring(bone)] end })
 local actors = {}
 local gs = F.obj("GameplayStatics", "GameplayStatics", {
-  BeginDeferredActorSpawnFromClass = function()
+  BeginDeferredActorSpawnFromClass = function(_, _, _, transform)
     local actor = F.obj("Fluid", "StaticMeshActor")
+    actor.origin = transform.Translation
     actors[#actors + 1] = actor
     actor.AddComponentByClass = function()
       return F.obj("FluidMesh", "ProceduralMeshComponent", {
@@ -26,7 +29,7 @@ local gs = F.obj("GameplayStatics", "GameplayStatics", {
   end,
   FinishSpawningActor = function(_, actor) return actor end,
 })
-local config = { enabled = false, still = 0.5, delay = 1, spray = 1 }
+local config = { enabled = false, still = 0.5, delay = 1, spray = 1, lactation = { enabled = false, delay = 1 } }
 local function try(fn) local ok, a = pcall(fn); if ok then return a end end
 local function valid(o) return o and o:IsValid() end
 local function alive(h) return h and not h.obj.__freed and valid(h.obj) end
@@ -37,7 +40,7 @@ fluid.init({
     for _, item in ipairs(list) do item.alive = alive(item) end
     return true
   end,
-  tune = { gore = { deathFluid = config } },
+  tune = { gore = { enabled = false, deathFluid = config } },
   gore = {
     native_ready = function() return true end,
     guarded_asset = function(path)
@@ -63,6 +66,7 @@ run(2, false)
 assert(#actors == 0, "effect never runs while alive")
 run(3, true)
 assert(#actors == 2 and actors[1].drawn and actors[2].drawn, "stream and puddle draw their own meshes")
+assert(actors[1].origin.Z > 14, "the hip source is on the front of a face-up body")
 actors[2].__freed = true
 run(1, false)
 assert(actors[1].__dead and #F.errors == 0, "recovery removes the live actor and skips the freed one")
@@ -71,4 +75,16 @@ run(3, true)
 assert(#actors == 3 and actors[3].drawn, "zero duration draws just the puddle")
 fluid.forget()
 assert(not actors[3].__dead, "world change discards references without touching old objects")
+config.enabled, config.lactation.enabled = false, true
+run(3, true)
+assert(#actors == 5 and actors[4].drawn and actors[5].drawn, "chest seepage can run with both cuts and incontinence off")
+assert(actors[4].origin.Z == 23, "the chest source is on the front of a face-up body")
+config.enabled = true
+run(2, true)
+assert(#actors == 6 and actors[6].drawn, "both fluid effects can coexist")
+config.lactation.enabled = false
+run(1, true)
+assert(actors[5].__dead and not actors[6].__dead, "disabling chest seepage clears only its own actors")
+run(1, false)
+assert(actors[6].__dead, "recovery clears the remaining pool")
 F.say("PASS")

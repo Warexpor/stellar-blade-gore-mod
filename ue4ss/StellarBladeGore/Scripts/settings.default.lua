@@ -7,7 +7,7 @@ return {
     enabled = true,            -- false: disables cuts and their blood effects
     uncutPool = false,         -- blood pool under Eve's ragdoll when cuts are off
     -- hitMarks = { enabled = false },  -- Parked. Healing fades scars left by surviving hits.
-    deathFluid = { enabled = false }, -- Incontinence after death, with a stream and puddle.
+    deathFluid = { enabled = false, lactation = { enabled = false } }, -- Independent after-death fluid effects.
     death = {                  -- relative odds of what her death does when the blow doesn't decide it
       limb = 42,               --   an arm or leg off
       head = 25,               --   beheaded

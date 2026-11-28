@@ -148,7 +148,9 @@ int main(void)
     // N: name 53 in row 13's array becomes 0x14
     snprintf(cmd, sizeof cmd, "%llx,%llx,d,0,18,35,0,14,0", (unsigned long long)(u64)table, (unsigned long long)(u64)rs);
     send(row_names_cmd, cmd);
-    check(!strcmp(lastres, "ok names 1 of 2") && find(13, 0)->names[0] == 0x14 && find(13, 0)->names[2] == 77, lastres);
+    check(!strcmp(lastres, "ok names 1 of 2, existing 0") && find(13, 0)->names[0] == 0x14 && find(13, 0)->names[2] == 77, lastres);
+    send(row_names_cmd, cmd);
+    check(!strcmp(lastres, "ok names 0 of 2, existing 1"), lastres);
     // a row struct that isn't the table's
     snprintf(cmd, sizeof cmd, "%llx,%llx,d,0,8;x", (unsigned long long)(u64)table, (unsigned long long)(u64)rs + 8);
     send(row_str_cmd, cmd);

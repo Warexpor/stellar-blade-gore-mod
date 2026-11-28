@@ -10,7 +10,7 @@ function M.init(c)
   log = function(s) c.log("stains: " .. s) end
 end
 local function cfg() return ctx.tune.stains or {} end
-local function on() return cfg().enabled == true and (ctx.tune.gore or {}).enabled ~= false end
+local function on() return cfg().enabled == true end
 local function number(x, default, lo, hi)
   x = tonumber(x)
   if not x or x ~= x or x == math.huge or x == -math.huge then x = default end

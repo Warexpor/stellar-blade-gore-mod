@@ -206,6 +206,12 @@ rawset(kml, "SetScalarParameterValue", realWrite)
 values.BloodOffset,values.DirtOffset=0.19,0.21
 run(1)
 check(values.BloodOffset==0.19 and values.DirtOffset==0.21, "feature off leaves native values alone")
+T.ctx.tune.gore.enabled = false
+c.enabled = true
+S.test_blood(); run(0.6)
+check(close(values.BloodOffset, 0.25), "Add Blood works through the native skin layer with cuts off")
+S.clean(); run(1)
+check(close(values.BloodOffset, 0), "Clean Her still works with cuts off")
 -- A new world may have freed every old UObject; the skin system must drop them without querying them.
 c.enabled=true
 F.free_world()

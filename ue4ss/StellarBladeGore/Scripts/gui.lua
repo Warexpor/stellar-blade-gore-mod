@@ -71,6 +71,7 @@ end
 M.ROWS = {
   { section = "Gore" },
   { key = "gore.enabled", label = "Cuts and Blood", kind = "bool", help = "Turns cuts, stumps and their blood effects on for Eve and enemies. Off: deaths use intact ragdolls." },
+  { button = "balanced", label = "Apply Balanced Cut Preset", help = "Gives Eve a mix of limb, head, waist and vertical cuts on lethal blade hits, and a mix of limb, head and torso smashes on lethal blunt hits. Replaces the cut and smash odds below." },
   { key = "gore.noBursts", label = "No Blood Bursts", kind = "bool", help = "Off by default. On: fresh stumps stay dry, no spurting blood out of cuts, splits or smashes. Floor splats, drips and pools stay as they are." },
   { key = "gore.death.limb", label = "Limb Cut Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the arm or leg nearest the hit comes off." },
   { key = "gore.death.head", label = "Beheading Chance", kind = "num", min = 0, max = 100, step = 1, help = "Rolled when no blade was tracked, or Hit Decides left it aside, leaning to what is near the hit (Chances Follow the Hit). Weight against the other chances: the head comes off." },
@@ -150,9 +151,10 @@ M.ROWS = {
   { section = "Blood and Dirt" },
   { key = "gore.uncutPool", label = "Blood Pool With Cuts Off", kind = "bool", help = "With Cuts and Blood off, a blood pool grows on the ground under Eve after her ragdoll settles." },
   -- Parked: { key = "gore.hitMarks.enabled", label = "Hit Scars (Experimental)", kind = "bool", help = "Hits Eve survives can leave a visible scar. Healing fades the scar. Recovery clears it." },
-  { key = "gore.deathFluid.enabled", label = "Incontinence After Death (Experimental)", kind = "bool", help = "After Eve dies and settles, a short stream forms a puddle under her. Recovery clears the effect." },
-  { key = "gore.deathFluid.spray", label = "   Stream Duration", kind = "num", min = 0, max = 6, step = 0.5, unit = " s", help = "How long the stream lasts. Set it to zero for a puddle alone." },
-  { key = "stains.enabled", label = "Blood and Dirt (Experimental)", kind = "bool", help = "Experimental, off by default. Restores the game's unused blood and dirt mechanic: it builds on Eve as she takes damage or nearby enemies are hit, and clears with healing or swimming. Works best with the Skin Suit and exposed skin on some outfits; many outfits do not fully support it." },
+  { key = "gore.deathFluid.enabled", label = "Incontinence After Death (Experimental)", kind = "bool", help = "After Eve dies and settles, a short downward seep forms a puddle beneath her hips. Recovery clears the effect." },
+  { key = "gore.deathFluid.spray", label = "   Seep Duration", kind = "num", min = 0, max = 6, step = 0.5, unit = " s", help = "How long the seep lasts. Set it to zero for a puddle alone." },
+  { key = "gore.deathFluid.lactation.enabled", label = "Lactation After Death (Experimental)", kind = "bool", help = "Adds a brief pale seep and a small puddle under Eve's chest once she settles. Independent of incontinence." },
+  { key = "stains.enabled", label = "Blood and Dirt (Experimental)", kind = "bool", help = "Uses the game's native skin-layer blood and dirt, even with Cuts and Blood off. Works best with the Skin Suit and exposed skin on supported outfits." },
   { key = "stains.scale", label = "   Blood Amount", kind = "num", min = 0.25, max = 3, step = 0.25, unit = "x", help = "With Blood and Dirt on: blood gained from her damage and nearby enemy hits or cuts (1: default, 2: twice as much)." },
   { key = "stains.splash.enabled", label = "   Enemy Blood Splatter", kind = "bool", help = "Enemies hit or cut near her add blood to her skin, more the closer they are." },
   { key = "stains.splash.range", label = "      Splatter Range", kind = "num", min = 100, max = 2000, step = 100, unit = " cm", help = "Distance within which enemy hits and cuts bloody her skin. Default: 1000 cm (10 m)." },
@@ -378,8 +380,7 @@ M.DEPENDS = {
   ["struggle.crawl.distance"] = { { "deathMoves", true }, { "struggle.crawl.enabled", true } },
   ["gore.uncutPool"] = { { "gore.enabled", false } },
   -- ["gore.hitMarks.enabled"] = { { "gore.enabled", true } },
-  ["gore.deathFluid.enabled"] = { { "gore.enabled", true } },
-  ["gore.deathFluid.spray"] = { { "gore.enabled", true }, { "gore.deathFluid.enabled", true } },
+  ["gore.deathFluid.spray"] = { { "gore.deathFluid.enabled", true } },
   ["gore.headRagdollChance"] = { { "active.animated", true }, { "gore.headRagdoll", false } },
   ["gore.armRagdollChance"] = { { "active.animated", true }, { "gore.armRagdoll", false } },
   ["gore.torsoLegs.rolled"] = { { "active.animated", true }, { "gore.torsoLegs.enabled", true } },
@@ -1395,6 +1396,20 @@ local function press(pawn)
     else
       log("menu: " .. row.label .. ": " .. tostring(row.call) .. " not loaded")
     end
+  elseif row.button == "balanced" then
+    local values = {
+      ["gore.enabled"] = true, ["gore.noSplits"] = false, ["gore.bladeFollow"] = 0.35,
+      ["gore.death.limb"] = 55, ["gore.death.head"] = 20, ["gore.death.torso"] = 10, ["gore.death.split"] = 15,
+      ["gore.oddsNear.enabled"] = true, ["gore.oddsNear.floor"] = 0.5, ["gore.bluntRagdoll"] = false,
+      ["gore.smash.enabled"] = true, ["gore.smash.overrideTargets"] = true, ["gore.smash.always"] = false,
+      ["gore.smash.targetWeights.limb"] = 55, ["gore.smash.targetWeights.head"] = 30, ["gore.smash.targetWeights.torso"] = 15,
+    }
+    for key, value in pairs(values) do
+      set(key, value)
+      s.changed[key] = true
+    end
+    log("menu: applied Balanced Cut Preset")
+    render()
   elseif row.button == "close" then M.close(pawn)
   elseif row.button == "reset" then
     os.remove(M.PATH)

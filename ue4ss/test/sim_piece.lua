@@ -53,6 +53,13 @@ check(E.hiddenBones[ARM] == true, "1: its bones hidden on her mesh")
 local copy = E.added[#E.added]
 check(copy ~= nil and not copy.hidden and not copy.__dead, "1: the copy shown")
 check(copy ~= nil and copy.postAtMesh == true, "1: no post-process AnimBP made on the copy (off before its mesh went on)")
+local detached, absolute
+for i, call in ipairs(F.calls) do
+  if copy and call == copy.__name .. ":K2_DetachFromComponent" then detached = i end
+  if copy and call == copy.__name .. ":SetAbsolute" then absolute = i end
+end
+check(detached and absolute and detached < absolute and copy.bDisableClothSimulation,
+  "1: the copy uses an absolute transform after detach and does not simulate cloth")
 local n0 = #E.added
 F.run(3, pawn)
 check(#E.added == n0, "1: made once")
@@ -97,6 +104,11 @@ F.run(3, pawn)
 -- 4: the copy's pose fails: the piece stays on her mesh, not hidden, and it isn't tried again
 at = mark()
 F.sbslice.P = function() return "err no pose" end
+local clearWeights = F.sbslice.x
+F.sbslice.x = function(s)
+  if s:match(",0,1$") then return "err test busy" end
+  return clearWeights
+end
 cut()
 F.run(4, pawn)
 check(F.find("no copy of her mesh for it, left on her mesh", at) ~= nil, "4: a failed copy leaves it on her mesh")
@@ -105,6 +117,9 @@ local tries = 0
 for i, x in ipairs(F.log_lines()) do if i >= at and x:find("left on her mesh") then tries = tries + 1 end end
 check(tries == 1, string.format("4: tried once (%d)", tries))
 local failedCopy = E.added[#E.added]
+check(failedCopy and failedCopy.hidden and not failedCopy.__dead, "4: a failed weight release keeps the copy hidden and alive")
+F.sbslice.x = clearWeights
+F.run(1.2, pawn)
 local release, destroy
 local releaseCmd = failedCopy and string.format("sbslice x%x,0,1", failedCopy:GetAddress())
 for i,event in ipairs(F.events) do
