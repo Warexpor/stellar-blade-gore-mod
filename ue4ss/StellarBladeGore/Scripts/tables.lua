@@ -2,8 +2,7 @@
 -- in the data pak (EffectTable, CharacterDeadTable), built from the vanilla ones: loaded last, they overrode every
 -- other mod's copy, and the rows those mods added were gone (Nexus: the nano suits gone with a moveset mod, buying
 -- in a shop mod crashed). Now only these rows change, in whatever table the game loaded:
---   EffectTable: Down_Eve, a copy of Down (ID 3009001), her tumbling knockdowns chained into it (main.lua's holdDown
---     sets its LifeTime)
+--   EffectTable: Down_Eve, a copy of Down (ID 3009001), with her tumbling knockdowns chained into it
 --   CharacterDeadTable, Player: the death shows (the data pak's ragdoll and animated deaths) and the revive screen's
 --     delay
 local M = {}
@@ -189,7 +188,37 @@ local function game_ids(adt, ars, idoff, from, to, t0)
   local a = ctx.gore.command(string.format("M%s,%s,%x,%x,%x,%x,%x", aliases, ids, adt, ars, from, to, idoff))
   local made = a:match("^ok ids (%a+)")
   if not made then return "the game's ID maps NOT given it: " .. a end
-  return string.format("in the game's ID maps (%s, %.0f ms)", made, (os.clock() - t0) * 1000)
+  return string.format("in the game's ID maps (%s, %.0f ms)", made, (os.clock() - t0) * 1000), now
+end
+
+local function held_life(dt, want)
+  local life = want and 100000 or 1
+  local was, why = ctx.gore.row_float(dt, M.HOLD.row, "LifeTime", life)
+  if not was then return false, "Down_Eve lifetime NOT set: " .. tostring(why) end
+  log(string.format("hold down %s: Down_Eve lasts %g s (was %g)", want and "on" or "off", life, was))
+  return true
+end
+
+local function chain_knockdowns(c, dt)
+  local want = not ctx.tune or ctx.tune.holdDown ~= false
+  local ok, why = held_life(dt, want)
+  if not ok then return why, false end
+  local adt, ars, _, from, to = table.unpack(c.args)
+  local chained, failed = 0, false
+  for _, row in ipairs(M.HOLD.chains) do
+    local ri = name_idx(row)
+    local reply = ri and ctx.gore.command(string.format("N%x,%x,%x,0,%x,%x,0,%x,0", adt, ars, ri, c.chainOff, from, to)) or "no name"
+    local n = tonumber(reply:match("^ok names (%d+)"))
+    local existing = tonumber(reply:match(", existing (%d+)$")) or 0
+    if n and n + existing > 0 then
+      chained = chained + 1
+    else
+      failed = failed or n == nil
+      c.out[#c.out + 1] = row .. " NOT chained: " .. (n and "no Down or Down_Eve link" or reply)
+    end
+  end
+  M.heldAddress, M.heldWant = adt, want
+  return string.format("%d of %d knockdowns chained into it", chained, #M.HOLD.chains), not failed
 end
 
 -- EffectTable: Down_Eve made, her tumbling knockdowns chained into it
@@ -208,7 +237,7 @@ local function effect_rows()
   local out = { "Down_Eve " .. made }
   if made == "added" then
     local idr = ctx.gore.command(string.format("d%x,%x,%x,0,%x,%x", addr(dt), addr(rs), to, fs.ID.off, h.id))
-    if idr:sub(1, 2) ~= "ok" then out[#out + 1] = "its ID NOT set: " .. idr end
+    if idr:sub(1, 2) ~= "ok" then return "Down_Eve ID NOT set: " .. idr end
   end
   -- (the game resolves a chain through alias -> ID maps of its own, made at load: game_ids gives Down_Eve to them
   -- below; in the table alone, a knockdown chained into it stood her straight up with no getup, playtest)
@@ -216,17 +245,9 @@ local function effect_rows()
     out[#out + 1] = "knockdowns left the game's (not chained into it)"
     return table.concat(out, ", ")
   end
-  local chained = 0
-  for _, row in ipairs(h.chains) do
-    local ri = name_idx(row)
-    local c = ri and ctx.gore.command(string.format("N%x,%x,%x,0,%x,%x,0,%x,0", addr(dt), addr(rs), ri, fs.ChainEffectAliasArray.off, from, to)) or "no name"
-    local n = c:match("^ok names (%d+)")
-    if n then chained = chained + 1 else out[#out + 1] = row .. " NOT chained: " .. c end
-  end
-  out[#out + 1] = string.format("%d of %d knockdowns chained into it", chained, #h.chains)
-  -- (the game's ID maps: through M.tick while its scans run)
+  -- Leave the vanilla chains in place until the ID maps and the lifetime are ready.
   M.memo, M.retries = {}, 0
-  M.cont = { out = out, args = { addr(dt), addr(rs), fs.ID.off, from, to, os.clock() } }
+  M.cont = { out = out, args = { addr(dt), addr(rs), fs.ID.off, from, to, os.clock() }, chainOff = fs.ChainEffectAliasArray.off }
   return PENDING
 end
 
@@ -273,17 +294,33 @@ M.next = 0
 function M.tick()
   local now = os.clock()
   if M.swordPut and now >= M.swordAt then M.sword_put() end
+  local want = not ctx.tune or ctx.tune.holdDown ~= false
+  if M.heldAddress and want ~= M.heldWant and now >= (M.nextHold or 0) then
+    M.nextHold = now + 1
+    local dt = try(function() return StaticFindObject(M.EFFECT) end)
+    if valid(dt) and addr(dt) == M.heldAddress and held_life(dt, want) then M.heldWant = want end
+  end
   -- (the game's ID maps looked for while sbslice's scans run: again each 0.1 s till they are done)
   if M.cont then
     if now < (M.cont.at or 0) then return end
     M.cont.at = now + 0.1
     local c = M.cont
-    local ok, r = pcall(game_ids, table.unpack(c.args))
+    local ok, r, dt = pcall(game_ids, table.unpack(c.args))
     if not ok and r == PENDING then return end
     M.cont, M.memo, M.running = nil, {}, nil
     c.out[#c.out + 1] = ok and r or ("the game's ID maps failed: " .. tostring(r))
+    local patched
+    if ok and dt then
+      local result
+      result, patched = chain_knockdowns(c, dt)
+      c.out[#c.out + 1] = result
+    end
     log("tables: " .. table.concat(c.out, ", "))
     M.next = 0
+    local retry = dt and "chainRetry" or "effectRetry"
+    if not patched and M[retry] ~= c.args[1] then
+      M[retry], M.done[M.EFFECT], M.next = c.args[1], nil, now + 3
+    end
     return
   end
   if now < M.next then return end

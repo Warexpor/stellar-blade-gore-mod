@@ -942,7 +942,7 @@ local function next_event(x, anim)
     return nil, 0
   end
   if st.smashed then
-    -- Only connected lower legs: no hips, chest, face, gasp, voice, or purposeful pushing.
+    -- Short bursts on connected lower legs, without chest, face or voice movement.
     local r, choices = rag(), {}
     for _, sd in ipairs({ "L", "R" }) do
       local b = "Bip001-" .. sd .. "-"
@@ -952,16 +952,23 @@ local function next_event(x, anim)
     end
     local n = 0
     if #choices > 0 and ctx.tune.deathMoves ~= false then
-      local b = choices[math.random(#choices)] .. (math.random() < 0.5 and "Calf" or "Foot")
-      local amp = 35 * math.max(0, math.min(cfg().strength or 1, 1)) * math.max(0, 1 - x / 4)
-      if pulse(st.mesh, nil, b, "plantar", amp, rnd(0.12, 0.18), os.clock(), anim, nil, nil, xaxis(st.mesh, b)) then
-        n = 1
-        if r then r.twitch(0.4) end
+      local prefix = choices[math.random(#choices)]
+      local strength = math.max(0, math.min(cfg().strength or 1, 1.5))
+      local amp = 105 * strength * math.max(0, 1 - x / 4)
+      local now = os.clock()
+      local calf, foot = prefix .. "Calf", prefix .. "Foot"
+      if amp > 0 then
+        for i = 0, (x < 1.5 and 2 or 1) do
+          local at = now + i * 0.19
+          if pulse(st.mesh, nil, calf, "plantar", amp * (1 - 0.18 * i), 0.15, at, anim, nil, nil, xaxis(st.mesh, calf)) then n = n + 1 end
+          if pulse(st.mesh, nil, foot, "plantar", amp * 0.55, 0.12, at + 0.04, anim, nil, nil, xaxis(st.mesh, foot)) then n = n + 1 end
+        end
+        if n > 0 and r then r.twitch(0.6) end
       end
     end
     st.events = st.events + n
-    st.next = x + rnd(1.5, 2.5)
-    return "small leg twitch", n
+    st.next = x + rnd(0.75, 1.15)
+    return n > 0 and "silent leg spasms" or nil, n
   end
   -- (with animBody off an animated death's end pose holds: her face only, but for a waist cut's upper body, flying
   -- in the ragdoll while her legs play the fall: its arms and head still move, playtest)
@@ -1118,7 +1125,7 @@ function M.tick(paused)
     st.smashed, st.pulses, st.faces, st.jolts = true, {}, {}, nil
     st.onset, st.next, st.done = nil, 0, false
     st.trail, st.down = {}, 0
-    log(st.quietLegs and "upper body smashed: lower body passive" or "head gone: silent minor leg twitches only")
+    log(st.quietLegs and "upper body smashed: lower body passive" or "head gone: silent leg spasms")
   end
   local anim = ctx.animated and ctx.animated()
   if not anim and next(st.chains) then chains_drop("ragdoll") end

@@ -2815,7 +2815,7 @@ end
 
 -- a copy of src on the pawn: same mesh, materials and transform, hidden, LOD0, not ticking (so nothing replaces the
 -- pose copied onto it) until the split opens
-local function clone_of(pawn, src)
+local function clone_of(pawn, src, frozenPiece)
   local cls = load_obj("/Script/Engine.SkeletalMeshComponent")
   if not cls then return nil end
   local id = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = vec(0, 0, 0), Scale3D = vec(1, 1, 1) }
@@ -2830,6 +2830,7 @@ local function clone_of(pawn, src)
   if not try(function() c:SetDisablePostProcessBlueprint(true); return true end) then
     try(function() c.bDisablePostProcessBlueprint = true end)
   end
+  if frozenPiece then try(function() c.bDisableClothSimulation = true end) end
   try(function() c:SetSkeletalMesh(src.SkeletalMesh, true) end)
   local nm = try(function() return src:GetNumMaterials() end) or 0
   local lods = math.max(1, try(function() return src:GetNumLODs() end) or 1)
@@ -4248,33 +4249,56 @@ end
 -- bake: the same while she plays, once a limb cut off her has settled (main.lua's hm.piece_watch): kept till a
 -- cut, a regrow, her death or an undo needs the piece on her mesh again (h.baked; photo mode leaves it so)
 M.pieceHid = nil
+local piece_releases = {}
+
+local function finish_piece_release(ref)
+  local live = ctx.alive(ref)
+  if live ~= true then return live == false end
+  local c = ref.obj
+  if not valid(c) then return true end
+  local reply = command(string.format("x%x,0,1", ref.addr))
+  if reply:match("^ok cleared") then
+    return try(function() c:K2_DestroyComponent(c); return true end) == true
+  end
+  if not ref.hidden then
+    ref.hidden = try(function() c:SetHiddenInGame(true, false); return true end)
+    log("piece copy: keeping it alive until weights can be released (" .. reply .. ")")
+  end
+  return false
+end
+
+local function release_piece_copy(c, ref)
+  for i = #clones, 1, -1 do if clones[i] == c then table.remove(clones, i) end end
+  if not ref then return end
+  forced[ref.addr] = nil
+  if not finish_piece_release(ref) then
+    ref.retryAt = os.clock() + 1
+    piece_releases[#piece_releases + 1] = ref
+  end
+end
+
 function M.hide_pieces(pawn, mesh, on, bake)
   local h = M.pieceHid
   local tag = bake and "piece settled" or "photo mode"
   if not on then
     M.pieceHid = nil
     if not h then return 0, 0 end
+    local function live(c) return c and ctx.held(h.guards[c]) end
+    local source = live(h.mesh) and h.mesh
     for _, r in ipairs(h.riders) do
-      if valid(r.c) and valid(h.mesh) then try(function() r.c:K2_AttachToComponent(h.mesh, r.socket, 0, 0, 0, false) end) end
+      if source and live(r.c) then try(function() r.c:K2_AttachToComponent(source, r.socket, 0, 0, 0, false) end) end
     end
-    if valid(h.face) and valid(h.mesh) then
-      try(function() h.face:SetMasterPoseComponent(h.mesh, true) end)
+    if source and live(h.face) then
+      try(function() h.face:SetMasterPoseComponent(source, true) end)
       command(string.format("Q%x", addr(h.face)))
     end
     for _, k in ipairs(h.posed or {}) do
-      if valid(k) and valid(h.mesh) then try(function() k:SetMasterPoseComponent(h.mesh, true) end) end
+      if source and live(k) then try(function() k:SetMasterPoseComponent(source, true) end) end
     end
-    for _, e in ipairs(h.bones) do if valid(e.c) then try(function() e.c:UnHideBoneByName(FName(e.b)) end) end end
-    for _, c in ipairs(h.hidden) do if valid(c) then try(function() c:SetVisibility(true, false) end) end end
-    for _, e in ipairs(h.blur or {}) do if valid(e.c) then try(function() e.c.bPerBoneMotionBlur = e.was end) end end
-    for _, c in ipairs(h.copies) do
-      local a = addr(c)
-      for i = #clones, 1, -1 do if addr(clones[i]) == a then table.remove(clones, i) end end
-      if a then forced[a] = nil end
-      -- (its weights let go and sbslice told it is gone, her sinks kept: "y" made it a co-owner of them)
-      if valid(c) then command(string.format("x%x,0,1", a)) end
-      if valid(c) then try(function() c:K2_DestroyComponent(c) end) end
-    end
+    for _, e in ipairs(h.bones) do if live(e.c) then try(function() e.c:UnHideBoneByName(FName(e.b)) end) end end
+    for _, c in ipairs(h.hidden) do if live(c) then try(function() c:SetVisibility(true, false) end) end end
+    for _, e in ipairs(h.blur or {}) do if live(e.c) then try(function() e.c.bPerBoneMotionBlur = e.was end) end end
+    for _, c in ipairs(h.copies) do release_piece_copy(c, h.guards[c]) end
     return #h.roots, #h.riders
   end
   if h then return #h.roots, #h.riders end
@@ -4286,22 +4310,22 @@ function M.hide_pieces(pawn, mesh, on, bake)
     if i and i >= 0 then idx[#idx + 1] = string.format("%x", i) end
   end
   if #idx == 0 then return 0, 0 end
-  local c = clone_of(pawn, mesh)
+  local c = clone_of(pawn, mesh, true)
   if not c then log(tag .. ": no copy for the piece cut off her"); return 0, 0 end
-  h = { mesh = mesh, roots = roots, copies = { c }, bones = {}, riders = {}, hidden = {}, baked = bake or nil }
+  local ca = addr(c)
+  h = { mesh = mesh, meshAddr = addr(mesh), roots = roots, copies = { c }, bones = {}, riders = {}, hidden = {}, guards = {}, baked = bake or nil }
   M.pieceHid = h
   try(function() c.bNoSkeletonUpdate = true end)
-  place_like(c, mesh)
-  -- (off her capsule, where clone_of put it: kept while she plays, it went along with her)
   try(function() c:K2_DetachFromComponent(1, 1, 1, false) end)
-  local y = command(string.format("y%x,0,%x", addr(mesh), addr(c)))
-  local p = command(string.format("P%x,%x,%s", addr(mesh), addr(c), table.concat(idx, ",")))
+  try(function() c:SetAbsolute(true, true, true) end)
+  place_like(c, mesh)
+  local parent = try(function() return c:GetAttachParent() end)
+  local y = valid(parent) and "err copy still attached" or command(string.format("y%x,0,%x", h.meshAddr, ca))
+  local p = y:sub(1, 9) == "ok copied" and command(string.format("P%x,%x,%s", h.meshAddr, ca, table.concat(idx, ","))) or "skipped"
   if y:sub(1, 9) ~= "ok copied" or p:sub(1, 8) ~= "ok piece" then
-    log(string.format(tag .. ": the piece's copy failed (weights %s, pose %s): her mesh poses with the piece hidden", y, p))
-    for i = #clones, 1, -1 do if addr(clones[i]) == addr(c) then table.remove(clones, i) end end
-    -- y may have succeeded before the pose failed: release the copy's override before destruction.
-    if valid(c) and addr(c) then command(string.format("x%x,0,1", addr(c))) end
-    try(function() c:K2_DestroyComponent(c) end)
+    log(string.format(tag .. ": the piece's copy failed (weights %s, pose %s)", y, p))
+    release_piece_copy(c, ctx.keep(c))
+    if bake then M.pieceHid = nil; return 0, 0 end
     h.copies = {}
     c = nil
   else
@@ -4385,6 +4409,21 @@ function M.hide_pieces(pawn, mesh, on, bake)
   -- (what is hidden here, for main.lua's showing her again up close to leave alone)
   h.set = {}
   for _, k in ipairs(h.hidden) do local a = addr(k); if a then h.set[a] = true end end
+  local guards = {}
+  local function keep(o)
+    if not o or h.guards[o] then return end
+    local held = ctx.keep(o)
+    if held then h.guards[o] = held; guards[#guards + 1] = held end
+  end
+  keep(mesh)
+  keep(c)
+  keep(h.face)
+  for _, e in ipairs(h.bones) do keep(e.c) end
+  for _, e in ipairs(h.riders) do keep(e.c) end
+  for _, e in ipairs(h.blur) do keep(e.c) end
+  for _, k in ipairs(h.hidden) do keep(k) end
+  for _, k in ipairs(h.posed) do keep(k) end
+  ctx.alive_ask(guards)
   -- where each piece is on her as it goes onto the copy: it hung in the air over her in photo mode's poses, strands
   -- down to her shoulder (playtest, not known yet whether her bodies or the copy put it there)
   local at = {}
@@ -4571,6 +4610,16 @@ dofile("ue4ss/Mods/StellarBladeGore/Scripts/gore_watch.lua")(M, {
 function M.tick(pawn, tm)
   -- F3 text and object guards use SBSlice even when cuts are disabled.
   native_tick()
+  if #piece_releases > 0 then
+    local now = os.clock()
+    for i = #piece_releases, 1, -1 do
+      local ref = piece_releases[i]
+      if now >= ref.retryAt then
+        if finish_piece_release(ref) then table.remove(piece_releases, i)
+        else ref.retryAt = now + 1 end
+      end
+    end
+  end
   if cfg().enabled == false then
     if cfg().uncutPool == true then
       pools_tick()
@@ -5235,6 +5284,7 @@ function M.forget(pawn)
   spawned, bleeds, caps, cuts, forced, clones, rehomed = {}, {}, {}, {}, {}, {}, {}
   later, hung, queued, skinned, hid = {}, {}, {}, {}, {}
   M.held, M.held_sword, M.blocking, M.pieceHid, M.photoHid = {}, nil, nil, nil, nil
+  piece_releases = {}
   M.sinksHeld = nil
   bleed_logged = false
   faceCache = {}

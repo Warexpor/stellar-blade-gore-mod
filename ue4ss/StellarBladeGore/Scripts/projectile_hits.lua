@@ -163,8 +163,10 @@ function sw.projectile_watch(o)
   local full = try(function() return o:GetClass():GetFullName() end)
   local path = type(full) == "string" and full:match(" (%/Game/%S+_C)$")
   if not path or sw.projectileHooks[path] then return end
+  local event = path .. ":EventOnHit"
+  if not valid(try(function() return StaticFindObject(event) end)) then return end
   sw.projectileHooks[path] = true
-  local ok, err = pcall(RegisterHook, path .. ":EventOnHit", function(...)
+  local ok, err = pcall(RegisterHook, event, function(...)
     local good, why = pcall(sw.projectile_blueprint_event, ...)
     if not good then log("projectile blueprint hit hook error: " .. tostring(why)) end
   end)

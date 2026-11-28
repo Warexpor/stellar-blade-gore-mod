@@ -1,4 +1,7 @@
 -- Replay the impact cues of the extracted S09 grab animation through the registered hook.
+local fake = require("fake")
+local path = "/Script/SB.SBCharacter:ActorPlayCustomAnimSequence"
+fake.objects[path] = fake.obj("ActorPlayCustomAnimSequence", "Function")
 local T = require("smash_world").boot('s.gore.blood = false\ns.gore.smash.enabled = true')
 local F, G, pawn, hm = T.F, T.G, T.pawn, T.state.hm
 local print, fails = F.say, 0
@@ -8,10 +11,10 @@ local oldSmash, oldBusy = G.smash, G.busy
 rawset(pawn, "GetGameTimeSinceCreation", function() return F.t end)
 G.busy = function() return busy end
 G.smash = function(_, _, hit, why) calls[#calls + 1] = { t = os.clock(), hit = hit, why = why }; return true end
-local path = "/Script/SB.SBCharacter:ActorPlayCustomAnimSequence"
 local anim = F.obj("Hit_SkullJuggernaut_Beta_Grab", "AnimSequence")
 local other = F.obj("Other", "SBCharacter")
 check(F.fire(path, F.param(other), F.param(anim)) > 0, "animation hook is registered")
+check(F.hooks["/Script/SB.SBCharacter:ActorPlayCustomAnimName"] == nil, "missing optional animation hook is skipped")
 check(hm.juggernaut.run == nil, "another actor does not start the player finisher")
 F.fire(path, F.param(pawn), F.param(F.obj("Unrelated", "AnimSequence")))
 check(hm.juggernaut.run == nil, "unrelated animation is ignored")

@@ -35,7 +35,7 @@
 -- Log: ue4ss/Mods/StellarBladeGore/stellarbladegore.log (also mirrored into UE4SS.log).
 
 local MOD = "StellarBladeGore"
-local VERSION = "0.7.10"
+local VERSION = "0.7.11"
 local LOG_PATH = "ue4ss/Mods/StellarBladeGore/stellarbladegore.log"
 local POLL_MS = 33
 local TRACE_EVERY = 3       -- log motion every 3rd poll (~10 Hz)
@@ -3082,11 +3082,13 @@ local function hook_once()
   end
   for _, f in ipairs({ "ActorPlayCustomAnimSequence", "ActorPlayCustomAnimName" }) do
     local path = "/Script/SB.SBCharacter:" .. f
-    local okc, errc = pcall(RegisterHook, path, function(actor, anim)
-      local ok2, e = pcall(hm.juggernaut.start, actor, anim)
-      if not ok2 then log("Juggernaut animation hook error: " .. tostring(e)) end
-    end)
-    log("hook " .. f .. ": " .. (okc and "ok" or tostring(errc)))
+    if valid(try(function() return StaticFindObject(path) end)) then
+      local okc, errc = pcall(RegisterHook, path, function(actor, anim)
+        local ok2, e = pcall(hm.juggernaut.start, actor, anim)
+        if not ok2 then log("Juggernaut animation hook error: " .. tostring(e)) end
+      end)
+      log("hook " .. f .. ": " .. (okc and "ok" or tostring(errc)))
+    end
   end
   for _, f in ipairs({ "OnPhysicsShapeHit", "OnCollisionOriginBeginOverlap" }) do
     local path = "/Script/SB.SBProjectile:" .. f
@@ -3325,32 +3327,7 @@ dofile("ue4ss/Mods/StellarBladeGore/Scripts/photo_visibility.lua")(screen, goreC
 -- and stretched (playtest)
 -- tune.holdDown: knocked down, she stays on the floor till the player gets her up (dodge or jump: the game's fast
 -- getup). tables.lua chains her tumbling knockdowns into Down_Eve, a copy of the shared Down (1 s, then Getup)
--- lasting held.LIFE s; off, its LifeTime in the loaded EffectTable goes back to Down's 1 s (gore.row_float). Looked at
--- every few seconds and on a change of the setting; written once per change (`hold down:` in the log)
-screen.held = { key = nil, next = 0, LIFE = 100000, TABLE = "/Game/Local/Data/EffectTable.EffectTable" }
-function screen.held.tick()
-  local held = screen.held
-  local want = tune.holdDown ~= false
-  local now = os.clock()
-  if want == held.want and now < held.next then return end
-  held.want, held.next = want, now + 5
-  if not gore then return end
-  -- after tables.lua made Down_Eve
-  local tb = goreCtx.tables
-  if tb and not tb.done[tb.EFFECT] then held.want = nil; return end
-  local dt = try(function() return StaticFindObject(held.TABLE) end)
-  if not valid(dt) then return end
-  local key = string.format("%s %x", tostring(want), dt:GetAddress())
-  if key == held.key then return end
-  local was, why = gore.row_float(dt, "Down_Eve", "LifeTime", want and held.LIFE or 1)
-  -- the DLL still starting: again next time
-  if not was and (why == "sbslice waiting" or why == "sbslice init") then held.next = 0; return end
-  held.key = key
-  if not was then
-    log("hold down: Down_Eve not set (" .. tostring(why) .. "): knockdowns stay the game's")
-  elseif was ~= held.LIFE and was ~= 1 then log(string.format("hold down: Down_Eve's LifeTime was %g (another mod's row?); now %g", was, want and held.LIFE or 1))
-  else log(string.format("hold down %s: Down_Eve lasts %g s (was %g)", want and "on" or "off", want and held.LIFE or 1, was)) end
-end
+-- for 100000 s. tables.lua installs the row, maps and chains together, and updates its lifetime when toggled.
 
 -- her watches while she plays (the swing, her guard, the bone watch, the HUD, hit marks, a lethal hit, Lose Arm at
 -- Low HP, a camp rest, her fall): a third of a poll after it, on a frame of their own (game_tick). With the rest of
@@ -3560,8 +3537,6 @@ local function tick()
   tp.mark("tables")
   if goreCtx.gui then goreCtx.gui.tick(pawn) end
   tp.mark("menu")
-  screen.held.tick()
-  tp.mark("held")
   -- (the enemies' part runs half a poll later, on a frame of its own: game_tick)
   if goreCtx.enemies then screen.enemiesDue = true end
   if gore then

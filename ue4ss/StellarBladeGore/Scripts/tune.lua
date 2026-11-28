@@ -114,7 +114,7 @@ return {
   cameraRate = 0.06,           --   share of the rest it closes a tick (30 a second): it lags, it doesn't track
   cameraLift = 95,             --   cm over her pelvis it is held (about where it stands over the floor)
   gore = {
-    enabled = true,            -- false = no cutting, no blood (sbslice.dll stays idle)
+    enabled = true,            -- false = no cutting or cut effects (independent skin stains still work)
     sliceOnDeath = true,       -- a killing blow leaves a mark (see death)
     sliceChance = 1.0,         -- 0..1, per death
     death = {                  -- relative odds of what it does (every killing blow cuts, whatever hit her);
@@ -557,9 +557,10 @@ return {
     deathFluid = {
       enabled = false,         --   opt-in incontinence effect after her hips settle
       delay = 2,               --   s after death at the soonest
-      spray = 2.5,             --   s the stream runs (0: puddle only)
-      size = 24,               --   puddle width in cm
-      tint = "dark",           --   dark, amber, yellow, pale, or custom
+      spray = 1.5,             --   s the seepage runs (0: puddle only)
+      size = 32,               --   puddle width in cm
+      tint = "natural",        --   natural, dark, amber, yellow, pale, or custom
+      lactation = { enabled = false, delay = 2.5, spray = 1, size = 18, tint = "milk" },
     },
     voice = {                  -- her own death cry (Eve's action-voice recordings) the moment she dies, nothing after
       enabled = true,          --   false: the game's own death voice only

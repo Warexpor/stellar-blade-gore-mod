@@ -447,6 +447,15 @@ typedef struct {
 } cut_ctx;
 
 static int parent_of(const cut_ctx *c, int bone) { return *(int *)(c->binfo + bone * 0xc + 8); }
+static int parent_first(const unsigned char *info, int n)
+{
+    if (!info || n <= 0 || *(const int *)(info + 8) != -1) return 0;
+    for (int i = 1; i < n; i++) {
+        int parent = *(const int *)(info + (u64)i * 0xc + 8);
+        if (parent < 0 || parent >= i) return 0;
+    }
+    return 1;
+}
 static const float *pose_of(const cut_ctx *c, int bone)
 {
     int s = c->mmap ? c->mmap[bone] : bone;
@@ -1866,11 +1875,7 @@ static void skin_cut(u64 comp, int lod, int b, const float *pw, const float *nw,
     if (!c.binfo) { skin_result("err no skeleton"); return; }
     if (b <= 0 || b >= nb || !c.refinv || *(int *)(c.sm + SM_REF_BASES_INV + 8) != nb) { skin_result("err bad bone"); return; }
     // Descendant flags and ancestor walks rely on the reference skeleton's parent-first order.
-    if (parent_of(&c, 0) != -1) { skin_result("err bad skeleton parent"); return; }
-    for (int i = 1; i < nb; i++) {
-        int p = parent_of(&c, i);
-        if (p < 0 || p >= i) { skin_result("err bad skeleton parent"); return; }
-    }
+    if (!parent_first(c.binfo, nb)) { skin_result("err bad skeleton parent"); return; }
     if (mode < MODE_CUT || mode > MODE_SIDE || mode == 3) { skin_result("err bad mode"); return; }
     if (forced_sink >= nb || forced_sink < 0) { skin_result("err bad sink"); return; }
     sink_table(&c); // (till the new sinks are recorded, below)
@@ -3627,11 +3632,13 @@ static void copy_pose(u64 src, u64 dst)
 #define MAX_PIECE_ROOTS 8
 static void piece_pose(u64 src, u64 dst, const u64 *roots, int nr)
 {
+    if (src == dst) { skin_result("err source is the piece"); return; }
     u64 sm = *(u64 *)(dst + SC_SKELETAL_MESH);
     const unsigned char *bi = sm ? *(const unsigned char **)(sm + SM_REF_BONE_INFO) : 0;
     int nb = sm ? *(int *)(sm + SM_REF_BONE_INFO + 8) : 0;
     if (!bi || nb <= 0 || nb > MAX_BONES) { skin_result("err no skeleton"); return; }
     if (sm != *(u64 *)(src + SC_SKELETAL_MESH)) { skin_result("err not the same mesh"); return; }
+    if (!parent_first(bi, nb)) { skin_result("err bad skeleton parent"); return; }
     static unsigned char keep[MAX_BONES];
     int kept = 0;
     for (int b = 0; b < nb; b++) {
@@ -3649,7 +3656,7 @@ static void piece_pose(u64 src, u64 dst, const u64 *roots, int nr)
         if (sinks[i].anchor < 0 || !sinks[i].mesh) continue;
         const unsigned char *si = *(const unsigned char **)(sinks[i].mesh + SM_REF_BONE_INFO);
         int sn = *(int *)(sinks[i].mesh + SM_REF_BONE_INFO + 8);
-        if (!si || sinks[i].anchor >= sn || sinks[i].bone < 0 || sinks[i].bone >= sn) continue;
+        if (!si || sn > MAX_BONES || sinks[i].anchor >= sn || sinks[i].bone < 0 || sinks[i].bone >= sn) continue;
         u64 an = *(const u64 *)(si + (u64)sinks[i].anchor * 0xc), bn = *(const u64 *)(si + (u64)sinks[i].bone * 0xc);
         int ka = 0, kb = -1;
         for (int b = 0; b < nb; b++) {
@@ -3666,12 +3673,17 @@ static void piece_pose(u64 src, u64 dst, const u64 *roots, int nr)
     int rd = *(int *)(src + SC_SPACE_READ);
     if (rd != 0 && rd != 1) { skin_result("err no read buffer"); return; }
     u64 sa = src + SC_SPACE_BASES + (u64)rd * 0x10;
+    const float *sp = *(const float **)sa;
+    if (!sp || *(int *)(sa + 8) != nb) { skin_result("err pose buffers differ"); return; }
+    float *poses[2];
     for (int buf = 0; buf < 2; buf++) {
         u64 da = dst + SC_SPACE_BASES + (u64)buf * 0x10;
-        float *sp = *(float **)sa, *dp = *(float **)da;
-        int sn = *(int *)(sa + 8), dn = *(int *)(da + 8);
-        if (!sp || !dp || sn != dn || sn != nb) { skin_result("err pose buffers differ"); return; }
-        for (int i = 0; i < sn * 12; i++) dp[i] = sp[i];
+        poses[buf] = *(float **)da;
+        if (!poses[buf] || poses[buf] == sp || *(int *)(da + 8) != nb) { skin_result("err pose buffers differ"); return; }
+    }
+    for (int buf = 0; buf < 2; buf++) {
+        float *dp = poses[buf];
+        for (int i = 0; i < nb * 12; i++) dp[i] = sp[i];
         // (and moved onto the nearest piece's root: scaled to nothing where it stood, skin weighted to several of
         // her bones still spanned them, a crumpled patch of her suit inside her. The copy keeps the pose photo mode
         // opened on, so once she crouched it hung in the air over her, playtest. On the root it sits in the stump)
@@ -6481,7 +6493,7 @@ static void row_str_cmd(const u16 *txt, int len)
 }
 
 // "N<table>,<row struct>,<name index>,<name number>,<offset>,<from index>,<from number>,<to index>,<to number>":
-// in the row's TArray<FName> at <offset>, every <from> becomes <to>. Answer "ok names <replaced> of <count>"
+// in the row's TArray<FName> at <offset>, every <from> becomes <to>. Report replacements and existing targets.
 static void row_names_cmd(const u16 *txt, int len)
 {
     u64 f[9] = { 0 };
@@ -6492,12 +6504,17 @@ static void row_names_cmd(const u16 *txt, int len)
     u64 row = *(u64 *)(e + 8);
     if (f[4] > 0x4000 || (f[4] & 7) || !mem_readable(row + f[4], 16)) { skin_result("err bad row"); return; }
     u32 *names = *(u32 **)(row + f[4]);
-    int n = *(int *)(row + f[4] + 8), done = 0;
+    int n = *(int *)(row + f[4] + 8), done = 0, existing = 0;
     if (n < 0 || n > 4096 || (n && (!names || !mem_readable((u64)names, (u64)n * 8)))) { skin_result("err bad array"); return; }
-    for (int i = 0; i < n; i++)
-        if (names[i * 2] == (u32)f[5] && names[i * 2 + 1] == (u32)f[6]) { names[i * 2] = (u32)f[7]; names[i * 2 + 1] = (u32)f[8]; done++; }
-    char msg[48] = "ok names ", *o = put_int(msg + 9, done);
-    o = put(o, " of "); *put_int(o, n) = 0;
+    for (int i = 0; i < n; i++) {
+        u32 *name = &names[i * 2];
+        if (name[0] == (u32)f[5] && name[1] == (u32)f[6]) {
+            name[0] = (u32)f[7]; name[1] = (u32)f[8]; done++;
+        } else if (name[0] == (u32)f[7] && name[1] == (u32)f[8]) existing++;
+    }
+    char msg[64] = "ok names ", *o = put_int(msg + 9, done);
+    o = put(o, " of "); o = put_int(o, n);
+    o = put(o, ", existing "); *put_int(o, existing) = 0;
     skin_result(msg);
 }
 

@@ -73,12 +73,12 @@ for _,kind in ipairs({"smash", "cut"}) do
   run(1/60)
   check(not ctx.struggle.due() and not ctx.struggle.busy(),kind..": head loss cancels struggle")
   run(6)
-  local minor=true
+  local onlyConnectedLegs=true
   for i=start+1,#moves do
     local m=moves[i]
-    minor=minor and not m.module:find("struggle.lua",1,true) and (m.bone:find("Calf",1,true) or m.bone:find("Foot",1,true) or m.bone:find("Thigh",1,true))~=nil
+    onlyConnectedLegs=onlyConnectedLegs and not m.module:find("struggle.lua",1,true) and (m.bone:find("Calf",1,true) or m.bone:find("Foot",1,true) or m.bone:find("Thigh",1,true))~=nil
   end
-  check(#moves>start and minor and voices==voice0,kind..": only slight silent leg convulsions remain")
+  check(#moves>start and onlyConnectedLegs and voices==voice0 and F.find("silent leg spasms"),kind..": only silent leg spasms remain")
 end
 -- The ordinary waist cut still has its detached upper body and therefore keeps the existing struggle.
 restart()

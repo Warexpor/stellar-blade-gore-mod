@@ -103,7 +103,7 @@ check(menu.state.open and widget.inViewport and inputHeld and not paused,
   "F3 opens without pausing when Eve cannot tick during pause")
 local function select_row(key)
   for i, row in ipairs(menu.ROWS) do
-    if row.key == key then menu.state.sel = i; return end
+    if row.key == key or row.button == key then menu.state.sel = i; return end
   end
   error("missing menu row: " .. key)
 end
@@ -148,5 +148,20 @@ check(#decals == 1 and decals[1].radius > 4 and decals[1].at.Z == 0 and not cut,
 E.respawn()
 F.run(1, pawn)
 check(decals[1] and decals[1].__dead, "recovery clears the intact ragdoll's pool")
+F.press("F3", "")
+F.run(0.2, pawn)
+select_row("balanced")
+local isInputDown = pawn.Controller.IsInputKeyDown
+rawset(pawn.Controller, "IsInputKeyDown", function(_, key) return tostring(key.KeyName) == "Enter" end)
+F.run(0.2, pawn)
+rawset(pawn.Controller, "IsInputKeyDown", isInputDown)
+check(menu.get("gore.enabled") == true and menu.get("gore.noSplits") == false
+    and menu.get("gore.bladeFollow") == 0.35 and menu.get("gore.smash.overrideTargets") == true,
+  "Balanced Cut Preset enables splits and adjusts both blade and blunt outcomes")
+F.press("F3", "")
+F.run(0.2, pawn)
+local saved = dofile(dir .. "menu.lua")
+check(saved["gore.death.head"] == 20 and saved["gore.smash.targetWeights.head"] == 30 and saved["gore.uncutPool"] == true,
+  "the preset saves the changed weights alongside prior menu preferences")
 check(#F.errors == 0 and not F.find("tick error"), "no fake engine or mod tick errors")
 F.say(fails == 0 and "PASS" or "FAIL")

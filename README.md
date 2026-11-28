@@ -5,9 +5,9 @@ The F3 Spawner (Experimental, Developer Keys on) lists every CharacterTable row 
 
 When Eve dies she goes limp as a real ragdoll, bleeds, and the killing blow can take an arm, a leg or her head off, or cut her in half. Generic humanoid enemies you kill get the same cuts.
 
-Release **0.7.10**. See the [changelog](CHANGELOG.md).
+Release **0.7.11**. See the [changelog](CHANGELOG.md).
 
-The new effects are opt-in. In F3, **Blood and Dirt** has **Incontinence After Death** and **Blood Pool With Cuts Off**. **Death** has **Crawl Away** under Death Struggle.
+F3 → **Gore** has **Apply Balanced Cut Preset** for a mix of limb, head, waist and vertical cuts on death and a mix of blunt smash targets. It updates the affected settings when selected. In **Blood and Dirt**, turn on **Blood and Dirt (Experimental)** to use **Add Blood** with cuts off. **Incontinence After Death** and **Lactation After Death** are separate opt-in effects.
 
 <!-- install -->
 ## Install
@@ -16,14 +16,14 @@ You need the game on Steam (Windows, Linux or Steam Deck) and nothing else. **Th
 
 1. **UE4SS** (skip if another mod already had you install it). Download `UE4SS_v3.1.0-6.zip` from [Chrisr0/RE-UE4SS](https://github.com/Chrisr0/RE-UE4SS/releases/tag/3.1.0-6), the Stellar Blade build (the regular UE4SS won't work). The Nexus "SB UE4SS" build ([mod 2952](https://www.nexusmods.com/stellarblade/mods/2952), 1.3) works too. Open it, go into its `UE4SS_v3.1.0-6` folder, and copy `dwmapi.dll` and the `ue4ss` folder into `StellarBlade/SB/Binaries/Win64/`, next to `SB-Win64-Shipping.exe`.
    **Check the signature even if UE4SS was already installed:** in `SB/Binaries/Win64/ue4ss/UE4SS_Signatures`, rename `FText_Constructor.lua` to `dFText_Constructor.lua` if present. The linked UE4SS archive enables it, and it can close the game at startup. If `dFText_Constructor.lua` already exists, move the enabled file to a backup outside this directory instead of overwriting it. Other UE4SS mods may depend on this signature; check their instructions if they stop working.
-2. **This mod.** Extract `StellarBladeGore-0.7.10.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
+2. **This mod.** Extract `StellarBladeGore-0.7.11.zip` straight into the game folder, merging folders when asked. Its `SB` folder lands on the game's `SB`, and it adds:
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_P.pak`, `.ucas`, `.utoc`: the ragdoll death and her death voice;
    - `SB/Content/Paks/~mods/ZZ_StellarBladeGore_Face_P.pak`, `.ucas`, `.utoc`: her death face (delete it with Customized Ragdoll or Proper Death Expression installed, below);
    - `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore`: the script;
    - `SB/Binaries/Win64/ue4ss/Mods/SBSlice`: its native helper, which makes the cuts and fixes every outfit's ragdoll physics as she puts it on.
 3. **Linux / Steam Deck only:** in Steam, Stellar Blade > Properties > Launch Options, put `WINEDLLOVERRIDES="dwmapi=n,b" %command%`. (Without it Proton ignores UE4SS.) **On Windows leave Launch Options empty**: that line is for Proton and Windows can't run it.
 
-Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`: it starts with `Stellar Blade Gore Mod 0.7.10`, and a few seconds later says `sbslice.dll ready`. It is made anew each start; the previous session's is kept as `stellarbladegore.log.old`.
+Start the game and die. To check it loaded, open `SB/Binaries/Win64/ue4ss/Mods/StellarBladeGore/stellarbladegore.log`. It starts with `Stellar Blade Gore Mod 0.7.11` and a few seconds later says `sbslice.dll ready`. Each start moves the previous session to `stellarbladegore.log.old`.
 
 **It doesn't work?**
 - Game closes at startup: check the FText signature in step 1; `UE4SS.log` may end with `Crashed calling FText constructor`.
@@ -85,14 +85,16 @@ UE4SS stays for your other mods. To remove it too, delete `dwmapi.dll` and the `
 | `gore.headRagdollChance` | `0.6` | With `headRagdoll` off, the chance a beheading during her animated fall ragdolls her (the rest play the fall on headless). |
 | `gore.armsOverSplit` | `0.6` | When a split's blade crossed both her arms, the chance it takes both arms instead of splitting her. |
 | `active.push` | `1.0` | How hard the killing blow throws her body, times the default (`0`: no push of the mod's). |
-| `stains.enabled` | `false` | Experimental, F3 → Blood and Dirt. Restores the game's unused native blood and dirt mechanic: gradual blood from her HP damage and nearby enemy hits/cuts, dirt from hard landings and knockdowns. It works best on the Skin Suit and exposed skin on some outfits; many outfits do not fully support it. |
+| `stains.enabled` | `false` | Experimental, F3 → Blood and Dirt. Enables native skin-layer blood and dirt independently of cuts, including Add Blood and Clean Her. Works best on the Skin Suit and exposed skin on supported outfits. |
+| `gore.deathFluid.enabled` | `false` | Incontinence After Death adds a translucent seep and puddle under her hips once she settles. Seep Duration defaults to 1.5 seconds. Set it to 0 for the puddle alone. |
+| `gore.deathFluid.lactation.enabled` | `false` | Lactation After Death adds a separate pale seep and puddle under her chest once she settles. Both fluid effects clear on recovery. |
 | `stains.splash.enabled` | `true` | Nearby enemy hits/cuts add blood to her skin; `stains.splash.range` is 1000 cm (10 m), with less blood at greater distance. |
 | `stains.dirt.enabled` | `true` | Hard landings, knockdowns and lying dead gradually dirty her skin. |
 | `stains.heal.enabled` | `true` | Healing a share of missing HP gradually removes that share of blood and dirt. Healing to full clears both. |
 | `stains.wash.enabled` | `true` | Swimming gradually washes blood and dirt off completely. |
 | `stains.rest` | `true` | Camp rest cleans her skin; a new life starts clean. |
 | `stains.fade` | `0` | Minutes to fade without healing or water (`0`: never). |
-| `convulse.enabled` | `true` | After her death her face winces, gasps, sobs, quivers and twitches for a while (a different face every death), fading out, with quiet breaths and moans (beheaded or split down her length by a vertical slash: her face stays still, no gasps, no voice). `convulse.body = true` makes her body spasm too. |
+| `convulse.enabled` | `true` | After death her face moves for a while with quiet breaths and moans. Beheading or a head smash leaves silent leg spasms when Death Movements is on. `convulse.body = true` adds full-body spasms to ordinary deaths. |
 | `gore.voice.enabled` | `true` | Her own death cry. |
 | `gore.voice.asHer` | `true` | Played as Tachy, Raven or Scarlet (the Stellar Blade Play As mod, or any mod putting their meshes on Eve), her death cry and the breaths and moans after it are that character's own recordings (`false`: Eve's). Not with `gore.voice.sounds` set. |
 | `gore.deathFace.enabled` | `true` | A dead face on her as she dies, her eyes closing (`false`: the game's own, gone a second in). |

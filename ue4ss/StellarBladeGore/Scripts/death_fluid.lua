@@ -1,19 +1,5 @@
--- Post-death incontinence effect contributed by troubling. The stream and puddle use non-colliding meshes.
---
--- Once her hips have lain still (still s) and delay s have passed since she died:
---  * the stream (spray s, 2-3): from the skin between her legs (sbslice's ray out of her from between her hip joints,
---    down her body and a little forward; else a point that far), launched down her body and forward of her at up to
---    spraySpeed cm/s, rising to it, wavering, then weakening to a dribble. It falls under gravity to the floor; a few
---    droplets splash where it lands. Followed every tick from her hips as they lie (a thin glossy tube of its own)
---  * the puddle: from where the stream lands, it spreads as the stream runs and goes on spreading for grow s after it,
---    to size cm across (longer along her legs by stretch, or downhill on a slope), lumpy at its edge and growing
---    unevenly. It lies on the floor as traced round it (a ring of traces at the start): it follows the floor's
---    slope and bumps, and stops at a drop, a step or a wall. It lies lift cm over the floor, over the blood pools'
---    decals (those paint the floor itself; the puddle takes no decals), so it shows on top of her blood.
--- Both are meshes of their own, not decals (decals take their colour from the game's blood materials, red and
--- global). Their material is Tachy's character material (Base Color Tint, Desaturation, Brightness, Roughness Min/
--- Max, all known to take), her colour texture swapped for plain white where the parameter takes, tinted color.
--- Gone when she is up again or the level changes.
+-- Post-death seepage adapted from troubling's incontinence effect. Each source waits for a settled pose,
+-- draws a short downward flow into a floor-traced puddle, and owns its actors until recovery or a level change.
 local M = {}
 local ctx, try, valid
 local log = function() end
@@ -37,7 +23,7 @@ local function num(x, d, lo, hi)
 end
 local GRAVITY = vec(0, 0, -980)
 
-local st = {}
+local hips_effect, chest_effect = {}, { chest = true }
 
 local function obj(p)
   local g = ctx.gore
@@ -48,7 +34,7 @@ local function bone(mesh, b)
   return try(function() local v = mesh:GetSocketLocation(FName(b)); return vec(v.X, v.Y, v.Z) end)
 end
 -- between her legs, and the way her legs run from there (nil when it can't tell)
-function M.between(mesh)
+function M.between(mesh, c)
   local lt, rt = bone(mesh, "Bip001-L-Thigh"), bone(mesh, "Bip001-R-Thigh")
   local pel = bone(mesh, "Bip001-Pelvis")
   if not (lt and rt) or len(sub(lt, rt)) > 45 then return pel, nil end
@@ -57,7 +43,7 @@ function M.between(mesh)
   if lk and rk and len(sub(lk, lt)) < 70 and len(sub(rk, rt)) < 70 then
     local knee = scale(add(lk, rk), 0.5)
     local way = sub(knee, hip)
-    return add(hip, scale(way, num(cfg().along, 0.3, 0, 0.8))), way
+    return add(hip, scale(way, num(c.along, 0.3, 0, 0.8))), way
   end
   return hip, nil
 end
@@ -78,11 +64,22 @@ function M.hips(mesh)
   local right = norm(sub(rt, lt))
   if not (up and right) then return nil end
   right = norm(sub(right, scale(up, dot(right, up)))) or right
-  local front = norm(cross(up, right))
+  local front = norm(cross(right, up))
   if not front then return nil end
   local lk, rk = bone(mesh, "Bip001-L-Calf"), bone(mesh, "Bip001-R-Calf")
   local legs = lk and rk and norm(sub(scale(add(lk, rk), 0.5), hip)) or nil
   return { hip = hip, up = up, right = right, front = front, legs = legs }
+end
+local function chest_frame(mesh)
+  local g = ctx.gore
+  if (g.split_on and g.split_on(mesh)) or (g.smashed and g.smashed.has(mesh, "Bip001-Spine1")) then return nil end
+  local upper, lower = bone(mesh, "Bip001-Spine2"), bone(mesh, "Bip001-Spine1")
+  local left, right = bone(mesh, "Bip001-L-Clavicle"), bone(mesh, "Bip001-R-Clavicle")
+  if not (upper and lower and left and right) or len(sub(upper, lower)) > 40
+    or len(sub(left, right)) > 50 then return nil end
+  local up, across = norm(sub(upper, lower)), norm(sub(right, left))
+  local front = up and across and norm(cross(across, up))
+  if front then return { hip = upper, up = up, right = cross(up, front), front = front } end
 end
 local function at_frame(f, k) return add(f.hip, add(add(scale(f.up, k[1]), scale(f.right, k[2])), scale(f.front, k[3]))) end
 local function dir_frame(f, k) return norm(add(add(scale(f.up, k[1]), scale(f.right, k[2])), scale(f.front, k[3]))) end
@@ -90,17 +87,17 @@ local function in_frame(f, p) local v = sub(p, f.hip); return { dot(v, f.up), do
 
 -- the stream's source on her, in her hips' frame { up, right, front } (cm), found once: sbslice's ray from between her
 -- hip joints, down her body and a little forward, the first skin it leaves through; else the point that far out
-function M.find_source(mesh, f)
-  local guess = { -7.5, 0, 3.5 }
+function M.find_source(mesh, f, chest)
+  local guess = chest and { 0, 0, 8 } or { -7.5, 0, 3.5 }
   local g = ctx.gore
-  local d = dir_frame(f, { -0.85, 0, 0.5 })
+  local d = chest and f.front or dir_frame(f, { -0.85, 0, 0.5 })
   local h = g and g.skin_ray and d and try(function() return g.skin_ray(mesh, f.hip, d, 25) end)
   if h and h.hit then
     local k = in_frame(f, h.hit)
     local r = len(sub(h.hit, f.hip))
-    if r >= 3 and r <= 18 and k[1] < 0 then return k, "her skin", h.n end
+    if r >= 3 and r <= 18 and (chest or k[1] < 0) then return k, "her skin" end
   end
-  return guess, "a guess (no skin found)", nil
+  return guess, "a guess (no skin found)"
 end
 
 -- the stream's speed share at t s into it (0-1): rising, holding, weakening to a dribble; 0 once it is over
@@ -218,11 +215,12 @@ function M.puddle_mesh(c, n, along, r, rmax, stretch, ph, hf, lim, lift, o)
       -- (lumpy, and growing faster some ways than others as it spreads)
       local wob = 1 + 0.13 * math.sin(2 * a + ph[1]) + 0.08 * math.sin(3 * a + ph[2]) + 0.05 * math.sin(5 * a + ph[3])
       local grow = math.min(1, k0 * (1 + 0.18 * math.sin(3 * a + ph[4])))
-      local k = math.min(grow, lim and lim(a) or 1) * ring[1]
-      local rr = rmax * k * wob
+      local edge = lim and lim(a) or 1
+      local k = math.min(grow * wob, edge < 1 and edge or 1.3) * ring[1]
+      local rr = rmax * k
       local x, y = rr * math.cos(a) * stretch, rr * math.sin(a)
       local out = norm(add(scale(e, math.cos(a)), scale(f, math.sin(a)))) or e
-      local h = (hf and hf(a, k * wob) or 0) + lift * ring[2]
+      local h = (hf and hf(a, k) or 0) + lift * ring[2]
       put(x, y, h, norm(add(up, scale(out, ring[1] < 1 and 0.04 * ring[1] or 0.22))) or up)
     end
   end
@@ -242,29 +240,46 @@ function M.puddle_mesh(c, n, along, r, rmax, stretch, ph, hf, lim, lift, o)
   return verts, tris, normals, uvs, colors, tangents
 end
 
--- its colour by tune.gore.deathFluid.tint (the menu's Fluid Colour): dark yellow by default, amber, yellow, pale,
--- or custom (deathFluid.color, linear RGB)
+-- Tint names and custom linear RGB values from tune.gore.deathFluid.
 M.TINTS = {
+  natural = { 0.72, 0.66, 0.46 },
+  milk = { 0.91, 0.90, 0.86 },
   dark = { 0.36, 0.25, 0.03 },
   amber = { 0.55, 0.30, 0.04 },
   yellow = { 0.80, 0.60, 0.10 },
   pale = { 0.85, 0.78, 0.36 },
 }
 function M.tint_color(c)
-  local t = c.tint or "dark"
+  local t = c.tint or "natural"
   if t == "custom" and type(c.color) == "table" then return c.color end
-  return M.TINTS[t] or M.TINTS.dark
+  return M.TINTS[t] or M.TINTS.natural
 end
 
--- its material: Tachy's, white under the tint where the colour texture takes, glossy, no glow. What took is logged once
-local function fluid_material(pmc)
-  local c = cfg()
+local GLASS = "/Game/Art/Character/PC/00_ACC/Materials/MI_ACC_Glass_Base.MI_ACC_Glass_Base"
+local function fluid_material(st, c, pmc)
   local g = ctx.gore
-  local mat = obj(c.material or (g and g.TACHY_MAT) or
-    "/Game/Art/Character/NPC/CH_NPC_TachyNPC/Materials/MI_CH_NPC_TachyNPC_Destroyed.MI_CH_NPC_TachyNPC_Destroyed")
-  if not mat then return false, "no material" end
+  local mat = obj(c.material or GLASS) or (g and g.TACHY_MAT and obj(g.TACHY_MAT))
+  if not valid(mat) then return false, "no material" end
   local mid = try(function() return pmc:CreateDynamicMaterialInstance(0, mat, FName("None")) end)
   if not valid(mid) then try(function() pmc:SetMaterial(0, mat) end); return false, "no instance of its own" end
+  local col = M.tint_color(c)
+  local tint = { R = col[1] or 0.72, G = col[2] or 0.66, B = col[3] or 0.46, A = 1 }
+  local opacity = num(c.opacity, st.chest and 0.52 or 0.24, 0.05, 1)
+  local translucent = try(function()
+    mid:SetScalarParameterValue(FName("Opacity Inner"), opacity)
+    local inner = mid:K2_GetScalarParameterValue(FName("Opacity Inner"))
+    if type(inner) ~= "number" or math.abs(inner - opacity) > 0.001 then return false end
+    mid:SetScalarParameterValue(FName("Opacity Out"), opacity * 1.25)
+    mid:SetScalarParameterValue(FName("Opacity Fresnel"), opacity)
+    for _, name in ipairs({ "GlassColor In", "GlassColor Out", "GlassColor Fresnel" }) do
+      mid:SetVectorParameterValue(FName(name), tint)
+    end
+    return true
+  end)
+  if translucent then
+    if not st.matLogged then log(string.format("translucent fluid material, opacity %.2f", opacity)); st.matLogged = true end
+    return true
+  end
   local white = obj("/Engine/EngineResources/WhiteSquareTexture.WhiteSquareTexture")
   local flat = obj("/Engine/EngineMaterials/FlatNormal.FlatNormal")
   local took = {}
@@ -281,12 +296,11 @@ local function fluid_material(pmc)
   end
   tex({ "BaseColor", "Basecolor", "BaseColorTex", "Diffuse" }, white)
   tex({ "BaseNormalTex", "Baked NormalMap", "NormalTex", "Normal" }, flat)
-  local col = M.tint_color(c)
   local gloss = num(c.gloss, 0.06, 0, 1)
   local whiteTook = false
   for _, nm in ipairs(took) do if nm:lower():find("color") or nm == "Diffuse" then whiteTook = true end end
   try(function()
-    mid:SetVectorParameterValue(FName("Base Color Tint"), { R = col[1] or 0.8, G = col[2] or 0.6, B = col[3] or 0.1, A = 1 })
+    mid:SetVectorParameterValue(FName("Base Color Tint"), tint)
     -- (her texture kept: greyed under the tint, so it still reads yellow)
     mid:SetScalarParameterValue(FName("Desaturation"), whiteTook and 0 or 1)
     mid:SetScalarParameterValue(FName("Brightness"), num(c.brightness, 1, 0.1, 5))
@@ -399,21 +413,19 @@ end
 
 -- ---- the run of it ----
 -- the floor under her hips, the stream and its puddle set up. False to try again a moment later
-function M.start(pawn, mesh, now)
-  local c = cfg()
+local function start(st, c, pawn, mesh, now, fr)
   local g = ctx.gore
   if not (g and g.pool_trace) then st.phase = "done"; log("no floor tracing (gore.lua)"); return false end
   st.noStream, st.way, st.fallback = nil, nil, nil
-  local fr = M.hips(mesh)
   if not fr then
     -- (a leg gone or her hips torn apart: the puddle alone, under her hips)
-    local p, way = M.between(mesh)
+    local p, way = M.between(mesh, c)
     if not p then return false end
     fr = nil
     st.noStream, st.way, st.fallback = true, way, p
   end
   local k, how = { -7.5, 0, 3.5 }, "a guess"
-  if fr then k, how = M.find_source(mesh, fr) end
+  if fr then k, how = M.find_source(mesh, fr, st.chest) end
   local src = fr and at_frame(fr, k) or st.fallback
   local hit, f, n = g.pool_trace(pawn, add(src, vec(0, 0, 10)), add(src, vec(0, 0, -100)))
   if not (hit and f and n) or n.Z < 0.75 then
@@ -421,19 +433,19 @@ function M.start(pawn, mesh, now)
     return false
   end
   local h = dot(sub(src, f), n)
-  if h > num(c.height, 45, 5, 200) then
-    if not st.toldHigh then st.toldHigh = true; log(string.format("between her legs %.0f cm over the floor: waiting for her to come down", h)) end
+  if h > num(c.height, 26, 5, 200) then
+    if not st.toldHigh then st.toldHigh = true; log(string.format("source %.0f cm over the floor: waiting for her to come down", h)) end
     return false
   end
-  st.srcK, st.floor, st.floorN, st.t1 = k, f, n, now
-  st.spray = num(c.spray, 2.5, 0, 6)
-  if st.noStream or c.stream == false or st.spray <= 0 then st.spray = 0 end
+  st.srcK, st.floor, st.floorN, st.t1, st.frame = k, f, n, now, fr
+  st.spray = num(c.spray, 1.5, 0, 6)
+  if st.noStream or c.stream == false or h < 1 then st.spray = 0 end
   -- the stream's own actor (none when it can't run)
   if st.spray > 0 then
     local a, pmc = spawn(pawn, src)
     if a then
       st.sa, st.spmc, st.so = a, pmc, src
-      local okm, why = fluid_material(pmc.obj)
+      local okm, why = fluid_material(st, c, pmc.obj)
       if not okm then log("material: " .. tostring(why)) end
       st.drops = {}
       for i = 1, M.DROPS do st.drops[i] = { born = -1, life = 0, v = vec(0, 0, 0), at = src, s = 0 } end
@@ -442,20 +454,19 @@ function M.start(pawn, mesh, now)
     end
   end
   st.phase = "stream"
-  log(string.format("from %s between her legs %.0f cm over the floor, %.1f s after her death: %s", how, h, now - st.t0,
-    st.spray > 0 and string.format("spurting for %.1f s, then spreading", st.spray) or "seeping out (no stream)"))
+  log(string.format("seepage at %s from %s, %.0f cm over the floor, %.1f s after death",
+    st.chest and "chest" or "hips", how, h, now - st.t0))
   return true
 end
 
 -- where the puddle goes and how it is shaped: centre c on the floor (the stream's landing point)
-function M.puddle_start(pawn, c, now)
-  local cc = cfg()
+local function puddle_start(st, cc, pawn, c, now)
   local g = ctx.gore
   local n = st.floorN
   -- (on the floor itself: the stream landed lift cm over the plane traced under her hips; the floor there, traced)
   local hit, q = g.pool_trace(pawn, add(c, scale(n, 10)), add(c, scale(n, -30)))
   if hit and q and math.abs(dot(sub(q, c), n)) < 8 then c = q else c = sub(c, scale(n, dot(sub(c, st.floor), n))) end
-  local size = num(cc.size, 24, 6, 120)
+  local size = num(cc.size, 32, 6, 120)
   local rmax = size * 0.5
   -- along her legs, or downhill on a slope (it runs further that way)
   local stretch = num(cc.stretch, 1.35, 1, 3)
@@ -476,7 +487,7 @@ function M.puddle_start(pawn, c, now)
   local map = M.floor_map(pawn, c, n, e, f, rmax, stretch)
   local a, pmc = spawn(pawn, c)
   if not a then return false end
-  local okm, why = fluid_material(pmc.obj)
+  local okm, why = fluid_material(st, cc, pmc.obj)
   if not okm then log("material: " .. tostring(why)) end
   st.pa, st.ppmc, st.pc, st.pe, st.rmax, st.stretch, st.map = a, pmc, c, e, rmax, stretch, map
   st.ph = { math.random() * 6.283, math.random() * 6.283, math.random() * 6.283, math.random() * 6.283 }
@@ -499,10 +510,9 @@ function M.puddle_share(t, spray, grow)
   return from + (1 - from) * (1 - math.exp(-3 * u / math.max(grow, 0.5)))
 end
 
-local function puddle_update(now)
+local function puddle_update(st, c, now)
   local pmc = component_of(st.pa, st.ppmc)
   if not pmc then return false end
-  local c = cfg()
   local grow = num(c.grow, 8, 1, 60)
   local t = now - st.pt0
   local k = M.puddle_share(t, st.spray or 0, grow)
@@ -518,20 +528,22 @@ local function puddle_update(now)
   return t < (st.spray or 0) + grow * 1.3
 end
 
-local function stream_update(pawn, mesh, now)
-  local c = cfg()
+local function stream_update(st, c, pawn, mesh, now)
   local t = now - st.t1
   local spray = st.spray
-  local fr = M.hips(mesh)
-  if fr then st.frame = fr end
-  fr = st.frame
+  local frame = st.chest and chest_frame or M.hips
+  local fr = valid(mesh) and frame(mesh)
   if not fr then return false end
+  st.frame = fr
   local src = at_frame(fr, st.srcK)
-  -- launched down her body and forward of her (her belly's way), wavering a little
-  local w1, w2 = math.sin(t * 9.1 + 0.7) * 0.07, math.sin(t * 6.3 + 2.1) * 0.06
-  local d = dir_frame(fr, { -0.7 + w1, w2, 0.72 })
+  if dot(sub(src, st.floor), st.floorN) > num(c.height, 26, 5, 200)
+    or len(sub(src, st.so)) > 35 then return false end
+  -- Small lateral drift, with gravity and the downward launch keeping the visible path close to the source.
+  local w = math.sin(t * 6.3 + 2.1) * 0.09
+  local drift = add(scale(fr.up, -0.24), scale(fr.right, w))
+  local d = norm(add(vec(0, 0, -1), drift))
   local p = M.pressure(t, spray)
-  local speed = num(c.spraySpeed, 100, 20, 400) * p * (1 + 0.05 * math.sin(t * 43) + 0.04 * math.sin(t * 71 + 1))
+  local speed = num(c.spraySpeed, 22, 0, 80) * p
   local v = scale(d, speed)
   local floorF, floorN = st.floor, st.floorN
   local lift = num(c.lift, 0.35, 0.05, 3)
@@ -541,14 +553,14 @@ local function stream_update(pawn, mesh, now)
   -- the puddle starts where it first lands
   if st.pa == nil and t >= land then
     st.way = st.way or fr.legs
-    if not M.puddle_start(pawn, landing, now) then st.pa = false end
+    if not puddle_start(st, c, pawn, landing, now) then st.pa = false end
   end
   local pmc = component_of(st.sa, st.spmc)
   if not pmc then return t < spray + 0.6 end
   -- the stream's head runs out at first, its tail falls away once it stops
   local s0 = math.max(0, t - (spray + 0.45))
   local s1 = math.min(land, t)
-  local r0 = num(c.sprayRadius, 0.32, 0.05, 2) * (0.55 + 0.45 * math.sqrt(math.max(p, 0)))
+  local r0 = num(c.sprayRadius, 0.23, 0.05, 2) * (0.55 + 0.45 * math.sqrt(math.max(p, 0)))
   local path = {}
   local R = M.RINGS
   local visible = s1 > s0 + 1e-3
@@ -562,7 +574,7 @@ local function stream_update(pawn, mesh, now)
     path[i] = { p = at(s), r = r }
   end
   -- droplets where it lands, while it reaches the floor
-  local splashing = c.splash ~= false and visible and t >= land and s0 < land * 0.8 and p > 0
+  local splashing = c.splash == true and visible and t >= land and s0 < land * 0.8 and p > 0
   for _, dr in ipairs(st.drops) do
     local age = now - dr.born
     if age > dr.life then
@@ -591,23 +603,23 @@ local function stream_update(pawn, mesh, now)
   local verts, tris, normals, uvs, colors, tangents = M.stream_mesh(path, st.drops, st.so)
   local ok = sections(pmc, verts, tris, normals, uvs, colors, tangents, st.smade)
   if ok then st.smade = true end
-  if not visible and t > spray + 0.45 then
-    destroy(st.sa)
-    st.sa = nil
-    return false
-  end
-  return true
+  return visible or t <= spray + 0.45
 end
 
--- every poll: dead, whether her death is on
-function M.tick(pawn, mesh, dead)
-  if not dead then
-    if st.phase then M.clear("she is up") end
-    return
-  end
-  local c = cfg()
-  if c.enabled ~= true or (ctx.tune.gore or {}).enabled == false then
-    if st.phase then M.clear("off") end
+local function forget(st)
+  for k in pairs(st) do if k ~= "chest" and k ~= "matLogged" then st[k] = nil end end
+end
+
+local function clear(st, why)
+  destroy(st.sa)
+  destroy(st.pa)
+  if st.sa or st.pa then log("cleared (" .. tostring(why) .. ")") end
+  forget(st)
+end
+
+local function tick_effect(st, c, pawn, mesh, dead)
+  if not dead or c.enabled ~= true then
+    if st.phase then clear(st, dead and "off" or "she is up") end
     return
   end
   if not (ctx.gore and ctx.gore.native_ready()) then return end
@@ -623,29 +635,32 @@ function M.tick(pawn, mesh, dead)
       return
     end
     if not valid(mesh) then return end
-    local p = M.between(mesh)
+    local fr = st.chest and chest_frame(mesh)
+    local p
+    if st.chest then p = fr and at_frame(fr, { 0, 0, 8 }) else p = M.between(mesh, c) end
     if not p then return end
     local moved = st.last and len(sub(p, st.last)) or 1e9
     st.last = p
     if moved / 0.2 < 12 then st.still = st.still + 0.2 else st.still = 0 end
     if st.still < num(c.still, 1, 0, 10) or now - st.t0 < num(c.delay, 2, 0, 60) then return end
-    st.frame = M.hips(mesh)
-    if not M.start(pawn, mesh, now) then st.next = now + 0.5 end
+    if not st.chest then fr = M.hips(mesh) end
+    if not start(st, c, pawn, mesh, now, fr) then st.next = now + 0.5 end
   elseif st.phase == "stream" then
     local going = false
-    if st.spray > 0 and valid(mesh) then
-      local ok, r = pcall(stream_update, pawn, mesh, now)
-      if not ok then
-        log("stream: " .. tostring(r))
+    if st.sa then
+      local ok, r = pcall(stream_update, st, c, pawn, mesh, now)
+      if not ok then log("stream: " .. tostring(r)) end
+      going = ok and r
+      if not going then
         destroy(st.sa)
-        st.sa, st.spray, r = nil, 0, false
+        st.sa = nil
+        if st.pa == nil then st.pa = false end
       end
-      going = r
     end
     -- (no stream: the puddle straight under her, seeping out)
     if st.pa == nil and st.spray <= 0 then
       st.way = st.way or (st.frame and st.frame.legs)
-      if not M.puddle_start(pawn, st.floor, now) then st.pa = false end
+      if not puddle_start(st, c, pawn, st.floor, now) then st.pa = false end
     end
     -- (the puddle redrawn a dozen times a second while it spreads)
     local spreading = false
@@ -653,7 +668,7 @@ function M.tick(pawn, mesh, dead)
       spreading = true
       if now >= (st.pnext or 0) then
         st.pnext = now + 0.08
-        local ok, r = pcall(puddle_update, now)
+        local ok, r = pcall(puddle_update, st, c, now)
         if not ok then log("puddle: " .. tostring(r)); r = false end
         spreading = r
       end
@@ -662,14 +677,19 @@ function M.tick(pawn, mesh, dead)
   end
 end
 
+function M.tick(pawn, mesh, dead)
+  local c = cfg()
+  tick_effect(hips_effect, c, pawn, mesh, dead)
+  tick_effect(chest_effect, c.lactation or {}, pawn, mesh, dead)
+end
+
 function M.clear(why)
-  destroy(st.sa)
-  destroy(st.pa)
-  if st.sa or st.pa then log("cleared (" .. tostring(why) .. ")") end
-  M.forget()
+  clear(hips_effect, why)
+  clear(chest_effect, why)
 end
 -- a new level: the old one's actors went with it, not touched
 function M.forget()
-  for k in pairs(st) do if k ~= "matLogged" then st[k] = nil end end
+  forget(hips_effect)
+  forget(chest_effect)
 end
 return M
